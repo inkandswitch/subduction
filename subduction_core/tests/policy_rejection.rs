@@ -6,7 +6,7 @@ use core::{convert::Infallible, fmt, time::Duration};
 use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::Blob,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
@@ -18,8 +18,8 @@ use subduction_core::{
     connection::{
         message::{BatchSyncResponse, SyncMessage, SyncResult},
         test_utils::{
-            test_signer, ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn,
-            TokioSpawn,
+            ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn, TokioSpawn,
+            test_signer,
         },
     },
     peer::id::PeerId,

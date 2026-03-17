@@ -10,7 +10,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::test_utils::{
-        test_signer, FailingSendMockConnection, InstantTimeout, MockConnection, TestSpawn,
+        FailingSendMockConnection, InstantTimeout, MockConnection, TestSpawn, test_signer,
     },
     handler::sync::SyncHandler,
     nonce_cache::NonceCache,
@@ -19,8 +19,8 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
     subduction::{
-        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
 };
 use testresult::TestResult;

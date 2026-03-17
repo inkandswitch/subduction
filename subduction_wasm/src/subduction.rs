@@ -101,6 +101,7 @@ type WasmSubductionCore = Subduction<
     WasmSyncHandler,
     OpenPolicy,
     JsSigner,
+    JsTimeout,
     WasmHashMetric,
     WASM_SHARD_COUNT,
 >;

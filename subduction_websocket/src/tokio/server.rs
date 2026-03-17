@@ -280,6 +280,7 @@ where
             .signer(signer)
             .storage(storage, Arc::new(policy))
             .spawner(TokioSpawn)
+            .timer(timeout.clone())
             .nonce_cache(nonce_cache)
             .depth_metric(depth_metric);
 
@@ -588,6 +589,7 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
         SyncHandler<Sendable, S, MessageTransport<UnifiedWebSocket<O>>, P, M>,
         P,
         Sig,
+        O,
         M,
     >,
 >;

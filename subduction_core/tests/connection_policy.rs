@@ -6,12 +6,12 @@ use core::{convert::Infallible, fmt};
 use std::sync::Arc;
 
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::id::SedimentreeId;
 use std::vec::Vec;
 use subduction_core::{
     connection::test_utils::{
-        new_test_subduction, test_signer, InstantTimeout, MockConnection, TestSpawn,
+        InstantTimeout, MockConnection, TestSpawn, new_test_subduction, test_signer,
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},

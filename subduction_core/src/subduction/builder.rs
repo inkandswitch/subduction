@@ -67,8 +67,8 @@ use sedimentree_core::{
 
 use crate::{
     authenticated::Authenticated,
-    connection::{manager::Spawn, message::SyncMessage, Connection},
-    handler::{sync::SyncHandler, Handler},
+    connection::{Connection, manager::Spawn, message::SyncMessage},
+    handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
@@ -81,9 +81,9 @@ use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    error::ListenError,
-    pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
     ListenerFuture, StartListener, Subduction, SubductionFutureForm,
+    error::ListenError,
+    pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
 };
 
 /// Marker for a required builder field that hasn't been set yet.
@@ -378,10 +378,10 @@ impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
             Into<ListenError<F, S, C, SyncMessage>>,
         crate::connection::managed::ManagedConnection<C, F, Tim>:
             crate::connection::managed::ManagedCall<
-                F,
-                SyncMessage,
-                SendError = <C as Connection<F, SyncMessage>>::SendError,
-            >,
+                    F,
+                    SyncMessage,
+                    SendError = <C as Connection<F, SyncMessage>>::SendError,
+                >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -466,10 +466,10 @@ impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
         H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
         crate::connection::managed::ManagedConnection<C, F, Tim>:
             crate::connection::managed::ManagedCall<
-                F,
-                H::Message,
-                SendError = <C as Connection<F, H::Message>>::SendError,
-            >,
+                    F,
+                    H::Message,
+                    SendError = <C as Connection<F, H::Message>>::SendError,
+                >,
     {
         let sedimentrees = self
             .sedimentrees

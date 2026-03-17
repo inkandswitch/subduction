@@ -922,17 +922,17 @@ where
                         result,
                         req_id: resp_batch_id,
                     } = ManagedCall::<F, H::Message>::call(
-                            &managed,
-                            BatchSyncRequest {
-                                id,
-                                req_id,
-                                fingerprint_summary: summary,
-                                subscribe: false,
-                            },
-                            timeout,
-                        )
-                        .await
-                        .map_err(IoError::ConnCall)?;
+                        &managed,
+                        BatchSyncRequest {
+                            id,
+                            req_id,
+                            fingerprint_summary: summary,
+                            subscribe: false,
+                        },
+                        timeout,
+                    )
+                    .await
+                    .map_err(IoError::ConnCall)?;
 
                     debug_assert_eq!(req_id, resp_batch_id);
 
@@ -1382,16 +1382,16 @@ where
             let req_id = managed.next_request_id();
 
             let result = ManagedCall::<F, H::Message>::call(
-                    &managed,
-                    BatchSyncRequest {
-                        id,
-                        req_id,
-                        fingerprint_summary: fp_summary,
-                        subscribe,
-                    },
-                    timeout,
-                )
-                .await;
+                &managed,
+                BatchSyncRequest {
+                    id,
+                    req_id,
+                    fingerprint_summary: fp_summary,
+                    subscribe,
+                },
+                timeout,
+            )
+            .await;
 
             match result {
                 Err(e) => conn_errs.push((conn, e)),

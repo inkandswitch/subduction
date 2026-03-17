@@ -19,7 +19,7 @@ use subduction_core::{
     connection::{
         message::SyncMessage,
         test_utils::{
-            new_test_subduction, test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn,
+            ChannelMockConnection, InstantTimeout, TokioSpawn, new_test_subduction, test_signer,
         },
     },
     handler::sync::SyncHandler,
@@ -29,8 +29,8 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
     subduction::{
-        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
 };
 use testresult::TestResult;

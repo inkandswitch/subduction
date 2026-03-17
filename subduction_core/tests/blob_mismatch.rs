@@ -20,13 +20,13 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;

@@ -47,7 +47,8 @@ async fn test_sendable_single_commit() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .timer(InstantTimeout).build::<Sendable, ChannelMockConnection<SyncMessage>>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -95,7 +96,8 @@ async fn test_sendable_multiple_sequential() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .timer(InstantTimeout).build::<Sendable, ChannelMockConnection<SyncMessage>>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -143,7 +145,8 @@ async fn test_sendable_same_sedimentree() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .timer(InstantTimeout).build::<Sendable, ChannelMockConnection<SyncMessage>>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -196,7 +199,8 @@ async fn test_local_single_commit() -> TestResult {
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .timer(InstantTimeout).build::<Local, ChannelMockConnection<SyncMessage>>();
+                    .timer(InstantTimeout)
+                    .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
@@ -249,7 +253,8 @@ async fn test_local_multiple_sequential() -> TestResult {
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .timer(InstantTimeout).build::<Local, ChannelMockConnection<SyncMessage>>();
+                    .timer(InstantTimeout)
+                    .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
@@ -303,7 +308,8 @@ async fn test_local_same_sedimentree() -> TestResult {
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .timer(InstantTimeout).build::<Local, ChannelMockConnection<SyncMessage>>();
+                    .timer(InstantTimeout)
+                    .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
