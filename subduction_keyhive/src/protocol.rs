@@ -21,7 +21,7 @@ use keyhive_core::{
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{static_event::StaticEvent, Event},
+    event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -746,10 +746,10 @@ mod tests {
     use crate::{
         storage::MemoryKeyhiveStorage,
         test_utils::{
-            create_channel_pair, create_group_with_read_members, exchange_all_contact_cards,
+            SimpleKeyhive, TestProtocol, TwoPeerHarness, create_channel_pair,
+            create_group_with_read_members, exchange_all_contact_cards,
             exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
             make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
-            SimpleKeyhive, TestProtocol, TwoPeerHarness,
         },
     };
     use future_form::Local;
@@ -1716,6 +1716,245 @@ mod tests {
                 members.contains_key(&carol_identifier),
                 "Carol should be a member of the group"
             );
+        }
+    }
+
+    mod cgka_sync {
+        use super::*;
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn document_creation_syncs_ops() {
+            let TwoPeerHarness {
+                alice_proto,
+                bob_proto,
+                alice_kh,
+                bob_kh,
+                alice_id,
+                bob_id,
+                alice_conn,
+                bob_conn,
+            } = exchange_contact_cards_and_setup().await;
+
+            // Alice creates a document (which initializes a CGKA tree)
+            // and adds Bob as a coparent so he can receive the ops.
+            let doc_id = {
+                let kh = alice_kh.lock().await;
+                let bob_identifier = bob_id.to_identifier().unwrap();
+                let bob_peer = kh.get_peer(bob_identifier).await.unwrap();
+                let doc = kh
+                    .generate_doc(vec![bob_peer], nonempty![[0u8; 32]])
+                    .await
+                    .unwrap();
+                doc.lock().await.doc_id()
+            };
+
+            // Alice should have CGKA ops for this document.
+            let alice_cgka_ops_before = {
+                let kh = alice_kh.lock().await;
+                kh.cgka_ops_for_doc(&doc_id).await.unwrap()
+            };
+            assert!(
+                alice_cgka_ops_before.is_some(),
+                "Alice should have CGKA ops after creating a document"
+            );
+
+            // Bob should not have CGKA ops before sync.
+            {
+                let kh = bob_kh.lock().await;
+                assert!(
+                    kh.get_document(doc_id).await.is_none(),
+                    "Bob should not have the document before sync"
+                );
+            }
+
+            // Sync Alice → Bob.
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+            .await;
+
+            // After sync: Bob should have the document.
+            {
+                let kh = bob_kh.lock().await;
+                let doc = kh.get_document(doc_id).await;
+                assert!(doc.is_some(), "Bob should have the document after sync");
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn pcs_update_syncs_after_force() {
+            let TwoPeerHarness {
+                alice_proto,
+                bob_proto,
+                alice_kh,
+                bob_kh,
+                alice_id,
+                bob_id,
+                alice_conn,
+                bob_conn,
+            } = exchange_contact_cards_and_setup().await;
+
+            // Alice creates a document with Bob as coparent.
+            let doc = {
+                let kh = alice_kh.lock().await;
+                let bob_identifier = bob_id.to_identifier().unwrap();
+                let bob_peer = kh.get_peer(bob_identifier).await.unwrap();
+                kh.generate_doc(vec![bob_peer], nonempty![[0u8; 32]])
+                    .await
+                    .unwrap()
+            };
+
+            let doc_id = doc.lock().await.doc_id();
+
+            // Force a PCS update (generates a CgkaOperation::Update).
+            {
+                let kh = alice_kh.lock().await;
+                kh.force_pcs_update(doc.clone()).await.unwrap();
+            }
+
+            // Count Alice's CGKA ops after the update.
+            let alice_cgka_count = {
+                let kh = alice_kh.lock().await;
+                kh.cgka_ops_for_doc(&doc_id)
+                    .await
+                    .unwrap()
+                    .map_or(0, |ops| ops.len())
+            };
+            assert!(
+                alice_cgka_count > 0,
+                "Alice should have CGKA ops after PCS update"
+            );
+
+            // Sync Alice → Bob, then Bob → Alice for full convergence.
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+            .await;
+            run_sync_round(
+                &bob_proto,
+                &alice_proto,
+                &bob_id,
+                &alice_id,
+                &bob_conn,
+                &alice_conn,
+            )
+            .await;
+
+            // After bidirectional sync: Bob should have the document
+            // with CGKA state.
+            {
+                let kh = bob_kh.lock().await;
+                let doc = kh.get_document(doc_id).await;
+                assert!(doc.is_some(), "Bob should have the document after sync");
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn bidirectional_sync_converges() {
+            let TwoPeerHarness {
+                alice_proto,
+                bob_proto,
+                alice_kh,
+                bob_kh,
+                alice_id,
+                bob_id,
+                alice_conn,
+                bob_conn,
+            } = exchange_contact_cards_and_setup().await;
+
+            // Alice creates a document with Bob as coparent.
+            let alice_doc = {
+                let kh = alice_kh.lock().await;
+                let bob_identifier = bob_id.to_identifier().unwrap();
+                let bob_peer = kh.get_peer(bob_identifier).await.unwrap();
+                kh.generate_doc(vec![bob_peer], nonempty![[1u8; 32]])
+                    .await
+                    .unwrap()
+            };
+            let alice_doc_id = alice_doc.lock().await.doc_id();
+
+            // Bob creates a different document with Alice as coparent.
+            let bob_doc = {
+                let kh = bob_kh.lock().await;
+                let alice_identifier = alice_id.to_identifier().unwrap();
+                let alice_peer = kh.get_peer(alice_identifier).await.unwrap();
+                kh.generate_doc(vec![alice_peer], nonempty![[2u8; 32]])
+                    .await
+                    .unwrap()
+            };
+            let bob_doc_id = bob_doc.lock().await.doc_id();
+
+            // Each peer should only have their own document.
+            {
+                let kh = alice_kh.lock().await;
+                assert!(kh.get_document(alice_doc_id).await.is_some());
+                assert!(
+                    kh.get_document(bob_doc_id).await.is_none(),
+                    "Alice should not have Bob's document before sync"
+                );
+            }
+            {
+                let kh = bob_kh.lock().await;
+                assert!(kh.get_document(bob_doc_id).await.is_some());
+                assert!(
+                    kh.get_document(alice_doc_id).await.is_none(),
+                    "Bob should not have Alice's document before sync"
+                );
+            }
+
+            // Bidirectional sync.
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+            .await;
+            run_sync_round(
+                &bob_proto,
+                &alice_proto,
+                &bob_id,
+                &alice_id,
+                &bob_conn,
+                &alice_conn,
+            )
+            .await;
+
+            // After bidirectional sync, both should have both documents.
+            {
+                let kh = alice_kh.lock().await;
+                assert!(
+                    kh.get_document(alice_doc_id).await.is_some(),
+                    "Alice should still have her own document"
+                );
+                assert!(
+                    kh.get_document(bob_doc_id).await.is_some(),
+                    "Alice should have Bob's document after sync"
+                );
+            }
+            {
+                let kh = bob_kh.lock().await;
+                assert!(
+                    kh.get_document(bob_doc_id).await.is_some(),
+                    "Bob should still have his own document"
+                );
+                assert!(
+                    kh.get_document(alice_doc_id).await.is_some(),
+                    "Bob should have Alice's document after sync"
+                );
+            }
         }
     }
 }
