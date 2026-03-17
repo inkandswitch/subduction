@@ -129,11 +129,10 @@ mod multiplexer {
         let bytes = SyncMessage::BatchSyncRequest(req).encode();
         let decoded = SyncMessage::try_decode(&bytes)?;
 
-        let SyncMessage::BatchSyncRequest(r) = decoded else {
-            return Err("expected BatchSyncRequest".into());
-        };
-        assert_eq!(r.req_id, req_id);
-        assert!(r.subscribe);
+        assert!(
+            matches!(&decoded, SyncMessage::BatchSyncRequest(r) if r.req_id == req_id && r.subscribe),
+            "expected matching BatchSyncRequest, got {decoded:?}"
+        );
         Ok(())
     }
 
