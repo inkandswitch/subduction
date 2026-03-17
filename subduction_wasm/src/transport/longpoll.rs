@@ -224,7 +224,7 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-        timeout_milliseconds: Option<u32>,
+        _timeout_milliseconds: Option<u32>,
     ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
         let client = make_client(base_url);
 

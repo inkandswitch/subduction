@@ -55,16 +55,17 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        MessageTransport<HttpLongPollTransport<FuturesTimerTimeout>>,
+        MessageTransport<HttpLongPollTransport>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            MessageTransport<HttpLongPollTransport<FuturesTimerTimeout>>,
+            MessageTransport<HttpLongPollTransport>,
             OpenPolicy,
             CountLeadingZeroBytes,
         >,
         OpenPolicy,
         MemorySigner,
+        FuturesTimerTimeout,
         CountLeadingZeroBytes,
     >,
 >;
@@ -202,17 +203,14 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, MessageTransport<HttpLongPollTransport<FuturesTimerTimeout>>>();
+            .timer(FuturesTimerTimeout)
+            .build::<Sendable, MessageTransport<HttpLongPollTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
 
-    let lp_client = HttpLongPollClient::new(
-        base_url,
-        ReqwestHttpClient::new(),
-        FuturesTimerTimeout,
-        SYNC_TIMEOUT,
-    );
+    let lp_client =
+        HttpLongPollClient::new(base_url, ReqwestHttpClient::new(), FuturesTimerTimeout);
 
     let now = TimestampSeconds::now();
     let result = lp_client

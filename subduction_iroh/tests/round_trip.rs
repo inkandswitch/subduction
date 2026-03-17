@@ -45,16 +45,17 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        MessageTransport<IrohTransport<FuturesTimerTimeout>>,
+        MessageTransport<IrohTransport>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            MessageTransport<IrohTransport<FuturesTimerTimeout>>,
+            MessageTransport<IrohTransport>,
             OpenPolicy,
             CountLeadingZeroBytes,
         >,
         OpenPolicy,
         MemorySigner,
+        FuturesTimerTimeout,
         CountLeadingZeroBytes,
     >,
 >;
@@ -88,14 +89,15 @@ fn spawn_subduction(sig: &MemorySigner, discovery_id: Option<DiscoveryId>) -> Te
     let mut builder = SubductionBuilder::new()
         .signer(sig.clone())
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn);
+        .spawner(TokioSpawn)
+        .timer(FuturesTimerTimeout);
 
     if let Some(id) = discovery_id {
         builder = builder.discovery_id(id);
     }
 
     let (subduction, _handler, listener_fut, manager_fut) =
-        builder.build::<Sendable, MessageTransport<IrohTransport<FuturesTimerTimeout>>>();
+        builder.build::<Sendable, MessageTransport<IrohTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -133,8 +135,6 @@ impl TestServer {
             loop {
                 match subduction_iroh::server::accept_one(
                     &accept_ep,
-                    REQUEST_TIMEOUT,
-                    FuturesTimerTimeout,
                     &accept_signer,
                     &nonce_cache,
                     peer_id,
@@ -189,8 +189,6 @@ impl TestClient {
         let result = subduction_iroh::client::connect(
             &client_ep,
             server_addr,
-            REQUEST_TIMEOUT,
-            FuturesTimerTimeout,
             &sig,
             Audience::known(server.peer_id),
         )
@@ -243,8 +241,6 @@ impl TestServerDiscover {
             loop {
                 match subduction_iroh::server::accept_one(
                     &accept_ep,
-                    REQUEST_TIMEOUT,
-                    FuturesTimerTimeout,
                     &accept_signer,
                     &nonce_cache,
                     peer_id,
@@ -295,8 +291,6 @@ impl TestClient {
         let result = subduction_iroh::client::connect(
             &client_ep,
             server_addr,
-            REQUEST_TIMEOUT,
-            FuturesTimerTimeout,
             &sig,
             Audience::discover(service_name.as_bytes()),
         )
@@ -803,8 +797,6 @@ async fn discovery_wrong_service_name_rejected() -> TestResult {
     let result = subduction_iroh::client::connect(
         &client_ep,
         server_addr,
-        REQUEST_TIMEOUT,
-        FuturesTimerTimeout,
         &sig,
         Audience::discover(b"service-beta"), // wrong service name
     )
@@ -1015,8 +1007,6 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
     tokio::spawn(async move {
         while let Ok(result) = subduction_iroh::server::accept_one(
             &accept_ep,
-            REQUEST_TIMEOUT,
-            FuturesTimerTimeout,
             &accept_signer,
             &nonce_cache,
             peer_id,
@@ -1046,8 +1036,6 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
     let result = subduction_iroh::client::connect(
         &client_ep,
         server_addr,
-        Duration::from_secs(2),
-        FuturesTimerTimeout,
         &client_sig,
         Audience::known(peer_id),
     )

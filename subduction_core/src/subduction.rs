@@ -890,6 +890,11 @@ where
     /// # Errors
     ///
     /// * Returns `IoError` if a storage or network error occurs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a connected peer has no corresponding multiplexer
+    /// (internal invariant: `add_connection` always creates one).
     pub async fn fetch_blobs(
         &self,
         id: SedimentreeId,
@@ -907,13 +912,15 @@ where
                     let seed = FingerprintSeed::random();
                     let summary = tree.fingerprint_summarize(&seed);
 
+                    #[allow(clippy::expect_used)]
+                    // Invariant: add_connection creates a Multiplexer for every peer
                     let mux = {
                         let muxes = self.multiplexers.lock().await;
-                        muxes.get(&peer_id).and_then(|v| v.first()).cloned().ok_or(
-                            IoError::MissingMultiplexer(
-                                crate::subduction::error::MissingMultiplexer(peer_id),
-                            ),
-                        )?
+                        muxes
+                            .get(&peer_id)
+                            .and_then(|v| v.first())
+                            .cloned()
+                            .expect("multiplexer exists for every connected peer")
                     };
                     let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                     let req_id = managed.next_request_id();
@@ -1317,6 +1324,11 @@ where
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a connected peer has no corresponding multiplexer
+    /// (internal invariant: `add_connection` always creates one).
     #[allow(clippy::too_many_lines)]
     pub async fn sync_with_peer(
         &self,
@@ -1370,13 +1382,15 @@ where
                 fp_summary.fragment_fingerprints().len()
             );
 
+            #[allow(clippy::expect_used)]
+            // Invariant: add_connection creates a Multiplexer for every peer
             let mux = {
                 let muxes = self.multiplexers.lock().await;
-                muxes.get(to_ask).and_then(|v| v.first()).cloned().ok_or(
-                    IoError::MissingMultiplexer(crate::subduction::error::MissingMultiplexer(
-                        *to_ask,
-                    )),
-                )?
+                muxes
+                    .get(to_ask)
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .expect("multiplexer exists for every connected peer")
             };
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
             let req_id = managed.next_request_id();
@@ -1538,6 +1552,11 @@ where
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a connected peer has no corresponding multiplexer
+    /// (internal invariant: `add_connection` always creates one).
     #[allow(clippy::too_many_lines)]
     pub async fn sync_with_all_peers(
         &self,
@@ -1600,14 +1619,13 @@ where
                                 |t| t.fingerprint_summarize(&seed),
                             );
 
+                        #[allow(clippy::expect_used)] // Invariant: add_connection creates a Multiplexer for every peer
                         let mux = {
                             let muxes = self.multiplexers.lock().await;
                             muxes.get(peer_id)
                                 .and_then(|v| v.first())
                                 .cloned()
-                                .ok_or(IoError::MissingMultiplexer(
-                                    crate::subduction::error::MissingMultiplexer(*peer_id),
-                                ))?
+                                .expect("multiplexer exists for every connected peer")
                         };
                         let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                         let req_id = managed.next_request_id();

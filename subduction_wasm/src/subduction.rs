@@ -446,7 +446,7 @@ impl WasmSubduction {
         &self,
         base_url: &str,
         expected_peer_id: &WasmPeerId,
-        timeout_milliseconds: Option<u32>,
+        _timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) =
             WasmLongPoll::connect_authenticated(base_url, self.core.signer(), expected_peer_id)
@@ -480,7 +480,7 @@ impl WasmSubduction {
     pub async fn connect_discover_long_poll(
         &self,
         base_url: &str,
-        timeout_milliseconds: Option<u32>,
+        _timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) = WasmLongPoll::connect_discover_authenticated(

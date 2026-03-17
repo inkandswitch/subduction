@@ -14,11 +14,6 @@ use crate::{
 
 /// No multiplexer was found for a connected peer.
 ///
-/// This indicates an internal invariant violation: every connected peer
-/// should have a corresponding [`Multiplexer`](crate::multiplexer::Multiplexer).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
-#[error("no multiplexer found for peer {0}")]
-pub struct MissingMultiplexer(pub PeerId);
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_crypto::verified_meta::BlobMismatch;
 
@@ -73,10 +68,6 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: 
     /// The blob content doesn't match the claimed metadata.
     #[error(transparent)]
     BlobMismatch(#[from] BlobMismatch),
-
-    /// No multiplexer found for a connected peer (internal invariant violation).
-    #[error(transparent)]
-    MissingMultiplexer(#[from] MissingMultiplexer),
 }
 
 /// An error that can occur while handling a blob request.

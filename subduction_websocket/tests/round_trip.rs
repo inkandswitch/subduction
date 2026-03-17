@@ -89,10 +89,11 @@ fn setup_client_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner>,
         ClientSyncHandler,
         OpenPolicy,
         MemorySigner,
+        TimeoutTokio,
         CountLeadingZeroBytes,
     >,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
@@ -101,7 +102,8 @@ fn setup_client_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
+        .timer(TimeoutTokio)
+        .build::<Sendable, TokioWebSocketClient<MemorySigner>>()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -137,7 +139,8 @@ async fn batch_sync() -> TestResult {
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>>();
+        .timer(TimeoutTokio)
+        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())
@@ -160,8 +163,6 @@ async fn batch_sync() -> TestResult {
 
     let server = TokioWebSocketServer::new(
         addr,
-        TimeoutTokio,
-        Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
@@ -181,14 +182,8 @@ async fn batch_sync() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
-        uri,
-        TimeoutTokio,
-        Duration::from_secs(5),
-        client_signer,
-        Audience::known(server_peer_id),
-    )
-    .await?;
+    let (client_ws, listener_fut, sender_fut) =
+        TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
         listener_fut.await?;
