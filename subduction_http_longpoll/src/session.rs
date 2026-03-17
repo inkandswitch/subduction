@@ -10,7 +10,7 @@ use core::fmt;
 use async_lock::Mutex;
 use future_form::Sendable;
 use rand::{RngCore, rngs::OsRng};
-use subduction_core::{authenticated::Authenticated, peer::id::PeerId, timeout::Timeout};
+use subduction_core::{authenticated::Authenticated, peer::id::PeerId};
 
 use crate::transport::HttpLongPollTransport;
 
@@ -85,24 +85,24 @@ const fn hex_digit(b: u8) -> Option<u8> {
 
 /// Thread-safe session store mapping [`SessionId`] to connection state.
 #[derive(Debug, Clone)]
-pub struct SessionStore<O: Timeout<Sendable> + Send + Sync> {
-    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<O>>>>,
+pub struct SessionStore {
+    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry>>>,
 }
 
 /// A single session entry containing the connection and peer identity.
 #[derive(Debug, Clone)]
-pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync> {
+pub struct SessionEntry {
     /// The peer's identity.
     pub peer_id: PeerId,
 
     /// The connection channels for this session.
-    pub connection: HttpLongPollTransport<O>,
+    pub connection: HttpLongPollTransport,
 
     /// The authenticated wrapper, present until consumed by Subduction registration.
-    pub authenticated: Option<Authenticated<HttpLongPollTransport<O>, Sendable>>,
+    pub authenticated: Option<Authenticated<HttpLongPollTransport, Sendable>>,
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> SessionStore<O> {
+impl SessionStore {
     /// Create a new empty session store.
     #[must_use]
     pub fn new() -> Self {
@@ -112,25 +112,22 @@ impl<O: Timeout<Sendable> + Send + Sync> SessionStore<O> {
     }
 
     /// Insert a new session.
-    pub async fn insert(&self, id: SessionId, entry: SessionEntry<O>) {
+    pub async fn insert(&self, id: SessionId, entry: SessionEntry) {
         self.sessions.lock().await.insert(id, entry);
     }
 
     /// Look up a session by ID.
-    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry<O>>
-    where
-        SessionEntry<O>: Clone,
-    {
+    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry> {
         self.sessions.lock().await.get(id).cloned()
     }
 
     /// Remove a session, returning the entry if it existed.
-    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry<O>> {
+    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry> {
         self.sessions.lock().await.remove(id)
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Default for SessionStore<O> {
+impl Default for SessionStore {
     fn default() -> Self {
         Self::new()
     }

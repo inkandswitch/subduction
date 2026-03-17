@@ -46,9 +46,9 @@ use crate::{
 
 /// Result of a successful connection, containing the authenticated connection
 /// and background task futures that the caller must spawn.
-pub struct ConnectResult<K: FutureForm, O: Clone> {
+pub struct ConnectResult<K: FutureForm> {
     /// The authenticated connection, ready for registration with Subduction.
-    pub authenticated: subduction_core::authenticated::Authenticated<HttpLongPollTransport<O>, K>,
+    pub authenticated: subduction_core::authenticated::Authenticated<HttpLongPollTransport, K>,
 
     /// The session ID assigned by the server.
     pub session_id: SessionId,
@@ -60,7 +60,7 @@ pub struct ConnectResult<K: FutureForm, O: Clone> {
     pub send_task: K::Future<'static, ()>,
 }
 
-impl<K: FutureForm, O: Clone> core::fmt::Debug for ConnectResult<K, O> {
+impl<K: FutureForm> core::fmt::Debug for ConnectResult<K> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectResult")
             .field("session_id", &self.session_id)
@@ -82,7 +82,6 @@ pub struct HttpLongPollClient<H, O> {
     base_url: String,
     http: H,
     timeout: O,
-    default_time_limit: Duration,
 }
 
 impl<H, O> HttpLongPollClient<H, O> {
@@ -90,15 +89,13 @@ impl<H, O> HttpLongPollClient<H, O> {
     ///
     /// - `base_url`: The server's base URL, e.g., `http://localhost:8080`.
     /// - `http`: The HTTP client implementation.
-    /// - `timeout`: The timeout strategy.
-    /// - `default_time_limit`: Default timeout for call operations.
+    /// - `timeout`: The timeout strategy (retained for the `Connect` trait).
     #[must_use]
-    pub fn new(base_url: &str, http: H, timeout: O, default_time_limit: Duration) -> Self {
+    pub fn new(base_url: &str, http: H, timeout: O) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
             timeout,
-            default_time_limit,
         }
     }
 }
@@ -116,9 +113,6 @@ impl<H, O> HttpLongPollClient<H, O> {
 /// Prefer the convenience methods [`HttpLongPollClient::connect`] and
 /// [`HttpLongPollClient::connect_discover`] over calling this trait directly.
 pub trait Connect<K: FutureForm, Sig: Signer<K>> {
-    /// The timeout strategy for the resulting connection.
-    type Timeout: Clone;
-
     /// Connect with a specific [`Audience`] (known peer ID or service discovery).
     ///
     /// # Errors
@@ -130,25 +124,21 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
         signer: &'a Sig,
         audience: Audience,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, Self::Timeout>, ClientError>>;
+    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>>;
 }
 
 #[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
 impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
     Connect<K, Sig> for HttpLongPollClient<H, O>
 {
-    type Timeout = O;
-
     fn connect_with_audience<'a>(
         &'a self,
         signer: &'a Sig,
         audience: Audience,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>> {
+    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>> {
         let http = self.http.clone();
         let base_url = self.base_url.clone();
-        let timeout = self.timeout.clone();
-        let default_time_limit = self.default_time_limit;
 
         K::from_future(async move {
             let nonce = Nonce::random();
@@ -169,11 +159,7 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
                         .session_id
                         .expect("session_id set during handshake send");
 
-                    let conn = HttpLongPollTransport::<O>::new(
-                        peer_id,
-                        default_time_limit,
-                        timeout.clone(),
-                    );
+                    let conn = HttpLongPollTransport::new(peer_id);
 
                     (conn, session_id)
                 },
@@ -197,7 +183,7 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
             let poll_conn = conn.clone();
 
             let poll_task = K::from_future(async move {
-                poll_loop::<K, H, O>(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
+                poll_loop::<K, H>(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
             });
 
             let send_url = format!("{base_url}/lp/send");
@@ -205,8 +191,7 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
             let send_conn = conn;
 
             let send_task = K::from_future(async move {
-                send_loop::<K, H, O>(send_http, send_url, session_id, send_conn, send_cancel_rx)
-                    .await;
+                send_loop::<K, H>(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
             });
 
             Ok(ConnectResult {
@@ -234,9 +219,9 @@ impl<H, O: Clone> HttpLongPollClient<H, O> {
         signer: &'a Sig,
         expected_peer_id: PeerId,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>>
     where
-        Self: Connect<K, Sig, Timeout = O>,
+        Self: Connect<K, Sig>,
     {
         Connect::<K, Sig>::connect_with_audience(
             self,
@@ -260,9 +245,9 @@ impl<H, O: Clone> HttpLongPollClient<H, O> {
         signer: &'a Sig,
         service_name: &str,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>>
     where
-        Self: Connect<K, Sig, Timeout = O>,
+        Self: Connect<K, Sig>,
     {
         Connect::<K, Sig>::connect_with_audience(
             self,
@@ -279,11 +264,11 @@ impl<H, O: Clone> HttpLongPollClient<H, O> {
 
 /// Background task that continuously polls `POST /lp/recv` and pushes
 /// raw bytes into the connection's inbound channel.
-async fn poll_loop<K: FutureForm, H: HttpClient<K>, O>(
+async fn poll_loop<K: FutureForm, H: HttpClient<K>>(
     http: H,
     url: String,
     session_id: SessionId,
-    conn: HttpLongPollTransport<O>,
+    conn: HttpLongPollTransport,
     cancel: async_channel::Receiver<()>,
 ) {
     loop {
@@ -332,11 +317,11 @@ async fn poll_loop<K: FutureForm, H: HttpClient<K>, O>(
 
 /// Background task that drains the connection's outbound channel and sends
 /// each message via `POST /lp/send`.
-async fn send_loop<K: FutureForm, H: HttpClient<K>, O>(
+async fn send_loop<K: FutureForm, H: HttpClient<K>>(
     http: H,
     url: String,
     session_id: SessionId,
-    conn: HttpLongPollTransport<O>,
+    conn: HttpLongPollTransport,
     cancel: async_channel::Receiver<()>,
 ) {
     loop {

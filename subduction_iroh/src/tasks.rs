@@ -73,10 +73,7 @@ pub(crate) async fn write_framed(send: &mut SendStream, data: &[u8]) -> Result<(
 /// # Errors
 ///
 /// Returns an error if reading from the stream or dispatching fails.
-pub async fn listener_task<O: Send + Sync>(
-    conn: IrohTransport<O>,
-    mut recv: RecvStream,
-) -> Result<(), RunError> {
+pub async fn listener_task(conn: IrohTransport, mut recv: RecvStream) -> Result<(), RunError> {
     let peer_id = conn.quic_connection().remote_id();
     tracing::info!("starting iroh listener task for peer {peer_id}");
 

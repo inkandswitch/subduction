@@ -13,15 +13,11 @@
 //! [`Multiplexer`], identical to other transports.
 
 use alloc::{sync::Arc, vec::Vec};
-use core::time::Duration;
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use rand::{RngCore, rngs::OsRng};
-use subduction_core::{
-    connection::message::SyncMessage, multiplexer::Multiplexer, peer::id::PeerId, timeout::Timeout,
-    transport::Transport,
-};
+use subduction_core::{peer::id::PeerId, transport::Transport};
 
 use crate::error::{DisconnectionError, RecvError, SendError};
 
@@ -36,10 +32,9 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// This struct is wrapped in an `Arc` so that clones share the same channels
 /// and pending-request map — exactly like the WebSocket transport.
 #[derive(Debug)]
-struct Inner<O> {
+struct Inner {
     chan_id: u64,
-    multiplexer: Multiplexer,
-    timeout: O,
+    peer_id: PeerId,
 
     /// Raw bytes from `send_bytes()` / `call()` → picked up by `/lp/recv` handler.
     outbound_tx: async_channel::Sender<Vec<u8>>,
@@ -59,20 +54,17 @@ struct Inner<O> {
 /// Created during handshake and stored in the [`SessionStore`](crate::session::SessionStore).
 /// The server's HTTP handlers interact with this connection's channels to
 /// bridge HTTP request-response pairs to Subduction's bidirectional protocol.
-///
-/// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio` for native,
-/// or a browser-based timeout for Wasm).
 #[derive(Debug, Clone)]
-pub struct HttpLongPollTransport<O> {
-    inner: Arc<Inner<O>>,
+pub struct HttpLongPollTransport {
+    inner: Arc<Inner>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
     outbound_rx: async_channel::Receiver<Vec<u8>>,
 }
 
-impl<O> HttpLongPollTransport<O> {
+impl HttpLongPollTransport {
     /// Create a new HTTP long-poll connection for the given peer.
     #[must_use]
-    pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
+    pub fn new(peer_id: PeerId) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let chan_id = OsRng.next_u64();
@@ -80,8 +72,7 @@ impl<O> HttpLongPollTransport<O> {
         Self {
             inner: Arc::new(Inner {
                 chan_id,
-                multiplexer: Multiplexer::new(peer_id, default_time_limit),
-                timeout,
+                peer_id,
                 outbound_tx,
                 inbound_writer,
                 inbound_reader,
@@ -105,9 +96,9 @@ impl<O> HttpLongPollTransport<O> {
     /// Called by HTTP handlers (server's `POST /lp/send`) or the client poll
     /// loop when a message arrives from the remote peer.
     ///
-    /// Attempts to decode as [`SyncMessage`] to check for [`BatchSyncResponse`];
-    /// if found, routes to the pending `call()` oneshot. All other bytes go to
-    /// the inbound channel for `recv_bytes()`.
+    /// All bytes go to the inbound channel for `recv_bytes()`. Response routing
+    /// is handled by
+    /// [`Subduction::listen`](subduction_core::subduction::Subduction::listen).
     ///
     /// # Errors
     ///
@@ -116,14 +107,6 @@ impl<O> HttpLongPollTransport<O> {
         &self,
         bytes: Vec<u8>,
     ) -> Result<(), async_channel::SendError<Vec<u8>>> {
-        // Try to decode as SyncMessage to route BatchSyncResponse to pending waiters.
-        if let Ok(SyncMessage::BatchSyncResponse(ref resp)) = SyncMessage::try_decode(&bytes)
-            && self.inner.multiplexer.resolve_pending(resp).await
-        {
-            return Ok(());
-        }
-
-        // All other bytes go to the inbound channel.
         self.inner.inbound_writer.send(bytes).await
     }
 
@@ -151,14 +134,14 @@ impl<O> HttpLongPollTransport<O> {
     }
 }
 
-#[future_form(Sendable where O: Send + Sync, Local)]
-impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollTransport<O> {
+#[future_form(Sendable, Local)]
+impl<K: FutureForm> Transport<K> for HttpLongPollTransport {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.inner.multiplexer.peer_id(), "HttpLongPoll::disconnect");
+        tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
         let conn = self.clone();
         K::from_future(async move {
             conn.close();
@@ -170,7 +153,7 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollTransport<O> {
         tracing::debug!(
             "http-lp: sending {} outbound bytes to peer {}",
             bytes.len(),
-            self.inner.multiplexer.peer_id()
+            self.inner.peer_id
         );
 
         let data = bytes.to_vec();
@@ -186,7 +169,7 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollTransport<O> {
         tracing::debug!(
             chan_id = self.inner.chan_id,
             "waiting on recv {:?}",
-            self.inner.multiplexer.peer_id()
+            self.inner.peer_id
         );
 
         K::from_future(async move {
@@ -201,7 +184,7 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollTransport<O> {
     }
 }
 
-impl<O> PartialEq for HttpLongPollTransport<O> {
+impl PartialEq for HttpLongPollTransport {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -211,46 +194,14 @@ impl<O> PartialEq for HttpLongPollTransport<O> {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use future_form::Sendable;
-    use subduction_core::peer::id::PeerId;
-
-    /// A simple timer-based timeout for tests using `futures_timer::Delay`.
-    #[derive(Debug, Clone, Copy)]
-    struct TestTimeout;
-
-    impl Timeout<Sendable> for TestTimeout {
-        fn timeout<'a, T: 'a>(
-            &'a self,
-            dur: Duration,
-            fut: futures::future::BoxFuture<'a, T>,
-        ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::timeout::TimedOut>> {
-            use futures::{
-                FutureExt,
-                future::{Either, select},
-            };
-            async move {
-                match select(fut, futures_timer::Delay::new(dur)).await {
-                    Either::Left((val, _)) => Ok(val),
-                    Either::Right(_) => Err(subduction_core::timeout::TimedOut),
-                }
-            }
-            .boxed()
-        }
-    }
+    use subduction_core::connection::message::SyncMessage;
 
     #[tokio::test]
-    async fn next_request_id_increments() {
+    async fn peer_id_preserved() {
         let peer_id = PeerId::new([1u8; 32]);
-        let conn: HttpLongPollTransport<TestTimeout> =
-            HttpLongPollTransport::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollTransport::new(peer_id);
 
-        let id1 = conn.inner.multiplexer.next_request_id();
-        let id2 = conn.inner.multiplexer.next_request_id();
-        let id3 = conn.inner.multiplexer.next_request_id();
-
-        assert_eq!(id1.requestor, peer_id);
-        assert_eq!(id2.nonce, id1.nonce + 1);
-        assert_eq!(id3.nonce, id2.nonce + 1);
+        assert_eq!(conn.inner.peer_id, peer_id);
     }
 
     #[tokio::test]
@@ -262,8 +213,7 @@ mod tests {
         };
 
         let peer_id = PeerId::new([2u8; 32]);
-        let conn: HttpLongPollTransport<TestTimeout> =
-            HttpLongPollTransport::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollTransport::new(peer_id);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
@@ -287,8 +237,7 @@ mod tests {
         };
 
         let peer_id = PeerId::new([3u8; 32]);
-        let conn: HttpLongPollTransport<TestTimeout> =
-            HttpLongPollTransport::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollTransport::new(peer_id);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],

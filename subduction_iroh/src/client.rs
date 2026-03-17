@@ -3,8 +3,6 @@
 //! Connects to a remote peer by their iroh [`EndpointAddr`] and returns an
 //! [`Authenticated`] connection with background listener and sender tasks.
 
-use core::time::Duration;
-
 use future_form::Sendable;
 use futures::future::BoxFuture;
 use iroh::{Endpoint, EndpointAddr, endpoint::Connection as QuicConnection};
@@ -12,7 +10,6 @@ use subduction_core::{
     authenticated::Authenticated,
     handshake::{self, audience::Audience},
     peer::id::PeerId,
-    timeout::Timeout,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -28,9 +25,9 @@ use crate::{
 ///
 /// Contains the authenticated connection plus two background task futures
 /// that must be spawned externally for the connection to function.
-pub struct ConnectResult<O: Timeout<Sendable> + Send + Sync> {
+pub struct ConnectResult {
     /// The authenticated connection, ready for use with Subduction.
-    pub authenticated: Authenticated<IrohTransport<O>, Sendable>,
+    pub authenticated: Authenticated<IrohTransport, Sendable>,
 
     /// Background task that reads from the QUIC stream.
     /// Must be spawned (e.g., via `tokio::spawn`).
@@ -41,7 +38,7 @@ pub struct ConnectResult<O: Timeout<Sendable> + Send + Sync> {
     pub sender_task: BoxFuture<'static, Result<(), RunError>>,
 }
 
-impl<O: Timeout<Sendable> + Send + Sync + core::fmt::Debug> core::fmt::Debug for ConnectResult<O> {
+impl core::fmt::Debug for ConnectResult {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectResult")
             .field("authenticated", &self.authenticated)
@@ -74,16 +71,13 @@ impl<O: Timeout<Sendable> + Send + Sync + core::fmt::Debug> core::fmt::Debug for
 /// tokio::spawn(result.sender_task);
 /// subduction.add_connection(result.authenticated).await?;
 /// ```
-pub async fn connect<O, S>(
+pub async fn connect<S>(
     endpoint: &Endpoint,
     addr: EndpointAddr,
-    default_time_limit: Duration,
-    timeout: O,
     signer: &S,
     audience: Audience,
-) -> Result<ConnectResult<O>, ConnectError>
+) -> Result<ConnectResult, ConnectError>
 where
-    O: Timeout<Sendable> + Clone + Send + Sync + 'static,
     S: Signer<Sendable>,
 {
     let quic_conn: QuicConnection = endpoint.connect(addr, ALPN).await?;
@@ -97,7 +91,6 @@ where
 
     let now = TimestampSeconds::now();
     let nonce = Nonce::random();
-    let timeout_clone = timeout.clone();
     let quic_conn_clone = quic_conn.clone();
 
     let (authenticated, (listener_task, sender_task)) =
@@ -106,12 +99,7 @@ where
             move |iroh_handshake, peer_id| {
                 let (send_stream, recv_stream) = iroh_handshake.into_parts();
 
-                let (conn, outbound_rx) = IrohTransport::<O>::new(
-                    peer_id,
-                    quic_conn_clone,
-                    default_time_limit,
-                    timeout_clone,
-                );
+                let (conn, outbound_rx) = IrohTransport::new(peer_id, quic_conn_clone);
 
                 let listener_conn = conn.clone();
                 let listener_task: BoxFuture<'static, Result<(), RunError>> =

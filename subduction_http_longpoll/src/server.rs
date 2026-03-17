@@ -44,13 +44,12 @@ use crate::{
 /// Server-side handler state, shared across request handlers.
 #[derive(Debug, Clone)]
 pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync> {
-    sessions: SessionStore<O>,
+    sessions: SessionStore,
     signer: Sig,
     nonce_cache: Arc<NonceCache>,
     our_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     handshake_max_drift: Duration,
-    default_time_limit: Duration,
     timeout: O,
     max_body_size: usize,
     poll_timeout: Duration,
@@ -67,7 +66,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         our_peer_id: PeerId,
         discovery_audience: Option<Audience>,
         handshake_max_drift: Duration,
-        default_time_limit: Duration,
         timeout: O,
     ) -> Self {
         Self {
@@ -77,7 +75,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
             our_peer_id,
             discovery_audience,
             handshake_max_drift,
-            default_time_limit,
             timeout,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
             poll_timeout: Duration::from_secs(DEFAULT_POLL_TIMEOUT_SECS),
@@ -100,7 +97,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
     /// Access the session store.
     #[must_use]
-    pub const fn sessions(&self) -> &SessionStore<O> {
+    pub const fn sessions(&self) -> &SessionStore {
         &self.sessions
     }
 
@@ -161,13 +158,11 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         };
 
         let now = TimestampSeconds::now();
-        let default_time_limit = self.default_time_limit;
-        let timeout = self.timeout.clone();
 
         let result = handshake::respond::<Sendable, _, _, _, _>(
             http_handshake,
             |_handshake, peer_id| {
-                let conn = HttpLongPollTransport::new(peer_id, default_time_limit, timeout.clone());
+                let conn = HttpLongPollTransport::new(peer_id);
                 (conn.clone(), conn)
             },
             &self.signer,
@@ -327,7 +322,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     pub async fn take_authenticated(
         &self,
         session_id: &SessionId,
-    ) -> Option<Authenticated<HttpLongPollTransport<O>, Sendable>> {
+    ) -> Option<Authenticated<HttpLongPollTransport, Sendable>> {
         let mut sessions = self.sessions.sessions.lock().await;
         sessions
             .get_mut(session_id)

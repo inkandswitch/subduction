@@ -6,22 +6,22 @@
 
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::{timeout::Timeout, transport::Transport};
+use subduction_core::transport::Transport;
 use subduction_http_longpoll::transport::HttpLongPollTransport;
 use subduction_iroh::transport::IrohTransport;
 use subduction_websocket::tokio::unified::UnifiedWebSocket;
 
 /// A unified connection covering all transport types the CLI server supports.
 #[derive(Debug, Clone)]
-pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Send + Sync> {
+pub(crate) enum UnifiedTransport {
     /// WebSocket transport (accepted or dialed).
-    WebSocket(UnifiedWebSocket<O>),
+    WebSocket(UnifiedWebSocket),
 
     /// HTTP long-poll transport.
-    HttpLongPoll(HttpLongPollTransport<O>),
+    HttpLongPoll(HttpLongPollTransport),
 
     /// Iroh QUIC transport.
-    Iroh(IrohTransport<O>),
+    Iroh(IrohTransport),
 }
 
 /// Error type for send operations across transports.
@@ -72,7 +72,7 @@ pub(crate) enum TransportDisconnectionError {
     Iroh(#[from] subduction_iroh::error::DisconnectionError),
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for UnifiedTransport<O> {
+impl Transport<Sendable> for UnifiedTransport {
     type SendError = TransportSendError;
     type RecvError = TransportRecvError;
     type DisconnectionError = TransportDisconnectionError;
@@ -135,7 +135,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for UnifiedTranspor
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> PartialEq for UnifiedTransport<O> {
+impl PartialEq for UnifiedTransport {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::WebSocket(a), Self::WebSocket(b)) => a == b,

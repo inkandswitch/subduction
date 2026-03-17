@@ -3,8 +3,10 @@
 //! The core [`Timeout`] trait and [`TimedOut`] error are re-exported from
 //! `subduction_core`. This module provides concrete implementations.
 
+#[cfg(feature = "futures-timer")]
 use core::time::Duration;
 
+#[cfg(feature = "futures-timer")]
 use subduction_core::timeout::{TimedOut, Timeout};
 
 #[cfg(feature = "futures-timer")]

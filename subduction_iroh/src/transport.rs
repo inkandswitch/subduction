@@ -13,15 +13,12 @@
 //! shared [`Multiplexer`], identical to other transports.
 
 use alloc::{sync::Arc, vec::Vec};
-use core::{fmt::Debug, time::Duration};
+use core::fmt::Debug;
 
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use rand::RngCore;
-use subduction_core::{
-    connection::message::SyncMessage, multiplexer::Multiplexer, peer::id::PeerId, timeout::Timeout,
-    transport::Transport,
-};
+use subduction_core::{peer::id::PeerId, transport::Transport};
 
 use crate::error::{DisconnectionError, RecvError, SendError};
 
@@ -33,10 +30,9 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 
 /// Shared interior state for an Iroh connection.
 #[derive(Debug)]
-struct Inner<O> {
+struct Inner {
     chan_id: u64,
-    multiplexer: Multiplexer,
-    timeout: O,
+    peer_id: PeerId,
 
     /// Raw bytes from `send_bytes()` / `call()` -> drained by the sender task.
     outbound_tx: async_channel::Sender<Vec<u8>>,
@@ -54,14 +50,12 @@ struct Inner<O> {
 /// Created by [`connect`](crate::client::connect) or the server accept loop.
 /// Uses a single QUIC bi-directional stream under the hood for framed message
 /// passing.
-///
-/// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio`).
 #[derive(Debug, Clone)]
-pub struct IrohTransport<O> {
-    inner: Arc<Inner<O>>,
+pub struct IrohTransport {
+    inner: Arc<Inner>,
 }
 
-impl<O> IrohTransport<O> {
+impl IrohTransport {
     /// Create a new Iroh connection from a QUIC connection.
     ///
     /// The caller is responsible for spawning the listener and sender tasks
@@ -73,8 +67,6 @@ impl<O> IrohTransport<O> {
     pub fn new(
         peer_id: PeerId,
         quic_conn: iroh::endpoint::Connection,
-        default_time_limit: Duration,
-        timeout: O,
     ) -> (Self, async_channel::Receiver<Vec<u8>>) {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
@@ -83,8 +75,7 @@ impl<O> IrohTransport<O> {
         let conn = Self {
             inner: Arc::new(Inner {
                 chan_id,
-                multiplexer: Multiplexer::new(peer_id, default_time_limit),
-                timeout,
+                peer_id,
                 outbound_tx,
                 inbound_writer,
                 inbound_reader,
@@ -97,21 +88,13 @@ impl<O> IrohTransport<O> {
 
     /// Push raw inbound bytes into the connection's channels.
     ///
-    /// Attempts to decode as [`SyncMessage`] to check for [`BatchSyncResponse`];
-    /// if found, routes to the pending `call()` oneshot. All other bytes go to
-    /// the inbound channel for `recv_bytes()`.
+    /// All bytes go to the inbound channel for `recv_bytes()`. Response
+    /// routing is handled by
+    /// [`Subduction::listen`](subduction_core::subduction::Subduction::listen).
     pub(crate) async fn push_inbound(
         &self,
         bytes: Vec<u8>,
     ) -> Result<(), async_channel::SendError<Vec<u8>>> {
-        // Try to decode as SyncMessage to route BatchSyncResponse to pending waiters.
-        if let Ok(SyncMessage::BatchSyncResponse(ref resp)) = SyncMessage::try_decode(&bytes)
-            && self.inner.multiplexer.resolve_pending(resp).await
-        {
-            return Ok(());
-        }
-
-        // All other bytes go to the inbound channel.
         self.inner.inbound_writer.send(bytes).await
     }
 
@@ -130,7 +113,7 @@ impl<O> IrohTransport<O> {
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohTransport<O> {
+impl Transport<Sendable> for IrohTransport {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
@@ -139,7 +122,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohTransport<O
         tracing::debug!(
             "iroh: sending {} outbound bytes to peer {}",
             bytes.len(),
-            self.inner.multiplexer.peer_id()
+            self.inner.peer_id
         );
 
         let data = bytes.to_vec();
@@ -156,7 +139,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohTransport<O
         tracing::debug!(
             chan_id = self.inner.chan_id,
             "waiting on recv {:?}",
-            self.inner.multiplexer.peer_id()
+            self.inner.peer_id
         );
 
         async move {
@@ -172,7 +155,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohTransport<O
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.inner.multiplexer.peer_id(), "IrohTransport::disconnect");
+        tracing::info!(peer_id = %self.inner.peer_id, "IrohTransport::disconnect");
         let conn = self.clone();
         async move {
             conn.close();
@@ -182,7 +165,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohTransport<O
     }
 }
 
-impl<O> PartialEq for IrohTransport<O> {
+impl PartialEq for IrohTransport {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }

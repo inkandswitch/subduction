@@ -39,6 +39,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
+// NOTE: `O: Timeout<Sendable>` remains on the server type because
+// `Subduction` / `SubductionBuilder` still require a timer parameter,
+// even though WebSocket itself no longer stores it.
+
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug)]
 pub struct TokioWebSocketServer<
@@ -99,8 +103,6 @@ where
     /// # Arguments
     ///
     /// * `address` - The socket address to bind to
-    /// * `timeout` - The timeout strategy for requests
-    /// * `default_time_limit` - Default timeout duration
     /// * `handshake_max_drift` - Maximum acceptable clock drift during handshake
     /// * `max_message_size` - Maximum WebSocket message size in bytes
     /// * `subduction` - The Subduction instance to register connections with
@@ -111,8 +113,6 @@ where
     #[allow(clippy::too_many_lines)]
     pub async fn new(
         address: SocketAddr,
-        timeout: O,
-        default_time_limit: Duration,
         handshake_max_drift: Duration,
         max_message_size: usize,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
@@ -154,7 +154,6 @@ where
                                 let task_subduction = inner_subduction.clone();
                                 let task_discovery_audience = discovery_audience;
                                 conns.spawn({
-                                    let tout = timeout.clone();
                                     async move {
                                         let mut ws_config = WebSocketConfig::default();
                                         ws_config.max_message_size = Some(max_message_size);
@@ -179,8 +178,6 @@ where
                                                 // Create WebSocket wrapper with verified PeerId
                                                 let (ws, sender_fut) = WebSocket::new(
                                                     ws_handshake.into_inner(),
-                                                    tout.clone(),
-                                                    default_time_limit,
                                                     peer_id,
                                                 );
 
@@ -259,7 +256,6 @@ where
     pub async fn setup(
         address: SocketAddr,
         timeout: O,
-        default_time_limit: Duration,
         handshake_max_drift: Duration,
         max_message_size: usize,
         signer: Sig,
@@ -272,7 +268,6 @@ where
     where
         M: Clone,
         S: core::fmt::Debug,
-        UnifiedWebSocket<O>: core::fmt::Debug,
     {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
 
@@ -289,17 +284,9 @@ where
         }
 
         let (subduction, _handler, listener_fut, manager_fut) =
-            builder.build::<Sendable, MessageTransport<UnifiedWebSocket<O>>>();
+            builder.build::<Sendable, MessageTransport<UnifiedWebSocket>>();
 
-        let server = Self::new(
-            address,
-            timeout,
-            default_time_limit,
-            handshake_max_drift,
-            max_message_size,
-            subduction,
-        )
-        .await?;
+        let server = Self::new(address, handshake_max_drift, max_message_size, subduction).await?;
 
         let actor_cancel = server.cancellation_token.clone();
         let listener_cancel = server.cancellation_token.clone();
@@ -354,7 +341,7 @@ where
     /// [`handshake::respond`]: subduction_core::handshake::respond
     pub async fn add_connection(
         &self,
-        authenticated: Authenticated<UnifiedWebSocket<O>, Sendable>,
+        authenticated: Authenticated<UnifiedWebSocket, Sendable>,
     ) -> Result<bool, AddConnectionError<P::ConnectionDisallowed>> {
         let auth_mt = authenticated.map(MessageTransport::new);
         self.subduction.add_connection(auth_mt).await
@@ -368,8 +355,6 @@ where
     /// # Arguments
     ///
     /// * `uri` - The WebSocket URI to connect to
-    /// * `timeout` - Timeout strategy for requests
-    /// * `default_time_limit` - Default timeout duration
     /// * `expected_peer_id` - The expected peer ID of the server
     ///
     /// # Errors
@@ -379,8 +364,6 @@ where
     pub async fn try_connect(
         &self,
         uri: Uri,
-        timeout: O,
-        default_time_limit: Duration,
         expected_peer_id: PeerId,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
         let uri_str = uri.to_string();
@@ -404,8 +387,7 @@ where
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut) =
-                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
+                let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -482,8 +464,6 @@ where
     /// # Arguments
     ///
     /// * `uri` - The WebSocket URI to connect to
-    /// * `timeout` - Timeout strategy for requests
-    /// * `default_time_limit` - Default timeout duration
     /// * `service_name` - The service name for discovery (e.g., "sync.example.com")
     ///
     /// # Errors
@@ -493,8 +473,6 @@ where
     pub async fn try_connect_discover(
         &self,
         uri: Uri,
-        timeout: O,
-        default_time_limit: Duration,
         service_name: &str,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
         let uri_str = uri.to_string();
@@ -518,8 +496,7 @@ where
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut) =
-                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
+                let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -585,8 +562,8 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
         'static,
         Sendable,
         S,
-        MessageTransport<UnifiedWebSocket<O>>,
-        SyncHandler<Sendable, S, MessageTransport<UnifiedWebSocket<O>>, P, M>,
+        MessageTransport<UnifiedWebSocket>,
+        SyncHandler<Sendable, S, MessageTransport<UnifiedWebSocket>, P, M>,
         P,
         Sig,
         O,

@@ -61,7 +61,7 @@ impl Timeout<Local> for JsTimeout {
 }
 
 /// Type alias for the long-poll transport used in Wasm.
-pub type WasmLongPollTransport = HttpLongPollTransport<JsTimeout>;
+pub type WasmLongPollTransport = HttpLongPollTransport;
 
 /// JS-facing wrapper around [`WasmLongPollTransport`] that exposes the
 /// byte-oriented [`Transport`](super::JsTransport) interface
@@ -188,16 +188,8 @@ impl WasmAuthenticatedLongPoll {
 // ---------------------------------------------------------------------------
 
 /// Build an [`HttpLongPollClient`] configured for the browser.
-fn make_client(
-    base_url: &str,
-    default_time_limit: Duration,
-) -> HttpLongPollClient<FetchHttpClient, JsTimeout> {
-    HttpLongPollClient::new(
-        base_url,
-        FetchHttpClient::new(),
-        JsTimeout,
-        default_time_limit,
-    )
+fn make_client(base_url: &str) -> HttpLongPollClient<FetchHttpClient, JsTimeout> {
+    HttpLongPollClient::new(base_url, FetchHttpClient::new(), JsTimeout)
 }
 
 /// Get the current timestamp from JS `Date.now()`.
@@ -234,9 +226,7 @@ impl WasmLongPoll {
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: Option<u32>,
     ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
-        let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
-        let default_time_limit = Duration::from_millis(timeout_ms.into());
-        let client = make_client(base_url, default_time_limit);
+        let client = make_client(base_url);
 
         let result = client
             .connect(signer, expected_peer_id.clone().into(), js_now())
@@ -259,7 +249,6 @@ impl WasmLongPoll {
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
     /// * `signer` - The client's signer for authentication
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     /// * `service_name` - The service name for discovery. If omitted, the base URL is used.
     ///
     /// # Errors
@@ -269,12 +258,9 @@ impl WasmLongPoll {
     pub async fn try_discover(
         base_url: &str,
         signer: &JsSigner,
-        timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
-        let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
-        let default_time_limit = Duration::from_millis(timeout_ms.into());
-        let client = make_client(base_url, default_time_limit);
+        let client = make_client(base_url);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
         let result = client
@@ -297,11 +283,9 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-        timeout_milliseconds: u32,
     ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
-        let default_time_limit = Duration::from_millis(timeout_milliseconds.into());
-        let client = make_client(base_url, default_time_limit);
+        let client = make_client(base_url);
 
         let result = client
             .connect(signer, expected_peer_id.clone().into(), js_now())
@@ -319,13 +303,10 @@ impl WasmLongPoll {
     pub(crate) async fn connect_discover_authenticated(
         base_url: &str,
         signer: &JsSigner,
-        timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
-        let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
-        let default_time_limit = Duration::from_millis(timeout_ms.into());
-        let client = make_client(base_url, default_time_limit);
+        let client = make_client(base_url);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
         let result = client
