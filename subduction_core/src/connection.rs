@@ -1,13 +1,7 @@
 //! Manage connections to peers in the network.
 //!
-//! Two independent traits model the two communication patterns:
-//!
-//! - [`Connection<K, M>`] — fire-and-forget cast + async recv (mailbox)
-//! - [`Roundtrip<K, Req, Resp>`] — correlated request-response
-//!
-//! Transports implement both. Consumers pick the trait(s) they need:
-//! handlers typically need only [`Connection`], while orchestration
-//! code (sync, full sync) also needs [`Roundtrip`].
+//! [`Connection<K, M>`] models fire-and-forget cast + async recv (mailbox).
+//! Transports implement this trait via [`MessageTransport`](crate::transport::message::MessageTransport).
 
 pub mod backoff;
 pub mod id;
@@ -20,9 +14,7 @@ pub mod stats;
 pub mod test_utils;
 
 use alloc::sync::Arc;
-use core::time::Duration;
 
-use self::message::RequestId;
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use thiserror::Error;
@@ -55,26 +47,6 @@ pub trait Connection<K: FutureForm + ?Sized, M: Encode + Decode>: Clone + Partia
     fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>>;
 }
 
-/// Correlated request-response roundtrip.
-///
-/// Independent of [`Connection`] — a type may implement one or both.
-/// Each request is tagged with a [`RequestId`] so that the transport
-/// can correlate the response.
-pub trait Roundtrip<K: FutureForm + ?Sized, Req, Resp>: Clone + PartialEq {
-    /// A problem with a roundtrip call.
-    type CallError: core::error::Error;
-
-    /// Get the next request ID for a [`call`](Self::call).
-    fn next_request_id(&self) -> K::Future<'_, RequestId>;
-
-    /// Perform a request-response roundtrip.
-    fn call(
-        &self,
-        req: Req,
-        timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<Resp, Self::CallError>>;
-}
-
 // ── Blanket impls for Arc<T> ────────────────────────────────────────────
 
 impl<T, K, M> Connection<K, M> for Arc<T>
@@ -97,26 +69,6 @@ where
 
     fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>> {
         T::recv(self)
-    }
-}
-
-impl<T, K, Req, Resp> Roundtrip<K, Req, Resp> for Arc<T>
-where
-    T: Roundtrip<K, Req, Resp>,
-    K: FutureForm,
-{
-    type CallError = T::CallError;
-
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        T::next_request_id(self)
-    }
-
-    fn call(
-        &self,
-        req: Req,
-        timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<Resp, Self::CallError>> {
-        T::call(self, req, timeout)
     }
 }
 

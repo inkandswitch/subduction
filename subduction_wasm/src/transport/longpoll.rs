@@ -175,11 +175,10 @@ impl WasmAuthenticatedLongPoll {
     #[must_use]
     #[wasm_bindgen(js_name = toTransport)]
     pub fn to_transport(self) -> super::WasmAuthenticatedTransport {
-        let peer_id = self.inner.peer_id();
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
             let transport: super::JsTransport =
                 wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-            super::make_transport(transport, peer_id, super::DEFAULT_CALL_TIME_LIMIT)
+            super::make_transport(transport)
         }))
     }
 }

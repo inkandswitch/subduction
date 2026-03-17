@@ -67,23 +67,23 @@ use sedimentree_core::{
 
 use crate::{
     authenticated::Authenticated,
-    connection::{manager::Spawn, message::SyncMessage, Connection},
-    handler::{sync::SyncHandler, Handler},
+    connection::{Connection, manager::Spawn, message::SyncMessage},
+    handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, traits::Storage},
-    timeout::Tmreout,
+    timeout::Timeout,
 };
 use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    error::ListenError,
-    pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
     ListenerFuture, StartListener, Subduction, SubductionFutureForm,
+    error::ListenError,
+    pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
 };
 
 /// Marker for a required builder field that hasn't been set yet.
@@ -242,8 +242,8 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Unset, M, 
     /// Set the timeout strategy for roundtrip calls.
     ///
     /// This is a required field. Common implementations:
-    /// - `TokioTmreout` for native async
-    /// - `JsTmreout` for browser environments
+    /// - `TokioTimeout` for native async
+    /// - `JsTimeout` for browser environments
     pub fn timer<O>(self, timer: O) -> SubductionBuilder<Sig, Sp, Sto, O, M, N> {
         SubductionBuilder {
             signer: self.signer,
@@ -351,7 +351,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     ///     .signer(signer)
     ///     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
     ///     .spawner(TokioSpawn)
-    ///     .timer(TokioTmreout)
+    ///     .timer(TokioTimeout)
     ///     .build::<Sendable, MyConnection>();
     /// ```
     #[allow(clippy::type_complexity)]
@@ -370,7 +370,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
         C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
-        Tmr: Tmreout<F> + Clone + Send + Sync + 'a,
+        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
         M: Clone,
         SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
@@ -378,10 +378,10 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             Into<ListenError<F, S, C, SyncMessage>>,
         crate::connection::managed::ManagedConnection<C, F, Tmr>:
             crate::connection::managed::ManagedCall<
-                F,
-                SyncMessage,
-                SendError = <C as Connection<F, SyncMessage>>::SendError,
-            >,
+                    F,
+                    SyncMessage,
+                    SendError = <C as Connection<F, SyncMessage>>::SendError,
+                >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -440,7 +440,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     ///     .signer(signer)
     ///     .storage(my_storage, Arc::new(policy))
     ///     .spawner(TokioSpawn)
-    ///     .timer(TokioTmreout)
+    ///     .timer(TokioTimeout)
     ///     .build_with_handler::<Sendable, MyConnection, _>(handler);
     /// ```
     #[allow(clippy::type_complexity)]
@@ -459,17 +459,17 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
         C: Connection<F, H::Message> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
-        Tmr: Tmreout<F> + Clone + Send + Sync + 'a,
+        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
         H::Message: From<SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
         crate::connection::managed::ManagedConnection<C, F, Tmr>:
             crate::connection::managed::ManagedCall<
-                F,
-                H::Message,
-                SendError = <C as Connection<F, H::Message>>::SendError,
-            >,
+                    F,
+                    H::Message,
+                    SendError = <C as Connection<F, H::Message>>::SendError,
+                >,
     {
         let sedimentrees = self
             .sedimentrees

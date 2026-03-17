@@ -3,13 +3,13 @@
 //! Provides [`Authenticated<C, K>`], a witness type proving that a connection
 //! has completed cryptographic handshake verification.
 
-use core::{marker::PhantomData, time::Duration};
+use core::marker::PhantomData;
 
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use crate::{
-    connection::{Connection, Reconnect, Roundtrip, message::RequestId},
+    connection::{Connection, Reconnect},
     peer::id::PeerId,
 };
 
@@ -143,26 +143,6 @@ impl<C: Connection<K, M>, K: FutureForm, M: Encode + Decode> Connection<K, M>
 
     fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>> {
         self.inner.recv()
-    }
-}
-
-impl<C, K, Req, Resp> Roundtrip<K, Req, Resp> for Authenticated<C, K>
-where
-    C: Roundtrip<K, Req, Resp>,
-    K: FutureForm,
-{
-    type CallError = C::CallError;
-
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        self.inner.next_request_id()
-    }
-
-    fn call(
-        &self,
-        req: Req,
-        timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<Resp, Self::CallError>> {
-        self.inner.call(req, timeout)
     }
 }
 

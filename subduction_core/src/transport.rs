@@ -5,28 +5,18 @@
 //! zero-cost wrapper that encodes on send and decodes on recv for any
 //! message type `M: Encode + Decode`.
 //!
-//! [`MuxTransport<T, O>`] adds request-response multiplexing on top of
-//! any `Transport`, providing [`Roundtrip`](crate::connection::Roundtrip)
-//! via a [`Multiplexer<O>`](crate::multiplexer::Multiplexer). It
-//! intercepts `BatchSyncResponse` on the recv path and routes them to
-//! pending callers, so transport backends don't need to know about the
-//! request-response pattern.
-//!
 //! # Architecture
 //!
 //! ```text
 //! Transport (one impl per backend)
-//!   └── MuxTransport<T, O>   — adds Roundtrip via Multiplexer
-//!        └── MessageTransport<MuxTransport<T, O>>   — adds Connection<K, M> for any M
+//!   └── MessageTransport<T>   — adds Connection<K, M> for any M
 //! ```
 //!
-//! This eliminates duplicate impls: each backend (WebSocket, iroh, HTTP
-//! long-poll, `MessagePort`) implements `Transport` once instead of
-//! implementing both `Handshake` and `Connection` separately.
+//! Each backend (WebSocket, iroh, HTTP long-poll, `MessagePort`)
+//! implements `Transport` once instead of implementing both `Handshake`
+//! and `Connection` separately.
 
 pub mod message;
-pub mod mux;
-
 use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;

@@ -31,35 +31,9 @@ use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 use self::nonce::WasmNonce;
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
-/// Transitional type alias — will become `MessageTransport<JsTransport>` once
-/// the `Roundtrip` bound is removed from `Subduction`.
-pub(crate) type MuxedTransport = MessageTransport<
-    subduction_core::transport::mux::MuxTransport<JsTransport, longpoll::JsTimeout>,
->;
-
-/// Default time limit for roundtrip calls.
-pub(crate) const DEFAULT_CALL_TIME_LIMIT: Duration = Duration::from_secs(30);
-
-/// Build a connection from a [`JsTransport`], peer identity, and time limit.
-///
-/// Wraps with `MuxTransport` (for `Roundtrip` via [`Multiplexer`]) and
-/// `MessageTransport` (for typed encode/decode).
-///
-/// NOTE: `MuxTransport` is a transitional layer. Once the `Roundtrip` trait
-/// is removed from `Subduction`'s `C` bound, `MuxTransport` will be deleted
-/// and this will simplify to `MessageTransport::new(transport)`.
-pub(crate) fn make_transport(
-    transport: JsTransport,
-    peer_id: subduction_core::peer::id::PeerId,
-    time_limit: Duration,
-) -> MessageTransport<subduction_core::transport::mux::MuxTransport<JsTransport, longpoll::JsTimeout>>
-{
-    MessageTransport::new(subduction_core::transport::mux::MuxTransport::new(
-        transport,
-        longpoll::JsTimeout,
-        time_limit,
-        peer_id,
-    ))
+/// Wrap a [`JsTransport`] with typed encode/decode.
+pub(crate) fn make_transport(transport: JsTransport) -> MessageTransport<JsTransport> {
+    MessageTransport::new(transport)
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -178,7 +152,6 @@ impl Handshake<Local> for JsTransport {
     }
 }
 
-// NOTE: `Roundtrip` is not implemented on `JsTransport`.
 // Request-response multiplexing is handled by `ManagedConnection`,
 // which pairs the connection with a `Multiplexer` and routes responses
 // in the `Subduction` listen loop.
@@ -359,12 +332,12 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 #[wasm_bindgen(js_name = AuthenticatedTransport)]
 #[derive(Debug)]
 pub struct WasmAuthenticatedTransport {
-    inner: Authenticated<MuxedTransport, Local>,
+    inner: Authenticated<MessageTransport<JsTransport>, Local>,
 }
 
 impl WasmAuthenticatedTransport {
     /// Access the inner `Authenticated` transport.
-    pub(crate) fn inner(&self) -> &Authenticated<MuxedTransport, Local> {
+    pub(crate) fn inner(&self) -> &Authenticated<MessageTransport<JsTransport>, Local> {
         &self.inner
     }
 
@@ -373,7 +346,9 @@ impl WasmAuthenticatedTransport {
     /// Used by [`WasmAuthenticatedWebSocket::to_connection`] and
     /// [`WasmAuthenticatedLongPoll::to_connection`] to wrap transport-specific
     /// authenticated connections.
-    pub(crate) fn from_authenticated(inner: Authenticated<MuxedTransport, Local>) -> Self {
+    pub(crate) fn from_authenticated(
+        inner: Authenticated<MessageTransport<JsTransport>, Local>,
+    ) -> Self {
         Self { inner }
     }
 }
@@ -410,12 +385,7 @@ impl WasmAuthenticatedTransport {
 
         let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
             transport,
-            |transport, peer_id| {
-                (
-                    make_transport(transport, peer_id, DEFAULT_CALL_TIME_LIMIT),
-                    peer_id,
-                )
-            },
+            |transport, peer_id| (make_transport(transport), peer_id),
             signer,
             audience,
             now,
@@ -463,12 +433,7 @@ impl WasmAuthenticatedTransport {
 
         let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
             transport,
-            |transport, peer_id| {
-                (
-                    make_transport(transport, peer_id, DEFAULT_CALL_TIME_LIMIT),
-                    peer_id,
-                )
-            },
+            |transport, peer_id| (make_transport(transport), peer_id),
             signer,
             &nonce_cache,
             our_peer_id,

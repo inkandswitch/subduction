@@ -9,7 +9,7 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 
 use super::Transport;
-use crate::connection::{Connection, Roundtrip, message::RequestId};
+use crate::connection::Connection;
 
 /// Typed message layer over a [`Transport`].
 ///
@@ -100,27 +100,5 @@ impl<K: FutureForm, T, M> Connection<K, M> for MessageTransport<T> {
                 .map_err(RecvDecodeError::Recv)?;
             M::try_decode(&bytes).map_err(RecvDecodeError::from)
         })
-    }
-}
-
-// ── Roundtrip delegation ─────────────────────────────────────────────────
-
-impl<T, K, Req, Resp> Roundtrip<K, Req, Resp> for MessageTransport<T>
-where
-    T: Roundtrip<K, Req, Resp>,
-    K: FutureForm,
-{
-    type CallError = T::CallError;
-
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        self.inner.next_request_id()
-    }
-
-    fn call(
-        &self,
-        req: Req,
-        timeout: Option<core::time::Duration>,
-    ) -> K::Future<'_, Result<Resp, Self::CallError>> {
-        self.inner.call(req, timeout)
     }
 }

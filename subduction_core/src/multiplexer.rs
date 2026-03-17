@@ -33,7 +33,7 @@ use crate::{
 ///
 /// Holds the pending-response map, request ID counter, and timeout
 /// strategy. Transport backends embed this and delegate their
-/// `Roundtrip` impls to it.
+/// request-response impls to it.
 #[derive(Debug)]
 pub struct Multiplexer {
     peer_id: PeerId,

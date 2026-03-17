@@ -37,6 +37,7 @@ use subduction_core::{
         Subduction, builder::SubductionBuilder, error::HydrationError,
         pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
+    transport::message::MessageTransport,
 };
 use wasm_bindgen::prelude::*;
 
@@ -52,7 +53,7 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        DEFAULT_CALL_TIME_LIMIT, JsTransport, MuxedTransport, WasmAuthenticatedTransport,
+        JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
@@ -90,14 +91,20 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
-type WasmSyncHandler =
-    SyncHandler<Local, JsStorage, MuxedTransport, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
+type WasmSyncHandler = SyncHandler<
+    Local,
+    JsStorage,
+    MessageTransport<JsTransport>,
+    OpenPolicy,
+    WasmHashMetric,
+    WASM_SHARD_COUNT,
+>;
 
 type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
-    MuxedTransport,
+    MessageTransport<JsTransport>,
     WasmSyncHandler,
     OpenPolicy,
     JsSigner,
@@ -374,15 +381,11 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
-        let time_limit = Duration::from_millis(u64::from(timeout_milliseconds));
         self.core
-            .add_connection(authenticated.map(|ws| {
-                make_transport(
-                    JsValue::from(ws).unchecked_into::<JsTransport>(),
-                    peer_id,
-                    time_limit,
-                )
-            }))
+            .add_connection(
+                authenticated
+                    .map(|ws| make_transport(JsValue::from(ws).unchecked_into::<JsTransport>())),
+            )
             .await?;
         Ok(peer_id.into())
     }
@@ -416,17 +419,11 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
-        let time_limit = timeout_milliseconds.map_or(DEFAULT_CALL_TIME_LIMIT, |ms| {
-            Duration::from_millis(u64::from(ms))
-        });
         self.core
-            .add_connection(authenticated.map(|ws| {
-                make_transport(
-                    JsValue::from(ws).unchecked_into::<JsTransport>(),
-                    peer_id,
-                    time_limit,
-                )
-            }))
+            .add_connection(
+                authenticated
+                    .map(|ws| make_transport(JsValue::from(ws).unchecked_into::<JsTransport>())),
+            )
             .await?;
         Ok(peer_id.into())
     }
@@ -460,14 +457,11 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
-        let time_limit = timeout_milliseconds.map_or(DEFAULT_CALL_TIME_LIMIT, |ms| {
-            Duration::from_millis(u64::from(ms))
-        });
         self.core
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_transport(transport, peer_id, time_limit)
+                make_transport(transport)
             }))
             .await?;
         Ok(peer_id.into())
@@ -502,14 +496,11 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
-        let time_limit = timeout_milliseconds.map_or(DEFAULT_CALL_TIME_LIMIT, |ms| {
-            Duration::from_millis(u64::from(ms))
-        });
         self.core
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_transport(transport, peer_id, time_limit)
+                make_transport(transport)
             }))
             .await?;
         Ok(peer_id.into())
@@ -957,7 +948,14 @@ impl PeerBatchSyncResult {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    Map<PeerId, (bool, WasmSyncStats, Vec<(MuxedTransport, WasmCallError)>)>,
+    Map<
+        PeerId,
+        (
+            bool,
+            WasmSyncStats,
+            Vec<(MessageTransport<JsTransport>, WasmCallError)>,
+        ),
+    >,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]
