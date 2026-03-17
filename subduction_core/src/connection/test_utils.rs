@@ -13,11 +13,7 @@ use sedimentree_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 
-use super::{
-    Connection, Roundtrip,
-    manager::Spawn,
-    message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-};
+use super::{Connection, manager::Spawn, message::SyncMessage};
 use crate::{
     authenticated::Authenticated,
     handler::sync::SyncHandler,
@@ -94,28 +90,6 @@ impl Connection<Sendable, SyncMessage> for MockConnection {
     }
 }
 
-impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for MockConnection {
-    type CallError = core::fmt::Error;
-
-    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
-        let peer_id = self.peer_id;
-        Sendable::from_future(async move {
-            RequestId {
-                requestor: peer_id,
-                nonce: 0,
-            }
-        })
-    }
-
-    fn call(
-        &self,
-        _req: BatchSyncRequest,
-        _timeout: Option<Duration>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        Sendable::from_future(async { Err(core::fmt::Error) })
-    }
-}
-
 /// A mock connection that always fails on send.
 ///
 /// This is useful for testing connection cleanup when send operations fail.
@@ -177,28 +151,6 @@ impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
     }
 }
 
-impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for FailingSendMockConnection {
-    type CallError = core::fmt::Error;
-
-    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
-        let peer_id = self.peer_id;
-        Sendable::from_future(async move {
-            RequestId {
-                requestor: peer_id,
-                nonce: 0,
-            }
-        })
-    }
-
-    fn call(
-        &self,
-        _req: BatchSyncRequest,
-        _timeout: Option<Duration>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        Sendable::from_future(async { Err(core::fmt::Error) })
-    }
-}
-
 /// A channel-based mock connection for diagnostic testing.
 ///
 /// This mock uses async channels to simulate real message flow, allowing
@@ -220,9 +172,6 @@ pub struct ChannelMockConnection<M> {
     /// Sender for inbound messages (kept for potential direct access in complex tests)
     #[allow(dead_code)]
     inbound_tx: async_channel::Sender<M>,
-
-    /// Request ID counter
-    request_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl<M> Clone for ChannelMockConnection<M> {
@@ -232,7 +181,6 @@ impl<M> Clone for ChannelMockConnection<M> {
             outbound_tx: self.outbound_tx.clone(),
             inbound_rx: self.inbound_rx.clone(),
             inbound_tx: self.inbound_tx.clone(),
-            request_counter: self.request_counter.clone(),
         }
     }
 }
@@ -269,7 +217,6 @@ impl<M> ChannelMockConnection<M> {
             outbound_tx,
             inbound_rx,
             inbound_tx: inbound_tx.clone(),
-            request_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         let handle = ChannelMockConnectionHandle {
@@ -344,61 +291,6 @@ impl<M: Clone + Encode + Decode + 'static> Connection<Local, M> for ChannelMockC
     fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<M, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
         Local::from_future(async move { rx.recv().await })
-    }
-}
-
-// Roundtrip impls are specific to SyncMessage — only tests that use
-// batch sync request/response need them.
-
-impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
-    for ChannelMockConnection<SyncMessage>
-{
-    type CallError = core::fmt::Error;
-
-    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
-        let peer_id = self.peer_id;
-        let counter = self
-            .request_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Sendable::from_future(async move {
-            RequestId {
-                requestor: peer_id,
-                nonce: counter,
-            }
-        })
-    }
-
-    fn call(
-        &self,
-        _req: BatchSyncRequest,
-        _timeout: Option<Duration>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        Sendable::from_future(async { Err(core::fmt::Error) })
-    }
-}
-
-impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for ChannelMockConnection<SyncMessage> {
-    type CallError = core::fmt::Error;
-
-    fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
-        let peer_id = self.peer_id;
-        let counter = self
-            .request_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Local::from_future(async move {
-            RequestId {
-                requestor: peer_id,
-                nonce: counter,
-            }
-        })
-    }
-
-    fn call(
-        &self,
-        _req: BatchSyncRequest,
-        _timeout: Option<Duration>,
-    ) -> <Local as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        Local::from_future(async { Err(core::fmt::Error) })
     }
 }
 
@@ -493,24 +385,6 @@ where
     }
 }
 
-impl<C: Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> + Send>
-    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for CallbackOnRecvConnection<C>
-{
-    type CallError = C::CallError;
-
-    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
-        self.inner.next_request_id()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        self.inner.call(req, timeout)
-    }
-}
-
 impl<C: Connection<Local, SyncMessage>> Connection<Local, SyncMessage>
     for CallbackOnRecvConnection<C>
 {
@@ -533,24 +407,6 @@ impl<C: Connection<Local, SyncMessage>> Connection<Local, SyncMessage>
 
     fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
         self.inner.recv()
-    }
-}
-
-impl<C: Roundtrip<Local, BatchSyncRequest, BatchSyncResponse>>
-    Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for CallbackOnRecvConnection<C>
-{
-    type CallError = C::CallError;
-
-    fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
-        self.inner.next_request_id()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> <Local as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        self.inner.call(req, timeout)
     }
 }
 

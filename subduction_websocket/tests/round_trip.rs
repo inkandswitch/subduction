@@ -47,16 +47,17 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+            TokioWebSocketClient<MemorySigner>,
             OpenPolicy,
             CountLeadingZeroBytes,
         >,
         OpenPolicy,
         MemorySigner,
+        TimeoutTokio,
     >,
 >;
 
@@ -64,7 +65,7 @@ type TestHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
@@ -73,7 +74,7 @@ type TestHandler = Arc<
 type ClientSyncHandler = SyncHandler<
     Sendable,
     MemoryStorage,
-    TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+    TokioWebSocketClient<MemorySigner>,
     OpenPolicy,
     CountLeadingZeroBytes,
 >;

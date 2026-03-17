@@ -199,7 +199,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
 
     /// Get the [`PeerId`] associated with this transport.
     #[must_use]
-    pub fn peer_id(&self) -> PeerId {
+    pub const fn peer_id(&self) -> PeerId {
         self.peer_id
     }
 

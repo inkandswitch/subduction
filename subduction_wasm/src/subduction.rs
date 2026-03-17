@@ -448,13 +448,9 @@ impl WasmSubduction {
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
-        let (authenticated, _session_id) = WasmLongPoll::connect_authenticated(
-            base_url,
-            self.core.signer(),
-            expected_peer_id,
-            timeout_milliseconds.unwrap_or(30_000),
-        )
-        .await?;
+        let (authenticated, _session_id) =
+            WasmLongPoll::connect_authenticated(base_url, self.core.signer(), expected_peer_id)
+                .await?;
 
         let peer_id = authenticated.peer_id();
         self.core
@@ -490,7 +486,6 @@ impl WasmSubduction {
         let (authenticated, _session_id) = WasmLongPoll::connect_discover_authenticated(
             base_url,
             self.core.signer(),
-            timeout_milliseconds,
             service_name,
         )
         .await?;

@@ -909,11 +909,11 @@ where
 
                     let mux = {
                         let muxes = self.multiplexers.lock().await;
-                        muxes
-                            .get(&peer_id)
-                            .and_then(|v| v.first())
-                            .cloned()
-                            .expect("multiplexer should exist for connected peer")
+                        muxes.get(&peer_id).and_then(|v| v.first()).cloned().ok_or(
+                            IoError::MissingMultiplexer(
+                                crate::subduction::error::MissingMultiplexer(peer_id),
+                            ),
+                        )?
                     };
                     let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                     let req_id = managed.next_request_id();
@@ -1372,11 +1372,11 @@ where
 
             let mux = {
                 let muxes = self.multiplexers.lock().await;
-                muxes
-                    .get(to_ask)
-                    .and_then(|v| v.first())
-                    .cloned()
-                    .expect("multiplexer should exist for connected peer")
+                muxes.get(to_ask).and_then(|v| v.first()).cloned().ok_or(
+                    IoError::MissingMultiplexer(crate::subduction::error::MissingMultiplexer(
+                        *to_ask,
+                    )),
+                )?
             };
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
             let req_id = managed.next_request_id();
@@ -1605,7 +1605,9 @@ where
                             muxes.get(peer_id)
                                 .and_then(|v| v.first())
                                 .cloned()
-                                .expect("multiplexer should exist for connected peer")
+                                .ok_or(IoError::MissingMultiplexer(
+                                    crate::subduction::error::MissingMultiplexer(*peer_id),
+                                ))?
                         };
                         let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                         let req_id = managed.next_request_id();
@@ -2340,6 +2342,7 @@ pub trait StartListener<
     H::HandlerError: Into<ListenError<Self, S, C, W>>,
 {
     /// Start the listener task for Subduction.
+    #[allow(clippy::type_complexity)]
     fn start_listener<O: Timeout<Self> + Clone + Send + Sync + 'a>(
         subduction: Arc<Subduction<'a, Self, S, C, H, P, Sig, O, M, N>>,
         abort_reg: AbortRegistration,

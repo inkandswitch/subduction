@@ -81,6 +81,7 @@ impl<K: FutureForm> core::fmt::Debug for ConnectResult<K> {
 pub struct HttpLongPollClient<H, O> {
     base_url: String,
     http: H,
+    #[allow(dead_code)]
     timeout: O,
 }
 
