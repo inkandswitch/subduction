@@ -256,12 +256,13 @@ sequenceDiagram
 let seed = FingerprintSeed::random();
 let summary = local_sedimentree.fingerprint_summarize(&seed);
 
-// Roundtrip::call encodes the request, sends it, and waits for a
-// matching BatchSyncResponse (via the Multiplexer's pending map).
-let req_id = Roundtrip::next_request_id(&conn).await;
+// ManagedConnection pairs the connection with a Multiplexer.
+// call() sends the request as the wire message type, and awaits
+// the matching BatchSyncResponse via the Multiplexer's pending map.
+// The Subduction listen loop routes responses to the Multiplexer.
+let req_id = managed_conn.next_request_id();
 
-let response = Roundtrip::call(
-    &conn,
+let response = managed_conn.call::<WireMessage>(
     BatchSyncRequest {
         id,
         req_id,

@@ -20,19 +20,25 @@ block-beta
     columns 1
     Application
     Sync["Sync<br/>(Batch + Incremental)"]
-    Connection["Connection + Roundtrip<br/>(Typed Messages + Request-Response)"]
-    Transport["Transport<br/>(Byte-oriented: Handshake · Policy · Multiplexing)"]
+    Connection["Connection<br/>(Typed Messages)"]
+    Transport["Transport<br/>(Byte-oriented: Handshake · Policy)"]
     Backend["Backend<br/>(WebSocket · HTTP Long-Poll · Iroh/QUIC)"]
 ```
 
-### Transport Composition
+### Transport Stack
 
 ```
 Backend (one impl per transport)
-  └── Transport         send_bytes / recv_bytes / disconnect
-       ├── MessageTransport<T>   Connection<K, M>  (typed encode/decode)
-       └── MuxTransport<T, O>    Roundtrip<K, Req, Resp>  (request-response via Multiplexer)
+  └── Transport             send_bytes / recv_bytes / disconnect
+       └── MessageTransport<T>    Connection<K, M>  (typed encode/decode)
 ```
+
+Request-response multiplexing (correlating `BatchSyncRequest` →
+`BatchSyncResponse`) is handled by [`ManagedConnection`] in the
+`Subduction` listen loop, _not_ the transport layer. Transports only
+need to implement `send_bytes`/`recv_bytes`/`disconnect`.
+
+[`ManagedConnection`]: ../subduction_core/src/connection/managed.rs
 
 ## Typical Flow
 

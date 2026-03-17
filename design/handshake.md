@@ -436,8 +436,8 @@ let (authenticated, ()) = handshake::initiate(
 ).await?;
 
 // authenticated: Authenticated<MyTransport, K>
-// Wrap with MessageTransport / MuxTransport as needed:
-// let conn = MessageTransport::new(MuxTransport::new(authenticated.into_inner(), ...));
+// Wrap with MessageTransport for typed send/recv:
+// let conn = MessageTransport::new(authenticated.into_inner());
 ```
 
 ### Responder Side
