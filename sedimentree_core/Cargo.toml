@@ -25,6 +25,7 @@ getrandom = { workspace = true, optional = true }
 nonempty = { workspace = true }
 num-bigint = { workspace = true }
 rand = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
 siphasher = { workspace = true }
 thiserror = { workspace = true }
@@ -49,6 +50,7 @@ default = []
 arbitrary = ["dep:arbitrary"]
 bolero = ["dep:bolero", "arbitrary", "std"]
 getrandom = ["dep:getrandom"]
+rayon = ["std", "dep:rayon"]
 serde = ["dep:serde"]
 std = [
   "async-lock/std",

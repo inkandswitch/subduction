@@ -4635,6 +4635,7 @@ dependencies = [
  "num-bigint",
  "pprof",
  "rand 0.8.5",
+ "rayon",
  "sedimentree_core",
  "serde",
  "siphasher",
