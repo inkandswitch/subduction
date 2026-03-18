@@ -11,7 +11,7 @@ use futures::FutureExt;
 use subduction_core::{
     authenticated::Authenticated,
     timeout::{TimedOut, Timeout},
-    transport::{message::MessageTransport, Transport},
+    transport::{Transport, message::MessageTransport},
 };
 use subduction_http_longpoll::{
     client::HttpLongPollClient, session::SessionId, transport::HttpLongPollTransport,
@@ -40,7 +40,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{select, Either},
+            future::{Either, select},
             pin_mut,
         };
 

@@ -41,8 +41,6 @@ use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 /// no explicit service name is provided.
 pub const DEFAULT_LOCAL_SERVICE_NAME: &str = "subduction:local";
 
-
-
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
 export interface Transport {
