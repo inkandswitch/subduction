@@ -223,6 +223,7 @@ nonces
 NotFound
 npm
 ns
+oneshot
 OCap
 ocap
 Ockham
