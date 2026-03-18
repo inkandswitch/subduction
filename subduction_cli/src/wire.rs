@@ -19,6 +19,7 @@ use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 ///
 /// Carries sync or ephemeral traffic. Decode reads the 4-byte schema
 /// header and dispatches to the appropriate decoder.
+// TODO: Wire into CLI server via `ComposedHandler` + `build_with_handler`
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CliWireMessage {
@@ -88,6 +89,33 @@ impl Decode for CliWireMessage {
                 got: schema,
             }
             .into()),
+        }
+    }
+}
+
+impl subduction_ephemeral::composed::WireEnvelope for CliWireMessage {
+    fn dispatch(self) -> subduction_ephemeral::composed::Dispatched {
+        match self {
+            Self::Sync(msg) => subduction_ephemeral::composed::Dispatched::Sync(msg),
+            Self::Ephemeral(msg) => subduction_ephemeral::composed::Dispatched::Ephemeral(msg),
+        }
+    }
+
+    fn as_batch_sync_response(
+        &self,
+    ) -> Option<&subduction_core::connection::message::BatchSyncResponse> {
+        match self {
+            Self::Sync(msg) => match msg.as_ref() {
+                SyncMessage::BatchSyncResponse(resp) => Some(resp),
+                SyncMessage::BatchSyncRequest(_)
+                | SyncMessage::BlobsRequest { .. }
+                | SyncMessage::BlobsResponse { .. }
+                | SyncMessage::DataRequestRejected(_)
+                | SyncMessage::Fragment { .. }
+                | SyncMessage::LooseCommit { .. }
+                | SyncMessage::RemoveSubscriptions(_) => None,
+            },
+            Self::Ephemeral(_) => None,
         }
     }
 }

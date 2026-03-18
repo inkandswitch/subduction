@@ -32,6 +32,7 @@
 
 extern crate alloc;
 
+pub mod composed;
 pub mod config;
 pub mod handler;
 pub mod message;
