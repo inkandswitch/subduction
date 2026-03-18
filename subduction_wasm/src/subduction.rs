@@ -101,19 +101,18 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
-type WasmSyncHandler = SyncHandler<
-    Local,
-    JsStorage,
-    MessageTransport<JsTransport>,
-    OpenPolicy,
-    WasmHashMetric,
-    WASM_SHARD_COUNT,
+type WasmHandler = ComposedHandler<
+    SyncHandler<
+        Local,
+        JsStorage,
+        MessageTransport<JsTransport>,
+        OpenPolicy,
+        WasmHashMetric,
+        WASM_SHARD_COUNT,
+    >,
+    EphemeralHandler<Local, MessageTransport<JsTransport>, OpenEphemeralPolicy>,
+    crate::wire::WireMessage,
 >;
-
-type WasmEphemeralHandler =
-    EphemeralHandler<Local, MessageTransport<JsTransport>, OpenEphemeralPolicy>;
-
-type WasmHandler = ComposedHandler<WasmSyncHandler, WasmEphemeralHandler, crate::wire::WireMessage>;
 
 type WasmSubductionCore = Subduction<
     'static,

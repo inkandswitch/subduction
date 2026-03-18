@@ -52,21 +52,21 @@ use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketC
 
 use crate::{key, metrics, transport::UnifiedTransport, wire::CliWireMessage};
 
-type CliSyncHandler = SyncHandler<
-    future_form::Sendable,
-    MetricsStorage<FsStorage>,
-    MessageTransport<UnifiedTransport>,
-    OpenPolicy,
-    CountLeadingZeroBytes,
+type CliHandler = ComposedHandler<
+    SyncHandler<
+        future_form::Sendable,
+        MetricsStorage<FsStorage>,
+        MessageTransport<UnifiedTransport>,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+    >,
+    EphemeralHandler<
+        future_form::Sendable,
+        MessageTransport<UnifiedTransport>,
+        OpenEphemeralPolicy,
+    >,
+    CliWireMessage,
 >;
-
-type CliEphemeralHandler = EphemeralHandler<
-    future_form::Sendable,
-    MessageTransport<UnifiedTransport>,
-    OpenEphemeralPolicy,
->;
-
-type CliHandler = ComposedHandler<CliSyncHandler, CliEphemeralHandler, CliWireMessage>;
 
 /// Type alias for the unified Subduction instance.
 type CliSubduction = Arc<
