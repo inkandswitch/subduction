@@ -152,9 +152,13 @@ pub struct IndexedSedimentreeAutomerge {
 }
 
 #[cfg(feature = "std")]
-impl From<&Automerge> for IndexedSedimentreeAutomerge {
-    fn from(doc: &Automerge) -> Self {
-        let changes = doc.get_changes(&[]);
+impl IndexedSedimentreeAutomerge {
+    /// Build the index from an already-fetched slice of changes.
+    ///
+    /// Use this when you already have the changes (e.g., from
+    /// `doc.get_changes(&[])`) to avoid calling `get_changes` a second time.
+    #[must_use]
+    pub fn from_changes(changes: &[automerge::Change]) -> Self {
         let mut index = sedimentree_core::collections::Map::with_capacity(changes.len());
 
         for change in changes {
@@ -168,6 +172,13 @@ impl From<&Automerge> for IndexedSedimentreeAutomerge {
         }
 
         Self { index }
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<&Automerge> for IndexedSedimentreeAutomerge {
+    fn from(doc: &Automerge) -> Self {
+        Self::from_changes(&doc.get_changes(&[]))
     }
 }
 
