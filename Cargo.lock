@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "automerge",
  "criterion",
@@ -4646,7 +4646,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_fs_storage"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-lock",
  "future_form",
