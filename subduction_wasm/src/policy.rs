@@ -26,7 +26,7 @@
 
 pub mod ephemeral;
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 
 use future_form::Local;
 use futures::FutureExt;
@@ -205,13 +205,14 @@ impl StoragePolicy<Local> for JsPolicy {
 
             // Intersect with the original list to prevent a buggy/malicious
             // policy from expanding the authorized set.
+            let allowed: BTreeSet<SedimentreeId> = ids.into_iter().collect();
             arr.iter()
                 .filter_map(|item| {
                     let bytes: Uint8Array = item.dyn_into().ok()?;
                     let vec = bytes.to_vec();
                     let arr: [u8; 32] = vec.try_into().ok()?;
                     let id = SedimentreeId::new(arr);
-                    ids.contains(&id).then_some(id)
+                    allowed.contains(&id).then_some(id)
                 })
                 .collect()
         }

@@ -5,7 +5,7 @@
 //! - `authorizePublish(peerId: Uint8Array, id: Uint8Array): Promise<void>`
 //! - `filterAuthorizedSubscribers(id: Uint8Array, peers: Uint8Array[]): Promise<Uint8Array[]>`
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 
 use future_form::Local;
 use futures::FutureExt;
@@ -173,13 +173,14 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
 
             // Intersect with the original list to prevent a buggy/malicious
             // policy from expanding the authorized set.
+            let allowed: BTreeSet<PeerId> = peers.into_iter().collect();
             arr.iter()
                 .filter_map(|item| {
                     let bytes: Uint8Array = item.dyn_into().ok()?;
                     let vec = bytes.to_vec();
                     let arr: [u8; 32] = vec.try_into().ok()?;
                     let peer = PeerId::new(arr);
-                    peers.contains(&peer).then_some(peer)
+                    allowed.contains(&peer).then_some(peer)
                 })
                 .collect()
         }
