@@ -13,7 +13,7 @@ use sedimentree_core::{
     collections::Set,
     commit::{CommitStore, Parents},
     crypto::digest::Digest,
-    sedimentree::LooseCommit,
+    loose_commit::LooseCommit,
 };
 
 /// Pre-indexed parent digests for a single commit.
@@ -101,7 +101,7 @@ impl CommitStore<'static> for IndexedSedimentreeAutomerge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use automerge::{AutoCommit, ObjType, transaction::Transactable};
+    use automerge::{transaction::Transactable, AutoCommit, ChangeHash, ObjType};
     use sedimentree_core::{
         collections::Map,
         commit::{CountLeadingZeroBytes, FragmentState},
