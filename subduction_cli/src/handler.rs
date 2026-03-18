@@ -98,12 +98,12 @@ impl Handler<Sendable, CliConn> for CliHandler {
                 }
 
                 CliWireMessage::Keyhive(keyhive_msg) => {
-                    Handler::<Sendable, CliConn>::handle(&self.keyhive, conn, keyhive_msg)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!(error = %e, "keyhive handler error");
-                            ListenError::TrySendError
-                        })
+                    if let Err(e) =
+                        Handler::<Sendable, CliConn>::handle(&self.keyhive, conn, keyhive_msg).await
+                    {
+                        tracing::error!(error = %e, "keyhive handler error (non-fatal)");
+                    }
+                    Ok(())
                 }
             }
         })

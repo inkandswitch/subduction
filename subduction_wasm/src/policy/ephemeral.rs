@@ -171,12 +171,15 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
                 return Vec::new();
             };
 
+            // Intersect with the original list to prevent a buggy/malicious
+            // policy from expanding the authorized set.
             arr.iter()
                 .filter_map(|item| {
                     let bytes: Uint8Array = item.dyn_into().ok()?;
                     let vec = bytes.to_vec();
                     let arr: [u8; 32] = vec.try_into().ok()?;
-                    Some(PeerId::new(arr))
+                    let peer = PeerId::new(arr);
+                    peers.contains(&peer).then_some(peer)
                 })
                 .collect()
         }

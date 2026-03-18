@@ -106,7 +106,7 @@ impl KeyhiveProtocolHandle {
     /// Pass the receiver to [`run_actor`] on a `LocalSet`.
     #[must_use]
     pub fn channel() -> (Self, Receiver<KeyhiveCommand>) {
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, rx) = async_channel::bounded(1024);
         (Self { tx }, rx)
     }
 }

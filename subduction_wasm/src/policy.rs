@@ -203,12 +203,15 @@ impl StoragePolicy<Local> for JsPolicy {
                 return Vec::new();
             };
 
+            // Intersect with the original list to prevent a buggy/malicious
+            // policy from expanding the authorized set.
             arr.iter()
                 .filter_map(|item| {
                     let bytes: Uint8Array = item.dyn_into().ok()?;
                     let vec = bytes.to_vec();
                     let arr: [u8; 32] = vec.try_into().ok()?;
-                    Some(SedimentreeId::new(arr))
+                    let id = SedimentreeId::new(arr);
+                    ids.contains(&id).then_some(id)
                 })
                 .collect()
         }
