@@ -19,8 +19,6 @@ use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 ///
 /// Carries sync or ephemeral traffic. Decode reads the 4-byte schema
 /// header and dispatches to the appropriate decoder.
-// TODO: Wire into CLI server via `ComposedHandler` + `build_with_handler`
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CliWireMessage {
     /// A sync-protocol message.

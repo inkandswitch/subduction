@@ -6,12 +6,18 @@
 use alloc::boxed::Box;
 use core::fmt::Debug;
 
-use future_form::Sendable;
+use future_form::{FutureForm, Sendable};
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_core::{
     authenticated::Authenticated,
-    connection::message::{BatchSyncResponse, SyncMessage},
+    connection::{
+        Connection,
+        message::{BatchSyncResponse, SyncMessage},
+    },
     handler::Handler,
     peer::id::PeerId,
+    storage::traits::Storage,
+    subduction::error::{IoError, ListenError},
 };
 use thiserror::Error;
 
@@ -97,6 +103,48 @@ pub enum ComposedHandlerError<S: core::error::Error, E: core::error::Error> {
     /// Error from the ephemeral sub-handler.
     #[error("ephemeral: {0}")]
     Ephemeral(E),
+}
+
+/// Convert a [`ComposedHandlerError`] into a [`ListenError`] parameterised
+/// over the wire-envelope message type `W`.
+///
+/// This works because [`MessageTransport`]-based connections have error
+/// types that are independent of the message generic `M`, so
+/// `ListenError<F,S,C,SyncMessage>` can be retyped to
+/// `ListenError<F,S,C,W>` without loss of information.
+impl<F, S, C, W, EphErr> From<ComposedHandlerError<ListenError<F, S, C, SyncMessage>, EphErr>>
+    for ListenError<F, S, C, W>
+where
+    F: FutureForm + Debug,
+    S: Storage<F> + Debug,
+    C: Connection<F, SyncMessage> + Connection<F, W> + Debug,
+    W: Encode + Decode,
+    S::Error: Debug,
+    <C as Connection<F, SyncMessage>>::SendError: Debug + Into<<C as Connection<F, W>>::SendError>,
+    <C as Connection<F, SyncMessage>>::RecvError: Debug + Into<<C as Connection<F, W>>::RecvError>,
+    <C as Connection<F, W>>::SendError: Debug,
+    <C as Connection<F, W>>::RecvError: Debug,
+    EphErr: core::error::Error,
+{
+    fn from(err: ComposedHandlerError<ListenError<F, S, C, SyncMessage>, EphErr>) -> Self {
+        match err {
+            ComposedHandlerError::Sync(listen_err) => match listen_err {
+                ListenError::IoError(io_err) => ListenError::IoError(match io_err {
+                    IoError::Storage(e) => IoError::Storage(e),
+                    IoError::ConnSend(e) => IoError::ConnSend(e.into()),
+                    IoError::ConnRecv(e) => IoError::ConnRecv(e.into()),
+                    IoError::ConnCall(e) => IoError::ConnCall(e.map_send(Into::into)),
+                    IoError::BlobMismatch(e) => IoError::BlobMismatch(e),
+                }),
+                ListenError::TrySendError => ListenError::TrySendError,
+            },
+            ComposedHandlerError::Ephemeral(_eph_err) => {
+                // Ephemeral handler errors are non-fatal by design —
+                // map to TrySendError as a generic "handler failed" signal.
+                ListenError::TrySendError
+            }
+        }
+    }
 }
 
 impl<C, SyncH, EphH, W> Handler<Sendable, C> for ComposedHandler<SyncH, EphH, W>

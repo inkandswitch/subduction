@@ -131,6 +131,15 @@ impl<S: core::error::Error> CallError<S> {
             Self::Timeout => "CallTimeout",
         }
     }
+
+    /// Map the inner send-error type.
+    pub fn map_send<S2: core::error::Error>(self, f: impl FnOnce(S) -> S2) -> CallError<S2> {
+        match self {
+            Self::Send(e) => CallError::Send(f(e)),
+            Self::ResponseDropped => CallError::ResponseDropped,
+            Self::Timeout => CallError::Timeout,
+        }
+    }
 }
 
 /// Trait for performing roundtrip calls on a [`ManagedConnection`].

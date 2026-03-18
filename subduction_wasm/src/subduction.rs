@@ -6,7 +6,9 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
+use async_lock::Mutex;
 use core::{fmt::Debug, time::Duration};
+use nonempty::NonEmpty;
 use sedimentree_core::collections::{Map, Set};
 
 use from_js_ref::FromJsRef;
@@ -27,17 +29,25 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
+    authenticated::Authenticated,
     connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
+    storage::powerbox::StoragePowerbox,
     subduction::{
-        Subduction, builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        Subduction,
+        error::HydrationError,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
     transport::message::MessageTransport,
+};
+use subduction_ephemeral::{
+    composed::ComposedHandler, config::EphemeralConfig, handler::EphemeralHandler,
+    policy::OpenEphemeralPolicy,
 };
 use wasm_bindgen::prelude::*;
 
@@ -100,12 +110,17 @@ type WasmSyncHandler = SyncHandler<
     WASM_SHARD_COUNT,
 >;
 
+type WasmEphemeralHandler =
+    EphemeralHandler<Local, MessageTransport<JsTransport>, OpenEphemeralPolicy>;
+
+type WasmHandler = ComposedHandler<WasmSyncHandler, WasmEphemeralHandler, crate::wire::WireMessage>;
+
 type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
     MessageTransport<JsTransport>,
-    WasmSyncHandler,
+    WasmHandler,
     OpenPolicy,
     JsSigner,
     JsTimeout,
@@ -166,19 +181,47 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        let mut builder = SubductionBuilder::<_, _, _, _, _, WASM_SHARD_COUNT>::new()
-            .signer(signer)
-            .storage(storage, Arc::new(OpenPolicy))
-            .spawner(WasmSpawn)
-            .timer(JsTimeout)
-            .depth_metric(depth_metric)
-            .max_pending_blob_requests(max_pending);
+        #[allow(clippy::type_complexity)]
+        let connections: Arc<
+            Mutex<Map<PeerId, NonEmpty<Authenticated<MessageTransport<JsTransport>, Local>>>>,
+        > = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let sedimentrees = Arc::new(ShardedMap::new());
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+        let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
 
-        if let Some(id) = discovery_id {
-            builder = builder.discovery_id(id);
-        }
+        let sync_handler = SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            powerbox.clone(),
+            pending_blob_requests.clone(),
+            depth_metric.clone(),
+        );
 
-        let (core, _handler, listener_fut, manager_fut) = builder.build();
+        let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
+            connections.clone(),
+            OpenEphemeralPolicy,
+            EphemeralConfig::default(),
+        );
+
+        let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+
+        let (core, listener_fut, manager_fut) = Subduction::new(
+            handler,
+            discovery_id,
+            signer,
+            sedimentrees,
+            connections,
+            subscriptions,
+            powerbox,
+            pending_blob_requests,
+            NonceCache::default(),
+            JsTimeout,
+            Duration::from_secs(30),
+            depth_metric,
+            WasmSpawn,
+        );
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -277,20 +320,46 @@ impl WasmSubduction {
                 .await;
         }
 
-        let mut builder = SubductionBuilder::<_, _, _, _, _, WASM_SHARD_COUNT>::new()
-            .signer(signer)
-            .storage(storage, Arc::new(OpenPolicy))
-            .spawner(WasmSpawn)
-            .timer(JsTimeout)
-            .depth_metric(depth_metric)
-            .max_pending_blob_requests(max_pending)
-            .sedimentrees(sedimentrees);
+        #[allow(clippy::type_complexity)]
+        let connections: Arc<
+            Mutex<Map<PeerId, NonEmpty<Authenticated<MessageTransport<JsTransport>, Local>>>>,
+        > = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+        let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
 
-        if let Some(id) = discovery_id {
-            builder = builder.discovery_id(id);
-        }
+        let sync_handler = SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            powerbox.clone(),
+            pending_blob_requests.clone(),
+            depth_metric.clone(),
+        );
 
-        let (core, _handler, listener_fut, manager_fut) = builder.build();
+        let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
+            connections.clone(),
+            OpenEphemeralPolicy,
+            EphemeralConfig::default(),
+        );
+
+        let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+
+        let (core, listener_fut, manager_fut) = Subduction::new(
+            handler,
+            discovery_id,
+            signer,
+            sedimentrees,
+            connections,
+            subscriptions,
+            powerbox,
+            pending_blob_requests,
+            NonceCache::default(),
+            JsTimeout,
+            Duration::from_secs(30),
+            depth_metric,
+            WasmSpawn,
+        );
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
