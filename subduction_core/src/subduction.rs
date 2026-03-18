@@ -196,6 +196,19 @@ pub struct Subduction<
     _phantom: core::marker::PhantomData<&'a F>,
 }
 
+/// A single fragment for [`Subduction::add_fragments_batch`].
+#[derive(Debug, Clone)]
+pub struct FragmentBatchItem {
+    /// The head commit of the fragment.
+    pub head: Digest<LooseCommit>,
+    /// The boundary commits (fragment edges).
+    pub boundary: BTreeSet<Digest<LooseCommit>>,
+    /// Checkpoint digests within the fragment.
+    pub checkpoints: Vec<Digest<LooseCommit>>,
+    /// The blob containing the fragment's data.
+    pub blob: Blob,
+}
+
 impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
@@ -1339,16 +1352,10 @@ where
     ///
     /// * [`WriteError::Io`] if a storage error occurs.
     /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
-    #[allow(clippy::type_complexity)]
     pub async fn add_fragments_batch(
         &self,
         id: SedimentreeId,
-        fragments: Vec<(
-            Digest<LooseCommit>,
-            BTreeSet<Digest<LooseCommit>>,
-            Vec<Digest<LooseCommit>>,
-            Blob,
-        )>,
+        fragments: Vec<FragmentBatchItem>,
     ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
         let self_id = self.peer_id();
         let putter = self
@@ -1360,7 +1367,13 @@ where
         let count = fragments.len();
         tracing::info!("bulk-inserting {count} fragments into sedimentree {id:?}");
 
-        for (head, boundary, checkpoints, blob) in fragments {
+        for item in fragments {
+            let FragmentBatchItem {
+                head,
+                boundary,
+                checkpoints,
+                blob,
+            } = item;
             let verified_blob = VerifiedBlobMeta::new(blob);
             let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<F, _>(
                 &self.signer,
