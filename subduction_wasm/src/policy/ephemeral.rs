@@ -79,11 +79,14 @@ async fn call_void_method(
     let result = func
         .apply(inner, &js_args)
         .map_err(|e| JsEphemeralDenied::from_js(&e))?;
-    if let Ok(promise) = result.dyn_into::<Promise>() {
-        JsFuture::from(promise)
-            .await
-            .map_err(|e| JsEphemeralDenied::from_js(&e))?;
-    }
+    // Fail closed: require a Promise return. Non-Promise (e.g., undefined)
+    // is treated as a misconfigured policy and denied.
+    let promise: Promise = result.dyn_into().map_err(|_| JsEphemeralDenied {
+        reason: alloc::format!("{method_name} did not return a Promise"),
+    })?;
+    JsFuture::from(promise)
+        .await
+        .map_err(|e| JsEphemeralDenied::from_js(&e))?;
     Ok(())
 }
 

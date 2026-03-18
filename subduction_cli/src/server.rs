@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
 use crate::{
-    handler::{CliHandler, CliConn},
+    handler::{CliConn, CliHandler},
     key, metrics,
     transport::UnifiedTransport,
 };

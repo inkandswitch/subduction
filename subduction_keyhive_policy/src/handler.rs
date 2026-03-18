@@ -174,7 +174,7 @@ where
                         .map_err(HandleError::Protocol),
                     Err(e) => Err(HandleError::Decode(e)),
                 };
-                // Best-effort reply; handle may have timed out.
+                // Best-effort reply; handle may have been dropped.
                 drop(reply.send(result).await);
             }
             KeyhiveCommand::PeerDisconnect { peer_id } => {
