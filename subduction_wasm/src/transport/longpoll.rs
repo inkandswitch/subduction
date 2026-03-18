@@ -40,7 +40,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{select, Either},
+            future::{Either, select},
             pin_mut,
         };
 

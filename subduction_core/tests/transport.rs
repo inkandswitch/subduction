@@ -8,13 +8,13 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
+        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
         test_utils::ChannelTransport,
-        Connection,
     },
     multiplexer::Multiplexer,
     peer::id::PeerId,
-    transport::{message::MessageTransport, Transport},
+    transport::{Transport, message::MessageTransport},
 };
 use testresult::TestResult;
 
