@@ -136,12 +136,14 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
     ) -> <Local as future_form::FutureForm>::Future<'_, Vec<PeerId>> {
         let inner = self.inner.clone();
         async move {
+            // Fail closed: if the JS policy errors, return empty (deny all)
+            // rather than returning the original list (allow all).
             let Ok(method) = js_sys::Reflect::get(&inner, &"filterAuthorizedSubscribers".into())
             else {
-                return peers;
+                return Vec::new();
             };
             let Ok(func): Result<js_sys::Function, _> = method.dyn_into() else {
-                return peers;
+                return Vec::new();
             };
 
             let id_bytes = Uint8Array::from(id.as_bytes().as_slice());
@@ -151,19 +153,19 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
             }
 
             let Ok(result) = func.call2(&inner, &id_bytes, &js_peers) else {
-                return peers;
+                return Vec::new();
             };
 
             let Ok(promise): Result<Promise, _> = result.dyn_into() else {
-                return peers;
+                return Vec::new();
             };
 
             let Ok(resolved) = JsFuture::from(promise).await else {
-                return peers;
+                return Vec::new();
             };
 
             let Ok(arr): Result<Array, _> = resolved.dyn_into() else {
-                return peers;
+                return Vec::new();
             };
 
             arr.iter()

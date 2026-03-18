@@ -58,6 +58,26 @@ impl Handler<Sendable, CliConn> for CliComposedHandler {
     type Message = CliWireMessage;
     type HandlerError = CliListenError;
 
+    fn as_batch_sync_response(
+        msg: &CliWireMessage,
+    ) -> Option<&subduction_core::connection::message::BatchSyncResponse> {
+        match msg {
+            CliWireMessage::Sync(sync_msg) => match sync_msg.as_ref() {
+                subduction_core::connection::message::SyncMessage::BatchSyncResponse(resp) => {
+                    Some(resp)
+                }
+                subduction_core::connection::message::SyncMessage::BatchSyncRequest(_)
+                | subduction_core::connection::message::SyncMessage::BlobsRequest { .. }
+                | subduction_core::connection::message::SyncMessage::BlobsResponse { .. }
+                | subduction_core::connection::message::SyncMessage::DataRequestRejected(_)
+                | subduction_core::connection::message::SyncMessage::Fragment { .. }
+                | subduction_core::connection::message::SyncMessage::LooseCommit { .. }
+                | subduction_core::connection::message::SyncMessage::RemoveSubscriptions(_) => None,
+            },
+            CliWireMessage::Ephemeral(_) | CliWireMessage::Keyhive(_) => None,
+        }
+    }
+
     fn handle<'a>(
         &'a self,
         conn: &'a Authenticated<CliConn, Sendable>,

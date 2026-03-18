@@ -208,13 +208,22 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
     // Set up the keyhive handler (actor bridge for !Send keyhive_core).
-    let (keyhive_handle, _keyhive_rx) =
+    let (keyhive_handle, keyhive_rx) =
         subduction_keyhive_policy::handler::KeyhiveProtocolHandle::channel();
 
-    // TODO: spawn run_actor on a LocalSet with a KeyhiveProtocol instance.
-    // Until keyhive_core is Send, the actor mediates access to the !Send
-    // keyhive state. After the Send migration, the handle can call
-    // KeyhiveProtocol directly and the actor is removed.
+    // Stub actor: drains commands and replies with errors until the real
+    // keyhive actor is wired up (see KEYHIVE_FLAG_PLAN.md).
+    tokio::spawn(async move {
+        use subduction_keyhive_policy::handler::{HandleError, KeyhiveCommand};
+        while let Ok(cmd) = keyhive_rx.recv().await {
+            match cmd {
+                KeyhiveCommand::HandleInbound { reply, .. } => {
+                    drop(reply.send(Err(HandleError::ActorGone)).await);
+                }
+                KeyhiveCommand::PeerDisconnect { .. } => {}
+            }
+        }
+    });
 
     let builder = subduction_core::subduction::builder::SubductionBuilder::new()
         .signer(signer.clone())

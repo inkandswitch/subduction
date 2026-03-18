@@ -2,9 +2,10 @@
 
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
+pub mod metrics;
+
 mod handler;
 mod key;
-pub mod metrics;
 mod purge;
 mod server;
 mod transport;

@@ -191,12 +191,16 @@ impl StoragePolicy<Local> for JsPolicy {
         }
         let result = self.js_filter_authorized_fetch(peer_bytes(peer), js_ids);
         async move {
-            let Ok(promise) = result else { return ids };
-            let Ok(resolved) = JsFuture::from(promise).await else {
-                return ids;
+            let Ok(promise) = result else {
+                return Vec::new();
             };
+
+            let Ok(resolved) = JsFuture::from(promise).await else {
+                return Vec::new();
+            };
+
             let Ok(arr) = resolved.dyn_into::<Array>() else {
-                return ids;
+                return Vec::new();
             };
 
             arr.iter()
