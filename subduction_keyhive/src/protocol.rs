@@ -19,13 +19,15 @@ use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 use async_lock::Mutex;
 use keyhive_core::{
     contact_card::ContactCard,
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
     store::ciphertext::CiphertextStore,
+};
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
 
 use crate::{
@@ -686,33 +688,36 @@ where
     R: rand::CryptoRng + rand::RngCore,
 {
     // Membership ops
-    #[allow(clippy::type_complexity)]
-    let mut ops: Map<Digest<Event<Signer, T, L>>, Event<Signer, T, L>> = keyhive
+    let mut ops: Map<Digest<StaticEvent<T>>, StaticEvent<T>> = keyhive
         .membership_ops_for_agent(agent)
         .await
         .into_iter()
-        .map(|(digest, op)| (digest.into(), op.into()))
+        .map(|(digest, op)| {
+            let event: Event<Signer, T, L> = op.into();
+            let static_event: StaticEvent<T> = event.into();
+            (digest.coerce(), static_event)
+        })
         .collect();
 
     // Prekey ops
     for key_ops in keyhive.reachable_prekey_ops_for_agent(agent).await.values() {
         for key_op in key_ops {
-            let op = Event::<Signer, T, L>::from(key_op.as_ref().clone());
-            ops.insert(Digest::hash(&op), op);
+            let event = Event::<Signer, T, L>::from(key_op.as_ref().clone());
+            let static_event: StaticEvent<T> = event.into();
+            ops.insert(Digest::hash(&static_event), static_event);
         }
     }
 
     // CGKA ops
     if let Ok(cgka_ops) = keyhive.cgka_ops_reachable_by_agent(agent).await {
         ops.extend(cgka_ops.into_iter().map(|cgka_op| {
-            let op = Event::<Signer, T, L>::CgkaOperation(cgka_op);
-            (Digest::hash(&op), op)
+            let event = Event::<Signer, T, L>::CgkaOperation(cgka_op);
+            let static_event: StaticEvent<T> = event.into();
+            (Digest::hash(&static_event), static_event)
         }));
     }
 
-    ops.into_iter()
-        .map(|(digest, event)| (digest.into(), event.into()))
-        .collect()
+    ops
 }
 
 /// Serialize a value to CBOR bytes.
@@ -1709,6 +1714,205 @@ mod tests {
             assert!(
                 members.contains_key(&carol_identifier),
                 "Carol should be a member of the group"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // CGKA sync tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_cgka_ops_converges() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates a doc (which generates CGKA ops) and adds Bob
+        let doc_id = {
+            let kh = alice_kh.lock().await;
+
+            // Create a group with Bob as a member
+            let group = kh.generate_group(vec![]).await.unwrap();
+            let group_id = group.lock().await.group_id();
+
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
+
+            kh.add_member(
+                bob_agent,
+                &Membered::Group(group_id, group.clone()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+            // Create a document owned by the group - this generates CGKA ops
+            let doc = kh
+                .generate_doc(
+                    vec![Peer::Group(group_id, group.clone())],
+                    nonempty![[42u8; 32]],
+                )
+                .await
+                .unwrap();
+
+            doc.lock().await.doc_id()
+        };
+
+        // Alice should have CGKA ops for this document
+        let alice_cgka_ops = {
+            let kh = alice_kh.lock().await;
+            kh.cgka_ops_for_doc(&doc_id).await.unwrap()
+        };
+        assert!(
+            alice_cgka_ops.is_some() && !alice_cgka_ops.as_ref().unwrap().is_empty(),
+            "Alice should have CGKA ops for the document"
+        );
+
+        // Before sync: Bob should not have the document or CGKA ops
+        {
+            let kh = bob_kh.lock().await;
+            assert!(
+                kh.get_document(doc_id).await.is_none(),
+                "Bob should not have the document before sync"
+            );
+        }
+
+        // Sync Alice → Bob
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // After sync: Bob should have the document and CGKA ops
+        {
+            let kh = bob_kh.lock().await;
+            assert!(
+                kh.get_document(doc_id).await.is_some(),
+                "Bob should have the document after sync"
+            );
+
+            let bob_cgka_ops = kh.cgka_ops_for_doc(&doc_id).await.unwrap();
+            assert!(
+                bob_cgka_ops.is_some() && !bob_cgka_ops.as_ref().unwrap().is_empty(),
+                "Bob should have CGKA ops for the document after sync"
+            );
+
+            // Bob should have the same number of CGKA ops as Alice
+            assert_eq!(
+                bob_cgka_ops.as_ref().unwrap().len(),
+                alice_cgka_ops.as_ref().unwrap().len(),
+                "Bob should have the same CGKA ops as Alice"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_includes_membership_prekey_and_cgka_ops() {
+        // This test verifies that all three types of ops are synced together
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates a group with Bob, then creates a document
+        // This will generate:
+        // - Membership ops (group creation, Bob's membership)
+        // - Prekey ops (for encryption)
+        // - CGKA ops (for the document's key tree)
+        let (group_id, doc_id) = {
+            let kh = alice_kh.lock().await;
+
+            // Create group (membership ops)
+            let group = kh.generate_group(vec![]).await.unwrap();
+            let group_id = group.lock().await.group_id();
+
+            // Add Bob (more membership ops)
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
+            kh.add_member(
+                bob_agent,
+                &Membered::Group(group_id, group.clone()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+            // Create document (CGKA ops)
+            let doc = kh
+                .generate_doc(
+                    vec![Peer::Group(group_id, group.clone())],
+                    nonempty![[99u8; 32]],
+                )
+                .await
+                .unwrap();
+
+            (group_id, doc.lock().await.doc_id())
+        };
+
+        // Sync Alice → Bob
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // Verify Bob has all types of ops
+        {
+            let kh = bob_kh.lock().await;
+
+            // Check membership ops synced (Bob should see the group)
+            let group = kh.get_group(group_id).await;
+            assert!(
+                group.is_some(),
+                "Bob should have the group (membership ops synced)"
+            );
+
+            // Check Bob is a member
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let members = kh
+                .reachable_members(Membered::Group(group_id, group.unwrap()))
+                .await;
+            assert!(
+                members.contains_key(&bob_identifier),
+                "Bob should be a member of the group (membership ops synced)"
+            );
+
+            // Check document synced
+            assert!(
+                kh.get_document(doc_id).await.is_some(),
+                "Bob should have the document"
+            );
+
+            // Check CGKA ops synced
+            let bob_cgka_ops = kh.cgka_ops_for_doc(&doc_id).await.unwrap();
+            assert!(
+                bob_cgka_ops.is_some() && !bob_cgka_ops.as_ref().unwrap().is_empty(),
+                "Bob should have CGKA ops (CGKA ops synced)"
             );
         }
     }

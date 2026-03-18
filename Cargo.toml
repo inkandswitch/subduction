@@ -83,6 +83,7 @@ hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 js-sys = { version = "0.3.81", default-features = false }
 keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
+keyhive_crypto = { version = "0.1.0", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 nonempty = { version = "0.12.0", default-features = false }

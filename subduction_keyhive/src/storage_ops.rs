@@ -5,11 +5,8 @@
 
 use alloc::{string::ToString, sync::Arc, vec::Vec};
 
-use keyhive_core::{
-    archive::Archive, crypto::signer::async_signer::AsyncSigner, event::static_event::StaticEvent,
-    keyhive::Keyhive,
-};
-use keyhive_crypto::content::reference::ContentRef;
+use keyhive_core::{archive::Archive, event::static_event::StaticEvent, keyhive::Keyhive};
+use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 
 use crate::{
     collections::{Map, Set},
@@ -51,7 +48,7 @@ pub async fn save_keyhive_archive<T, S, K>(
     archive: &Archive<T>,
 ) -> Result<(), StorageError>
 where
-    T: keyhive_core::content::reference::ContentRef,
+    T: ContentRef,
     S: KeyhiveStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
@@ -81,7 +78,7 @@ pub async fn save_event<T, S, K>(
     event: &StaticEvent<T>,
 ) -> Result<StorageHash, StorageError>
 where
-    T: keyhive_core::content::reference::ContentRef,
+    T: ContentRef,
     S: KeyhiveStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {

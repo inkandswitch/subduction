@@ -2,6 +2,8 @@
 
 use alloc::string::String;
 
+#[cfg(feature = "std")]
+use keyhive_crypto::signed::SigningError as CryptoSigningError;
 use thiserror::Error;
 
 #[cfg(feature = "std")]
@@ -17,7 +19,7 @@ pub enum SigningError {
 
     /// The signing operation failed.
     #[error("signing failed")]
-    SigningFailed(#[source] keyhive_core::crypto::signed::SigningError),
+    SigningFailed(#[source] CryptoSigningError),
 }
 
 /// Errors that can occur during message verification.

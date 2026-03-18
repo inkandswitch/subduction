@@ -6,15 +6,15 @@ use core::convert::Infallible;
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
 use future_form::Local;
-use futures::{FutureExt, future::LocalBoxFuture};
+use futures::{future::LocalBoxFuture, FutureExt};
 use keyhive_core::{
     access::Access,
-    crypto::signer::memory::MemorySigner,
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::{group::id::GroupId, membered::Membered},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
+use keyhive_crypto::signer::memory::MemorySigner;
 use rand::rngs::OsRng;
 
 use crate::{
