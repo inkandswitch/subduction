@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
 use crate::{
-    handler::{CliComposedHandler, CliConn},
+    handler::{CliHandler, CliConn},
     key, metrics,
     transport::UnifiedTransport,
 };
@@ -48,7 +48,7 @@ type CliSubduction = Arc<
         future_form::Sendable,
         MetricsStorage<FsStorage>,
         CliConn,
-        CliComposedHandler,
+        CliHandler,
         OpenPolicy,
         MemorySigner,
         FuturesTimerTimeout,
@@ -239,7 +239,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
     let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) =
         builder.build_composed(|sync_handler| {
-            Arc::new(CliComposedHandler {
+            Arc::new(CliHandler {
                 sync: sync_handler,
                 keyhive: keyhive_handle,
             })

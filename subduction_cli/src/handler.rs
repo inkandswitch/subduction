@@ -2,11 +2,11 @@
 //!
 //! Dispatches [`CliWireMessage`] variants to the appropriate sub-handler:
 //!
-//! | Variant      | Handler                                       |
-//! |--------------|-----------------------------------------------|
-//! | `Sync`       | [`SyncHandler`]                               |
-//! | `Ephemeral`  | Logs warning (not yet wired)                  |
-//! | `Keyhive`    | [`KeyhiveProtocolHandle`]                     |
+//! | Variant      | Handler                   |
+//! |--------------|---------------------------|
+//! | `Sync`       | [`SyncHandler`]           |
+//! | `Ephemeral`  | Logged and dropped        |
+//! | `Keyhive`    | [`KeyhiveProtocolHandle`] |
 
 use std::sync::Arc;
 
@@ -30,31 +30,30 @@ use crate::{transport::UnifiedTransport, wire::CliWireMessage};
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
 
-/// Type alias for the concrete `SyncHandler` used in the CLI.
-pub(crate) type CliSyncHandler = subduction_core::handler::sync::SyncHandler<
-    Sendable,
-    MetricsStorage<FsStorage>,
-    CliConn,
-    OpenPolicy,
-    CountLeadingZeroBytes,
->;
-
-/// Concrete `ListenError` for the CLI composed handler.
+/// Concrete `ListenError` for the CLI handler.
 type CliListenError = ListenError<Sendable, MetricsStorage<FsStorage>, CliConn, CliWireMessage>;
 
-/// Composed handler that dispatches [`CliWireMessage`] variants.
-pub(crate) struct CliComposedHandler {
-    pub(crate) sync: Arc<CliSyncHandler>,
+/// Handler that dispatches [`CliWireMessage`] variants to sub-handlers.
+pub(crate) struct CliHandler {
+    pub(crate) sync: Arc<
+        subduction_core::handler::sync::SyncHandler<
+            Sendable,
+            MetricsStorage<FsStorage>,
+            CliConn,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
+    >,
     pub(crate) keyhive: KeyhiveProtocolHandle,
 }
 
-impl core::fmt::Debug for CliComposedHandler {
+impl core::fmt::Debug for CliHandler {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CliComposedHandler").finish_non_exhaustive()
+        f.debug_struct("CliHandler").finish_non_exhaustive()
     }
 }
 
-impl Handler<Sendable, CliConn> for CliComposedHandler {
+impl Handler<Sendable, CliConn> for CliHandler {
     type Message = CliWireMessage;
     type HandlerError = CliListenError;
 

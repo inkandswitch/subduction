@@ -12,9 +12,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
-use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
-use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
+use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
+use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
+use subduction_keyhive::{KeyhiveMessage, KEYHIVE_SCHEMA};
 
 /// Composed wire message for the CLI server.
 ///
@@ -110,7 +110,7 @@ impl subduction_ephemeral::composed::WireEnvelope for CliWireMessage {
             Self::Sync(msg) => subduction_ephemeral::composed::Dispatched::Sync(msg),
             Self::Ephemeral(msg) => subduction_ephemeral::composed::Dispatched::Ephemeral(msg),
             Self::Keyhive(_) => {
-                // Keyhive messages are handled directly by CliComposedHandler,
+                // Keyhive messages are handled directly by CliHandler,
                 // not through the WireEnvelope/ComposedHandler dispatch path.
                 unreachable!("keyhive messages should not be dispatched via WireEnvelope")
             }
