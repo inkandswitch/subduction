@@ -91,10 +91,10 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
     let (client_auth, listener, sender) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
-    tokio::spawn(async {
+    tokio::spawn(async move {
         listener.await.ok();
     });
-    tokio::spawn(async {
+    tokio::spawn(async move {
         sender.await.ok();
     });
 
@@ -169,10 +169,10 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
     let (client_auth, listener, sender) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
-    tokio::spawn(async {
+    tokio::spawn(async move {
         listener.await.ok();
     });
-    tokio::spawn(async {
+    tokio::spawn(async move {
         sender.await.ok();
     });
 

@@ -32,8 +32,8 @@ pub struct EphemeralConfig {
 
     /// Capacity of the inbound event channel.
     ///
-    /// The channel is bounded; senders block if the app doesn't drain
-    /// fast enough.
+    /// The channel is bounded; events are dropped if the app doesn't
+    /// drain fast enough.
     /// Default: 1024.
     pub channel_capacity: usize,
 }

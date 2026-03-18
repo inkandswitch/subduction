@@ -126,17 +126,28 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
 
         let msg = EphemeralMessage::Ephemeral { id, payload };
 
-        let conns = self.connections.lock().await;
-        for peer in &authorized_peers {
-            if let Some(peer_conns) = conns.get(peer) {
-                let conn = peer_conns.first();
-                if let Err(e) = conn.send(&msg).await {
-                    debug!(
-                        peer = %peer,
-                        error = %e,
-                        "ephemeral fan-out send failed"
-                    );
-                }
+        // Collect target connections while holding the lock, then drop it
+        // before awaiting sends to avoid holding the mutex across .await.
+        let targets: Vec<Authenticated<C, F>> = {
+            let conns = self.connections.lock().await;
+            authorized_peers
+                .iter()
+                .flat_map(|peer| {
+                    conns
+                        .get(peer)
+                        .into_iter()
+                        .flat_map(|peer_conns| peer_conns.iter().cloned())
+                })
+                .collect()
+        };
+
+        for conn in &targets {
+            if let Err(e) = conn.send(&msg).await {
+                debug!(
+                    peer = %conn.peer_id(),
+                    error = %e,
+                    "ephemeral fan-out send failed"
+                );
             }
         }
     }
@@ -275,17 +286,28 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
 
         let msg = EphemeralMessage::Ephemeral { id, payload };
 
-        let conns = self.connections.lock().await;
-        for peer in &authorized_peers {
-            if let Some(peer_conns) = conns.get(peer) {
-                let c = peer_conns.first();
-                if let Err(e) = c.send(&msg).await {
-                    debug!(
-                        peer = %peer,
-                        error = %e,
-                        "ephemeral fan-out send failed"
-                    );
-                }
+        // Collect target connections while holding the lock, then drop it
+        // before awaiting sends to avoid holding the mutex across .await.
+        let targets: Vec<Authenticated<C, F>> = {
+            let conns = self.connections.lock().await;
+            authorized_peers
+                .iter()
+                .flat_map(|peer| {
+                    conns
+                        .get(peer)
+                        .into_iter()
+                        .flat_map(|peer_conns| peer_conns.iter().cloned())
+                })
+                .collect()
+        };
+
+        for conn in &targets {
+            if let Err(e) = conn.send(&msg).await {
+                debug!(
+                    peer = %conn.peer_id(),
+                    error = %e,
+                    "ephemeral fan-out send failed"
+                );
             }
         }
     }
