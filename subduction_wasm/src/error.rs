@@ -3,10 +3,11 @@
 use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
-use subduction_core::{
-    connection::message::SyncMessage,
-    subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
+use subduction_core::subduction::error::{
+    AddConnectionError, HydrationError, IoError, ListenError, WriteError,
 };
+
+use crate::wire::WireMessage;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -37,7 +38,7 @@ impl From<WasmHydrationError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmIoError(
-    #[from] IoError<Local, JsStorage, MessageTransport<JsTransport>, SyncMessage>,
+    #[from] IoError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage>,
 );
 
 impl From<WasmIoError> for JsValue {
@@ -55,7 +56,7 @@ impl From<WasmIoError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmWriteError(
-    #[from] WriteError<Local, JsStorage, MessageTransport<JsTransport>, SyncMessage, Infallible>,
+    #[from] WriteError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage, Infallible>,
 );
 
 impl From<WasmWriteError> for JsValue {
@@ -94,7 +95,7 @@ impl From<WasmConnectError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmListenError(
-    #[from] ListenError<Local, JsStorage, MessageTransport<JsTransport>, SyncMessage>,
+    #[from] ListenError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage>,
 );
 
 impl From<WasmListenError> for JsValue {

@@ -193,3 +193,107 @@ mod message_transport {
         Ok(())
     }
 }
+
+// ── ManagedConnection ───────────────────────────────────────────────────
+
+mod managed_connection {
+    use std::sync::Arc;
+
+    use futures::future::BoxFuture;
+    use subduction_core::{
+        authenticated::Authenticated,
+        connection::{
+            managed::{CallError, ManagedCall, ManagedConnection},
+            message::BatchSyncRequest,
+            test_utils::ChannelMockConnection,
+        },
+        timeout::{TimedOut, Timeout},
+    };
+
+    use super::*;
+
+    /// A [`Timeout`] that always immediately returns [`TimedOut`].
+    #[derive(Debug, Clone, Copy)]
+    struct AlwaysTimeout;
+
+    impl Timeout<Sendable> for AlwaysTimeout {
+        fn timeout<'a, T: 'a>(
+            &'a self,
+            _dur: Duration,
+            _fut: BoxFuture<'a, T>,
+        ) -> BoxFuture<'a, Result<T, TimedOut>> {
+            Box::pin(async { Err(TimedOut) })
+        }
+    }
+
+    type MockHandle =
+        subduction_core::connection::test_utils::ChannelMockConnectionHandle<SyncMessage>;
+
+    fn make_managed() -> (
+        ManagedConnection<ChannelMockConnection<SyncMessage>, Sendable, AlwaysTimeout>,
+        Arc<subduction_core::multiplexer::Multiplexer>,
+        MockHandle,
+    ) {
+        let peer_id = test_peer_id();
+        let (conn, handle) = ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
+        let auth = Authenticated::new_for_test(conn, peer_id);
+        let mux = Arc::new(Multiplexer::new(peer_id, Duration::from_secs(30)));
+        let managed = ManagedConnection::new(auth, mux.clone(), AlwaysTimeout);
+        (managed, mux, handle)
+    }
+
+    #[tokio::test]
+    async fn call_returns_timeout_error() {
+        let (managed, _mux, _handle) = make_managed();
+        let req_id = managed.next_request_id();
+
+        let req = BatchSyncRequest {
+            req_id,
+            id: SedimentreeId::new([0xAA; 32]),
+            fingerprint_summary: empty_fingerprint_summary(),
+            subscribe: false,
+        };
+
+        let result =
+            <ManagedConnection<ChannelMockConnection<SyncMessage>, Sendable, AlwaysTimeout> as ManagedCall<Sendable, SyncMessage>>::call(
+                &managed,
+                req,
+                None,
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(CallError::Timeout)),
+            "expected Timeout, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_cancels_pending_on_timeout() {
+        let (managed, mux, _handle) = make_managed();
+        let req_id = managed.next_request_id();
+
+        let req = BatchSyncRequest {
+            req_id,
+            id: SedimentreeId::new([0xBB; 32]),
+            fingerprint_summary: empty_fingerprint_summary(),
+            subscribe: false,
+        };
+
+        drop(
+            <ManagedConnection<ChannelMockConnection<SyncMessage>, Sendable, AlwaysTimeout> as ManagedCall<Sendable, SyncMessage>>::call(
+                &managed,
+                req,
+                None,
+            )
+            .await,
+        );
+
+        // The pending entry should have been cleaned up by cancel_pending.
+        let resp = test_batch_sync_response(req_id);
+        assert!(
+            !mux.resolve_pending(&resp).await,
+            "pending entry should have been cancelled after timeout"
+        );
+    }
+}
