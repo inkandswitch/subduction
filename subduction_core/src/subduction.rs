@@ -1280,6 +1280,105 @@ where
         Ok(())
     }
 
+    // ── Batch / Bulk Ingestion ──────────────────────────────────────────
+
+    /// Bulk-insert commits without per-commit minimization or broadcasting.
+    ///
+    /// Unlike [`add_commit`](Self::add_commit), which calls `minimize_tree`
+    /// and broadcasts to peers after _every_ commit (O(n^2) for n commits),
+    /// this method inserts all commits first and runs `minimize_tree` once
+    /// at the end.
+    ///
+    /// No messages are broadcast to peers — use
+    /// [`sync_with_peer`](Self::sync_with_peer) afterward to propagate.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] if a storage error occurs.
+    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
+    pub async fn add_commits_batch(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(BTreeSet<Digest<LooseCommit>>, Blob)>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        let self_id = self.peer_id();
+        let putter = self
+            .storage
+            .get_putter::<F>(self_id, self_id, id)
+            .await
+            .map_err(WriteError::PutDisallowed)?;
+
+        let count = commits.len();
+        tracing::info!("bulk-inserting {count} commits into sedimentree {id:?}");
+
+        for (parents, blob) in commits {
+            let verified_blob = VerifiedBlobMeta::new(blob);
+            let verified_meta: VerifiedMeta<LooseCommit> =
+                VerifiedMeta::seal::<F, _>(&self.signer, (id, parents), verified_blob).await;
+
+            self.insert_commit_locally(&putter, verified_meta)
+                .await
+                .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+        }
+
+        self.minimize_tree(id).await;
+        tracing::info!("bulk-insert of {count} commits complete, tree minimized");
+        Ok(())
+    }
+
+    /// Bulk-insert fragments without per-fragment minimization or broadcasting.
+    ///
+    /// Unlike [`add_fragment`](Self::add_fragment), which calls `minimize_tree`
+    /// and broadcasts to peers after _every_ fragment, this method inserts all
+    /// fragments first and runs `minimize_tree` once at the end.
+    ///
+    /// No messages are broadcast to peers — use
+    /// [`sync_with_peer`](Self::sync_with_peer) afterward to propagate.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] if a storage error occurs.
+    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
+    #[allow(clippy::type_complexity)]
+    pub async fn add_fragments_batch(
+        &self,
+        id: SedimentreeId,
+        fragments: Vec<(
+            Digest<LooseCommit>,
+            BTreeSet<Digest<LooseCommit>>,
+            Vec<Digest<LooseCommit>>,
+            Blob,
+        )>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        let self_id = self.peer_id();
+        let putter = self
+            .storage
+            .get_putter::<F>(self_id, self_id, id)
+            .await
+            .map_err(WriteError::PutDisallowed)?;
+
+        let count = fragments.len();
+        tracing::info!("bulk-inserting {count} fragments into sedimentree {id:?}");
+
+        for (head, boundary, checkpoints, blob) in fragments {
+            let verified_blob = VerifiedBlobMeta::new(blob);
+            let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<F, _>(
+                &self.signer,
+                (id, head, boundary, checkpoints),
+                verified_blob,
+            )
+            .await;
+
+            self.insert_fragment_locally(&putter, verified_meta)
+                .await
+                .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+        }
+
+        self.minimize_tree(id).await;
+        tracing::info!("bulk-insert of {count} fragments complete, tree minimized");
+        Ok(())
+    }
+
     /// Handle receiving a batch sync response from a peer.
     ///
     /// Ingests all commits and fragments from the diff, then re-minimizes

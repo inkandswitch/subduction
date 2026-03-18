@@ -18,9 +18,11 @@ automerge = { workspace = true }
 sedimentree_core = { workspace = true }
 
 [dev-dependencies]
+automerge_sedimentree = { path = ".", features = ["std"] }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
+testresult = { workspace = true }
 
 [[bench]]
 name = "egwalker"

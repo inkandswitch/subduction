@@ -191,3 +191,99 @@ impl CommitStore<'static> for IndexedSedimentreeAutomerge {
         Ok(self.index.get(&digest).cloned())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use automerge::{transaction::Transactable, AutoCommit, ObjType};
+    use sedimentree_core::{
+        collections::Map,
+        commit::{CountLeadingZeroBytes, FragmentState},
+    };
+    use testresult::TestResult;
+
+    fn build_test_doc(num_changes: usize) -> TestResult<AutoCommit> {
+        let mut doc = AutoCommit::new();
+        let list = doc.put_object(automerge::ROOT, "items", ObjType::List)?;
+        for i in 0..num_changes {
+            doc.insert(&list, i, format!("item-{i}"))?;
+        }
+        Ok(doc)
+    }
+
+    #[test]
+    fn roundtrip_fragment_decomposition() -> TestResult {
+        let mut doc = build_test_doc(2000)?;
+        let am_doc = doc.document();
+
+        let original_bytes = am_doc.save();
+        let changes = am_doc.get_changes(&[]);
+        let change_count = changes.len();
+        assert!(change_count > 0, "document should have changes");
+
+        let commit_store = IndexedSedimentreeAutomerge::from_changes(&changes);
+        let heads: Vec<Digest<LooseCommit>> = am_doc
+            .get_heads()
+            .iter()
+            .map(|h| Digest::force_from_bytes(h.0))
+            .collect();
+        let strategy = CountLeadingZeroBytes;
+        let mut known_states: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
+
+        let fragment_states =
+            commit_store.build_fragment_store(&heads, &mut known_states, &strategy)?;
+
+        let changes_by_hash: std::collections::HashMap<ChangeHash, &automerge::Change> =
+            changes.iter().map(|c| (c.hash(), c)).collect();
+
+        let mut fragment_blobs: Vec<Vec<u8>> = Vec::new();
+        for state in &fragment_states {
+            let mut blob = Vec::new();
+            for member_digest in state.members() {
+                let hash = ChangeHash(*member_digest.as_bytes());
+                let change = changes_by_hash
+                    .get(&hash)
+                    .ok_or("member should be in changes_by_hash")?;
+                blob.extend_from_slice(change.raw_bytes());
+            }
+            fragment_blobs.push(blob);
+        }
+
+        let covered: Set<Digest<LooseCommit>> = known_states
+            .values()
+            .flat_map(|state| state.members().iter().copied())
+            .collect();
+
+        let uncovered_blobs: Vec<Vec<u8>> = changes
+            .iter()
+            .filter(|change| {
+                let digest = Digest::force_from_bytes(change.hash().0);
+                !covered.contains(&digest)
+            })
+            .map(|change| change.raw_bytes().to_vec())
+            .collect();
+
+        let total_covered = covered.len() + uncovered_blobs.len();
+        assert_eq!(
+            total_covered,
+            change_count,
+            "covered ({}) + uncovered ({}) should equal total changes ({change_count})",
+            covered.len(),
+            uncovered_blobs.len()
+        );
+
+        let mut reassembled = Automerge::new();
+        for blob in &fragment_blobs {
+            reassembled.load_incremental(blob)?;
+        }
+        for blob in &uncovered_blobs {
+            reassembled.load_incremental(blob)?;
+        }
+
+        let reassembled_bytes = reassembled.save();
+        assert_eq!(am_doc.get_heads(), reassembled.get_heads());
+        assert_eq!(change_count, reassembled.get_changes(&[]).len());
+        assert_eq!(original_bytes, reassembled_bytes);
+        Ok(())
+    }
+}

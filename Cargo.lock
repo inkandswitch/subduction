@@ -301,10 +301,12 @@ name = "automerge_sedimentree"
 version = "0.7.0"
 dependencies = [
  "automerge",
+ "automerge_sedimentree",
  "criterion",
  "pprof",
  "rand 0.8.5",
  "sedimentree_core",
+ "testresult",
 ]
 
 [[package]]
@@ -4635,6 +4637,7 @@ dependencies = [
  "num-bigint",
  "pprof",
  "rand 0.8.5",
+ "rayon",
  "sedimentree_core",
  "serde",
  "siphasher",
