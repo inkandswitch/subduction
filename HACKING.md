@@ -155,13 +155,11 @@ Each connection gets its own task, enabling:
 Sedimentree organizes CRDT data into depth-stratified layers based on content hash:
 
 ```
-Depth 0: ████████████████████████  (all commits)
-         ↓ filter by leading zero bytes
-Depth 1: ████████                   (1+ leading zero bytes)
+Depth 0: ████                       (0+ leading zero bytes → few per fragment)
+         ↓ require more leading zero bytes
+Depth 1: ████████                   (1+ leading zero bytes → more per fragment)
          ↓
-Depth 2: ████                       (2+ leading zero bytes)
-         ↓
-Depth 3: ██                         (3+ leading zero bytes)
+Depth 2: ████████████████████████   (2+ leading zero bytes → most per fragment)
 ```
 
 This enables efficient sync: compare summaries at higher depths first, then drill down only where differences exist. Like a B-tree for content-addressed data.
