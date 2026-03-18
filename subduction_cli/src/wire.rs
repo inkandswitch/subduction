@@ -137,7 +137,6 @@ impl subduction_ephemeral::composed::WireEnvelope for CliWireMessage {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use sedimentree_core::{codec::encode::Encode, id::SedimentreeId};
@@ -145,6 +144,7 @@ mod tests {
         BatchSyncResponse, RemoveSubscriptions, RequestId, SyncResult,
     };
     use subduction_ephemeral::composed::{Dispatched, WireEnvelope};
+    use testresult::TestResult;
 
     fn test_peer_id() -> subduction_core::peer::id::PeerId {
         subduction_core::peer::id::PeerId::new([42u8; 32])
@@ -157,110 +157,136 @@ mod tests {
         }
     }
 
-    // ── Encode / Decode roundtrips ──────────────────────────────────────
+    mod roundtrip {
+        use super::*;
 
-    #[test]
-    fn sync_message_roundtrip() {
-        let msg = CliWireMessage::Sync(Box::new(SyncMessage::RemoveSubscriptions(
-            RemoveSubscriptions {
-                ids: vec![
-                    SedimentreeId::new([0x01; 32]),
-                    SedimentreeId::new([0x02; 32]),
-                ],
-            },
-        )));
+        #[test]
+        fn sync() -> TestResult {
+            let msg = CliWireMessage::Sync(Box::new(SyncMessage::RemoveSubscriptions(
+                RemoveSubscriptions {
+                    ids: vec![
+                        SedimentreeId::new([0x01; 32]),
+                        SedimentreeId::new([0x02; 32]),
+                    ],
+                },
+            )));
 
-        let encoded = msg.encode();
-        let decoded = CliWireMessage::try_decode(&encoded).expect("decode sync");
-        assert_eq!(decoded, msg);
-    }
+            let encoded = msg.encode();
+            let decoded = CliWireMessage::try_decode(&encoded)?;
+            assert_eq!(decoded, msg);
+            Ok(())
+        }
 
-    #[test]
-    fn ephemeral_message_roundtrip() {
-        let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
-            id: SedimentreeId::new([0xAA; 32]),
-            payload: vec![10, 20, 30],
-        });
+        #[test]
+        fn ephemeral() -> TestResult {
+            let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
+                id: SedimentreeId::new([0xAA; 32]),
+                payload: vec![10, 20, 30],
+            });
 
-        let encoded = msg.encode();
-        let decoded = CliWireMessage::try_decode(&encoded).expect("decode ephemeral");
-        assert_eq!(decoded, msg);
-    }
+            let encoded = msg.encode();
+            let decoded = CliWireMessage::try_decode(&encoded)?;
+            assert_eq!(decoded, msg);
+            Ok(())
+        }
 
-    #[test]
-    fn batch_sync_response_roundtrip() {
-        let resp = BatchSyncResponse {
-            req_id: test_request_id(),
-            id: SedimentreeId::new([0xFF; 32]),
-            result: SyncResult::NotFound,
-        };
-        let msg = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp)));
+        #[test]
+        fn batch_sync_response() -> TestResult {
+            let resp = BatchSyncResponse {
+                req_id: test_request_id(),
+                id: SedimentreeId::new([0xFF; 32]),
+                result: SyncResult::NotFound,
+            };
+            let msg = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp)));
 
-        let encoded = msg.encode();
-        let decoded = CliWireMessage::try_decode(&encoded).expect("decode batch sync response");
-        assert_eq!(decoded, msg);
-    }
+            let encoded = msg.encode();
+            let decoded = CliWireMessage::try_decode(&encoded)?;
+            assert_eq!(decoded, msg);
+            Ok(())
+        }
 
-    // ── WireEnvelope::dispatch ──────────────────────────────────────────
+        #[test]
+        fn keyhive() -> TestResult {
+            let msg = CliWireMessage::Keyhive(KeyhiveMessage::new(vec![0xCA, 0xFE, 0xBA, 0xBE]));
 
-    #[test]
-    fn dispatch_sync_returns_sync() {
-        let inner = SyncMessage::BlobsRequest {
-            id: SedimentreeId::new([0x11; 32]),
-            digests: vec![],
-        };
-        let wire = CliWireMessage::Sync(Box::new(inner.clone()));
-
-        match wire.dispatch() {
-            Dispatched::Sync(msg) => assert_eq!(*msg, inner),
-            Dispatched::Ephemeral(_) => panic!("expected Sync variant"),
+            let encoded = msg.encode();
+            let decoded = CliWireMessage::try_decode(&encoded)?;
+            assert_eq!(decoded, msg);
+            Ok(())
         }
     }
 
-    #[test]
-    fn dispatch_ephemeral_returns_ephemeral() {
-        let inner = EphemeralMessage::Subscribe {
-            ids: vec![SedimentreeId::new([0x22; 32])],
-        };
-        let wire = CliWireMessage::Ephemeral(inner.clone());
+    mod dispatch {
+        use super::*;
 
-        match wire.dispatch() {
-            Dispatched::Ephemeral(msg) => assert_eq!(msg, inner),
-            Dispatched::Sync(_) => panic!("expected Ephemeral variant"),
+        #[test]
+        fn sync_returns_sync() {
+            let inner = SyncMessage::BlobsRequest {
+                id: SedimentreeId::new([0x11; 32]),
+                digests: vec![],
+            };
+            let wire = CliWireMessage::Sync(Box::new(inner.clone()));
+
+            assert!(
+                matches!(wire.dispatch(), Dispatched::Sync(msg) if *msg == inner),
+                "expected Sync variant"
+            );
+        }
+
+        #[test]
+        fn ephemeral_returns_ephemeral() {
+            let inner = EphemeralMessage::Subscribe {
+                ids: vec![SedimentreeId::new([0x22; 32])],
+            };
+            let wire = CliWireMessage::Ephemeral(inner.clone());
+
+            assert!(
+                matches!(wire.dispatch(), Dispatched::Ephemeral(msg) if msg == inner),
+                "expected Ephemeral variant"
+            );
         }
     }
 
-    // ── WireEnvelope::as_batch_sync_response ────────────────────────────
+    mod as_batch_sync_response {
+        use super::*;
 
-    #[test]
-    fn as_batch_sync_response_extracts_response() {
-        let resp = BatchSyncResponse {
-            req_id: test_request_id(),
-            id: SedimentreeId::new([0x33; 32]),
-            result: SyncResult::NotFound,
-        };
-        let wire = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
+        #[test]
+        fn extracts_response() {
+            let resp = BatchSyncResponse {
+                req_id: test_request_id(),
+                id: SedimentreeId::new([0x33; 32]),
+                result: SyncResult::NotFound,
+            };
+            let wire = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
 
-        assert_eq!(wire.as_batch_sync_response(), Some(&resp));
-    }
+            assert_eq!(wire.as_batch_sync_response(), Some(&resp));
+        }
 
-    #[test]
-    fn as_batch_sync_response_none_for_other_sync() {
-        let wire = CliWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
-            id: SedimentreeId::new([0x44; 32]),
-            digests: vec![],
-        }));
+        #[test]
+        fn none_for_other_sync() {
+            let wire = CliWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
+                id: SedimentreeId::new([0x44; 32]),
+                digests: vec![],
+            }));
 
-        assert_eq!(wire.as_batch_sync_response(), None);
-    }
+            assert_eq!(wire.as_batch_sync_response(), None);
+        }
 
-    #[test]
-    fn as_batch_sync_response_none_for_ephemeral() {
-        let wire = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
-            id: SedimentreeId::new([0x55; 32]),
-            payload: vec![1],
-        });
+        #[test]
+        fn none_for_ephemeral() {
+            let wire = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
+                id: SedimentreeId::new([0x55; 32]),
+                payload: vec![1],
+            });
 
-        assert_eq!(wire.as_batch_sync_response(), None);
+            assert_eq!(wire.as_batch_sync_response(), None);
+        }
+
+        #[test]
+        fn none_for_keyhive() {
+            let wire = CliWireMessage::Keyhive(KeyhiveMessage::new(vec![0xDE, 0xAD]));
+
+            assert_eq!(wire.as_batch_sync_response(), None);
+        }
     }
 }

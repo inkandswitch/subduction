@@ -137,3 +137,77 @@ fn convert_sync_listen_error(
         ListenError::TrySendError => ListenError::TrySendError,
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
+mod tests {
+    use future_form::Sendable;
+    use sedimentree_core::id::SedimentreeId;
+    use subduction_core::{
+        connection::message::{
+            BatchSyncResponse, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
+        },
+        handler::Handler,
+        peer::id::PeerId,
+    };
+    use subduction_ephemeral::message::EphemeralMessage;
+    use subduction_keyhive::KeyhiveMessage;
+
+    use super::{CliConn, CliHandler};
+    use crate::wire::CliWireMessage;
+
+    fn test_peer_id() -> PeerId {
+        PeerId::new([42u8; 32])
+    }
+
+    fn test_request_id() -> RequestId {
+        RequestId {
+            requestor: test_peer_id(),
+            nonce: 99,
+        }
+    }
+
+    #[test]
+    fn as_batch_sync_response_extracts_from_sync() {
+        let resp = BatchSyncResponse {
+            req_id: test_request_id(),
+            id: SedimentreeId::new([0xAA; 32]),
+            result: SyncResult::NotFound,
+        };
+        let msg = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
+
+        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        assert_eq!(extracted, Some(&resp));
+    }
+
+    #[test]
+    fn as_batch_sync_response_none_for_other_sync() {
+        let msg = CliWireMessage::Sync(Box::new(SyncMessage::RemoveSubscriptions(
+            RemoveSubscriptions {
+                ids: vec![SedimentreeId::new([0xBB; 32])],
+            },
+        )));
+
+        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        assert_eq!(extracted, None);
+    }
+
+    #[test]
+    fn as_batch_sync_response_none_for_ephemeral() {
+        let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
+            id: SedimentreeId::new([0xCC; 32]),
+            payload: vec![1, 2, 3],
+        });
+
+        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        assert_eq!(extracted, None);
+    }
+
+    #[test]
+    fn as_batch_sync_response_none_for_keyhive() {
+        let msg = CliWireMessage::Keyhive(KeyhiveMessage::new(vec![0xDE, 0xAD]));
+
+        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        assert_eq!(extracted, None);
+    }
+}
