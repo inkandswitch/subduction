@@ -474,23 +474,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "beekem"
-version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#c9e123827a9042a31f5b6a23e78f7107adbbd352"
-dependencies = [
- "blake3",
- "chacha20poly1305",
- "dupe",
- "ed25519-dalek 2.2.0",
- "keyhive_crypto",
- "nonempty 0.10.0",
- "rand 0.8.5",
- "serde",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
 name = "bijou64"
 version = "0.1.1"
 dependencies = [
@@ -2903,9 +2886,8 @@ dependencies = [
 [[package]]
 name = "keyhive_core"
 version = "0.2.0-alpha.1"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#c9e123827a9042a31f5b6a23e78f7107adbbd352"
+source = "git+https://github.com/inkandswitch/keyhive?branch=main#6e9333cc7eeabf7120b3cdafe10722854ebd3aa3"
 dependencies = [
- "beekem",
  "bincode",
  "blake3",
  "chacha20poly1305",
@@ -2915,7 +2897,6 @@ dependencies = [
  "dupe",
  "ed25519-dalek 2.2.0",
  "futures 0.3.32",
- "keyhive_crypto",
  "nonempty 0.10.0",
  "rand 0.8.5",
  "serde",
@@ -2924,25 +2905,6 @@ dependencies = [
  "topological-sort",
  "tracing",
  "trait-variant",
- "x25519-dalek",
-]
-
-[[package]]
-name = "keyhive_crypto"
-version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#c9e123827a9042a31f5b6a23e78f7107adbbd352"
-dependencies = [
- "bincode",
- "blake3",
- "chacha20poly1305",
- "derive_more 1.0.0",
- "dupe",
- "ed25519-dalek 2.2.0",
- "rand 0.8.5",
- "serde",
- "signature 2.2.0",
- "thiserror 1.0.69",
- "tracing",
  "x25519-dalek",
 ]
 
