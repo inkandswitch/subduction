@@ -21,7 +21,7 @@ use keyhive_core::{
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{Event, static_event::StaticEvent},
+    event::{static_event::StaticEvent, Event},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -672,7 +672,7 @@ where
     }
 }
 
-/// Get sync-relevant events for an agent, excluding CGKA operations.
+/// Get sync-relevant events for an agent.
 async fn sync_events_for_agent<Signer, T, P, C, L, R>(
     keyhive: &Keyhive<Signer, T, P, C, L, R>,
     agent: &Agent<Signer, T, L>,
@@ -702,8 +702,13 @@ where
         }
     }
 
-    // TODO: CGKA ops are currently excluded but will need to be added back in
-    // to support encryption.
+    // CGKA ops
+    if let Ok(cgka_ops) = keyhive.cgka_ops_reachable_by_agent(agent).await {
+        ops.extend(cgka_ops.into_iter().map(|cgka_op| {
+            let op = Event::<Signer, T, L>::CgkaOperation(cgka_op);
+            (Digest::hash(&op), op)
+        }));
+    }
 
     ops.into_iter()
         .map(|(digest, event)| (digest.into(), event.into()))
@@ -735,10 +740,10 @@ mod tests {
     use crate::{
         storage::MemoryKeyhiveStorage,
         test_utils::{
-            SimpleKeyhive, TestProtocol, TwoPeerHarness, create_channel_pair,
-            create_group_with_read_members, exchange_all_contact_cards,
+            create_channel_pair, create_group_with_read_members, exchange_all_contact_cards,
             exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
             make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
+            SimpleKeyhive, TestProtocol, TwoPeerHarness,
         },
     };
     use future_form::Local;
