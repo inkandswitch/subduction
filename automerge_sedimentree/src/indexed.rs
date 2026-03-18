@@ -101,7 +101,7 @@ impl CommitStore<'static> for IndexedSedimentreeAutomerge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use automerge::{transaction::Transactable, AutoCommit, ChangeHash, ObjType};
+    use automerge::{AutoCommit, ChangeHash, ObjType, transaction::Transactable};
     use sedimentree_core::{
         collections::Map,
         commit::{CountLeadingZeroBytes, FragmentState},
