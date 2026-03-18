@@ -273,16 +273,13 @@ pub trait CommitStore<'a> {
             // Already-known heads were filtered out by `retain` above.
             let level_results: Vec<Result<_, FragmentError<'a, Self>>> = horizon
                 .par_iter()
-                .filter_map(|&head| {
-                    let mut local_cache = Map::new();
-                    match self.fragment(head, &mut local_cache, strategy) {
-                        Ok(state) => Some(Ok((head, state))),
-                        Err(FragmentError::MissingCommit(missing)) => {
-                            tracing::debug!(%head, %missing, "skipping head with incomplete history");
-                            None
-                        }
-                        Err(e) => Some(Err(e)),
+                .filter_map(|&head| match self.fragment(head, &Map::new(), strategy) {
+                    Ok(state) => Some(Ok((head, state))),
+                    Err(FragmentError::MissingCommit(missing)) => {
+                        tracing::debug!(%head, %missing, "skipping head with incomplete history");
+                        None
                     }
+                    Err(e) => Some(Err(e)),
                 })
                 .collect();
 
