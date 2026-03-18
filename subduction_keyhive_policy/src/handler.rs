@@ -234,8 +234,7 @@ where
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
-    use alloc::{string::ToString, sync::Arc, vec};
-    use core::sync::atomic::{AtomicBool, Ordering};
+    use alloc::{string::ToString, vec};
 
     use subduction_keyhive::SignedMessage;
     use testresult::TestResult;
@@ -281,16 +280,15 @@ mod tests {
     async fn actor_processes_peer_disconnect() -> TestResult {
         let (handle, rx) = KeyhiveProtocolHandle::channel();
 
-        let disconnected = Arc::new(AtomicBool::new(false));
-        let flag = disconnected.clone();
+        let (done_tx, done_rx) = async_channel::bounded::<PeerId>(1);
 
         tokio::spawn(run_actor(
             rx,
             |_peer_id, _msg| async { Ok(()) },
-            move |_peer_id| {
-                let flag = flag.clone();
+            move |peer_id| {
+                let done_tx = done_tx.clone();
                 async move {
-                    flag.store(true, Ordering::SeqCst);
+                    let _ = done_tx.send(peer_id).await;
                 }
             },
         ));
@@ -298,8 +296,8 @@ mod tests {
         Handler::<future_form::Sendable, DummyConn>::on_peer_disconnect(&handle, test_peer_id())
             .await;
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        assert!(disconnected.load(Ordering::SeqCst));
+        let disconnected_peer = done_rx.recv().await?;
+        assert_eq!(disconnected_peer, test_peer_id());
 
         Ok(())
     }
@@ -375,18 +373,17 @@ mod tests {
     async fn actor_shuts_down_when_all_handles_dropped() -> TestResult {
         let (handle, rx) = KeyhiveProtocolHandle::channel();
 
-        let shut_down = Arc::new(AtomicBool::new(false));
-        let flag = shut_down.clone();
+        let (done_tx, done_rx) = async_channel::bounded::<()>(1);
 
         tokio::spawn(async move {
             run_actor(rx, |_peer_id, _msg| async { Ok(()) }, |_peer_id| async {}).await;
-            flag.store(true, Ordering::SeqCst);
+            let _ = done_tx.send(()).await;
         });
 
         drop(handle);
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        assert!(shut_down.load(Ordering::SeqCst));
+        // Actor exits when all senders (handles) are dropped.
+        done_rx.recv().await?;
 
         Ok(())
     }

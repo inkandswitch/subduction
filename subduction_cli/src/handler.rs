@@ -91,7 +91,7 @@ impl Handler<Sendable, CliConn> for CliHandler {
                 }
 
                 CliWireMessage::Ephemeral(_) => {
-                    tracing::warn!(
+                    tracing::debug!(
                         "received ephemeral message but ephemeral handler not configured"
                     );
                     Ok(())
