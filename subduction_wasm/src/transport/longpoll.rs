@@ -40,7 +40,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{Either, select},
+            future::{select, Either},
             pin_mut,
         };
 
@@ -347,5 +347,35 @@ impl From<LongPollTransportError> for JsValue {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("LongPollTransportError");
         js_err.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_from_url_with_scheme_and_path() {
+        assert_eq!(host_from_url("https://example.com/path"), "example.com");
+    }
+
+    #[test]
+    fn host_from_url_with_scheme_and_port() {
+        assert_eq!(host_from_url("http://localhost:8080/api"), "localhost:8080");
+    }
+
+    #[test]
+    fn host_from_url_without_scheme() {
+        assert_eq!(host_from_url("example.com/path"), "example.com");
+    }
+
+    #[test]
+    fn host_from_url_bare_host() {
+        assert_eq!(host_from_url("localhost"), "localhost");
+    }
+
+    #[test]
+    fn host_from_url_with_port_no_path() {
+        assert_eq!(host_from_url("http://localhost:8080"), "localhost:8080");
     }
 }
