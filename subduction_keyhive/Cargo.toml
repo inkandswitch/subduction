@@ -21,6 +21,7 @@ ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 future_form = { workspace = true }
 keyhive_core = { workspace = true }
+sedimentree_core = { workspace = true }
 rand = "0.8.5"
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }

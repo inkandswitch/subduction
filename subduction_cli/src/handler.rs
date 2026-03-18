@@ -21,15 +21,14 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::metrics::MetricsStorage,
     subduction::error::{IoError, ListenError},
-    transport::MessageTransport,
+    transport::message::MessageTransport,
 };
 use subduction_keyhive_policy::handler::KeyhiveProtocolHandle;
-use subduction_websocket::timeout::FuturesTimerTimeout;
 
 use crate::{transport::UnifiedTransport, wire::CliWireMessage};
 
 /// The concrete connection type used by the CLI server.
-pub(crate) type CliConn = MessageTransport<UnifiedTransport<FuturesTimerTimeout>>;
+pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
 
 /// Type alias for the concrete `SyncHandler` used in the CLI.
 pub(crate) type CliSyncHandler = subduction_core::handler::sync::SyncHandler<

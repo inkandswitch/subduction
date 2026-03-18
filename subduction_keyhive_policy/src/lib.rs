@@ -4,7 +4,6 @@
 
 pub mod handler;
 
-
 #[cfg(feature = "std")]
 extern crate std;
 
@@ -85,7 +84,6 @@ pub enum PutDisallowedError {
     #[error("author does not have Write access")]
     InsufficientAccess,
 }
-
 
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
 #[allow(missing_debug_implementations)]

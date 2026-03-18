@@ -10,12 +10,17 @@ use subduction_core::subduction::error::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use crate::transport::{
-    longpoll::LongPollTransportError, websocket::WebSocketAuthenticatedTransportError,
-    JsTransportError, WasmTransport,
+use crate::{
+    transport::{
+        JsTransportError, longpoll::LongPollTransportError,
+        websocket::WebSocketAuthenticatedTransportError,
+    },
+    wire::WireMessage,
 };
 use sedimentree_wasm::storage::JsStorage;
-use subduction_core::connection::message::SyncMessage;
+use subduction_core::transport::message::MessageTransport;
+
+use crate::transport::JsTransport;
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
@@ -55,7 +60,8 @@ impl From<WasmIoError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmWriteError(
-    #[from] WriteError<Local, JsStorage, WasmTransport, SyncMessage, JsPolicyDenied>,
+    #[from]
+    WriteError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage, JsPolicyDenied>,
 );
 
 impl From<WasmWriteError> for JsValue {

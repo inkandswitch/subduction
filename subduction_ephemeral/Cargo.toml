@@ -15,6 +15,7 @@ repository.workspace = true
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 bijou64 = { workspace = true }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 future_form = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }

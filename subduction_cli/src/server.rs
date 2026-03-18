@@ -5,11 +5,9 @@ extern crate alloc;
 use alloc::sync::Arc;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
-use async_lock::Mutex;
 use eyre::Result;
 use iroh::EndpointAddr;
-use nonempty::NonEmpty;
-use sedimentree_core::{collections::Map, commit::CountLeadingZeroBytes};
+use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     handshake::{
@@ -19,23 +17,12 @@ use subduction_core::{
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
-    storage::{
-        metrics::{MetricsStorage, RefreshMetrics},
-        powerbox::StoragePowerbox,
-    },
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::metrics::{MetricsStorage, RefreshMetrics},
+    subduction::Subduction,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
-use subduction_ephemeral::{
-    composed::ComposedHandler, config::EphemeralConfig, handler::EphemeralHandler,
-    policy::OpenEphemeralPolicy,
-};
 use subduction_http_longpoll::server::LongPollHandler;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
@@ -220,32 +207,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
-    // Shared state for both Subduction and the composed handler
-    #[allow(clippy::type_complexity)]
-    let connections: Arc<
-        Mutex<
-            Map<
-                PeerId,
-                NonEmpty<Authenticated<MessageTransport<UnifiedTransport>, future_form::Sendable>>,
-            >,
-        >,
-    > = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let sedimentrees = Arc::new(ShardedMap::new());
-    let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-    let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
-
-    let sync_handler = SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        powerbox.clone(),
-        pending_blob_requests.clone(),
-        CountLeadingZeroBytes,
-    );
-
     // Set up the keyhive handler (actor bridge for !Send keyhive_core).
     let (keyhive_handle, _keyhive_rx) =
         subduction_keyhive_policy::handler::KeyhiveProtocolHandle::channel();
@@ -254,6 +215,18 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     // Until keyhive_core is Send, the actor mediates access to the !Send
     // keyhive state. After the Send migration, the handle can call
     // KeyhiveProtocol directly and the actor is removed.
+
+    let builder = subduction_core::subduction::builder::SubductionBuilder::new()
+        .signer(signer.clone())
+        .storage(storage, Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(FuturesTimerTimeout);
+
+    let builder = if let Some(id) = discovery_id {
+        builder.discovery_id(id)
+    } else {
+        builder
+    };
 
     let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) =
         builder.build_composed(|sync_handler| {

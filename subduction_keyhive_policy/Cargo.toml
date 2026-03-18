@@ -26,6 +26,7 @@ serde = { workspace = true }
 subduction_core = { workspace = true, default-features = false }
 subduction_keyhive = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 subduction_core = { workspace = true, features = ["test_utils"] }

@@ -545,28 +545,32 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
         self,
         compose: impl FnOnce(Arc<SyncHandler<F, S, C, P, M, N>>) -> Arc<H>,
     ) -> (
-        Arc<Subduction<'a, F, S, C, H, P, Sig, M, N>>,
-        ListenerFuture<'a, F, S, C, H, P, Sig, M, N>,
+        Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
+        ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
         F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
         F: StartListener<'a, S, C, H::Message, H, P, Sig, M, N>,
         S: Storage<F>,
-        C: Connection<F, H::Message>
-            + Connection<F, SyncMessage>
-            + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
-            + PartialEq
-            + Clone
-            + 'a,
+        C: Connection<F, H::Message> + Connection<F, SyncMessage> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
+        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
         H::Message: From<SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
         M: Clone,
         SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
+        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
+            Into<ListenError<F, S, C, SyncMessage>>,
+        crate::connection::managed::ManagedConnection<C, F, Tmr>:
+            crate::connection::managed::ManagedCall<
+                    F,
+                    H::Message,
+                    SendError = <C as Connection<F, H::Message>>::SendError,
+                >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -603,6 +607,8 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.storage,
             pending_blob_requests,
             nonce_cache,
+            self.timer,
+            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
         )

@@ -8,15 +8,14 @@ use alloc::{
 };
 use async_lock::Mutex;
 use core::{fmt::Debug, time::Duration};
-use nonempty::NonEmpty;
 use sedimentree_core::collections::{Map, Set};
 
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -29,7 +28,6 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    authenticated::Authenticated,
     connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
@@ -38,10 +36,9 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
-        builder::SubductionBuilder,
-        error::HydrationError,
-        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
+        error::HydrationError,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
     transport::message::MessageTransport,
 };
@@ -63,11 +60,10 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
+        DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
-        JsTransport, WasmAuthenticatedTransport, WasmTransport, DEFAULT_LOCAL_SERVICE_NAME,
-        DEFAULT_MUX_TIME_LIMIT,
     },
 };
 use sedimentree_wasm::{
@@ -104,15 +100,20 @@ impl Spawn<Local> for WasmSpawn {
 
 use crate::policy::{JsPolicy, make_open_policy};
 
-type WasmSyncHandler =
-    SyncHandler<Local, JsStorage, WasmTransport, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
+type WasmConn = MessageTransport<JsTransport>;
+
+type WasmHandler = ComposedHandler<
+    SyncHandler<Local, JsStorage, WasmConn, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>,
+    EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy>,
+    crate::wire::WireMessage,
+>;
 
 type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
-    WasmTransport,
-    WasmSyncHandler,
+    WasmConn,
+    WasmHandler,
     JsPolicy,
     JsSigner,
     JsTimeout,
@@ -179,12 +180,11 @@ impl WasmSubduction {
 
         let policy = policy.unwrap_or_else(make_open_policy);
 
-        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
-            .signer(signer)
-            .storage(storage, Arc::new(policy))
-            .spawner(WasmSpawn)
-            .depth_metric(depth_metric)
-            .max_pending_blob_requests(max_pending);
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let sedimentrees = Arc::new(ShardedMap::new());
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+        let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
         let sync_handler = SyncHandler::new(
             sedimentrees.clone(),
@@ -319,13 +319,10 @@ impl WasmSubduction {
 
         let policy = policy.unwrap_or_else(make_open_policy);
 
-        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
-            .signer(signer)
-            .storage(storage, Arc::new(policy))
-            .spawner(WasmSpawn)
-            .depth_metric(depth_metric)
-            .max_pending_blob_requests(max_pending)
-            .sedimentrees(sedimentrees);
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+        let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
         let sync_handler = SyncHandler::new(
             sedimentrees.clone(),

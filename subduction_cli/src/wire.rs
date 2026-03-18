@@ -109,6 +109,11 @@ impl subduction_ephemeral::composed::WireEnvelope for CliWireMessage {
         match self {
             Self::Sync(msg) => subduction_ephemeral::composed::Dispatched::Sync(msg),
             Self::Ephemeral(msg) => subduction_ephemeral::composed::Dispatched::Ephemeral(msg),
+            Self::Keyhive(_) => {
+                // Keyhive messages are handled directly by CliComposedHandler,
+                // not through the WireEnvelope/ComposedHandler dispatch path.
+                unreachable!("keyhive messages should not be dispatched via WireEnvelope")
+            }
         }
     }
 
@@ -126,7 +131,7 @@ impl subduction_ephemeral::composed::WireEnvelope for CliWireMessage {
                 | SyncMessage::LooseCommit { .. }
                 | SyncMessage::RemoveSubscriptions(_) => None,
             },
-            Self::Ephemeral(_) => None,
+            Self::Ephemeral(_) | Self::Keyhive(_) => None,
         }
     }
 }
