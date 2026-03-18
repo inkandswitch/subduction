@@ -5303,6 +5303,7 @@ dependencies = [
  "future_form",
  "futures 0.3.32",
  "keyhive_core",
+ "keyhive_crypto",
  "rand 0.8.5",
  "sedimentree_core",
  "serde",

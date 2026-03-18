@@ -20,6 +20,7 @@ ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
 keyhive_core = { workspace = true }
+keyhive_crypto = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true }
