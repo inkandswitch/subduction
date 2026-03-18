@@ -17,7 +17,7 @@ use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
     connection::Connection, handshake::audience::Audience, peer::id::PeerId,
     policy::open::OpenPolicy, storage::memory::MemoryStorage,
-    subduction::builder::SubductionBuilder, transport::MessageTransport,
+    subduction::builder::SubductionBuilder, transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_ephemeral::message::EphemeralMessage;
@@ -46,14 +46,10 @@ const fn topic(n: u8) -> SedimentreeId {
     SedimentreeId::new([n; 32])
 }
 
-type ServerConn = MessageTransport<UnifiedWebSocket<TimeoutTokio>>;
+type ServerConn = MessageTransport<UnifiedWebSocket>;
 
 /// Verify that an `EphemeralMessage` can be sent over a real WebSocket
 /// connection using `MessageTransport`'s generic `Connection<K, M>` impl.
-///
-/// The client sends an `EphemeralMessage` via `Connection::send`, which
-/// encodes it using the `SUE\x00` schema and transmits the bytes over
-/// the WebSocket. This proves the codec integrates with the transport.
 #[tokio::test]
 async fn ephemeral_message_survives_websocket_transport() -> TestResult {
     init_tracing();
@@ -64,12 +60,12 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    // Server setup — uses SyncHandler internally, we just need it to
-    // accept WebSocket connections.
     let (sd, _, listener, manager) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
+        .timer(TimeoutTokio)
+        .roundtrip_timeout(Duration::from_secs(5))
         .build::<Sendable, ServerConn>();
 
     tokio::spawn(async move {
@@ -81,8 +77,6 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     let server = TokioWebSocketServer::new(
         addr,
-        TimeoutTokio,
-        Duration::from_secs(5),
         Duration::from_secs(60),
         DEFAULT_MAX_MESSAGE_SIZE,
         sd.clone(),
@@ -91,16 +85,9 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     let bound = server.address();
 
-    // Connect a client.
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_auth, listener, sender) = TokioWebSocketClient::new(
-        uri,
-        TimeoutTokio,
-        Duration::from_secs(5),
-        client_signer,
-        Audience::known(server_peer_id),
-    )
-    .await?;
+    let (client_auth, listener, sender) =
+        TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
         listener.await.ok();
@@ -109,7 +96,6 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
         sender.await.ok();
     });
 
-    // Wrap in MessageTransport for Connection<Sendable, EphemeralMessage>.
     let client = MessageTransport::new(client_auth.into_inner());
 
     // Send an ephemeral message using the generic Connection impl.
@@ -156,6 +142,8 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
+        .timer(TimeoutTokio)
+        .roundtrip_timeout(Duration::from_secs(5))
         .build::<Sendable, ServerConn>();
 
     tokio::spawn(async move {
@@ -167,8 +155,6 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
 
     let server = TokioWebSocketServer::new(
         addr,
-        TimeoutTokio,
-        Duration::from_secs(5),
         Duration::from_secs(60),
         DEFAULT_MAX_MESSAGE_SIZE,
         sd.clone(),
@@ -178,14 +164,8 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
     let bound = server.address();
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_auth, listener, sender) = TokioWebSocketClient::new(
-        uri,
-        TimeoutTokio,
-        Duration::from_secs(5),
-        client_signer,
-        Audience::known(server_peer_id),
-    )
-    .await?;
+    let (client_auth, listener, sender) =
+        TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
         listener.await.ok();
