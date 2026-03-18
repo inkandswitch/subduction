@@ -1,22 +1,26 @@
 //! Error types.
 
+use crate::policy::JsPolicyDenied;
 use alloc::string::{String, ToString};
-use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::subduction::error::{
     AddConnectionError, HydrationError, IoError, ListenError, WriteError,
 };
 
-use crate::wire::WireMessage;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use crate::transport::{
-    JsTransport, JsTransportError, longpoll::LongPollTransportError,
-    websocket::WebSocketAuthenticatedTransportError,
+use crate::{
+    transport::{
+        JsTransportError, longpoll::LongPollTransportError,
+        websocket::WebSocketAuthenticatedTransportError,
+    },
+    wire::WireMessage,
 };
 use sedimentree_wasm::storage::JsStorage;
 use subduction_core::transport::message::MessageTransport;
+
+use crate::transport::JsTransport;
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
@@ -56,7 +60,8 @@ impl From<WasmIoError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmWriteError(
-    #[from] WriteError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage, Infallible>,
+    #[from]
+    WriteError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage, JsPolicyDenied>,
 );
 
 impl From<WasmWriteError> for JsValue {
@@ -80,7 +85,7 @@ pub enum WasmConnectError {
 
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]
-    AddConnection(#[from] AddConnectionError<Infallible>),
+    AddConnection(#[from] AddConnectionError<JsPolicyDenied>),
 }
 
 impl From<WasmConnectError> for JsValue {
@@ -110,10 +115,10 @@ impl From<WasmListenError> for JsValue {
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
 #[error(transparent)]
 #[allow(missing_copy_implementations)]
-pub struct WasmAddConnectionError(AddConnectionError<Infallible>);
+pub struct WasmAddConnectionError(AddConnectionError<JsPolicyDenied>);
 
-impl From<AddConnectionError<Infallible>> for WasmAddConnectionError {
-    fn from(err: AddConnectionError<Infallible>) -> Self {
+impl From<AddConnectionError<JsPolicyDenied>> for WasmAddConnectionError {
+    fn from(err: AddConnectionError<JsPolicyDenied>) -> Self {
         WasmAddConnectionError(err)
     }
 }
@@ -149,7 +154,7 @@ pub enum WasmLongPollConnectError {
 
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]
-    AddConnection(#[from] AddConnectionError<Infallible>),
+    AddConnection(#[from] AddConnectionError<JsPolicyDenied>),
 }
 
 impl From<WasmLongPollConnectError> for JsValue {

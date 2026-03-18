@@ -5,15 +5,11 @@ extern crate alloc;
 use alloc::sync::Arc;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
-use async_lock::Mutex;
 use eyre::Result;
 use iroh::EndpointAddr;
-use nonempty::NonEmpty;
-use sedimentree_core::{collections::Map, commit::CountLeadingZeroBytes};
+use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
-    authenticated::Authenticated,
-    handler::sync::SyncHandler,
     handshake::{
         self,
         audience::{Audience, DiscoveryId},
@@ -21,23 +17,12 @@ use subduction_core::{
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
-    storage::{
-        metrics::{MetricsStorage, RefreshMetrics},
-        powerbox::StoragePowerbox,
-    },
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::metrics::{MetricsStorage, RefreshMetrics},
+    subduction::Subduction,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
-use subduction_ephemeral::{
-    composed::ComposedHandler, config::EphemeralConfig, handler::EphemeralHandler,
-    policy::OpenEphemeralPolicy,
-};
 use subduction_http_longpoll::server::LongPollHandler;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
@@ -50,23 +35,11 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
-use crate::{key, metrics, transport::UnifiedTransport, wire::CliWireMessage};
-
-type CliHandler = ComposedHandler<
-    SyncHandler<
-        future_form::Sendable,
-        MetricsStorage<FsStorage>,
-        MessageTransport<UnifiedTransport>,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-    >,
-    EphemeralHandler<
-        future_form::Sendable,
-        MessageTransport<UnifiedTransport>,
-        OpenEphemeralPolicy,
-    >,
-    CliWireMessage,
->;
+use crate::{
+    handler::{CliConn, CliHandler},
+    key, metrics,
+    transport::UnifiedTransport,
+};
 
 /// Type alias for the unified Subduction instance.
 type CliSubduction = Arc<
@@ -74,7 +47,7 @@ type CliSubduction = Arc<
         'static,
         future_form::Sendable,
         MetricsStorage<FsStorage>,
-        MessageTransport<UnifiedTransport>,
+        CliConn,
         CliHandler,
         OpenPolicy,
         MemorySigner,
@@ -234,55 +207,43 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
-    // Shared state for both Subduction and the composed handler
-    #[allow(clippy::type_complexity)]
-    let connections: Arc<
-        Mutex<
-            Map<
-                PeerId,
-                NonEmpty<Authenticated<MessageTransport<UnifiedTransport>, future_form::Sendable>>,
-            >,
-        >,
-    > = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let sedimentrees = Arc::new(ShardedMap::new());
-    let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-    let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
+    // Set up the keyhive handler (actor bridge for !Send keyhive_core).
+    let (keyhive_handle, keyhive_rx) =
+        subduction_keyhive_policy::handler::KeyhiveProtocolHandle::channel();
 
-    let sync_handler = SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        powerbox.clone(),
-        pending_blob_requests.clone(),
-        CountLeadingZeroBytes,
-    );
+    // Stub actor: drains commands and replies with errors until the real
+    // keyhive actor is wired up (see KEYHIVE_FLAG_PLAN.md).
+    tokio::spawn(async move {
+        use subduction_keyhive_policy::handler::{HandleError, KeyhiveCommand};
+        while let Ok(cmd) = keyhive_rx.recv().await {
+            match cmd {
+                KeyhiveCommand::HandleInbound { reply, .. } => {
+                    drop(reply.send(Err(HandleError::ActorGone)).await);
+                }
+                KeyhiveCommand::PeerDisconnect { .. } => {}
+            }
+        }
+    });
 
-    let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
-        connections.clone(),
-        OpenEphemeralPolicy,
-        EphemeralConfig::default(),
-    );
+    let builder = subduction_core::subduction::builder::SubductionBuilder::new()
+        .signer(signer.clone())
+        .storage(storage, Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(FuturesTimerTimeout);
 
-    let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+    let builder = if let Some(id) = discovery_id {
+        builder.discovery_id(id)
+    } else {
+        builder
+    };
 
-    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) = Subduction::new(
-        handler,
-        discovery_id,
-        signer.clone(),
-        sedimentrees,
-        connections,
-        subscriptions,
-        powerbox,
-        pending_blob_requests,
-        NonceCache::default(),
-        FuturesTimerTimeout,
-        Duration::from_secs(30),
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    );
+    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) =
+        builder.build_composed(|sync_handler| {
+            Arc::new(CliHandler {
+                sync: sync_handler,
+                keyhive: keyhive_handle,
+            })
+        });
 
     let server_peer_id = subduction.peer_id();
 

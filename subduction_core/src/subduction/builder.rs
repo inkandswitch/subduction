@@ -521,4 +521,96 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.spawner,
         )
     }
+
+    /// Build a [`Subduction`] instance with a composed [`Handler`].
+    ///
+    /// Like [`build_with_handler`](Self::build_with_handler), but
+    /// creates the default [`SyncHandler`] internally and passes it to
+    /// the `compose` closure. This lets you wrap the `SyncHandler` in a
+    /// composed handler that also handles other message types.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let (sd, listener, manager) = SubductionBuilder::new()
+    ///     .signer(signer)
+    ///     .storage(my_storage, Arc::new(policy))
+    ///     .spawner(TokioSpawn)
+    ///     .build_composed::<Sendable, MyConn, _>(|sync_handler| {
+    ///         Arc::new(MyComposedHandler { sync: sync_handler, /* ... */ })
+    ///     });
+    /// ```
+    #[allow(clippy::type_complexity)]
+    pub fn build_composed<'a, F, C, H>(
+        self,
+        compose: impl FnOnce(Arc<SyncHandler<F, S, C, P, M, N>>) -> Arc<H>,
+    ) -> (
+        Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
+        ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
+        crate::connection::manager::ManagerFuture<F>,
+    )
+    where
+        F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
+        F: StartListener<'a, S, C, H::Message, H, P, Sig, M, N>,
+        S: Storage<F>,
+        C: Connection<F, H::Message> + Connection<F, SyncMessage> + PartialEq + Clone + 'a,
+        P: ConnectionPolicy<F> + StoragePolicy<F>,
+        Sig: Signer<F>,
+        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
+        Sp: Spawn<F> + Send + Sync + 'static,
+        H: Handler<F, C>,
+        H::Message: From<SyncMessage>,
+        H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
+        M: Clone,
+        SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
+        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
+            Into<ListenError<F, S, C, SyncMessage>>,
+        crate::connection::managed::ManagedConnection<C, F, Tmr>:
+            crate::connection::managed::ManagedCall<
+                    F,
+                    H::Message,
+                    SendError = <C as Connection<F, H::Message>>::SendError,
+                >,
+    {
+        let sedimentrees = self
+            .sedimentrees
+            .0
+            .unwrap_or_else(|| Arc::new(ShardedMap::new()));
+
+        let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>> =
+            Arc::new(Mutex::new(Map::new()));
+        let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
+            Arc::new(Mutex::new(Map::new()));
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
+            self.max_pending_blob_requests,
+        )));
+        let nonce_cache = self.nonce_cache.unwrap_or_default();
+
+        let sync_handler = Arc::new(SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            self.storage.clone(),
+            pending_blob_requests.clone(),
+            self.depth_metric.clone(),
+        ));
+
+        let handler = compose(sync_handler);
+
+        Subduction::new(
+            handler,
+            self.discovery_id,
+            self.signer,
+            sedimentrees,
+            connections,
+            subscriptions,
+            self.storage,
+            pending_blob_requests,
+            nonce_cache,
+            self.timer,
+            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
+            self.depth_metric,
+            self.spawner,
+        )
+    }
 }

@@ -15,11 +15,13 @@ repository.workspace = true
 async-lock = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ciborium = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 future_form = { workspace = true }
 keyhive_core = { workspace = true }
+sedimentree_core = { workspace = true }
 rand = "0.8.5"
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
@@ -27,6 +29,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
+bolero = ["dep:bolero"]
 serde = ["dep:serde", "std"]
 std = ["thiserror/std"]
 

@@ -14,6 +14,7 @@ pub mod message;
 pub mod peer_id;
 pub mod signed_message;
 pub mod storage;
+pub mod wire;
 
 #[cfg(feature = "serde")]
 pub mod protocol;
@@ -32,6 +33,7 @@ pub use message::Message;
 pub use peer_id::KeyhivePeerId;
 pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
+pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 #[cfg(feature = "serde")]
 pub use protocol::KeyhiveProtocol;

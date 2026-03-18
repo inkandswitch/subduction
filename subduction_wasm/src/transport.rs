@@ -41,11 +41,6 @@ use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 /// no explicit service name is provided.
 pub const DEFAULT_LOCAL_SERVICE_NAME: &str = "subduction:local";
 
-/// Wrap a [`JsTransport`] with typed encode/decode.
-pub(crate) fn make_transport(transport: JsTransport) -> MessageTransport<JsTransport> {
-    MessageTransport::new(transport)
-}
-
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
 export interface Transport {
@@ -396,7 +391,7 @@ impl WasmAuthenticatedTransport {
 
         let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
             transport,
-            |transport, peer_id| (make_transport(transport), peer_id),
+            |transport, peer_id| (MessageTransport::new(transport), peer_id),
             signer,
             audience,
             now,
@@ -443,7 +438,7 @@ impl WasmAuthenticatedTransport {
 
         let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
             transport,
-            |transport, peer_id| (make_transport(transport), peer_id),
+            |transport, peer_id| (MessageTransport::new(transport), peer_id),
             signer,
             audience,
             now,
@@ -491,7 +486,7 @@ impl WasmAuthenticatedTransport {
 
         let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
             transport,
-            |transport, peer_id| (make_transport(transport), peer_id),
+            |transport, peer_id| (MessageTransport::new(transport), peer_id),
             signer,
             &nonce_cache,
             our_peer_id,
@@ -543,7 +538,7 @@ impl WasmAuthenticatedTransport {
 
         let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
             transport,
-            |transport, peer_id| (make_transport(transport), peer_id),
+            |transport, peer_id| (MessageTransport::new(transport), peer_id),
             signer,
             &nonce_cache,
             our_peer_id,

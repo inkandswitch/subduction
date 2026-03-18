@@ -8,7 +8,6 @@ use alloc::{
 };
 use async_lock::Mutex;
 use core::{fmt::Debug, time::Duration};
-use nonempty::NonEmpty;
 use sedimentree_core::collections::{Map, Set};
 
 use from_js_ref::FromJsRef;
@@ -29,13 +28,11 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    authenticated::Authenticated,
     connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
@@ -65,7 +62,6 @@ use crate::{
     transport::{
         DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
-        make_transport,
         websocket::WasmWebSocket,
     },
 };
@@ -101,16 +97,13 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
+use crate::policy::{JsPolicy, make_open_policy};
+
+type WasmConn = MessageTransport<JsTransport>;
+
 type WasmHandler = ComposedHandler<
-    SyncHandler<
-        Local,
-        JsStorage,
-        MessageTransport<JsTransport>,
-        OpenPolicy,
-        WasmHashMetric,
-        WASM_SHARD_COUNT,
-    >,
-    EphemeralHandler<Local, MessageTransport<JsTransport>, OpenEphemeralPolicy>,
+    SyncHandler<Local, JsStorage, WasmConn, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>,
+    EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy>,
     crate::wire::WireMessage,
 >;
 
@@ -118,9 +111,9 @@ type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
-    MessageTransport<JsTransport>,
+    WasmConn,
     WasmHandler,
-    OpenPolicy,
+    JsPolicy,
     JsSigner,
     JsTimeout,
     WasmHashMetric,
@@ -154,6 +147,9 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `policy` - Optional JS object implementing authorization.
+    ///   Must have `authorizeConnect(...)`, `authorizeFetch(...)`, `authorizePut(...)`,
+    ///   `filterAuthorizedFetch(...)`. Defaults to allow-all.
     ///
     /// # Panics
     ///
@@ -167,6 +163,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        policy: Option<JsPolicy>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -180,14 +177,13 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        #[allow(clippy::type_complexity)]
-        let connections: Arc<
-            Mutex<Map<PeerId, NonEmpty<Authenticated<MessageTransport<JsTransport>, Local>>>>,
-        > = Arc::new(Mutex::new(Map::new()));
+        let policy = policy.unwrap_or_else(make_open_policy);
+
+        let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let sedimentrees = Arc::new(ShardedMap::new());
         let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
-        let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
+        let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
         let sync_handler = SyncHandler::new(
             sedimentrees.clone(),
@@ -272,6 +268,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        policy: Option<JsPolicy>,
     ) -> Result<Self, WasmHydrationError> {
         use subduction_core::storage::traits::Storage as _;
 
@@ -319,13 +316,12 @@ impl WasmSubduction {
                 .await;
         }
 
-        #[allow(clippy::type_complexity)]
-        let connections: Arc<
-            Mutex<Map<PeerId, NonEmpty<Authenticated<MessageTransport<JsTransport>, Local>>>>,
-        > = Arc::new(Mutex::new(Map::new()));
+        let policy = policy.unwrap_or_else(make_open_policy);
+
+        let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
-        let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
+        let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
         let sync_handler = SyncHandler::new(
             sedimentrees.clone(),
@@ -445,8 +441,9 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(
-                authenticated
-                    .map(|ws| make_transport(JsValue::from(ws).unchecked_into::<JsTransport>())),
+                authenticated.map(|ws| {
+                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
+                }),
             )
             .await?;
         Ok(peer_id.into())
@@ -481,8 +478,9 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(
-                authenticated
-                    .map(|ws| make_transport(JsValue::from(ws).unchecked_into::<JsTransport>())),
+                authenticated.map(|ws| {
+                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
+                }),
             )
             .await?;
         Ok(peer_id.into())
@@ -516,7 +514,7 @@ impl WasmSubduction {
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_transport(transport)
+                MessageTransport::new(transport)
             }))
             .await?;
         Ok(peer_id.into())
@@ -553,7 +551,7 @@ impl WasmSubduction {
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_transport(transport)
+                MessageTransport::new(transport)
             }))
             .await?;
         Ok(peer_id.into())
