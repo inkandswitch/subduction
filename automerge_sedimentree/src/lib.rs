@@ -99,3 +99,84 @@ impl Parents for SedimentreeChangeMetadata<'_> {
             .collect()
     }
 }
+
+// ============================================================================
+// Indexed (pre-hashed) variant for large documents
+// ============================================================================
+
+/// Pre-indexed parent digests for a single commit.
+///
+/// Unlike [`SedimentreeChangeMetadata`], this type owns its data and does not
+/// borrow from the Automerge document. Lookups against
+/// [`IndexedSedimentreeAutomerge`] are O(1) instead of the O(n) linear scan
+/// that [`SedimentreeAutomerge`] incurs per call.
+#[cfg(feature = "std")]
+#[derive(Debug, Clone)]
+pub struct OwnedParents(Set<Digest<LooseCommit>>);
+
+#[cfg(feature = "std")]
+impl Parents for OwnedParents {
+    fn parents(&self) -> Set<Digest<LooseCommit>> {
+        self.0.clone()
+    }
+}
+
+/// A pre-indexed [`CommitStore`] for large Automerge documents.
+///
+/// [`SedimentreeAutomerge`] calls `doc.get_change_meta_by_hash()` on every
+/// [`CommitStore::lookup`], which may be O(n) inside Automerge's internal
+/// storage. For a document with _n_ changes, `build_fragment_store` makes
+/// O(n) lookups, giving **O(n²)** total cost.
+///
+/// `IndexedSedimentreeAutomerge` pre-indexes all change metadata into a
+/// [`HashMap`](std::collections::HashMap) on construction (one O(n) pass),
+/// then serves every lookup in **O(1)**. Use this for documents with many
+/// changes (>10k) where the quadratic cost becomes prohibitive.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use automerge_sedimentree::IndexedSedimentreeAutomerge;
+/// use sedimentree_core::commit::{CommitStore, CountLeadingZeroBytes};
+///
+/// # fn example(doc: &automerge::Automerge) {
+/// let store = IndexedSedimentreeAutomerge::from(doc);
+/// // store.build_fragment_store(...) is now O(n) instead of O(n²)
+/// # }
+/// ```
+#[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+#[derive(Debug, Clone)]
+pub struct IndexedSedimentreeAutomerge {
+    index: sedimentree_core::collections::Map<Digest<LooseCommit>, OwnedParents>,
+}
+
+#[cfg(feature = "std")]
+impl From<&Automerge> for IndexedSedimentreeAutomerge {
+    fn from(doc: &Automerge) -> Self {
+        let changes = doc.get_changes(&[]);
+        let mut index = sedimentree_core::collections::Map::with_capacity(changes.len());
+
+        for change in changes {
+            let digest = Digest::force_from_bytes(change.hash().0);
+            let parents: Set<Digest<LooseCommit>> = change
+                .deps()
+                .iter()
+                .map(|dep| Digest::force_from_bytes(dep.0))
+                .collect();
+            index.insert(digest, OwnedParents(parents));
+        }
+
+        Self { index }
+    }
+}
+
+#[cfg(feature = "std")]
+impl CommitStore<'static> for IndexedSedimentreeAutomerge {
+    type Node = OwnedParents;
+    type LookupError = Infallible;
+
+    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
+        Ok(self.index.get(&digest).cloned())
+    }
+}
