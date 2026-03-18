@@ -11,7 +11,7 @@ use futures::FutureExt;
 use subduction_core::{
     authenticated::Authenticated,
     timeout::{TimedOut, Timeout},
-    transport::Transport,
+    transport::{message::MessageTransport, Transport},
 };
 use subduction_http_longpoll::{
     client::HttpLongPollClient, session::SessionId, transport::HttpLongPollTransport,
@@ -40,7 +40,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{Either, select},
+            future::{select, Either},
             pin_mut,
         };
 
@@ -175,7 +175,7 @@ impl WasmAuthenticatedLongPoll {
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
             let transport: super::JsTransport =
                 wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-            super::make_transport(transport)
+            MessageTransport::new(transport)
         }))
     }
 }

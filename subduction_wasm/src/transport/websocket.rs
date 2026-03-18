@@ -16,7 +16,10 @@ use futures::{
     channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
 };
-use subduction_core::{timestamp::TimestampSeconds, transport::Transport};
+use subduction_core::{
+    timestamp::TimestampSeconds,
+    transport::{Transport, message::MessageTransport},
+};
 use subduction_crypto::nonce::Nonce;
 use thiserror::Error;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
@@ -537,7 +540,7 @@ impl WasmAuthenticatedWebSocket {
     pub fn to_transport(self) -> super::WasmAuthenticatedTransport {
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
             let transport: super::JsTransport = wasm_bindgen::JsValue::from(ws).unchecked_into();
-            super::make_transport(transport)
+            MessageTransport::new(transport)
         }))
     }
 }
