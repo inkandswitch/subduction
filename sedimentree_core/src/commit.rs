@@ -62,12 +62,18 @@ pub trait CommitStore<'a> {
 
     /// Constructs a single fragment starting from `head_digest`.
     ///
-    /// BFS-walks from the head through parents until hitting commits whose
-    /// depth (according to `strategy`) is ≥ the head's depth. Those become
-    /// the fragment's boundary; everything in between becomes members.
+    /// BFS-walks from the head through parents, collecting all commits
+    /// whose depth is _less than or equal to_ the head's depth. Commits
+    /// with depth _strictly greater_ than the head become the boundary —
+    /// they delimit the fragment and will head deeper (larger) strata.
     ///
-    /// `head_digest` must have depth > 0; depth-0 commits are loose commits,
-    /// not fragment heads.
+    /// Same-depth commits encountered during the walk are absorbed as
+    /// members and recorded as checkpoints. This means a depth-N fragment
+    /// spans all the way back to the next depth-(N+1)+ commit, rather
+    /// than stopping at each depth-N peer.
+    ///
+    /// `head_digest` must have depth > 0; depth-0 commits are loose
+    /// commits, not fragment heads.
     ///
     /// # Errors
     ///
@@ -79,7 +85,7 @@ pub trait CommitStore<'a> {
         known_fragment_states: &Map<Digest<LooseCommit>, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
-        let min_depth = strategy.to_depth(head_digest);
+        let head_depth = strategy.to_depth(head_digest);
 
         let mut visited: Set<Digest<LooseCommit>> = Set::from([head_digest]);
         let mut members: Set<Digest<LooseCommit>> = Set::from([head_digest]);
@@ -108,14 +114,17 @@ pub trait CommitStore<'a> {
                 )))?;
 
             let depth = strategy.to_depth(digest);
-            if depth >= min_depth {
-                // Boundary: this commit delimits the fragment. Don't
-                // expand its parents — they belong to a deeper fragment.
+            if depth > head_depth {
+                // Strictly deeper: this commit heads a larger stratum.
+                // It becomes our boundary — don't expand its parents.
                 boundary.insert(digest, node);
             } else {
-                // Interior member of this fragment.
+                // Same or shallower depth: absorbed into this fragment.
                 members.insert(digest);
-                if depth > Depth(0) {
+                if depth > Depth(0) && depth < head_depth {
+                    // Shallower stratum boundary within this fragment.
+                    // Retained so we can determine the "supports"
+                    // relationship between strata.
                     checkpoints.insert(digest);
                 }
                 for p in node.parents() {
@@ -127,7 +136,7 @@ pub trait CommitStore<'a> {
         }
 
         // Strip overlap with already-known deeper fragments whose heads
-        // coincide with our boundary (can happen with depth ties).
+        // coincide with our boundary.
         for boundary_hash in boundary.keys() {
             if let Some(known) = known_fragment_states.get(boundary_hash) {
                 for m in known.members() {
