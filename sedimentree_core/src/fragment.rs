@@ -411,7 +411,7 @@ mod tests {
         /// the key used by `Sedimentree`'s fragment map and all storage
         /// backends.
         #[test]
-        fn digest_hash_is_deterministic() {
+        fn digest_hash_is_deterministic() -> testresult::TestResult {
             let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
             let fragment = Fragment::from_parts(
                 SedimentreeId::new([0x01; 32]),
@@ -431,8 +431,13 @@ mod tests {
 
             // The digest used as a Sedimentree map key must match.
             let tree = Sedimentree::new(alloc::vec![fragment.clone()], alloc::vec![]);
-            let (map_key, _) = tree.fragment_entries().next().expect("one fragment");
+            let (map_key, _) = tree
+                .fragment_entries()
+                .next()
+                .ok_or("tree should contain one fragment")?;
             assert_eq!(*map_key, d1, "Sedimentree map key must equal Digest::hash");
+
+            Ok(())
         }
     }
 
