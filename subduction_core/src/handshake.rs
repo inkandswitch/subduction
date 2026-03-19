@@ -471,35 +471,48 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
                 return Err(AuthenticateError::ReflectedChallenge);
             }
 
-            // Guard: detect challenge signed by our own key (reflection attack
-            // or self-connection).
-            let our_verifying_key = signer.verifying_key();
-            if their_signed_challenge.issuer() == our_verifying_key {
+            // Verify signature, audience, and clock drift using the same
+            // validation as `respond()`. Try Known(our_peer_id) first,
+            // then fall back to our discovery audience if applicable.
+            let our_peer_id = PeerId::from(signer.verifying_key());
+            let known_audience = Audience::known(our_peer_id);
+            let max_drift = Duration::from_secs(600);
+
+            let their_verified =
+                match verify_challenge(&their_signed_challenge, &known_audience, now, max_drift) {
+                    Ok(v) => v,
+                    Err(HandshakeError::ChallengeValidation(
+                        ChallengeValidationError::InvalidAudience,
+                    )) => {
+                        // Fall back to discovery audience if we initiated with one.
+                        let discovery = match &audience {
+                            Audience::Discover(_) => Some(&audience),
+                            Audience::Known(_) => None,
+                        };
+                        match discovery {
+                            Some(disc) => {
+                                verify_challenge(&their_signed_challenge, disc, now, max_drift)?
+                            }
+                            None => {
+                                return Err(AuthenticateError::Handshake(
+                                    HandshakeError::ChallengeValidation(
+                                        ChallengeValidationError::InvalidAudience,
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+
+            // Guard: detect challenge signed by our own key (reflection
+            // attack or self-connection). Checked AFTER signature verification
+            // to prevent DoS via spoofed issuer field.
+            if their_verified.client_id == our_peer_id {
                 return Err(AuthenticateError::ReflectionAttack);
             }
 
-            // Verify their challenge signature.
-            let their_verified = their_signed_challenge
-                .try_verify()
-                .map_err(|_| HandshakeError::InvalidSignature)?;
-            let their_challenge = *their_verified.payload();
-
-            // Validate their challenge's audience targets us.
-            let our_peer_id = PeerId::from(our_verifying_key);
-            let their_audience = &their_challenge.audience;
-            let audience_ok = match their_audience {
-                Audience::Known(peer_id) => *peer_id == our_peer_id,
-                Audience::Discover(_) => {
-                    // In discovery mode, accept any discovery audience
-                    // (both sides are discovering each other).
-                    true
-                }
-            };
-            if !audience_ok {
-                return Err(AuthenticateError::Handshake(
-                    HandshakeError::ChallengeValidation(ChallengeValidationError::InvalidAudience),
-                ));
-            }
+            let their_challenge = their_verified.challenge;
 
             // Break the tie deterministically — the side whose signed
             // challenge is lexicographically greater wins (keeps initiator role).
@@ -1408,6 +1421,7 @@ mod tests {
 
     mod simultaneous_open {
         use super::*;
+        use future_form::Sendable;
         use futures::FutureExt;
         use subduction_crypto::signer::memory::MemorySigner;
         use testresult::TestResult;
@@ -1430,20 +1444,28 @@ mod tests {
             }
         }
 
-        impl Handshake<future_form::Sendable> for ChannelHandshake {
-            type Error = alloc::string::String;
+        #[derive(Debug, thiserror::Error)]
+        enum ChannelError {
+            #[error("send: {0}")]
+            Send(#[from] async_channel::SendError<Vec<u8>>),
+            #[error("recv: {0}")]
+            Recv(#[from] async_channel::RecvError),
+        }
+
+        impl Handshake<Sendable> for ChannelHandshake {
+            type Error = ChannelError;
 
             fn send(
                 &mut self,
                 bytes: Vec<u8>,
             ) -> futures::future::BoxFuture<'_, Result<(), Self::Error>> {
                 let tx = self.tx.clone();
-                async move { tx.send(bytes).await.map_err(|e| e.to_string()) }.boxed()
+                async move { Ok(tx.send(bytes).await?) }.boxed()
             }
 
             fn recv(&mut self) -> futures::future::BoxFuture<'_, Result<Vec<u8>, Self::Error>> {
                 let rx = self.rx.clone();
-                async move { rx.recv().await.map_err(|e| e.to_string()) }.boxed()
+                async move { Ok(rx.recv().await?) }.boxed()
             }
         }
 
@@ -1464,7 +1486,7 @@ mod tests {
             let now = TimestampSeconds::new(1000);
 
             let a_handle = tokio::spawn(async move {
-                initiate::<future_form::Sendable, _, _, _, _>(
+                initiate::<Sendable, _, _, _, _>(
                     transport_a,
                     |_hs, peer_id| (peer_id, ()),
                     &signer_a,
@@ -1476,7 +1498,7 @@ mod tests {
             });
 
             let b_handle = tokio::spawn(async move {
-                initiate::<future_form::Sendable, _, _, _, _>(
+                initiate::<Sendable, _, _, _, _>(
                     transport_b,
                     |_hs, peer_id| (peer_id, ()),
                     &signer_b,
@@ -1510,28 +1532,20 @@ mod tests {
                 now,
                 Nonce::random(),
             );
-            let signed_challenge =
-                Signed::seal::<future_form::Sendable, _>(&signer_alice, challenge)
-                    .await
-                    .into_signed();
+            let signed_challenge = Signed::seal::<Sendable, _>(&signer_alice, challenge)
+                .await
+                .into_signed();
 
             // Alice sends her challenge
             let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());
-            alice_hs
-                .send(msg.encode())
-                .await
-                .map_err(|e| e.to_string())?;
+            alice_hs.send(msg.encode()).await?;
 
             // Mallory receives and reflects it back
-            let reflected_bytes = mallory_hs.recv().await.map_err(|e| e.to_string())?;
-            mallory_hs
-                .send(reflected_bytes)
-                .await
-                .map_err(|e| e.to_string())?;
+            let reflected_bytes = mallory_hs.recv().await?;
+            mallory_hs.send(reflected_bytes).await?;
 
             // Alice tries to complete the handshake
-            let first_msg =
-                recv_handshake_message::<future_form::Sendable, _>(&mut alice_hs).await?;
+            let first_msg = recv_handshake_message::<Sendable, _>(&mut alice_hs).await?;
 
             // Simulate what initiate does: check if it's a challenge
             match first_msg {
@@ -1561,7 +1575,7 @@ mod tests {
             // Spawn Alice's initiate
             let signer_clone = test_signer(1);
             let alice_handle = tokio::spawn(async move {
-                initiate::<future_form::Sendable, _, _, _, _>(
+                initiate::<Sendable, _, _, _, _>(
                     alice_hs2,
                     |_hs, peer_id| (peer_id, ()),
                     &signer_clone,
@@ -1573,11 +1587,8 @@ mod tests {
             });
 
             // Mallory reflects Alice's challenge
-            let alice_challenge = mallory_hs2.recv().await.map_err(|e| e.to_string())?;
-            mallory_hs2
-                .send(alice_challenge)
-                .await
-                .map_err(|e| e.to_string())?;
+            let alice_challenge = mallory_hs2.recv().await?;
+            mallory_hs2.send(alice_challenge).await?;
 
             let result = alice_handle.await?;
             assert!(
@@ -1607,7 +1618,7 @@ mod tests {
             let service_b = service;
 
             let a_handle = tokio::spawn(async move {
-                initiate::<future_form::Sendable, _, _, _, _>(
+                initiate::<Sendable, _, _, _, _>(
                     transport_a,
                     |_hs, peer_id| (peer_id, ()),
                     &signer_a,
@@ -1619,7 +1630,7 @@ mod tests {
             });
 
             let b_handle = tokio::spawn(async move {
-                initiate::<future_form::Sendable, _, _, _, _>(
+                initiate::<Sendable, _, _, _, _>(
                     transport_b,
                     |_hs, peer_id| (peer_id, ()),
                     &signer_b,
