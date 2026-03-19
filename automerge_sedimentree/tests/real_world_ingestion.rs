@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
+use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},

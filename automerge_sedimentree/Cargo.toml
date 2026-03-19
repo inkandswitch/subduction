@@ -16,6 +16,7 @@ rust-version.workspace = true
 [dependencies]
 automerge = { workspace = true }
 sedimentree_core = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 automerge_sedimentree = { path = ".", features = ["std"] }

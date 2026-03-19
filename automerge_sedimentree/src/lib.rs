@@ -9,6 +9,9 @@ extern crate std;
 #[cfg(feature = "std")]
 pub mod indexed;
 
+#[cfg(feature = "std")]
+pub mod ingest;
+
 extern crate alloc;
 
 use alloc::rc::Rc;

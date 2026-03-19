@@ -356,14 +356,11 @@ impl TestGraph {
     }
 }
 
-impl<'a> CommitStore<'a> for TestGraph {
+impl CommitStore<'_> for TestGraph {
     type Node = Set<Digest<LooseCommit>>;
     type LookupError = Infallible;
 
-    fn lookup(
-        &self,
-        digest: Digest<LooseCommit>,
-    ) -> Result<Option<Self::Node>, Self::LookupError> {
+    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
         Ok(self.lookup_parents(digest))
     }
 }

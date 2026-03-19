@@ -13,7 +13,7 @@ use sedimentree_core::{
     commit::{CommitStore, FragmentState},
     crypto::digest::Digest,
     loose_commit::LooseCommit,
-    test_utils::{seeded_rng, TestGraph},
+    test_utils::{TestGraph, seeded_rng},
 };
 
 type Known = Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>;

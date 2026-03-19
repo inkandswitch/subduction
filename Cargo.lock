@@ -307,6 +307,7 @@ dependencies = [
  "rand 0.8.5",
  "sedimentree_core",
  "testresult",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
