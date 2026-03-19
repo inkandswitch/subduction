@@ -35,7 +35,6 @@ pub struct Fragment {
     sedimentree_id: SedimentreeId,
     summary: FragmentSummary,
     checkpoints: BTreeSet<Checkpoint>,
-    digest: Digest<Fragment>,
 }
 
 impl Fragment {
@@ -74,7 +73,7 @@ impl Fragment {
         checkpoints: BTreeSet<Checkpoint>,
         blob_meta: BlobMeta,
     ) -> Self {
-        let mut fragment = Self {
+        Self {
             sedimentree_id,
             summary: FragmentSummary {
                 head,
@@ -82,13 +81,7 @@ impl Fragment {
                 blob_meta,
             },
             checkpoints,
-            digest: Digest::force_from_bytes([0u8; 32]), // placeholder
-        };
-
-        // Compute digest from the canonical wire encoding so that
-        // `fragment.digest() == Digest::hash(&fragment)`.
-        fragment.digest = Digest::hash(&fragment);
-        fragment
+        }
     }
 
     /// Returns true if this fragment supports the given fragment summary.
@@ -166,11 +159,6 @@ impl Fragment {
         &self.checkpoints
     }
 
-    /// The unique [`Digest`] of this [`Fragment`], derived from its content.
-    #[must_use]
-    pub const fn digest(&self) -> Digest<Fragment> {
-        self.digest
-    }
     /// The causal identity of this fragment (its head digest).
     #[must_use]
     pub const fn fragment_id(&self) -> FragmentId {
@@ -714,7 +702,25 @@ mod tests {
             fragment::Fragment,
         };
 
-        /// Round-trip property: encode then decode yields the original value.
+        /// Regression guard: `Fragment::digest()` must equal
+        /// `Digest::hash(&fragment)`. Currently trivially true since
+        /// `digest()` computes on demand, but guards against anyone
+        /// re-introducing a cached digest field that diverges.
+        #[test]
+        fn digest_equals_encode_hash() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    assert_eq!(
+                        fragment.digest(),
+                        Digest::hash(fragment),
+                        "Fragment::digest() must equal Digest::hash(&fragment)"
+                    );
+                });
+        }
+
+        /// Round-trip property: encode then decode yields the original value,
+        /// and the decoded fragment's digest is consistent.
         #[test]
         #[allow(clippy::panic)]
         fn codec_round_trip() {
@@ -727,6 +733,11 @@ mod tests {
                         Ok((decoded, consumed)) => {
                             assert_eq!(&decoded, fragment);
                             assert_eq!(consumed, buf.len());
+                            assert_eq!(
+                                decoded.digest(),
+                                Digest::hash(&decoded),
+                                "digest must be consistent after decode"
+                            );
                         }
                         Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
                     }
