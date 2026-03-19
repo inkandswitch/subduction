@@ -476,6 +476,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "beekem"
+version = "0.1.0"
+source = "git+https://github.com/inkandswitch/keyhive?branch=main#256d948749c81856931bbb613da21815c799d990"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "dupe",
+ "ed25519-dalek 2.2.0",
+ "keyhive_crypto",
+ "nonempty 0.10.0",
+ "rand 0.8.5",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "bijou64"
 version = "0.1.1"
 dependencies = [
@@ -652,10 +669,11 @@ dependencies = [
 
 [[package]]
 name = "borsh"
-version = "1.6.0"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f"
+checksum = "cfd1e3f8955a5d7de9fab72fc8373fade9fb8a703968cb200ae3dc6cf08e185a"
 dependencies = [
+ "bytes",
  "cfg_aliases",
 ]
 
@@ -2888,8 +2906,9 @@ dependencies = [
 [[package]]
 name = "keyhive_core"
 version = "0.2.0-alpha.1"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#6e9333cc7eeabf7120b3cdafe10722854ebd3aa3"
+source = "git+https://github.com/inkandswitch/keyhive?branch=main#256d948749c81856931bbb613da21815c799d990"
 dependencies = [
+ "beekem",
  "bincode",
  "blake3",
  "chacha20poly1305",
@@ -2899,6 +2918,7 @@ dependencies = [
  "dupe",
  "ed25519-dalek 2.2.0",
  "futures 0.3.32",
+ "keyhive_crypto",
  "nonempty 0.10.0",
  "rand 0.8.5",
  "serde",
@@ -2907,6 +2927,25 @@ dependencies = [
  "topological-sort",
  "tracing",
  "trait-variant",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "keyhive_crypto"
+version = "0.1.0"
+source = "git+https://github.com/inkandswitch/keyhive?branch=main#256d948749c81856931bbb613da21815c799d990"
+dependencies = [
+ "bincode",
+ "blake3",
+ "chacha20poly1305",
+ "derive_more 1.0.0",
+ "dupe",
+ "ed25519-dalek 2.2.0",
+ "rand 0.8.5",
+ "serde",
+ "signature 2.2.0",
+ "thiserror 1.0.69",
+ "tracing",
  "x25519-dalek",
 ]
 
@@ -3444,9 +3483,9 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
-version = "0.7.5"
+version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1207a7e20ad57b847bbddc6776b968420d38292bbfe2089accff5e19e82454c"
+checksum = "5d0bca838442ec211fa11de3a8b0e0e8f3a4522575b5c4c06ed722e005036f26"
 dependencies = [
  "num_enum_derive",
  "rustversion",
@@ -3454,9 +3493,9 @@ dependencies = [
 
 [[package]]
 name = "num_enum_derive"
-version = "0.7.5"
+version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff32365de1b6743cb203b710788263c44a03de03802daf96092f2da4fe6ba4d7"
+checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2 1.0.106",
@@ -3937,9 +3976,9 @@ dependencies = [
 
 [[package]]
 name = "pretty-hex"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbc83ee4a840062f368f9096d80077a9841ec117e17e7f700df81958f1451254"
+checksum = "9a65843dfefbafd3c879c683306959a6de478443ffe9c9adf02f5976432402d7"
 
 [[package]]
 name = "prettyplease"
@@ -3967,7 +4006,7 @@ version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
 dependencies = [
- "toml_edit 0.25.4+spec-1.1.0",
+ "toml_edit 0.25.5+spec-1.1.0",
 ]
 
 [[package]]
@@ -5248,6 +5287,7 @@ dependencies = [
  "future_form",
  "futures 0.3.32",
  "keyhive_core",
+ "keyhive_crypto",
  "nonempty 0.10.0",
  "rand 0.8.5",
  "sedimentree_core",
@@ -5266,6 +5306,7 @@ dependencies = [
  "future_form",
  "futures 0.3.32",
  "keyhive_core",
+ "keyhive_crypto",
  "rand 0.8.5",
  "sedimentree_core",
  "serde",
@@ -5677,9 +5718,9 @@ checksum = "7cda73e2f1397b1262d6dfdcef8aafae14d1de7748d66822d3bfeeb6d03e5e4b"
 
 [[package]]
 name = "toml_datetime"
-version = "1.0.0+spec-1.1.0"
+version = "1.0.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32c2555c699578a4f59f0cc68e5116c8d7cabbd45e1409b989d4be085b53f13e"
+checksum = "9b320e741db58cac564e26c607d3cc1fdc4a88fd36c879568c07856ed83ff3e9"
 dependencies = [
  "serde_core",
 ]
@@ -5697,23 +5738,23 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.25.4+spec-1.1.0"
+version = "0.25.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7193cbd0ce53dc966037f54351dbbcf0d5a642c7f0038c382ef9e677ce8c13f2"
+checksum = "8ca1a40644a28bce036923f6a431df0b34236949d111cc07cb6dca830c9ef2e1"
 dependencies = [
  "indexmap",
- "toml_datetime 1.0.0+spec-1.1.0",
+ "toml_datetime 1.0.1+spec-1.1.0",
  "toml_parser",
- "winnow 0.7.15",
+ "winnow 1.0.0",
 ]
 
 [[package]]
 name = "toml_parser"
-version = "1.0.9+spec-1.1.0"
+version = "1.0.10+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "702d4415e08923e7e1ef96cd5727c0dfed80b4d2fa25db9647fe5eb6f7c5a4c4"
+checksum = "7df25b4befd31c4816df190124375d5a20c6b6921e2cad937316de3fccd63420"
 dependencies = [
- "winnow 0.7.15",
+ "winnow 1.0.0",
 ]
 
 [[package]]
@@ -6830,9 +6871,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "0.7.15"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+checksum = "a90e88e4667264a994d34e6d1ab2d26d398dcdca8b7f52bec8668957517fc7d8"
 dependencies = [
  "memchr",
 ]

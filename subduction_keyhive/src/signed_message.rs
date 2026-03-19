@@ -11,7 +11,7 @@ use core::fmt;
 use crate::error::VerificationError;
 use crate::peer_id::KeyhivePeerId;
 #[cfg(all(feature = "serde", feature = "std"))]
-use keyhive_core::crypto::signed::Signed;
+use keyhive_crypto::signed::Signed;
 
 /// Error type for CBOR serialization/deserialization.
 #[derive(Debug, Clone)]
