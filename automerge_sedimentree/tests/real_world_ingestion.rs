@@ -6,7 +6,7 @@
 //! invariants. Byte-identical reassembly is tested in release mode only
 //! (automerge's `get_changes` has a `debug_assert` that doubles work).
 
-use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
+use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -107,8 +107,8 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
     // Get all changes with raw bytes in topological order.
     let changes = doc.get_changes(&[]);
 
-    // For each fragment: filter members in topological order, concatenate
-    // raw_bytes, load into fresh doc, save as compact Document format.
+    // For each fragment: load boundary + member changes into a sub-doc,
+    // then save_after(boundary) for compact Document format output.
     let mut fragment_blobs = Vec::new();
     let mut fragment_state_blobs = Vec::new();
     for state in &states {
@@ -117,10 +117,16 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
             .iter()
             .map(|d| ChangeHash(*d.as_bytes()))
             .collect();
+        let boundary: Set<ChangeHash> = state
+            .boundary()
+            .keys()
+            .map(|d| ChangeHash(*d.as_bytes()))
+            .collect();
 
         let mut raw = Vec::new();
         for change in &changes {
-            if members.contains(&change.hash()) {
+            let hash = change.hash();
+            if boundary.contains(&hash) || members.contains(&hash) {
                 raw.extend_from_slice(change.raw_bytes());
             }
         }
@@ -129,7 +135,8 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
         sub_doc
             .load_incremental(&raw)
             .expect("load_incremental for fragment");
-        let compact = sub_doc.save();
+        let boundary_heads: Vec<ChangeHash> = boundary.into_iter().collect();
+        let compact = sub_doc.save_after(&boundary_heads);
 
         fragment_state_blobs.push((state.clone(), Blob::new(compact.clone())));
         fragment_blobs.push(compact);
@@ -315,6 +322,32 @@ fn roundtrip_full(name: &str, bytes: &[u8]) {
         rebuilt.length(&ROOT),
         "{name}: root object length diverged"
     );
+}
+
+/// Report blob sizes for all vectors that have fragments.
+/// Release-only because it calls get_changes.
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn blob_size_report() {
+    for (name, bytes) in [
+        ("A1", &include_bytes!("../test-vectors/A1.am")[..]),
+        ("A2", &include_bytes!("../test-vectors/A2.am")[..]),
+        ("C1", &include_bytes!("../test-vectors/C1.am")[..]),
+        ("C2", &include_bytes!("../test-vectors/C2.am")[..]),
+    ] {
+        let doc = Automerge::load(bytes).expect(name);
+        let d = decompose_full(&doc);
+        let frag_bytes: usize = d.fragment_blobs.iter().map(|b| b.len()).sum();
+        let loose_bytes: usize = d.uncovered_blobs.iter().map(|b| b.len()).sum();
+        let original = bytes.len();
+        let ratio = (frag_bytes + loose_bytes) as f64 / original as f64;
+        eprintln!(
+            "{name}: original={original} fragments={frag_bytes} ({} blobs) loose={loose_bytes} ({} blobs) total={} ratio={ratio:.2}x",
+            d.fragment_state_blobs.len(),
+            d.uncovered_blobs.len(),
+            frag_bytes + loose_bytes,
+        );
+    }
 }
 
 #[test]
