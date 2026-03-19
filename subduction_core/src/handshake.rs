@@ -58,6 +58,11 @@
 //! ).await?;
 //! ```
 
+pub mod audience;
+pub mod challenge;
+pub mod rejection;
+pub mod response;
+
 use alloc::vec::Vec;
 use core::time::Duration;
 
@@ -74,11 +79,6 @@ use sedimentree_core::codec::{
 };
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
-pub mod audience;
-pub mod challenge;
-pub mod rejection;
-pub mod response;
-
 use audience::Audience;
 use challenge::{Challenge, ChallengeValidationError};
 use rejection::{Rejection, RejectionReason};
@@ -86,6 +86,9 @@ use response::{Response, ResponseValidationError};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
+
+/// Maximum clock drift tolerated during simultaneous open handshakes.
+const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(600);
 
 /// Client-side drift correction.
 ///
@@ -1515,7 +1518,6 @@ mod tests {
                     Audience::known(peer_id_b),
                     now,
                     Nonce::random(),
-                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1528,7 +1530,6 @@ mod tests {
                     Audience::known(peer_id_a),
                     now,
                     Nonce::random(),
-                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1606,7 +1607,6 @@ mod tests {
                     Audience::known(PeerId::new([0xAA; 32])),
                     now,
                     Nonce::random(),
-                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1650,7 +1650,6 @@ mod tests {
                     service_a,
                     now,
                     Nonce::random(),
-                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1663,7 +1662,6 @@ mod tests {
                     service_b,
                     now,
                     Nonce::random(),
-                    Duration::from_secs(600),
                 )
                 .await
             });
