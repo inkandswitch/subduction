@@ -89,12 +89,6 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
     let metadata = doc.get_changes_meta(&[]);
     let change_count = metadata.len();
 
-    // Build a lookup from digest → deps (cheap, metadata only).
-    let meta_by_digest: HashMap<Digest<LooseCommit>, &[ChangeHash]> = metadata
-        .iter()
-        .map(|m| (Digest::force_from_bytes(m.hash.0), m.deps.as_slice()))
-        .collect();
-
     let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
     let heads: Vec<Digest<LooseCommit>> = doc
         .get_heads()
@@ -113,41 +107,41 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
         .flat_map(|s| s.members().iter().copied())
         .collect();
 
-    // Use bundle() to produce columnar-compressed blobs — one per fragment.
+    // Single get_changes call — one OpSet scan instead of N bundle() calls.
+    let changes = doc.get_changes(&[]);
+    let by_hash: HashMap<ChangeHash, &automerge::Change> =
+        changes.iter().map(|c| (c.hash(), c)).collect();
+
+    // Build one bundle per fragment from the pre-fetched changes.
     let mut fragment_bundles = Vec::new();
     let mut fragment_state_blobs = Vec::new();
     for state in &states {
-        let hashes: Vec<ChangeHash> = state
-            .members()
-            .iter()
-            .map(|d| ChangeHash(*d.as_bytes()))
-            .collect();
-        let bundle = doc.bundle(hashes).expect("bundle fragment");
-        let bytes = bundle.bytes().to_vec();
-        fragment_state_blobs.push((state.clone(), Blob::new(bytes.clone())));
-        fragment_bundles.push(bytes);
+        let mut raw = Vec::new();
+        for member in state.members() {
+            let hash = ChangeHash(*member.as_bytes());
+            raw.extend_from_slice(by_hash.get(&hash).expect("member in changes").raw_bytes());
+        }
+        fragment_state_blobs.push((state.clone(), Blob::new(raw.clone())));
+        fragment_bundles.push(raw);
     }
 
-    // Uncovered changes → one bundle per loose commit.
-    let uncovered_digests: Vec<Digest<LooseCommit>> = metadata
+    // Loose commits from the same pre-fetched changes.
+    let uncovered: Vec<&automerge::Change> = changes
         .iter()
-        .map(|m| Digest::force_from_bytes(m.hash.0))
-        .filter(|d| !covered.contains(d))
+        .filter(|c| !covered.contains(&Digest::force_from_bytes(c.hash().0)))
         .collect();
 
-    let mut uncovered_bundles = Vec::new();
-    let mut uncovered_parents = Vec::new();
-    for digest in &uncovered_digests {
-        let hash = ChangeHash(*digest.as_bytes());
-        let bundle = doc.bundle([hash]).expect("bundle loose commit");
-        uncovered_bundles.push(bundle.bytes().to_vec());
-
-        let parents: std::collections::BTreeSet<Digest<LooseCommit>> = meta_by_digest
-            .get(digest)
-            .map(|deps| deps.iter().map(|d| Digest::force_from_bytes(d.0)).collect())
-            .unwrap_or_default();
-        uncovered_parents.push(parents);
-    }
+    let uncovered_bundles: Vec<Vec<u8>> =
+        uncovered.iter().map(|c| c.raw_bytes().to_vec()).collect();
+    let uncovered_parents: Vec<std::collections::BTreeSet<Digest<LooseCommit>>> = uncovered
+        .iter()
+        .map(|c| {
+            c.deps()
+                .iter()
+                .map(|d| Digest::force_from_bytes(d.0))
+                .collect()
+        })
+        .collect();
 
     FullDecomp {
         change_count,
@@ -399,4 +393,59 @@ fn merge_identical_is_idempotent() {
     let mut merged = tree_a;
     merged.merge(tree_b);
     assert_eq!(before, merged.minimal_hash(&m));
+}
+
+// ---------------------------------------------------------------------------
+// Real-world document tests (226k changes, ~6MB)
+//
+// The file is not checked in (it contains real user data). Tests skip
+// gracefully when the file is absent.
+// ---------------------------------------------------------------------------
+
+const REAL_WORLD_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-vectors/real-world.am");
+
+fn load_real_world() -> Option<Vec<u8>> {
+    std::fs::read(REAL_WORLD_PATH).ok()
+}
+
+/// Metadata-only decomposition on the 226k-change real-world doc.
+/// Verifies `build_fragment_store` completes and coverage is correct.
+#[test]
+fn real_world_metadata_decomposition() {
+    let Some(bytes) = load_real_world() else {
+        eprintln!("skipping: real-world.am not found at {REAL_WORLD_PATH}");
+        return;
+    };
+
+    let doc = Automerge::load(&bytes).expect("load real-world doc");
+    let d = decompose_meta(&doc);
+
+    eprintln!(
+        "real-world: {} changes, {} fragments, {} uncovered, {} heads",
+        d.change_count,
+        d.fragment_count,
+        d.uncovered_count,
+        d.heads.len(),
+    );
+
+    assert!(d.change_count > 200_000, "expected 200k+ changes");
+    assert!(d.fragment_count > 0, "should produce fragments");
+    assert_eq!(
+        d.covered.len() + d.uncovered_count,
+        d.change_count,
+        "coverage mismatch"
+    );
+}
+
+/// Full bundle roundtrip on the real-world doc.
+/// Only runs in release mode, and only when the file is present.
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn real_world_roundtrip() {
+    let Some(bytes) = load_real_world() else {
+        eprintln!("skipping: real-world.am not found at {REAL_WORLD_PATH}");
+        return;
+    };
+
+    roundtrip_full("real-world", &bytes);
 }

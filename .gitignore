@@ -30,4 +30,5 @@ data
 rust_out
 
 # Real-world test data (automerge docs dumped for local testing)
+*.automerge
 real-world.am

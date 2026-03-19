@@ -19,9 +19,9 @@
 use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use criterion_pprof::criterion::{Output, PProfProfiler};
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 use sedimentree_core::{
     blob::BlobMeta,
     commit::{CountLeadingZeroBytes, CountTrailingZerosInBase},
@@ -109,7 +109,11 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
         let rand_byte: u8 = rng.gen_range(0..=255);
         let depth = if rand_byte == 0 {
             let rand_byte2: u8 = rng.gen_range(0..=255);
-            if rand_byte2 == 0 { 2 } else { 1 }
+            if rand_byte2 == 0 {
+                2
+            } else {
+                1
+            }
         } else {
             0
         };
@@ -210,7 +214,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..=255);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..=255);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }
@@ -220,7 +228,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..10);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..10);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }
@@ -734,6 +746,88 @@ fn bench_minimal_hash_by_metric(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark `build_fragment_store` — the real automerge→sedimentree
+/// decomposition pipeline using `get_changes_meta` + `from_metadata`.
+fn bench_build_fragment_store(c: &mut Criterion) {
+    use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
+    use sedimentree_core::{collections::Map, commit::CommitStore};
+
+    let mut group = c.benchmark_group("build_fragment_store");
+
+    for tv in TEST_VECTORS {
+        let doc = load_automerge(tv.bytes);
+        let metadata = doc.get_changes_meta(&[]);
+        let change_count = metadata.len() as u64;
+
+        // Pre-build the index outside the bench loop (we're benchmarking
+        // the fragment building, not the indexing).
+        let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
+        let heads: Vec<Digest<LooseCommit>> = doc
+            .get_heads()
+            .iter()
+            .map(|h| Digest::force_from_bytes(h.0))
+            .collect();
+
+        group.throughput(Throughput::Elements(change_count));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(tv.name),
+            &(store, heads),
+            |b, (store, heads)| {
+                b.iter(|| {
+                    let mut known: Map<
+                        Digest<LooseCommit>,
+                        sedimentree_core::commit::FragmentState<OwnedParents>,
+                    > = Map::new();
+                    store
+                        .build_fragment_store(black_box(heads), &mut known, &CountLeadingZeroBytes)
+                        .expect("build_fragment_store");
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark full ingestion: `get_changes_meta` + `from_metadata` +
+/// `build_fragment_store` + `get_changes` for blob extraction.
+fn bench_full_ingestion(c: &mut Criterion) {
+    use automerge_sedimentree::indexed::IndexedSedimentreeAutomerge;
+    use sedimentree_core::commit::CommitStore;
+
+    let mut group = c.benchmark_group("full_ingestion");
+    // These are expensive — reduce sample size.
+    group.sample_size(10);
+
+    for tv in TEST_VECTORS {
+        let doc = load_automerge(tv.bytes);
+        let change_count = doc.get_changes_meta(&[]).len() as u64;
+
+        group.throughput(Throughput::Elements(change_count));
+        group.bench_with_input(BenchmarkId::from_parameter(tv.name), &doc, |b, doc| {
+            b.iter(|| {
+                // Phase 1: metadata index + fragment decomposition
+                let metadata = doc.get_changes_meta(&[]);
+                let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
+                let heads: Vec<Digest<LooseCommit>> = doc
+                    .get_heads()
+                    .iter()
+                    .map(|h| Digest::force_from_bytes(h.0))
+                    .collect();
+                let mut known = sedimentree_core::collections::Map::new();
+                let _fresh = store
+                    .build_fragment_store(black_box(&heads), &mut known, &CountLeadingZeroBytes)
+                    .expect("build_fragment_store");
+
+                // Phase 2: extract raw change bytes
+                let _changes = doc.get_changes(black_box(&[]));
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
@@ -741,6 +835,8 @@ criterion_group! {
         bench_document_stats,
         bench_depth_metric_stats,
         bench_load_document,
+        bench_build_fragment_store,
+        bench_full_ingestion,
         bench_minimize,
         bench_minimize_by_metric,
         bench_fingerprint_summarize,
