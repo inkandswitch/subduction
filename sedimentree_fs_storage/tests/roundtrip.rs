@@ -168,6 +168,61 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
     Ok(())
 }
 
+/// Verify that `Fragment::digest()` matches the storage key (`Digest::hash`).
+///
+/// This is a regression test for a bug where `Fragment::digest()` used ad-hoc
+/// hashing (different field order, no schema prefix) while storage backends
+/// used `Digest::hash(&fragment)` (canonical wire encoding). The digests
+/// didn't match, causing "fragment not found" on reload.
+#[tokio::test]
+async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x05);
+
+    let head = Digest::<LooseCommit>::force_from_bytes([0xAA; 32]);
+    let boundary = BTreeSet::from([
+        Digest::<LooseCommit>::force_from_bytes([0xBB; 32]),
+        Digest::<LooseCommit>::force_from_bytes([0xCC; 32]),
+    ]);
+    let checkpoints = vec![Digest::<LooseCommit>::force_from_bytes([0xDD; 32])];
+
+    let blob = Blob::new(vec![99; 100]);
+    let verified_blob = VerifiedBlobMeta::new(blob);
+    let verified: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (id, head, boundary, checkpoints),
+        verified_blob,
+    )
+    .await;
+
+    // The two digest computation paths must agree
+    let digest_from_method = verified.payload().digest();
+    let digest_from_hash = Digest::hash(verified.payload());
+    assert_eq!(
+        digest_from_method, digest_from_hash,
+        "Fragment::digest() must equal Digest::hash(&fragment)"
+    );
+
+    // Save using the storage backend (which uses Digest::hash internally)
+    Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+    Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
+
+    // Load using Fragment::digest() — must find the fragment
+    let loaded = Storage::<Sendable>::load_fragment(&storage, id, digest_from_method)
+        .await?
+        .expect("fragment must be loadable by Fragment::digest()");
+
+    assert_eq!(
+        loaded.payload().digest(),
+        digest_from_method,
+        "loaded fragment's digest must match"
+    );
+
+    Ok(())
+}
+
 /// Save multiple commits, `load_loose_commits` returns all of them.
 #[tokio::test]
 async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {

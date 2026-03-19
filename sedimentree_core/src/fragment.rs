@@ -74,24 +74,7 @@ impl Fragment {
         checkpoints: BTreeSet<Checkpoint>,
         blob_meta: BlobMeta,
     ) -> Self {
-        let digest = {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(sedimentree_id.as_bytes());
-            hasher.update(head.as_bytes());
-
-            for end in &boundary {
-                hasher.update(end.as_bytes());
-            }
-            hasher.update(blob_meta.digest().as_bytes());
-
-            for checkpoint in &checkpoints {
-                hasher.update(checkpoint.as_bytes());
-            }
-
-            Digest::force_from_bytes(*hasher.finalize().as_bytes())
-        };
-
-        Self {
+        let mut fragment = Self {
             sedimentree_id,
             summary: FragmentSummary {
                 head,
@@ -99,8 +82,13 @@ impl Fragment {
                 blob_meta,
             },
             checkpoints,
-            digest,
-        }
+            digest: Digest::force_from_bytes([0u8; 32]), // placeholder
+        };
+
+        // Compute digest from the canonical wire encoding so that
+        // `fragment.digest() == Digest::hash(&fragment)`.
+        fragment.digest = Digest::hash(&fragment);
+        fragment
     }
 
     /// Returns true if this fragment supports the given fragment summary.
@@ -427,6 +415,37 @@ impl DecodeFields for Fragment {
 
 #[cfg(test)]
 mod tests {
+    mod digest_consistency {
+        use super::super::*;
+        use crate::crypto::digest::Digest;
+
+        /// `Fragment::digest()` must equal `Digest::hash(&fragment)`.
+        ///
+        /// These two values were historically different (the stored digest used
+        /// ad-hoc incremental hashing while `Digest::hash` used the canonical
+        /// `Encode` output). This test prevents that regression.
+        #[test]
+        fn fragment_digest_matches_encode_hash() {
+            let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
+            let fragment = Fragment::from_parts(
+                SedimentreeId::new([0x01; 32]),
+                Digest::force_from_bytes([0x10; 32]),
+                alloc::collections::BTreeSet::from([
+                    Digest::force_from_bytes([0x20; 32]),
+                    Digest::force_from_bytes([0x30; 32]),
+                ]),
+                alloc::collections::BTreeSet::new(),
+                BlobMeta::new(&blob),
+            );
+
+            assert_eq!(
+                fragment.digest(),
+                Digest::hash(&fragment),
+                "Fragment::digest() must equal Digest::hash(&fragment)"
+            );
+        }
+    }
+
     mod codec {
         use super::super::*;
         use alloc::vec;
