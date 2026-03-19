@@ -357,6 +357,42 @@ pub struct RespondResult {
     pub challenge: Challenge,
 }
 
+/// Receive and decode a handshake message from the transport.
+async fn recv_handshake_message<K: FutureForm, H: Handshake<K>>(
+    handshake: &mut H,
+) -> Result<HandshakeMessage, AuthenticateError<H::Error>> {
+    let bytes = handshake
+        .recv()
+        .await
+        .map_err(AuthenticateError::Transport)?;
+    if bytes.is_empty() {
+        return Err(AuthenticateError::ConnectionClosed);
+    }
+    Ok(HandshakeMessage::try_decode(&bytes)?)
+}
+
+/// Receive a message from the transport, verify it is a [`Signed<Response>`]
+/// that matches our original challenge, and return the responder's peer ID.
+///
+/// Also handles [`Rejection`] messages and unexpected message types.
+async fn recv_verified_response<K: FutureForm, H: Handshake<K>>(
+    handshake: &mut H,
+    original_challenge: &Challenge,
+) -> Result<PeerId, AuthenticateError<H::Error>> {
+    let msg = recv_handshake_message(handshake).await?;
+    match msg {
+        HandshakeMessage::SignedResponse(signed_response) => {
+            let verified = verify_response(&signed_response, original_challenge)?;
+            Ok(verified.server_id)
+        }
+        HandshakeMessage::Rejection(rejection) => Err(AuthenticateError::Rejected {
+            reason: rejection.reason,
+            responder_timestamp: rejection.server_timestamp,
+        }),
+        _ => Err(AuthenticateError::UnexpectedMessage),
+    }
+}
+
 /// Perform the initiator side of the handshake (sends first).
 ///
 /// Sends a signed challenge and waits for a signed response.
@@ -395,25 +431,18 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
     let signed_challenge = Signed::seal::<K, _>(signer, challenge).await.into_signed();
-    let msg = HandshakeMessage::SignedChallenge(signed_challenge);
+    let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());
     handshake
         .send(msg.encode())
         .await
         .map_err(AuthenticateError::Transport)?;
 
-    // Receive response
-    let response_bytes = handshake
-        .recv()
-        .await
-        .map_err(AuthenticateError::Transport)?;
-    if response_bytes.is_empty() {
-        return Err(AuthenticateError::ConnectionClosed);
-    }
+    // Receive first message (response, rejection, or simultaneous challenge)
+    let first_msg = recv_handshake_message(&mut handshake).await?;
 
-    let response_msg = HandshakeMessage::try_decode(&response_bytes)?;
-
-    match response_msg {
+    match first_msg {
         HandshakeMessage::SignedResponse(signed_response) => {
+            // Normal case: responder sent a response to our challenge.
             let verified = verify_response(&signed_response, &challenge)?;
             let peer_id = verified.server_id;
             let (conn, extra) = build_connection(handshake, peer_id);
@@ -423,7 +452,47 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
             reason: rejection.reason,
             responder_timestamp: rejection.server_timestamp,
         }),
-        HandshakeMessage::SignedChallenge(_) => Err(AuthenticateError::UnexpectedMessage),
+        HandshakeMessage::SignedChallenge(their_signed_challenge) => {
+            // Simultaneous open: both sides sent challenges. Break the tie
+            // deterministically — the side whose signed challenge is
+            // lexicographically greater wins (keeps the initiator role).
+            let we_win = signed_challenge.as_bytes() > their_signed_challenge.as_bytes();
+
+            // Verify their challenge signature so we can respond to it.
+            let their_verified = their_signed_challenge
+                .try_verify()
+                .map_err(|_| HandshakeError::InvalidSignature)?;
+            let their_challenge = *their_verified.payload();
+
+            if we_win {
+                // Winner: receive the loser's response first (verify they're
+                // legit), then send our response to their challenge so they
+                // can complete the handshake too.
+                let peer_id = recv_verified_response(&mut handshake, &challenge).await?;
+
+                let our_response = create_response::<K, _>(signer, &their_challenge, now).await;
+                handshake
+                    .send(HandshakeMessage::SignedResponse(our_response).encode())
+                    .await
+                    .map_err(AuthenticateError::Transport)?;
+
+                let (conn, extra) = build_connection(handshake, peer_id);
+                Ok((Authenticated::from_handshake(conn, peer_id), extra))
+            } else {
+                // Loser: send our response to their challenge, then wait
+                // for the winner to respond to ours.
+                let our_response = create_response::<K, _>(signer, &their_challenge, now).await;
+                handshake
+                    .send(HandshakeMessage::SignedResponse(our_response).encode())
+                    .await
+                    .map_err(AuthenticateError::Transport)?;
+
+                let peer_id = recv_verified_response(&mut handshake, &challenge).await?;
+
+                let (conn, extra) = build_connection(handshake, peer_id);
+                Ok((Authenticated::from_handshake(conn, peer_id), extra))
+            }
+        }
     }
 }
 
@@ -469,15 +538,7 @@ pub async fn respond<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>(
     max_drift: Duration,
 ) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
     // Receive challenge
-    let challenge_bytes = handshake
-        .recv()
-        .await
-        .map_err(AuthenticateError::Transport)?;
-    if challenge_bytes.is_empty() {
-        return Err(AuthenticateError::ConnectionClosed);
-    }
-
-    let challenge_msg = HandshakeMessage::try_decode(&challenge_bytes)?;
+    let challenge_msg = recv_handshake_message(&mut handshake).await?;
 
     let HandshakeMessage::SignedChallenge(signed_challenge) = challenge_msg else {
         return Err(AuthenticateError::UnexpectedMessage);
