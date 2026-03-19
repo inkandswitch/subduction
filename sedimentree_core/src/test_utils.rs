@@ -17,9 +17,12 @@ use alloc::{
 
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 
+use core::convert::Infallible;
+
 use crate::{
     blob::{Blob, BlobMeta},
-    collections::Map,
+    collections::{Map, Set},
+    commit::CommitStore,
     crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     fragment::Fragment,
@@ -313,6 +316,20 @@ impl TestGraph {
         Sedimentree::new(fragments, self.commits())
     }
 
+    /// Look up a commit's parent set by digest.
+    ///
+    /// Returns `None` if the digest is not in the graph.
+    #[must_use]
+    pub fn lookup_parents(&self, digest: Digest<LooseCommit>) -> Option<Set<Digest<LooseCommit>>> {
+        self.commits.values().find_map(|c| {
+            if Digest::hash(c) == digest {
+                Some(c.parents().iter().copied().collect())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Create a fragment covering from `head_node` to `boundary_nodes`.
     ///
     /// Optionally include checkpoint nodes.
@@ -336,6 +353,18 @@ impl TestGraph {
             .unwrap_or_else(|| panic!("Node not found: {head_node}"));
         let blob_meta = *commit.blob_meta();
         Fragment::new(self.sedimentree_id, head, boundary, &checkpoints, blob_meta)
+    }
+}
+
+impl<'a> CommitStore<'a> for TestGraph {
+    type Node = Set<Digest<LooseCommit>>;
+    type LookupError = Infallible;
+
+    fn lookup(
+        &self,
+        digest: Digest<LooseCommit>,
+    ) -> Result<Option<Self::Node>, Self::LookupError> {
+        Ok(self.lookup_parents(digest))
     }
 }
 

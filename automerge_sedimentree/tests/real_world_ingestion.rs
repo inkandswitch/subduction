@@ -8,8 +8,7 @@
 
 use std::collections::HashMap;
 
-use automerge::Automerge;
-use automerge::ChangeHash;
+use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -201,6 +200,13 @@ fn load_and_count() {
     ] {
         let doc = Automerge::load(bytes).expect(name);
         let d = decompose_meta(&doc);
+        eprintln!(
+            "{name}: {} changes, {} fragments, {} uncovered, {} heads",
+            d.change_count,
+            d.fragment_count,
+            d.uncovered_count,
+            d.heads.len(),
+        );
         assert!(d.change_count > 0, "{name}: should have changes");
         assert!(!d.heads.is_empty(), "{name}: should have heads");
     }
@@ -284,11 +290,26 @@ fn roundtrip_full(name: &str, bytes: &[u8]) {
         "{name}: change count diverged"
     );
 
-    // Note: byte-identical comparison (doc.save() == rebuilt.save()) is not
-    // guaranteed because `load_incremental` with individual change blobs may
-    // produce different internal ordering than `load` from a single document
-    // chunk. The semantic equivalence (same heads, same change set) is what
-    // matters for correctness.
+    // Content verification: compare root-level keys and values.
+    let orig_keys: Vec<_> = doc.keys(&ROOT).collect();
+    let rebuilt_keys: Vec<_> = rebuilt.keys(&ROOT).collect();
+    assert_eq!(orig_keys, rebuilt_keys, "{name}: root keys diverged");
+
+    for key in &orig_keys {
+        let orig_val = doc.get(&ROOT, key.as_str());
+        let rebuilt_val = rebuilt.get(&ROOT, key.as_str());
+        assert_eq!(
+            orig_val, rebuilt_val,
+            "{name}: value at root key {key:?} diverged"
+        );
+    }
+
+    // Spot check: root object length should match.
+    assert_eq!(
+        doc.length(&ROOT),
+        rebuilt.length(&ROOT),
+        "{name}: root object length diverged"
+    );
 }
 
 #[test]
