@@ -24,6 +24,7 @@ rand = { workspace = true }
 sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true }
 subduction_core = { workspace = true, default-features = false }
+subduction_ephemeral = { workspace = true }
 subduction_keyhive = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }

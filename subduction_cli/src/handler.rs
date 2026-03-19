@@ -5,7 +5,7 @@
 //! | Variant      | Handler                   |
 //! |--------------|---------------------------|
 //! | `Sync`       | [`SyncHandler`]           |
-//! | `Ephemeral`  | Logged and dropped        |
+//! | `Ephemeral`  | [`EphemeralHandler`]      |
 //! | `Keyhive`    | [`KeyhiveProtocolHandle`] |
 
 use std::sync::Arc;
@@ -18,11 +18,12 @@ use subduction_core::{
     authenticated::Authenticated,
     handler::Handler,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::metrics::MetricsStorage,
     subduction::error::{IoError, ListenError},
     transport::message::MessageTransport,
 };
+use subduction_ephemeral::{handler::EphemeralHandler, policy::EphemeralPolicy};
 use subduction_keyhive_policy::handler::KeyhiveProtocolHandle;
 
 use crate::{transport::UnifiedTransport, wire::CliWireMessage};
@@ -34,26 +35,40 @@ pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
 type CliListenError = ListenError<Sendable, MetricsStorage<FsStorage>, CliConn, CliWireMessage>;
 
 /// Handler that dispatches [`CliWireMessage`] variants to sub-handlers.
-pub(crate) struct CliHandler {
+pub(crate) struct CliHandler<P: StoragePolicy<Sendable> + EphemeralPolicy<Sendable>> {
     pub(crate) sync: Arc<
         subduction_core::handler::sync::SyncHandler<
             Sendable,
             MetricsStorage<FsStorage>,
             CliConn,
-            OpenPolicy,
+            P,
             CountLeadingZeroBytes,
         >,
     >,
+    pub(crate) ephemeral: Arc<EphemeralHandler<Sendable, CliConn, P>>,
     pub(crate) keyhive: KeyhiveProtocolHandle,
 }
 
-impl core::fmt::Debug for CliHandler {
+impl<P: StoragePolicy<Sendable> + EphemeralPolicy<Sendable>> core::fmt::Debug for CliHandler<P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("CliHandler").finish_non_exhaustive()
     }
 }
 
-impl Handler<Sendable, CliConn> for CliHandler {
+impl<P> Handler<Sendable, CliConn> for CliHandler<P>
+where
+    P: ConnectionPolicy<Sendable>
+        + StoragePolicy<Sendable>
+        + EphemeralPolicy<Sendable>
+        + Send
+        + Sync
+        + 'static,
+    P::ConnectionDisallowed: Send + 'static,
+    P::FetchDisallowed: Send + 'static,
+    P::PutDisallowed: Send + 'static,
+    P::SubscribeDisallowed: Send + 'static,
+    P::PublishDisallowed: Send + 'static,
+{
     type Message = CliWireMessage;
     type HandlerError = CliListenError;
 
@@ -90,10 +105,13 @@ impl Handler<Sendable, CliConn> for CliHandler {
                         .map_err(convert_sync_listen_error)
                 }
 
-                CliWireMessage::Ephemeral(_) => {
-                    tracing::debug!(
-                        "received ephemeral message but ephemeral handler not configured"
-                    );
+                CliWireMessage::Ephemeral(eph_msg) => {
+                    if let Err(e) =
+                        Handler::<Sendable, CliConn>::handle(self.ephemeral.as_ref(), conn, eph_msg)
+                            .await
+                    {
+                        tracing::error!(error = %e, "ephemeral handler error (non-fatal)");
+                    }
                     Ok(())
                 }
 
@@ -112,6 +130,7 @@ impl Handler<Sendable, CliConn> for CliHandler {
     fn on_peer_disconnect(&self, peer: PeerId) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             Handler::<Sendable, CliConn>::on_peer_disconnect(self.sync.as_ref(), peer).await;
+            Handler::<Sendable, CliConn>::on_peer_disconnect(self.ephemeral.as_ref(), peer).await;
             Handler::<Sendable, CliConn>::on_peer_disconnect(&self.keyhive, peer).await;
         })
     }
@@ -149,12 +168,15 @@ mod tests {
         },
         handler::Handler,
         peer::id::PeerId,
+        policy::open::OpenPolicy,
     };
     use subduction_ephemeral::message::EphemeralMessage;
     use subduction_keyhive::KeyhiveMessage;
 
     use super::{CliConn, CliHandler};
     use crate::wire::CliWireMessage;
+
+    type TestCliHandler = CliHandler<OpenPolicy>;
 
     fn test_peer_id() -> PeerId {
         PeerId::new([42u8; 32])
@@ -176,7 +198,8 @@ mod tests {
         };
         let msg = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        let extracted =
+            <TestCliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
         assert_eq!(extracted, Some(&resp));
     }
 
@@ -188,7 +211,8 @@ mod tests {
             },
         )));
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        let extracted =
+            <TestCliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
         assert_eq!(extracted, None);
     }
 
@@ -199,7 +223,8 @@ mod tests {
             payload: vec![1, 2, 3],
         });
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        let extracted =
+            <TestCliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
         assert_eq!(extracted, None);
     }
 
@@ -207,7 +232,8 @@ mod tests {
     fn as_batch_sync_response_none_for_keyhive() {
         let msg = CliWireMessage::Keyhive(KeyhiveMessage::new(vec![0xDE, 0xAD]));
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
+        let extracted =
+            <TestCliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
         assert_eq!(extracted, None);
     }
 }

@@ -16,14 +16,18 @@ use subduction_core::{
     },
     nonce_cache::NonceCache,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
+    policy::{connection::ConnectionPolicy, open::OpenPolicy, storage::StoragePolicy},
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::Subduction,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
+use subduction_ephemeral::{
+    config::EphemeralConfig, handler::EphemeralHandler, policy::EphemeralPolicy,
+};
 use subduction_http_longpoll::server::LongPollHandler;
+use subduction_keyhive_policy::handler::KeyhiveProtocolHandle;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
@@ -41,15 +45,55 @@ use crate::{
     transport::UnifiedTransport,
 };
 
-/// Type alias for the unified Subduction instance.
-type CliSubduction = Arc<
+/// Trait alias for policies usable with the CLI server.
+///
+/// Any `P` satisfying these bounds can be used as the authorization
+/// policy for both persistent (sync) and ephemeral messaging.
+trait CliPolicy:
+    ConnectionPolicy<future_form::Sendable, ConnectionDisallowed: Send + Sync + 'static>
+    + StoragePolicy<
+        future_form::Sendable,
+        FetchDisallowed: Send + Sync + 'static,
+        PutDisallowed: Send + Sync + 'static,
+    > + EphemeralPolicy<
+        future_form::Sendable,
+        SubscribeDisallowed: Send + Sync + 'static,
+        PublishDisallowed: Send + Sync + 'static,
+    > + Send
+    + Sync
+    + Clone
+    + core::fmt::Debug
+    + 'static
+{
+}
+
+impl<P> CliPolicy for P
+where
+    P: ConnectionPolicy<future_form::Sendable>
+        + StoragePolicy<future_form::Sendable>
+        + EphemeralPolicy<future_form::Sendable>
+        + Send
+        + Sync
+        + Clone
+        + core::fmt::Debug
+        + 'static,
+    P::ConnectionDisallowed: Send + Sync + 'static,
+    P::FetchDisallowed: Send + Sync + 'static,
+    P::PutDisallowed: Send + Sync + 'static,
+    P::SubscribeDisallowed: Send + Sync + 'static,
+    P::PublishDisallowed: Send + Sync + 'static,
+{
+}
+
+/// Type alias for the unified Subduction instance, generic over policy.
+type CliSubduction<P> = Arc<
     Subduction<
         'static,
         future_form::Sendable,
         MetricsStorage<FsStorage>,
         CliConn,
-        CliHandler,
-        OpenPolicy,
+        CliHandler<P>,
+        P,
         MemorySigner,
         FuturesTimerTimeout,
         CountLeadingZeroBytes,
@@ -102,6 +146,14 @@ pub(crate) struct ServerArgs {
     /// Interval in seconds for refreshing storage metrics from disk
     #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
     pub(crate) metrics_refresh_interval: u64,
+
+    /// Enable keyhive-based authorization policy.
+    ///
+    /// When true, peer connections and storage/ephemeral operations are
+    /// authorized through the keyhive actor. When false, the open policy
+    /// is used (all operations are permitted).
+    #[arg(long, default_value_t = true)]
+    pub(crate) keyhive: bool,
 
     /// Enable the WebSocket transport
     #[arg(long, default_value_t = true)]
@@ -211,8 +263,9 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let (keyhive_handle, keyhive_rx) =
         subduction_keyhive_policy::handler::KeyhiveProtocolHandle::channel();
 
-    // Stub actor: drains commands and replies with errors until the real
-    // keyhive actor is wired up (see KEYHIVE_FLAG_PLAN.md).
+    // Stub actor: drains commands. For the protocol handler commands,
+    // replies with errors. For policy commands, replies with allow-all
+    // (policy enforcement comes from the type-level policy choice).
     tokio::spawn(async move {
         use subduction_keyhive_policy::handler::{HandleError, KeyhiveCommand};
         while let Ok(cmd) = keyhive_rx.recv().await {
@@ -221,13 +274,83 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     drop(reply.send(Err(HandleError::ActorGone)).await);
                 }
                 KeyhiveCommand::PeerDisconnect { .. } => {}
+                KeyhiveCommand::AuthorizeConnect { reply, .. }
+                | KeyhiveCommand::AuthorizeFetch { reply, .. }
+                | KeyhiveCommand::AuthorizePut { reply, .. }
+                | KeyhiveCommand::AuthorizeSubscribe { reply, .. }
+                | KeyhiveCommand::AuthorizePublish { reply, .. } => {
+                    drop(reply.send(Ok(())).await);
+                }
+                KeyhiveCommand::FilterAuthorizedFetch { ids, reply, .. } => {
+                    drop(reply.send(ids).await);
+                }
+                KeyhiveCommand::FilterAuthorizedSubscribers { peers, reply, .. } => {
+                    drop(reply.send(peers).await);
+                }
             }
         }
     });
 
+    if args.keyhive {
+        tracing::info!("Using keyhive authorization policy");
+        let keyhive_policy = keyhive_handle.clone();
+        build_and_run(
+            storage,
+            Arc::new(keyhive_policy.clone()),
+            keyhive_policy,
+            keyhive_handle,
+            discovery_id,
+            &args,
+            signer,
+            peer_id,
+            addr,
+            handshake_max_drift,
+            discovery_audience,
+            service_name,
+            token,
+        )
+        .await
+    } else {
+        tracing::info!("Using open (allow-all) authorization policy");
+        build_and_run(
+            storage,
+            Arc::new(OpenPolicy),
+            OpenPolicy,
+            keyhive_handle,
+            discovery_id,
+            &args,
+            signer,
+            peer_id,
+            addr,
+            handshake_max_drift,
+            discovery_audience,
+            service_name,
+            token,
+        )
+        .await
+    }
+}
+
+/// Construct a [`Subduction`] instance with the given policy and run the server.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn build_and_run<P: CliPolicy>(
+    storage: MetricsStorage<FsStorage>,
+    policy: Arc<P>,
+    ephemeral_policy: P,
+    keyhive_handle: KeyhiveProtocolHandle,
+    discovery_id: Option<DiscoveryId>,
+    args: &ServerArgs,
+    signer: MemorySigner,
+    peer_id: PeerId,
+    addr: SocketAddr,
+    handshake_max_drift: Duration,
+    discovery_audience: Option<Audience>,
+    service_name: String,
+    token: CancellationToken,
+) -> Result<()> {
     let builder = subduction_core::subduction::builder::SubductionBuilder::new()
         .signer(signer.clone())
-        .storage(storage, Arc::new(OpenPolicy))
+        .storage(storage, policy)
         .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout);
 
@@ -237,10 +360,13 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         builder
     };
 
-    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) =
-        builder.build_composed(|sync_handler| {
+    let (subduction, listener_fut, manager_fut): (CliSubduction<P>, _, _) =
+        builder.build_composed(|sync_handler, connections| {
+            let (ephemeral_handler, _ephemeral_rx) =
+                EphemeralHandler::new(connections, ephemeral_policy, EphemeralConfig::default());
             Arc::new(CliHandler {
                 sync: sync_handler,
+                ephemeral: Arc::new(ephemeral_handler),
                 keyhive: keyhive_handle,
             })
         });
@@ -550,9 +676,9 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
 /// Accept loop: routes incoming TCP connections to WebSocket or HTTP long-poll.
 #[allow(clippy::too_many_arguments)]
-async fn accept_loop(
+async fn accept_loop<P: CliPolicy>(
     tcp_listener: TcpListener,
-    subduction: CliSubduction,
+    subduction: CliSubduction<P>,
     lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
     cancel: CancellationToken,
     handshake_max_drift: Duration,
@@ -638,10 +764,10 @@ async fn accept_loop(
 
 /// Handle a WebSocket connection: upgrade, handshake, add connection.
 #[allow(clippy::too_many_arguments)]
-async fn handle_websocket(
+async fn handle_websocket<P: CliPolicy>(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
-    subduction: CliSubduction,
+    subduction: CliSubduction<P>,
     handshake_max_drift: Duration,
     max_message_size: usize,
     server_peer_id: PeerId,
@@ -720,10 +846,10 @@ async fn handle_websocket(
 }
 
 /// Handle an HTTP long-poll connection via hyper.
-async fn handle_http_longpoll(
+async fn handle_http_longpoll<P: CliPolicy>(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
-    subduction: CliSubduction,
+    subduction: CliSubduction<P>,
     handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
 ) {
     use http_body_util::Full;
@@ -823,9 +949,9 @@ async fn handle_http_longpoll(
 
 /// Connect to a peer via WebSocket (outbound).
 #[allow(clippy::too_many_arguments)]
-async fn try_connect_ws(
+async fn try_connect_ws<P: CliPolicy>(
     uri: Uri,
-    subduction: &CliSubduction,
+    subduction: &CliSubduction<P>,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -904,10 +1030,10 @@ async fn try_connect_ws(
 
 /// Connect to a peer via Iroh (QUIC) transport (outbound).
 #[allow(clippy::too_many_arguments)]
-async fn try_connect_iroh(
+async fn try_connect_iroh<P: CliPolicy>(
     endpoint: &iroh::Endpoint,
     addr: EndpointAddr,
-    subduction: &CliSubduction,
+    subduction: &CliSubduction<P>,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,

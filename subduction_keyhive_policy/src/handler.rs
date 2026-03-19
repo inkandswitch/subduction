@@ -25,11 +25,18 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
 
 use async_channel::{Receiver, Sender};
 use futures::{FutureExt, future::BoxFuture};
-use subduction_core::{authenticated::Authenticated, handler::Handler, peer::id::PeerId};
+use sedimentree_core::id::SedimentreeId;
+use subduction_core::{
+    authenticated::Authenticated,
+    handler::Handler,
+    peer::id::PeerId,
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+};
+use subduction_ephemeral::policy::EphemeralPolicy;
 use subduction_keyhive::{KeyhiveMessage, SignedMessage, signed_message::CborError};
 
 // ── Command enum ────────────────────────────────────────────────────────
@@ -52,6 +59,79 @@ pub enum KeyhiveCommand {
         /// Subduction peer ID.
         peer_id: PeerId,
     },
+
+    // ── ConnectionPolicy commands ───────────────────────────────────
+    /// Authorize a peer connection.
+    AuthorizeConnect {
+        /// Subduction peer ID.
+        peer_id: PeerId,
+        /// Reply channel for the authorization result.
+        reply: Sender<Result<(), String>>,
+    },
+
+    // ── StoragePolicy commands ──────────────────────────────────────
+    /// Authorize fetching a sedimentree.
+    AuthorizeFetch {
+        /// Subduction peer ID.
+        peer_id: PeerId,
+        /// Target sedimentree.
+        sedimentree_id: SedimentreeId,
+        /// Reply channel for the authorization result.
+        reply: Sender<Result<(), String>>,
+    },
+
+    /// Authorize putting data into a sedimentree.
+    AuthorizePut {
+        /// The peer requesting the put.
+        requestor: PeerId,
+        /// The peer that authored the data.
+        author: PeerId,
+        /// Target sedimentree.
+        sedimentree_id: SedimentreeId,
+        /// Reply channel for the authorization result.
+        reply: Sender<Result<(), String>>,
+    },
+
+    /// Filter a set of sedimentree IDs to those the peer may fetch.
+    FilterAuthorizedFetch {
+        /// Subduction peer ID.
+        peer_id: PeerId,
+        /// Candidate sedimentree IDs.
+        ids: Vec<SedimentreeId>,
+        /// Reply channel for the filtered IDs.
+        reply: Sender<Vec<SedimentreeId>>,
+    },
+
+    // ── EphemeralPolicy commands ────────────────────────────────────
+    /// Authorize subscribing to ephemeral messages on a sedimentree.
+    AuthorizeSubscribe {
+        /// Subduction peer ID.
+        peer_id: PeerId,
+        /// Target sedimentree.
+        id: SedimentreeId,
+        /// Reply channel for the authorization result.
+        reply: Sender<Result<(), String>>,
+    },
+
+    /// Authorize publishing ephemeral messages to a sedimentree.
+    AuthorizePublish {
+        /// Subduction peer ID.
+        peer_id: PeerId,
+        /// Target sedimentree.
+        id: SedimentreeId,
+        /// Reply channel for the authorization result.
+        reply: Sender<Result<(), String>>,
+    },
+
+    /// Filter a set of peers to those authorized to receive ephemeral messages.
+    FilterAuthorizedSubscribers {
+        /// Target sedimentree.
+        id: SedimentreeId,
+        /// Candidate peers.
+        peers: Vec<PeerId>,
+        /// Reply channel for the filtered peers.
+        reply: Sender<Vec<PeerId>>,
+    },
 }
 
 // ── Error type ──────────────────────────────────────────────────────────
@@ -70,6 +150,21 @@ pub enum HandleError {
     /// The actor is gone (channel closed).
     #[error("keyhive actor has shut down")]
     ActorGone,
+}
+
+/// Error returned by policy trait impls on [`KeyhiveProtocolHandle`].
+///
+/// Uses `String` to avoid exposing complex keyhive-internal error types
+/// through the actor channel.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct KeyhivePolicyError(String);
+
+impl KeyhivePolicyError {
+    /// Create a new policy error from any displayable value.
+    pub fn new(msg: impl Into<String>) -> Self {
+        Self(msg.into())
+    }
 }
 
 // ── Handle ──────────────────────────────────────────────────────────────
@@ -180,6 +275,24 @@ where
             KeyhiveCommand::PeerDisconnect { peer_id } => {
                 on_disconnect(peer_id).await;
             }
+
+            // Policy commands are handled by a dedicated keyhive actor
+            // that holds a SubductionKeyhive instance. In the generic
+            // run_actor, these allow-all as a safe fallback.
+            KeyhiveCommand::AuthorizeConnect { reply, .. }
+            | KeyhiveCommand::AuthorizeFetch { reply, .. }
+            | KeyhiveCommand::AuthorizePut { reply, .. }
+            | KeyhiveCommand::AuthorizeSubscribe { reply, .. }
+            | KeyhiveCommand::AuthorizePublish { reply, .. } => {
+                drop(reply.send(Ok(())).await);
+            }
+
+            KeyhiveCommand::FilterAuthorizedFetch { ids, reply, .. } => {
+                drop(reply.send(ids).await);
+            }
+            KeyhiveCommand::FilterAuthorizedSubscribers { peers, reply, .. } => {
+                drop(reply.send(peers).await);
+            }
         }
     }
 
@@ -231,11 +344,211 @@ where
     }
 }
 
+// ── ConnectionPolicy impl ──────────────────────────────────────────────
+
+impl ConnectionPolicy<future_form::Sendable> for KeyhiveProtocolHandle {
+    type ConnectionDisallowed = KeyhivePolicyError;
+
+    fn authorize_connect(
+        &self,
+        peer: PeerId,
+    ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+        let tx = self.tx.clone();
+        async move {
+            let (reply_tx, reply_rx) = async_channel::bounded(1);
+            tx.send(KeyhiveCommand::AuthorizeConnect {
+                peer_id: peer,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| KeyhivePolicyError::new("actor gone"))?;
+
+            reply_rx
+                .recv()
+                .await
+                .map_err(|_| KeyhivePolicyError::new("actor gone"))?
+                .map_err(KeyhivePolicyError)
+        }
+        .boxed()
+    }
+}
+
+// ── StoragePolicy impl ─────────────────────────────────────────────────
+
+impl StoragePolicy<future_form::Sendable> for KeyhiveProtocolHandle {
+    type FetchDisallowed = KeyhivePolicyError;
+    type PutDisallowed = KeyhivePolicyError;
+
+    fn authorize_fetch(
+        &self,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+        let tx = self.tx.clone();
+        async move {
+            let (reply_tx, reply_rx) = async_channel::bounded(1);
+            tx.send(KeyhiveCommand::AuthorizeFetch {
+                peer_id: peer,
+                sedimentree_id,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| KeyhivePolicyError::new("actor gone"))?;
+
+            reply_rx
+                .recv()
+                .await
+                .map_err(|_| KeyhivePolicyError::new("actor gone"))?
+                .map_err(KeyhivePolicyError)
+        }
+        .boxed()
+    }
+
+    fn authorize_put(
+        &self,
+        requestor: PeerId,
+        author: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+        let tx = self.tx.clone();
+        async move {
+            let (reply_tx, reply_rx) = async_channel::bounded(1);
+            tx.send(KeyhiveCommand::AuthorizePut {
+                requestor,
+                author,
+                sedimentree_id,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| KeyhivePolicyError::new("actor gone"))?;
+
+            reply_rx
+                .recv()
+                .await
+                .map_err(|_| KeyhivePolicyError::new("actor gone"))?
+                .map_err(KeyhivePolicyError)
+        }
+        .boxed()
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        let tx = self.tx.clone();
+        async move {
+            let (reply_tx, reply_rx) = async_channel::bounded(1);
+            let send_result = tx
+                .send(KeyhiveCommand::FilterAuthorizedFetch {
+                    peer_id: peer,
+                    ids: ids.clone(),
+                    reply: reply_tx,
+                })
+                .await;
+
+            if send_result.is_err() {
+                tracing::warn!("keyhive actor gone during filter_authorized_fetch; denying all");
+                return Vec::new();
+            }
+
+            reply_rx.recv().await.unwrap_or_default()
+        }
+        .boxed()
+    }
+}
+
+// ── EphemeralPolicy impl ───────────────────────────────────────────────
+
+impl EphemeralPolicy<future_form::Sendable> for KeyhiveProtocolHandle {
+    type SubscribeDisallowed = KeyhivePolicyError;
+    type PublishDisallowed = KeyhivePolicyError;
+
+    fn authorize_subscribe(
+        &self,
+        peer: PeerId,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::SubscribeDisallowed>> {
+        let tx = self.tx.clone();
+        async move {
+            let (reply_tx, reply_rx) = async_channel::bounded(1);
+            tx.send(KeyhiveCommand::AuthorizeSubscribe {
+                peer_id: peer,
+                id,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| KeyhivePolicyError::new("actor gone"))?;
+
+            reply_rx
+                .recv()
+                .await
+                .map_err(|_| KeyhivePolicyError::new("actor gone"))?
+                .map_err(KeyhivePolicyError)
+        }
+        .boxed()
+    }
+
+    fn authorize_publish(
+        &self,
+        peer: PeerId,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::PublishDisallowed>> {
+        let tx = self.tx.clone();
+        async move {
+            let (reply_tx, reply_rx) = async_channel::bounded(1);
+            tx.send(KeyhiveCommand::AuthorizePublish {
+                peer_id: peer,
+                id,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| KeyhivePolicyError::new("actor gone"))?;
+
+            reply_rx
+                .recv()
+                .await
+                .map_err(|_| KeyhivePolicyError::new("actor gone"))?
+                .map_err(KeyhivePolicyError)
+        }
+        .boxed()
+    }
+
+    fn filter_authorized_subscribers(
+        &self,
+        id: SedimentreeId,
+        peers: Vec<PeerId>,
+    ) -> BoxFuture<'_, Vec<PeerId>> {
+        let tx = self.tx.clone();
+        async move {
+            let (reply_tx, reply_rx) = async_channel::bounded(1);
+            let send_result = tx
+                .send(KeyhiveCommand::FilterAuthorizedSubscribers {
+                    id,
+                    peers: peers.clone(),
+                    reply: reply_tx,
+                })
+                .await;
+
+            if send_result.is_err() {
+                tracing::warn!(
+                    "keyhive actor gone during filter_authorized_subscribers; denying all"
+                );
+                return Vec::new();
+            }
+
+            reply_rx.recv().await.unwrap_or_default()
+        }
+        .boxed()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use alloc::{string::ToString, vec};
 
+    use future_form::Sendable;
     use subduction_keyhive::SignedMessage;
     use testresult::TestResult;
 
@@ -365,6 +678,84 @@ mod tests {
         // Should not panic even though the actor is gone.
         Handler::<future_form::Sendable, DummyConn>::on_peer_disconnect(&handle, test_peer_id())
             .await;
+
+        Ok(())
+    }
+
+    // ── Policy trait integration tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn policy_authorize_connect_via_actor() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id| async {},
+        ));
+
+        let result = ConnectionPolicy::<Sendable>::authorize_connect(&handle, test_peer_id()).await;
+        assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn policy_authorize_fetch_via_actor() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id| async {},
+        ));
+
+        let sid = SedimentreeId::new([0xCC; 32]);
+        let result = StoragePolicy::<Sendable>::authorize_fetch(&handle, test_peer_id(), sid).await;
+        assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn policy_filter_authorized_fetch_via_actor() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id| async {},
+        ));
+
+        let ids = vec![
+            SedimentreeId::new([0x01; 32]),
+            SedimentreeId::new([0x02; 32]),
+        ];
+        let filtered = StoragePolicy::<Sendable>::filter_authorized_fetch(
+            &handle,
+            test_peer_id(),
+            ids.clone(),
+        )
+        .await;
+        assert_eq!(filtered, ids);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn policy_authorize_subscribe_via_actor() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id| async {},
+        ));
+
+        let sid = SedimentreeId::new([0xDD; 32]);
+        let result =
+            EphemeralPolicy::<Sendable>::authorize_subscribe(&handle, test_peer_id(), sid).await;
+        assert!(result.is_ok());
 
         Ok(())
     }

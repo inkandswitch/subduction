@@ -37,6 +37,12 @@ impl MemorySigner {
         Self::new(SigningKey::from_bytes(bytes))
     }
 
+    /// Get the raw signing key.
+    #[must_use]
+    pub const fn signing_key(&self) -> &SigningKey {
+        &self.signing_key
+    }
+
     /// Get the verifying (public) key.
     #[must_use]
     pub fn verifying_key(&self) -> VerifyingKey {

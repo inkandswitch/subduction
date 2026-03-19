@@ -119,6 +119,12 @@ in {
         description = "Interval in seconds for refreshing storage metrics from disk.";
       };
 
+      keyhive = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Enable keyhive-based authorization. When false, uses open (allow-all) policy.";
+      };
+
       wsPeers = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [];
@@ -253,6 +259,7 @@ in {
                 ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
                 ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
                 ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
+                ++ lib.optionals (!cfg.server.keyhive) ["--keyhive" "false"]
                 ++ lib.concatMap (peer: ["--ws-peer" peer]) cfg.server.wsPeers
                 ++ lib.optionals cfg.server.iroh.enable ["--iroh"]
                 ++ lib.optionals (cfg.server.iroh.enable && cfg.server.iroh.directOnly) ["--iroh-direct-only"]

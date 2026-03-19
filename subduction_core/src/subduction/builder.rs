@@ -543,7 +543,10 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     #[allow(clippy::type_complexity)]
     pub fn build_composed<'a, F, C, H>(
         self,
-        compose: impl FnOnce(Arc<SyncHandler<F, S, C, P, M, N>>) -> Arc<H>,
+        compose: impl FnOnce(
+            Arc<SyncHandler<F, S, C, P, M, N>>,
+            Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+        ) -> Arc<H>,
     ) -> (
         Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
         ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
@@ -595,7 +598,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.depth_metric.clone(),
         ));
 
-        let handler = compose(sync_handler);
+        let handler = compose(sync_handler, connections.clone());
 
         Subduction::new(
             handler,
