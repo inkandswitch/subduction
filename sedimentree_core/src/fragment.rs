@@ -697,6 +697,7 @@ mod tests {
                 encode::{Encode, EncodeFields},
             },
             commit::CountLeadingZeroBytes,
+            crypto::digest::Digest,
             fragment::Fragment,
         };
 
