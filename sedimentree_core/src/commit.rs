@@ -2,7 +2,7 @@
 
 use crate::collections::{Map, Set};
 use alloc::vec::Vec;
-use core::{error::Error, mem::take, num::NonZero};
+use core::{error::Error, num::NonZero};
 
 use thiserror::Error;
 
@@ -60,11 +60,19 @@ pub trait CommitStore<'a> {
     /// Returns a [`Self::LookupError`] if the lookup fails.
     fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError>;
 
-    /// Constructs a fragment of the commit history starting from the given head digest,
+    /// Constructs a single fragment starting from `head_digest`.
+    ///
+    /// BFS-walks from the head through parents until hitting commits whose
+    /// depth (according to `strategy`) is ≥ the head's depth. Those become
+    /// the fragment's boundary; everything in between becomes members.
+    ///
+    /// `head_digest` must have depth > 0; depth-0 commits are loose commits,
+    /// not fragment heads.
     ///
     /// # Errors
     ///
-    /// Returns a [`Self::LookupError`] if any lookup fails.
+    /// Returns [`FragmentError::MissingCommit`] if any commit in the walk
+    /// is absent from the store.
     fn fragment<D: DepthMetric>(
         &self,
         head_digest: Digest<LooseCommit>,
@@ -75,78 +83,57 @@ pub trait CommitStore<'a> {
 
         let mut visited: Set<Digest<LooseCommit>> = Set::from([head_digest]);
         let mut members: Set<Digest<LooseCommit>> = Set::from([head_digest]);
-
         let mut boundary: Map<Digest<LooseCommit>, Self::Node> = Map::new();
         let mut checkpoints: Set<Digest<LooseCommit>> = Set::new();
 
-        let head_change = self
+        let head_node = self
             .lookup(head_digest)
-            .map_err(|e| FragmentError::LookupError(e))?
-            .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
-        let mut horizon: Set<Digest<LooseCommit>> = head_change.parents();
+            .map_err(FragmentError::LookupError)?
+            .ok_or(FragmentError::MissingCommit(MissingCommitError(
+                head_digest,
+            )))?;
 
-        while !horizon.is_empty() {
-            let local_horizon = take(&mut horizon);
-            for &digest in &local_horizon {
-                let commit = self
-                    .lookup(digest)
-                    .map_err(|e| FragmentError::LookupError(e))?
-                    .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
+        let mut queue: Vec<Digest<LooseCommit>> = head_node.parents().into_iter().collect();
 
-                let is_newly_visited = visited.insert(digest);
-                if !is_newly_visited {
-                    continue;
-                }
-
-                members.insert(digest);
-
-                let depth = strategy.to_depth(digest);
-                if strategy.to_depth(digest) >= min_depth {
-                    boundary.insert(digest, commit);
-                } else {
-                    if depth > Depth(0) {
-                        checkpoints.insert(digest);
-                    }
-                    horizon.extend(commit.parents().iter().filter(|&d| !visited.contains(d)));
-                }
+        while let Some(digest) = queue.pop() {
+            if !visited.insert(digest) {
+                continue;
             }
-        }
 
-        // Cleanup
+            let node = self
+                .lookup(digest)
+                .map_err(FragmentError::LookupError)?
+                .ok_or(FragmentError::MissingCommit(MissingCommitError(
+                    head_digest,
+                )))?;
 
-        let mut cleanup_horizon: Vec<Digest<LooseCommit>> = Vec::new();
-        for (boundary_hash, boundary_change) in &boundary {
-            members.remove(boundary_hash);
-
-            if let Some(fragment_state) = known_fragment_states.get(boundary_hash) {
-                for member in fragment_state.members() {
-                    members.remove(member);
-                }
-                cleanup_horizon.extend(fragment_state.boundary().keys().copied());
+            let depth = strategy.to_depth(digest);
+            if depth >= min_depth {
+                // Boundary: this commit delimits the fragment. Don't
+                // expand its parents — they belong to a deeper fragment.
+                boundary.insert(digest, node);
             } else {
-                let deps = boundary_change.parents();
-                cleanup_horizon.extend(deps);
+                // Interior member of this fragment.
+                members.insert(digest);
+                if depth > Depth(0) {
+                    checkpoints.insert(digest);
+                }
+                for p in node.parents() {
+                    if !visited.contains(&p) {
+                        queue.push(p);
+                    }
+                }
             }
         }
 
-        while !cleanup_horizon.is_empty() {
-            let local_cleanup_horizon = take(&mut cleanup_horizon);
-            for digest in local_cleanup_horizon {
-                members.remove(&digest);
-                checkpoints.remove(&digest);
-                boundary.remove(&digest); // NOTE if one boundary covers another
-
-                let is_newly_visited = visited.insert(digest);
-                if !is_newly_visited {
-                    continue;
+        // Strip overlap with already-known deeper fragments whose heads
+        // coincide with our boundary (can happen with depth ties).
+        for boundary_hash in boundary.keys() {
+            if let Some(known) = known_fragment_states.get(boundary_hash) {
+                for m in known.members() {
+                    members.remove(m);
+                    checkpoints.remove(m);
                 }
-
-                let commit = self
-                    .lookup(digest)
-                    .map_err(|e| FragmentError::LookupError(e))?
-                    .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
-
-                cleanup_horizon.extend(commit.parents().iter().filter(|&d| !visited.contains(d)));
             }
         }
 
@@ -158,9 +145,16 @@ pub trait CommitStore<'a> {
         ))
     }
 
-    /// Builds a fragment store starting from the given head digests.
+    /// Builds a complete fragment store by walking from heads to roots.
     ///
-    /// This reuses known fragment states to avoid redundant work.
+    /// Fragments are built level-by-level: the document heads yield the
+    /// shallowest fragments, whose boundaries become the heads for the
+    /// next (deeper) level. Depth-0 commits are skipped — they are loose
+    /// commits, not fragment heads — but their parents are still walked
+    /// so that deeper fragment boundaries are discovered.
+    ///
+    /// Previously computed fragments in `known_fragment_states` are reused;
+    /// newly built ones are inserted into the map and also returned.
     ///
     /// # Errors
     ///
@@ -171,23 +165,37 @@ pub trait CommitStore<'a> {
         known_fragment_states: &'b mut Map<Digest<LooseCommit>, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<Vec<&'b FragmentState<Self::Node>>, FragmentError<'a, Self>> {
-        let mut fresh_heads = Vec::new();
-        let mut horizon = head_digests.to_vec();
-        while let Some(head) = horizon.pop() {
+        let mut fresh_heads: Vec<Digest<LooseCommit>> = Vec::new();
+        let mut queue = head_digests.to_vec();
+        let mut visited: Set<Digest<LooseCommit>> = Set::new();
+
+        while let Some(head) = queue.pop() {
+            if !visited.insert(head) {
+                continue;
+            }
+
+            // Already computed — just walk past to discover deeper levels.
             if let Some(state) = known_fragment_states.get(&head) {
-                horizon.extend(state.boundary().keys().copied());
+                queue.extend(state.boundary().keys().copied());
+                continue;
+            }
+
+            // Depth-0 commits are loose commits, not fragment heads.
+            // Walk their parents so we still discover deeper boundaries.
+            if strategy.to_depth(head) == Depth(0) {
+                if let Ok(Some(node)) = self.lookup(head) {
+                    queue.extend(node.parents());
+                }
                 continue;
             }
 
             match self.fragment(head, known_fragment_states, strategy) {
-                Ok(fragment_state) => {
+                Ok(state) => {
+                    queue.extend(state.boundary().keys().copied());
+                    known_fragment_states.insert(head, state);
                     fresh_heads.push(head);
-                    horizon.extend(fragment_state.boundary().keys().copied());
-                    known_fragment_states.insert(head, fragment_state);
                 }
                 Err(FragmentError::MissingCommit(missing)) => {
-                    // Partial history (e.g. mid-sync incremental loading).
-                    // Skip this head; a later broadcast will retry once all commits arrive.
                     tracing::debug!(%head, %missing, "skipping head with incomplete history");
                 }
                 Err(e) => return Err(e),
@@ -195,10 +203,9 @@ pub trait CommitStore<'a> {
         }
 
         let mut fresh = Vec::with_capacity(fresh_heads.len());
-        for head in fresh_heads {
+        for h in fresh_heads {
             #[allow(clippy::expect_used)]
-            let r = known_fragment_states.get(&head).expect("just inserted");
-            fresh.push(r);
+            fresh.push(known_fragment_states.get(&h).expect("just inserted"));
         }
         Ok(fresh)
     }
@@ -213,6 +220,9 @@ pub trait CommitStore<'a> {
     /// Each parallel task receives a read-only snapshot of
     /// `known_fragment_states` for deduplication; newly computed states
     /// are merged sequentially after each level completes.
+    ///
+    /// Depth-0 commits are skipped (they are loose commits, not fragment
+    /// heads), but their parents are walked so deeper boundaries are found.
     ///
     /// # Performance
     ///
@@ -243,6 +253,46 @@ pub trait CommitStore<'a> {
         let mut horizon = head_digests.to_vec();
 
         while !horizon.is_empty() {
+            // Dedup against already-known fragments.
+            horizon.retain(|h| !known_fragment_states.contains_key(h));
+            if horizon.is_empty() {
+                break;
+            }
+
+            // Walk past depth-0 commits (loose commits, not fragment heads)
+            // to discover their deeper-depth parents.
+            {
+                let mut visited_d0: Set<Digest<LooseCommit>> = Set::new();
+                let mut pending: Vec<Digest<LooseCommit>> = Vec::new();
+                horizon.retain(|&h| {
+                    if strategy.to_depth(h) == Depth(0) {
+                        if visited_d0.insert(h) {
+                            pending.push(h);
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                while let Some(d) = pending.pop() {
+                    if let Ok(Some(node)) = self.lookup(d) {
+                        for p in node.parents() {
+                            if known_fragment_states.contains_key(&p) {
+                                continue;
+                            }
+                            if strategy.to_depth(p) == Depth(0) {
+                                if visited_d0.insert(p) {
+                                    pending.push(p);
+                                }
+                            } else {
+                                horizon.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+
             horizon.retain(|h| !known_fragment_states.contains_key(h));
             if horizon.is_empty() {
                 break;
@@ -264,7 +314,7 @@ pub trait CommitStore<'a> {
                 })
                 .collect();
 
-            // Sequential phase: merge results into known_fragment_states
+            // Sequential phase: merge results into known_fragment_states.
             let mut successes = Vec::with_capacity(level_results.len());
             for result in level_results {
                 successes.push(result?);

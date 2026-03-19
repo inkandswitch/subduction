@@ -186,6 +186,25 @@ strip = "debuginfo"
 [profile.release.package.automerge_subduction_wasm]
 strip = "debuginfo"
 
+# Optimize heavy dependencies in test/dev builds so that integration tests
+# exercising real Automerge documents finish in reasonable time.
+# Without this, debug-mode HashSet/HashMap and automerge internals are
+# ~10-50x slower than release, making real-document tests impractical.
+[profile.dev.package.automerge]
+opt-level = 2
+
+[profile.dev.package.sedimentree_core]
+opt-level = 2
+
+[profile.test.package.automerge]
+opt-level = 2
+
+[profile.test.package.automerge_sedimentree]
+opt-level = 2
+
+[profile.test.package.sedimentree_core]
+opt-level = 2
+
 # Benchmarks inherit from release, but the workspace release profile is tuned
 # for Wasm (opt-level="z", strip="symbols"). Override for accurate benchmarks
 # with debug info sufficient for flamegraphs.

@@ -81,11 +81,36 @@ impl IndexedSedimentreeAutomerge {
 
         Self { index }
     }
+
+    /// Build the index from lightweight change metadata.
+    ///
+    /// Prefer this over [`from_changes`](Self::from_changes) when you don't
+    /// need the full `Change` objects (which carry serialized operations).
+    /// Automerge's `get_changes_meta(&[])` returns metadata without
+    /// reconstructing operation data, which is significantly cheaper —
+    /// especially in debug builds where `get_changes` runs a redundant
+    /// verification pass.
+    #[must_use]
+    pub fn from_metadata(metadata: &[automerge::ChangeMetadata<'_>]) -> Self {
+        let mut index = sedimentree_core::collections::Map::with_capacity(metadata.len());
+
+        for meta in metadata {
+            let digest = Digest::force_from_bytes(meta.hash.0);
+            let parents: Set<Digest<LooseCommit>> = meta
+                .deps
+                .iter()
+                .map(|dep| Digest::force_from_bytes(dep.0))
+                .collect();
+            index.insert(digest, OwnedParents(parents));
+        }
+
+        Self { index }
+    }
 }
 
 impl From<&Automerge> for IndexedSedimentreeAutomerge {
     fn from(doc: &Automerge) -> Self {
-        Self::from_changes(&doc.get_changes(&[]))
+        Self::from_metadata(&doc.get_changes_meta(&[]))
     }
 }
 
@@ -101,7 +126,7 @@ impl CommitStore<'static> for IndexedSedimentreeAutomerge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use automerge::{AutoCommit, ChangeHash, ObjType, transaction::Transactable};
+    use automerge::{transaction::Transactable, AutoCommit, ChangeHash, ObjType};
     use sedimentree_core::{
         collections::Map,
         commit::{CountLeadingZeroBytes, FragmentState},
@@ -123,11 +148,14 @@ mod tests {
         let am_doc = doc.document();
 
         let original_bytes = am_doc.save();
-        let changes = am_doc.get_changes(&[]);
-        let change_count = changes.len();
+
+        // Build the index from lightweight metadata (avoids expensive
+        // change reconstruction + debug_assert doubling in get_changes).
+        let metadata = am_doc.get_changes_meta(&[]);
+        let change_count = metadata.len();
         assert!(change_count > 0, "document should have changes");
 
-        let commit_store = IndexedSedimentreeAutomerge::from_changes(&changes);
+        let commit_store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
         let heads: Vec<Digest<LooseCommit>> = am_doc
             .get_heads()
             .iter()
@@ -139,6 +167,8 @@ mod tests {
         let fragment_states =
             commit_store.build_fragment_store(&heads, &mut known_states, &strategy)?;
 
+        // Only now fetch full changes for raw byte extraction.
+        let changes = am_doc.get_changes(&[]);
         let changes_by_hash: std::collections::HashMap<ChangeHash, &automerge::Change> =
             changes.iter().map(|c| (c.hash(), c)).collect();
 
