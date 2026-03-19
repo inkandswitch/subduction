@@ -202,6 +202,91 @@ pub trait CommitStore<'a> {
         }
         Ok(fresh)
     }
+
+    /// Parallel variant of [`build_fragment_store`](Self::build_fragment_store).
+    ///
+    /// Processes each depth level of the fragment tree in parallel using
+    /// [rayon](https://docs.rs/rayon). Starting from the given heads, all
+    /// fragments at the same level are built concurrently, then their
+    /// boundaries become the next level's heads.
+    ///
+    /// Each parallel task receives a read-only snapshot of
+    /// `known_fragment_states` for deduplication; newly computed states
+    /// are merged sequentially after each level completes.
+    ///
+    /// # Performance
+    ///
+    /// For a document with _n_ changes and _k_ fragment boundaries at the
+    /// first level, this gives ~k-way parallelism. With
+    /// [`CountLeadingZeroBytes`], k ≈ n/256, so a 200k-change document
+    /// gets ~800-way parallelism.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FragmentError`] if any lookup fails.
+    #[cfg(feature = "rayon")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
+    fn build_fragment_store_par<'b, D: DepthMetric + Sync>(
+        &self,
+        head_digests: &[Digest<LooseCommit>],
+        known_fragment_states: &'b mut Map<Digest<LooseCommit>, FragmentState<Self::Node>>,
+        strategy: &D,
+    ) -> Result<Vec<&'b FragmentState<Self::Node>>, FragmentError<'a, Self>>
+    where
+        Self: Sync,
+        Self::Node: Send + Sync + Clone,
+        Self::LookupError: Send,
+    {
+        use rayon::prelude::*;
+
+        let mut all_heads: Vec<Digest<LooseCommit>> = Vec::new();
+        let mut horizon = head_digests.to_vec();
+
+        while !horizon.is_empty() {
+            horizon.retain(|h| !known_fragment_states.contains_key(h));
+            if horizon.is_empty() {
+                break;
+            }
+
+            // Parallel phase: snapshot the known states so each task can
+            // deduplicate members against previously computed fragments.
+            let snapshot: Map<Digest<LooseCommit>, FragmentState<Self::Node>> =
+                known_fragment_states.clone();
+            let level_results: Vec<Result<_, FragmentError<'a, Self>>> = horizon
+                .par_iter()
+                .filter_map(|&head| match self.fragment(head, &snapshot, strategy) {
+                    Ok(state) => Some(Ok((head, state))),
+                    Err(FragmentError::MissingCommit(missing)) => {
+                        tracing::debug!(%head, %missing, "skipping head with incomplete history");
+                        None
+                    }
+                    Err(e) => Some(Err(e)),
+                })
+                .collect();
+
+            // Sequential phase: merge results into known_fragment_states
+            let mut successes = Vec::with_capacity(level_results.len());
+            for result in level_results {
+                successes.push(result?);
+            }
+
+            let mut next_horizon = Vec::new();
+            for (head, state) in successes {
+                next_horizon.extend(state.boundary().keys().copied());
+                all_heads.push(head);
+                known_fragment_states.insert(head, state);
+            }
+            horizon = next_horizon;
+        }
+
+        let mut fresh = Vec::with_capacity(all_heads.len());
+        for head in all_heads {
+            #[allow(clippy::expect_used)]
+            let r = known_fragment_states.get(&head).expect("just inserted");
+            fresh.push(r);
+        }
+        Ok(fresh)
+    }
 }
 
 /// A depth strategy that counts leading zero bytes in the digest.
