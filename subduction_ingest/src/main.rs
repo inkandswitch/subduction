@@ -13,7 +13,7 @@
 //!   document.am
 //! ```
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use automerge::Automerge;
 use automerge_sedimentree::ingest::{ingest_automerge, IngestResult};
@@ -42,11 +42,19 @@ struct Args {
     #[arg(short, long, value_name = "URL")]
     server: String,
 
-    /// Override the document ID (64 hex chars = 32 bytes).
+    /// Service name for audience discovery during handshake.
     ///
-    /// By default, the sedimentree ID is derived from a blake3 hash of the
-    /// filename (minus extension).
-    #[arg(long, value_name = "HEX")]
+    /// Must match the server's `--service-name`. Defaults to the hostname
+    /// from the server URL.
+    #[arg(long)]
+    service_name: Option<String>,
+
+    /// Document ID in `automerge:<base58check>` format, or raw hex (64 chars).
+    ///
+    /// By default, derived from the filename (minus extension) as an
+    /// `automerge:` URL. The base58check-decoded bytes (typically 16-byte
+    /// UUID) are zero-padded to 32 bytes for the SedimentreeId.
+    #[arg(long, value_name = "ID")]
     doc_id: Option<String>,
 
     /// Key seed (64 hex characters) for deterministic key generation.
@@ -120,14 +128,49 @@ fn load_signer(args: &Args) -> Result<MemorySigner> {
     ))
 }
 
-/// Derive a SedimentreeId from the filename (minus extension).
+/// Decode a bs58check-encoded document ID into a zero-padded 32-byte
+/// `SedimentreeId`.
+fn sed_id_from_bs58check(encoded: &str) -> Result<SedimentreeId> {
+    let decoded = bs58::decode(encoded)
+        .with_check(None)
+        .into_vec()
+        .wrap_err_with(|| format!("invalid base58check document ID: {encoded}"))?;
+    if decoded.len() > 32 {
+        eyre::bail!("document ID too long: {} bytes (max 32)", decoded.len());
+    }
+    let mut padded = [0u8; 32];
+    padded[..decoded.len()].copy_from_slice(&decoded);
+    Ok(SedimentreeId::new(padded))
+}
+
+/// Parse a document ID from various formats:
+/// - `automerge:<base58check>` → decode the base58check portion
+/// - Raw base58check string → decode directly
+/// - 64 hex characters → decode as 32 raw bytes
+fn parse_doc_id(input: &str) -> Result<SedimentreeId> {
+    let stripped = input.strip_prefix("automerge:").unwrap_or(input);
+
+    // Strip optional #heads suffix (automerge URLs can have `#head1|head2`)
+    let stripped = stripped.split('#').next().unwrap_or(stripped);
+
+    // Try hex first (64 hex chars = 32 bytes)
+    if stripped.len() == 64 && stripped.chars().all(|c| c.is_ascii_hexdigit()) {
+        let bytes = parse_32_bytes(stripped, "doc-id")?;
+        return Ok(SedimentreeId::new(bytes));
+    }
+
+    // Otherwise treat as base58check
+    sed_id_from_bs58check(stripped)
+}
+
+/// Derive a document ID from the filename (minus extension), treating
+/// the stem as a base58check-encoded automerge document ID.
 fn sed_id_from_filename(path: &PathBuf) -> Result<SedimentreeId> {
     let stem = path
         .file_stem()
         .ok_or_else(|| eyre!("file has no name: {}", path.display()))?
         .to_string_lossy();
-    let hash = blake3::hash(stem.as_bytes());
-    Ok(SedimentreeId::new(*hash.as_bytes()))
+    parse_doc_id(&stem)
 }
 
 fn print_ingest_stats(result: &IngestResult, sed_id: SedimentreeId) {
@@ -148,9 +191,8 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Resolve document ID.
-    let sed_id = if let Some(hex) = &args.doc_id {
-        let bytes = parse_32_bytes(hex, "doc-id")?;
-        SedimentreeId::new(bytes)
+    let sed_id = if let Some(id) = &args.doc_id {
+        parse_doc_id(id)?
     } else {
         sed_id_from_filename(&args.file)?
     };
@@ -202,7 +244,12 @@ async fn main() -> Result<()> {
     // Connect to the server.
     eprintln!("connecting to {}...", args.server);
     let uri: tungstenite::http::Uri = args.server.parse().wrap_err("invalid server URL")?;
-    let audience = Audience::discover(b"subduction");
+
+    let service_name = args
+        .service_name
+        .unwrap_or_else(|| uri.host().unwrap_or("localhost").to_string());
+    eprintln!("service name: {service_name}");
+    let audience = Audience::discover(service_name.as_bytes());
 
     let (authenticated, listener_task, sender_task) =
         TokioWebSocketClient::new(uri, signer, audience)
@@ -230,16 +277,9 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| eyre!("upload failed: {e}"))?;
 
-    eprintln!("upload complete, syncing...");
-
-    let timeout = Duration::from_secs(args.timeout);
-    let (had_success, stats, _call_errs, _io_errs) =
-        subduction.full_sync_with_all_peers(Some(timeout)).await;
-
-    eprintln!("sync complete:");
-    eprintln!("  success:        {had_success}");
-    eprintln!("  fragments sent: {}", stats.fragments_sent);
-    eprintln!("  commits sent:   {}", stats.commits_sent);
+    // add_sedimentree already calls sync_with_all_peers internally,
+    // so by this point the data should be on the server.
+    eprintln!("upload and sync complete");
 
     Ok(())
 }
