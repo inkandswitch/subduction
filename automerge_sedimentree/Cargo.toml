@@ -30,6 +30,7 @@ harness = false
 
 [features]
 default = []
+rayon = ["sedimentree_core/rayon", "std"]
 std = ["sedimentree_core/std"]
 
 [lints]
