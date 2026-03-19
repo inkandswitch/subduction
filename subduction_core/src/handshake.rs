@@ -337,6 +337,17 @@ pub enum AuthenticateError<E> {
     /// Connection closed before handshake completed.
     #[error("connection closed during handshake")]
     ConnectionClosed,
+
+    /// Simultaneous open detected a reflected challenge (same bytes as ours).
+    /// This indicates a reflection attack where the remote side replayed our
+    /// challenge back to us without signing their own.
+    #[error("reflected challenge detected (possible reflection attack)")]
+    ReflectedChallenge,
+
+    /// Simultaneous open received a challenge signed by our own key.
+    /// This indicates a reflection attack or a self-connection attempt.
+    #[error("challenge signed by our own key (reflection attack)")]
+    ReflectionAttack,
 }
 
 /// Result of a successful initiator-side handshake.
@@ -389,7 +400,7 @@ async fn recv_verified_response<K: FutureForm, H: Handshake<K>>(
             reason: rejection.reason,
             responder_timestamp: rejection.server_timestamp,
         }),
-        _ => Err(AuthenticateError::UnexpectedMessage),
+        HandshakeMessage::SignedChallenge(_) => Err(AuthenticateError::UnexpectedMessage),
     }
 }
 
@@ -453,21 +464,50 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
             responder_timestamp: rejection.server_timestamp,
         }),
         HandshakeMessage::SignedChallenge(their_signed_challenge) => {
-            // Simultaneous open: both sides sent challenges. Break the tie
-            // deterministically — the side whose signed challenge is
-            // lexicographically greater wins (keeps the initiator role).
-            let we_win = signed_challenge.as_bytes() > their_signed_challenge.as_bytes();
+            // Simultaneous open: both sides sent challenges.
 
-            // Verify their challenge signature so we can respond to it.
+            // Guard: detect reflected challenge (exact replay of our bytes).
+            if signed_challenge.as_bytes() == their_signed_challenge.as_bytes() {
+                return Err(AuthenticateError::ReflectedChallenge);
+            }
+
+            // Guard: detect challenge signed by our own key (reflection attack
+            // or self-connection).
+            let our_verifying_key = signer.verifying_key();
+            if their_signed_challenge.issuer() == our_verifying_key {
+                return Err(AuthenticateError::ReflectionAttack);
+            }
+
+            // Verify their challenge signature.
             let their_verified = their_signed_challenge
                 .try_verify()
                 .map_err(|_| HandshakeError::InvalidSignature)?;
             let their_challenge = *their_verified.payload();
 
+            // Validate their challenge's audience targets us.
+            let our_peer_id = PeerId::from(our_verifying_key);
+            let their_audience = &their_challenge.audience;
+            let audience_ok = match their_audience {
+                Audience::Known(peer_id) => *peer_id == our_peer_id,
+                Audience::Discover(_) => {
+                    // In discovery mode, accept any discovery audience
+                    // (both sides are discovering each other).
+                    true
+                }
+            };
+            if !audience_ok {
+                return Err(AuthenticateError::Handshake(
+                    HandshakeError::ChallengeValidation(ChallengeValidationError::InvalidAudience),
+                ));
+            }
+
+            // Break the tie deterministically — the side whose signed
+            // challenge is lexicographically greater wins (keeps initiator role).
+            let we_win = signed_challenge.as_bytes() > their_signed_challenge.as_bytes();
+
             if we_win {
                 // Winner: receive the loser's response first (verify they're
-                // legit), then send our response to their challenge so they
-                // can complete the handshake too.
+                // legit), then send our response to their challenge.
                 let peer_id = recv_verified_response(&mut handshake, &challenge).await?;
 
                 let our_response = create_response::<K, _>(signer, &their_challenge, now).await;
@@ -1363,6 +1403,241 @@ mod tests {
                 matches!(result, Err(DecodeError::InvalidSchema(_))),
                 "expected InvalidSchema, got {result:?}"
             );
+        }
+    }
+
+    mod simultaneous_open {
+        use super::*;
+        use futures::FutureExt;
+        use subduction_crypto::signer::memory::MemorySigner;
+        use testresult::TestResult;
+
+        /// A paired in-memory handshake transport for testing.
+        ///
+        /// Two `ChannelHandshake` instances share crossed channels:
+        /// A's send goes to B's recv and vice versa.
+        #[derive(Debug)]
+        struct ChannelHandshake {
+            tx: async_channel::Sender<Vec<u8>>,
+            rx: async_channel::Receiver<Vec<u8>>,
+        }
+
+        impl ChannelHandshake {
+            fn pair() -> (Self, Self) {
+                let (tx_a, rx_a) = async_channel::bounded(16);
+                let (tx_b, rx_b) = async_channel::bounded(16);
+                (Self { tx: tx_a, rx: rx_b }, Self { tx: tx_b, rx: rx_a })
+            }
+        }
+
+        impl Handshake<future_form::Sendable> for ChannelHandshake {
+            type Error = alloc::string::String;
+
+            fn send(
+                &mut self,
+                bytes: Vec<u8>,
+            ) -> futures::future::BoxFuture<'_, Result<(), Self::Error>> {
+                let tx = self.tx.clone();
+                async move { tx.send(bytes).await.map_err(|e| e.to_string()) }.boxed()
+            }
+
+            fn recv(&mut self) -> futures::future::BoxFuture<'_, Result<Vec<u8>, Self::Error>> {
+                let rx = self.rx.clone();
+                async move { rx.recv().await.map_err(|e| e.to_string()) }.boxed()
+            }
+        }
+
+        fn test_signer(seed: u8) -> MemorySigner {
+            MemorySigner::from_bytes(&[seed; 32])
+        }
+
+        /// Both sides call `initiate` simultaneously — one wins, one loses,
+        /// both complete successfully with the correct peer IDs.
+        #[tokio::test]
+        async fn simultaneous_initiate_completes() -> TestResult {
+            let (transport_a, transport_b) = ChannelHandshake::pair();
+            let signer_a = test_signer(1);
+            let signer_b = test_signer(2);
+            let peer_id_a = PeerId::from(signer_a.verifying_key());
+            let peer_id_b = PeerId::from(signer_b.verifying_key());
+
+            let now = TimestampSeconds::new(1000);
+
+            let a_handle = tokio::spawn(async move {
+                initiate::<future_form::Sendable, _, _, _, _>(
+                    transport_a,
+                    |_hs, peer_id| (peer_id, ()),
+                    &signer_a,
+                    Audience::known(peer_id_b),
+                    now,
+                    Nonce::random(),
+                )
+                .await
+            });
+
+            let b_handle = tokio::spawn(async move {
+                initiate::<future_form::Sendable, _, _, _, _>(
+                    transport_b,
+                    |_hs, peer_id| (peer_id, ()),
+                    &signer_b,
+                    Audience::known(peer_id_a),
+                    now,
+                    Nonce::random(),
+                )
+                .await
+            });
+
+            let (a_result, b_result) = tokio::join!(a_handle, b_handle);
+            let (a_auth, ()) = a_result??;
+            let (b_auth, ()) = b_result??;
+
+            assert_eq!(a_auth.peer_id(), peer_id_b, "A should authenticate B");
+            assert_eq!(b_auth.peer_id(), peer_id_a, "B should authenticate A");
+
+            Ok(())
+        }
+
+        /// Reflection attack: Mallory reflects Alice's challenge back.
+        /// Alice should detect the reflected challenge and reject.
+        #[tokio::test]
+        async fn reflected_challenge_is_rejected() -> TestResult {
+            let (mut alice_hs, mut mallory_hs) = ChannelHandshake::pair();
+            let signer_alice = test_signer(1);
+
+            let now = TimestampSeconds::new(1000);
+            let challenge = Challenge::new(
+                Audience::known(PeerId::new([0xAA; 32])),
+                now,
+                Nonce::random(),
+            );
+            let signed_challenge =
+                Signed::seal::<future_form::Sendable, _>(&signer_alice, challenge)
+                    .await
+                    .into_signed();
+
+            // Alice sends her challenge
+            let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());
+            alice_hs
+                .send(msg.encode())
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // Mallory receives and reflects it back
+            let reflected_bytes = mallory_hs.recv().await.map_err(|e| e.to_string())?;
+            mallory_hs
+                .send(reflected_bytes)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // Alice tries to complete the handshake
+            let first_msg =
+                recv_handshake_message::<future_form::Sendable, _>(&mut alice_hs).await?;
+
+            // Simulate what initiate does: check if it's a challenge
+            match first_msg {
+                HandshakeMessage::SignedChallenge(their_challenge) => {
+                    // The reflected challenge has identical bytes
+                    assert_eq!(
+                        signed_challenge.as_bytes(),
+                        their_challenge.as_bytes(),
+                        "reflected challenge should have identical bytes"
+                    );
+
+                    // The issuer is our own key
+                    assert_eq!(
+                        their_challenge.issuer(),
+                        signer_alice.verifying_key(),
+                        "reflected challenge issuer should be our own key"
+                    );
+                }
+                HandshakeMessage::SignedResponse(_) | HandshakeMessage::Rejection(_) => {
+                    return Err("expected SignedChallenge".into());
+                }
+            }
+
+            // Now test that `initiate` itself rejects this
+            let (alice_hs2, mut mallory_hs2) = ChannelHandshake::pair();
+
+            // Spawn Alice's initiate
+            let signer_clone = test_signer(1);
+            let alice_handle = tokio::spawn(async move {
+                initiate::<future_form::Sendable, _, _, _, _>(
+                    alice_hs2,
+                    |_hs, peer_id| (peer_id, ()),
+                    &signer_clone,
+                    Audience::known(PeerId::new([0xAA; 32])),
+                    now,
+                    Nonce::random(),
+                )
+                .await
+            });
+
+            // Mallory reflects Alice's challenge
+            let alice_challenge = mallory_hs2.recv().await.map_err(|e| e.to_string())?;
+            mallory_hs2
+                .send(alice_challenge)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let result = alice_handle.await?;
+            assert!(
+                matches!(
+                    result,
+                    Err(AuthenticateError::ReflectedChallenge | AuthenticateError::ReflectionAttack)
+                ),
+                "expected reflection error, got {result:?}"
+            );
+
+            Ok(())
+        }
+
+        /// Simultaneous open with discovery audience should succeed.
+        #[tokio::test]
+        async fn simultaneous_initiate_with_discovery() -> TestResult {
+            let (transport_a, transport_b) = ChannelHandshake::pair();
+            let signer_a = test_signer(3);
+            let signer_b = test_signer(4);
+            let peer_id_a = PeerId::from(signer_a.verifying_key());
+            let peer_id_b = PeerId::from(signer_b.verifying_key());
+
+            let now = TimestampSeconds::new(1000);
+            let service = Audience::discover(b"my-service");
+
+            let service_a = service;
+            let service_b = service;
+
+            let a_handle = tokio::spawn(async move {
+                initiate::<future_form::Sendable, _, _, _, _>(
+                    transport_a,
+                    |_hs, peer_id| (peer_id, ()),
+                    &signer_a,
+                    service_a,
+                    now,
+                    Nonce::random(),
+                )
+                .await
+            });
+
+            let b_handle = tokio::spawn(async move {
+                initiate::<future_form::Sendable, _, _, _, _>(
+                    transport_b,
+                    |_hs, peer_id| (peer_id, ()),
+                    &signer_b,
+                    service_b,
+                    now,
+                    Nonce::random(),
+                )
+                .await
+            });
+
+            let (a_result, b_result) = tokio::join!(a_handle, b_handle);
+            let (a_auth, ()) = a_result??;
+            let (b_auth, ()) = b_result??;
+
+            assert_eq!(a_auth.peer_id(), peer_id_b);
+            assert_eq!(b_auth.peer_id(), peer_id_a);
+
+            Ok(())
         }
     }
 }
