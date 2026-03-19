@@ -436,7 +436,7 @@ impl<
         let author = PeerId::from(verified.issuer());
         tracing::debug!(
             "receiving fragment {:?} for sedimentree {:?} from peer {:?} (author {:?})",
-            verified.payload().digest(),
+            Digest::hash(verified.payload()),
             id,
             from,
             author
@@ -544,7 +544,7 @@ impl<
                 .collect();
         let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> = verified_fragments
             .into_iter()
-            .map(|vm| (vm.payload().digest(), vm))
+            .map(|vm| (Digest::hash(vm.payload()), vm))
             .collect();
 
         let (
@@ -584,11 +584,11 @@ impl<
             (
                 diff.local_only_commits
                     .iter()
-                    .map(|c| Digest::hash(*c))
+                    .map(|(digest, _)| **digest)
                     .collect::<Vec<_>>(),
                 diff.local_only_fragments
                     .iter()
-                    .map(|f| f.digest())
+                    .map(|(digest, _)| **digest)
                     .collect::<Vec<_>>(),
                 diff.remote_only_commit_fingerprints,
                 diff.remote_only_fragment_fingerprints,

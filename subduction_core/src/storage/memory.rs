@@ -197,7 +197,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         verified: VerifiedMeta<Fragment>,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            let digest = verified.payload().digest();
+            let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
 
             let (signed, _payload, blob) = verified.into_full_parts();

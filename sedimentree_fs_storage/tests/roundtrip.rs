@@ -168,6 +168,53 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
     Ok(())
 }
 
+/// Verify that `Digest::hash` on a fragment matches the storage key.
+///
+/// Regression test: storage backends use `Digest::hash(&fragment)` (canonical
+/// wire encoding) as the key. Fragments must be loadable by this digest.
+#[tokio::test]
+async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x05);
+
+    let head = Digest::<LooseCommit>::force_from_bytes([0xAA; 32]);
+    let boundary = BTreeSet::from([
+        Digest::<LooseCommit>::force_from_bytes([0xBB; 32]),
+        Digest::<LooseCommit>::force_from_bytes([0xCC; 32]),
+    ]);
+    let checkpoints = vec![Digest::<LooseCommit>::force_from_bytes([0xDD; 32])];
+
+    let blob = Blob::new(vec![99; 100]);
+    let verified_blob = VerifiedBlobMeta::new(blob);
+    let verified: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (id, head, boundary, checkpoints),
+        verified_blob,
+    )
+    .await;
+
+    let digest_from_hash = Digest::hash(verified.payload());
+
+    // Save using the storage backend (which uses Digest::hash internally)
+    Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+    Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
+
+    // Load using Digest::hash — must find the fragment
+    let loaded = Storage::<Sendable>::load_fragment(&storage, id, digest_from_hash)
+        .await?
+        .expect("fragment must be loadable by Digest::hash");
+
+    assert_eq!(
+        Digest::hash(loaded.payload()),
+        digest_from_hash,
+        "loaded fragment's digest must match"
+    );
+
+    Ok(())
+}
+
 /// Save multiple commits, `load_loose_commits` returns all of them.
 #[tokio::test]
 async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
@@ -186,7 +233,10 @@ async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
         let verified: VerifiedMeta<LooseCommit> =
             VerifiedMeta::seal::<Sendable, _>(&signer, (id, BTreeSet::new()), verified_blob).await;
         expected_digests.insert(Digest::hash(verified.payload()));
-        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+        if let Err(e) = Storage::<Sendable>::save_loose_commit(&storage, id, verified).await {
+            eprintln!("save_loose_commit failed: {e:?}");
+            return Err(e.into());
+        }
     }
 
     let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;

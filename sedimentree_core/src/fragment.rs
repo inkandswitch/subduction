@@ -35,7 +35,6 @@ pub struct Fragment {
     sedimentree_id: SedimentreeId,
     summary: FragmentSummary,
     checkpoints: BTreeSet<Checkpoint>,
-    digest: Digest<Fragment>,
 }
 
 impl Fragment {
@@ -67,30 +66,13 @@ impl Fragment {
     ///
     /// Used by codec decoding where checkpoints are already in truncated form.
     #[must_use]
-    pub fn from_parts(
+    pub const fn from_parts(
         sedimentree_id: SedimentreeId,
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
         checkpoints: BTreeSet<Checkpoint>,
         blob_meta: BlobMeta,
     ) -> Self {
-        let digest = {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(sedimentree_id.as_bytes());
-            hasher.update(head.as_bytes());
-
-            for end in &boundary {
-                hasher.update(end.as_bytes());
-            }
-            hasher.update(blob_meta.digest().as_bytes());
-
-            for checkpoint in &checkpoints {
-                hasher.update(checkpoint.as_bytes());
-            }
-
-            Digest::force_from_bytes(*hasher.finalize().as_bytes())
-        };
-
         Self {
             sedimentree_id,
             summary: FragmentSummary {
@@ -99,7 +81,6 @@ impl Fragment {
                 blob_meta,
             },
             checkpoints,
-            digest,
         }
     }
 
@@ -178,11 +159,6 @@ impl Fragment {
         &self.checkpoints
     }
 
-    /// The unique [`Digest`] of this [`Fragment`], derived from its content.
-    #[must_use]
-    pub const fn digest(&self) -> Digest<Fragment> {
-        self.digest
-    }
     /// The causal identity of this fragment (its head digest).
     #[must_use]
     pub const fn fragment_id(&self) -> FragmentId {
@@ -427,6 +403,44 @@ impl DecodeFields for Fragment {
 
 #[cfg(test)]
 mod tests {
+    mod digest_consistency {
+        use super::super::*;
+        use crate::{crypto::digest::Digest, sedimentree::Sedimentree};
+
+        /// `Digest::hash(&fragment)` must be deterministic and must match
+        /// the key used by `Sedimentree`'s fragment map and all storage
+        /// backends.
+        #[test]
+        fn digest_hash_is_deterministic() -> testresult::TestResult {
+            let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
+            let fragment = Fragment::from_parts(
+                SedimentreeId::new([0x01; 32]),
+                Digest::force_from_bytes([0x10; 32]),
+                alloc::collections::BTreeSet::from([
+                    Digest::force_from_bytes([0x20; 32]),
+                    Digest::force_from_bytes([0x30; 32]),
+                ]),
+                alloc::collections::BTreeSet::new(),
+                BlobMeta::new(&blob),
+            );
+
+            // Determinism: same fragment hashes the same way twice.
+            let d1: Digest<Fragment> = Digest::hash(&fragment);
+            let d2: Digest<Fragment> = Digest::hash(&fragment);
+            assert_eq!(d1, d2, "Digest::hash must be deterministic");
+
+            // The digest used as a Sedimentree map key must match.
+            let tree = Sedimentree::new(alloc::vec![fragment.clone()], alloc::vec![]);
+            let (map_key, _) = tree
+                .fragment_entries()
+                .next()
+                .ok_or("tree should contain one fragment")?;
+            assert_eq!(*map_key, d1, "Sedimentree map key must equal Digest::hash");
+
+            Ok(())
+        }
+    }
+
     mod codec {
         use super::super::*;
         use alloc::vec;
@@ -692,10 +706,12 @@ mod tests {
                 encode::{Encode, EncodeFields},
             },
             commit::CountLeadingZeroBytes,
+            crypto::digest::Digest,
             fragment::Fragment,
         };
 
-        /// Round-trip property: encode then decode yields the original value.
+        /// Round-trip property: encode then decode yields the original value,
+        /// and the decoded fragment's digest is consistent.
         #[test]
         #[allow(clippy::panic)]
         fn codec_round_trip() {
@@ -708,6 +724,11 @@ mod tests {
                         Ok((decoded, consumed)) => {
                             assert_eq!(&decoded, fragment);
                             assert_eq!(consumed, buf.len());
+                            assert_eq!(
+                                Digest::hash(&decoded),
+                                Digest::hash(fragment),
+                                "digest must be consistent after decode"
+                            );
                         }
                         Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
                     }

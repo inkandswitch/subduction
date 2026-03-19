@@ -11,8 +11,8 @@
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob, crypto::digest::Digest, depth::DepthMetric, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit, sedimentree::Sedimentree,
+    blob::Blob, collections::Map, crypto::digest::Digest, depth::DepthMetric, fragment::Fragment,
+    id::SedimentreeId, loose_commit::LooseCommit, sedimentree::Sedimentree,
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -53,19 +53,29 @@ pub(crate) async fn recv_batch_sync_response<
         diff.missing_fragments.len()
     );
 
-    let putter = match storage.get_putter::<F>(*from, *from, id).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(
-                "policy rejected batch sync from peer {:?} for sedimentree {:?}: {e}",
-                from,
-                id
-            );
-            return Ok(());
-        }
-    };
+    let mut putter_cache: Map<PeerId, Putter<F, S>> = Map::new();
 
     for (signed_commit, blob) in diff.missing_commits {
+        let author = PeerId::from(signed_commit.issuer());
+
+        #[allow(clippy::map_entry)]
+        if !putter_cache.contains_key(&author) {
+            match storage.get_putter::<F>(*from, author, id).await {
+                Ok(p) => {
+                    putter_cache.insert(author, p);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "policy rejected commit from {from:?} (author {author:?}) for {id:?}: {e}"
+                    );
+                    continue;
+                }
+            }
+        }
+        let Some(putter) = putter_cache.get(&author) else {
+            continue;
+        };
+
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -73,6 +83,7 @@ pub(crate) async fn recv_batch_sync_response<
                 continue;
             }
         };
+
         let verified_meta = match VerifiedMeta::new(verified, blob) {
             Ok(vm) => vm,
             Err(e) => {
@@ -80,12 +91,34 @@ pub(crate) async fn recv_batch_sync_response<
                 continue;
             }
         };
-        insert_commit_locally(sedimentrees, &putter, verified_meta)
+
+        insert_commit_locally(sedimentrees, putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
     }
 
     for (signed_fragment, blob) in diff.missing_fragments {
+        let author = PeerId::from(signed_fragment.issuer());
+
+        #[allow(clippy::map_entry)] // async in insertion path
+        if !putter_cache.contains_key(&author) {
+            match storage.get_putter::<F>(*from, author, id).await {
+                Ok(p) => {
+                    putter_cache.insert(author, p);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "policy rejected fragment from {from:?} (author {author:?}) for {id:?}: {e}"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        let Some(putter) = putter_cache.get(&author) else {
+            continue;
+        };
+
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -93,6 +126,7 @@ pub(crate) async fn recv_batch_sync_response<
                 continue;
             }
         };
+
         let verified_meta = match VerifiedMeta::new(verified, blob) {
             Ok(vm) => vm,
             Err(e) => {
@@ -100,7 +134,8 @@ pub(crate) async fn recv_batch_sync_response<
                 continue;
             }
         };
-        insert_fragment_locally(sedimentrees, &putter, verified_meta)
+
+        insert_fragment_locally(sedimentrees, putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
     }

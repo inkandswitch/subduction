@@ -279,16 +279,19 @@ impl Storage<Sendable> for FsStorage {
                 });
             }
 
-            // Write signed data
-            let signed_temp = signed_path.with_extension("tmp");
-            tokio::fs::write(&signed_temp, &signed_data).await?;
-            tokio::fs::rename(&signed_temp, &signed_path).await?;
-
-            // Write blob data
+            // Write both temp files first, then rename both.
+            // The `.signed` rename is last — it's the CAS marker.
+            // A crash before the final rename leaves either:
+            //   - orphaned .tmp files (harmless, overwritten on re-save)
+            //   - .blob committed but no .signed (CAS allows re-save)
             let blob_data = verified.blob().contents().clone();
-            let blob_temp = blob_path.with_extension("tmp");
+            let blob_temp = blob_path.with_extension("blob.tmp");
+            let signed_temp = signed_path.with_extension("signed.tmp");
+
             tokio::fs::write(&blob_temp, &blob_data).await?;
+            tokio::fs::write(&signed_temp, &signed_data).await?;
             tokio::fs::rename(&blob_temp, &blob_path).await?;
+            tokio::fs::rename(&signed_temp, &signed_path).await?;
 
             Ok(())
         })
@@ -498,16 +501,16 @@ impl Storage<Sendable> for FsStorage {
                 });
             }
 
-            // Write signed data
-            let signed_temp = signed_path.with_extension("tmp");
-            tokio::fs::write(&signed_temp, &signed_data).await?;
-            tokio::fs::rename(&signed_temp, &signed_path).await?;
-
-            // Write blob data
+            // Write both temp files first, then rename both.
+            // The `.signed` rename is last — it's the CAS marker.
             let blob_data = verified.blob().contents().clone();
-            let blob_temp = blob_path.with_extension("tmp");
+            let blob_temp = blob_path.with_extension("blob.tmp");
+            let signed_temp = signed_path.with_extension("signed.tmp");
+
             tokio::fs::write(&blob_temp, &blob_data).await?;
+            tokio::fs::write(&signed_temp, &signed_data).await?;
             tokio::fs::rename(&blob_temp, &blob_path).await?;
+            tokio::fs::rename(&signed_temp, &signed_path).await?;
 
             Ok(())
         })
