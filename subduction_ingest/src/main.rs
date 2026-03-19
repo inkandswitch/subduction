@@ -179,8 +179,25 @@ fn print_ingest_stats(result: &IngestResult, sed_id: SedimentreeId) {
     eprintln!("  fragments:  {}", result.fragment_count);
     eprintln!("  loose:      {}", result.loose_count);
     eprintln!("  covered:    {}", result.covered_count);
-    let blob_bytes: usize = result.blobs.iter().map(|b| b.as_slice().len()).sum();
-    eprintln!("  blob bytes: {blob_bytes}");
+
+    let fragment_bytes: usize = result
+        .blobs
+        .iter()
+        .take(result.fragment_count)
+        .map(|b| b.as_slice().len())
+        .sum();
+    let loose_bytes: usize = result
+        .blobs
+        .iter()
+        .skip(result.fragment_count)
+        .map(|b| b.as_slice().len())
+        .sum();
+    eprintln!(
+        "  blob bytes: {} (fragments: {}, loose: {})",
+        fragment_bytes + loose_bytes,
+        fragment_bytes,
+        loose_bytes,
+    );
 }
 
 #[tokio::main]

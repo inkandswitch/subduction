@@ -6,9 +6,7 @@
 //! invariants. Byte-identical reassembly is tested in release mode only
 //! (automerge's `get_changes` has a `debug_assert` that doubles work).
 
-use std::collections::HashMap;
-
-use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
+use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -76,10 +74,10 @@ fn decompose_meta(doc: &Automerge) -> MetadataDecomp {
 /// debug due to automerge's internal `debug_assert`).
 struct FullDecomp {
     change_count: usize,
-    /// One bundle (columnar-compressed) per fragment.
-    fragment_bundles: Vec<Vec<u8>>,
-    /// One bundle per loose commit.
-    uncovered_bundles: Vec<Vec<u8>>,
+    /// Compact Document-format blobs per fragment.
+    fragment_blobs: Vec<Vec<u8>>,
+    /// Raw change bytes per loose commit.
+    uncovered_blobs: Vec<Vec<u8>>,
     uncovered_parents: Vec<std::collections::BTreeSet<Digest<LooseCommit>>>,
     fragment_state_blobs: Vec<(FragmentState<OwnedParents>, Blob)>,
 }
@@ -106,46 +104,59 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
         .flat_map(|s| s.members().iter().copied())
         .collect();
 
-    // Single get_changes call — one OpSet scan instead of N bundle() calls.
+    // Get all changes with raw bytes in topological order.
     let changes = doc.get_changes(&[]);
-    let by_hash: HashMap<ChangeHash, &automerge::Change> =
-        changes.iter().map(|c| (c.hash(), c)).collect();
 
-    // Build one bundle per fragment from the pre-fetched changes.
-    let mut fragment_bundles = Vec::new();
+    // For each fragment: filter members in topological order, concatenate
+    // raw_bytes, load into fresh doc, save as compact Document format.
+    let mut fragment_blobs = Vec::new();
     let mut fragment_state_blobs = Vec::new();
     for state in &states {
+        let members: Set<ChangeHash> = state
+            .members()
+            .iter()
+            .map(|d| ChangeHash(*d.as_bytes()))
+            .collect();
+
         let mut raw = Vec::new();
-        for member in state.members() {
-            let hash = ChangeHash(*member.as_bytes());
-            raw.extend_from_slice(by_hash.get(&hash).expect("member in changes").raw_bytes());
+        for change in &changes {
+            if members.contains(&change.hash()) {
+                raw.extend_from_slice(change.raw_bytes());
+            }
         }
-        fragment_state_blobs.push((state.clone(), Blob::new(raw.clone())));
-        fragment_bundles.push(raw);
+
+        let mut sub_doc = Automerge::new();
+        sub_doc
+            .load_incremental(&raw)
+            .expect("load_incremental for fragment");
+        let compact = sub_doc.save();
+
+        fragment_state_blobs.push((state.clone(), Blob::new(compact.clone())));
+        fragment_blobs.push(compact);
     }
 
-    // Loose commits from the same pre-fetched changes.
-    let uncovered: Vec<&automerge::Change> = changes
-        .iter()
-        .filter(|c| !covered.contains(&Digest::force_from_bytes(c.hash().0)))
-        .collect();
-
-    let uncovered_bundles: Vec<Vec<u8>> =
-        uncovered.iter().map(|c| c.raw_bytes().to_vec()).collect();
-    let uncovered_parents: Vec<std::collections::BTreeSet<Digest<LooseCommit>>> = uncovered
-        .iter()
-        .map(|c| {
-            c.deps()
+    // Loose commits: raw_bytes per uncovered change.
+    let mut uncovered_blobs = Vec::new();
+    let mut uncovered_parents = Vec::new();
+    for change in &changes {
+        let digest = Digest::force_from_bytes(change.hash().0);
+        if covered.contains(&digest) {
+            continue;
+        }
+        uncovered_blobs.push(change.raw_bytes().to_vec());
+        uncovered_parents.push(
+            change
+                .deps()
                 .iter()
                 .map(|d| Digest::force_from_bytes(d.0))
-                .collect()
-        })
-        .collect();
+                .collect(),
+        );
+    }
 
     FullDecomp {
         change_count,
-        fragment_bundles,
-        uncovered_bundles,
+        fragment_blobs,
+        uncovered_blobs,
         uncovered_parents,
         fragment_state_blobs,
     }
@@ -166,15 +177,11 @@ fn build_tree(bytes: &[u8], d: &FullDecomp) -> (Sedimentree, Vec<Fragment>, Vec<
         .collect();
 
     let loose: Vec<LooseCommit> = d
-        .uncovered_bundles
+        .uncovered_blobs
         .iter()
         .zip(d.uncovered_parents.iter())
-        .map(|(bundle_bytes, parents)| {
-            LooseCommit::new(
-                id,
-                parents.clone(),
-                BlobMeta::new(&Blob::new(bundle_bytes.clone())),
-            )
+        .map(|(raw, parents)| {
+            LooseCommit::new(id, parents.clone(), BlobMeta::new(&Blob::new(raw.clone())))
         })
         .collect();
 
@@ -268,15 +275,13 @@ fn roundtrip_full(name: &str, bytes: &[u8]) {
     let d = decompose_full(&doc);
 
     let mut rebuilt = Automerge::new();
-    for bundle_bytes in &d.fragment_bundles {
-        rebuilt
-            .load_incremental(bundle_bytes)
-            .expect("load fragment bundle");
+    for blob in &d.fragment_blobs {
+        rebuilt.load_incremental(blob).expect("load fragment blob");
     }
-    for bundle_bytes in &d.uncovered_bundles {
+    for blob in &d.uncovered_blobs {
         rebuilt
-            .load_incremental(bundle_bytes)
-            .expect("load loose commit bundle");
+            .load_incremental(blob)
+            .expect("load loose commit blob");
     }
 
     assert_eq!(

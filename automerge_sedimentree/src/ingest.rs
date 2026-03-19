@@ -59,9 +59,13 @@ pub enum IngestError {
     #[error("fragment construction failed: {0}")]
     Fragment(String),
 
-    /// A fragment member's change was not found in the document.
-    #[error("change not found for digest: {0}")]
-    MissingChange(Digest<LooseCommit>),
+    /// A fragment member's change was not found in the change set.
+    #[error("change not found for hash: {0}")]
+    MissingChange(ChangeHash),
+
+    /// Failed to load or save a sub-document during blob compression.
+    #[error("automerge error during blob compression: {0}")]
+    Automerge(String),
 }
 
 /// Result of ingesting an Automerge document.
@@ -141,37 +145,73 @@ pub fn ingest_automerge(
         .collect();
     let covered_count = covered.len();
 
-    // Phase 2: extract raw change bytes (one get_changes call).
+    // Phase 2: produce blobs.
+    //
+    // One `get_changes(&[])` call to get all changes with raw bytes in
+    // topological (causal) order. Then for each fragment we:
+    //   1. Filter to member changes, preserving topological order
+    //   2. Concatenate their raw_bytes()
+    //   3. Load into a fresh Automerge doc via load_incremental
+    //   4. save() → compact Document format (unified columnar encoding)
+    //
+    // This produces blobs comparable in size to the original .am file
+    // rather than the inflated per-change or Bundle formats.
+    //
+    // For loose commits: just the individual change's raw_bytes() (already
+    // small, no recompression needed).
     let changes = doc.get_changes(&[]);
-    let by_hash: Map<ChangeHash, &automerge::Change> =
-        changes.iter().map(|c| (c.hash(), c)).collect();
 
-    // Build fragments: one blob per fragment state.
     let mut blobs = Vec::new();
     let mut fragments = Vec::with_capacity(states.len());
     for state in states {
+        let members: Set<ChangeHash> = state
+            .members()
+            .iter()
+            .map(|d| ChangeHash(*d.as_bytes()))
+            .collect();
+        let boundary: Set<ChangeHash> = state
+            .boundary()
+            .keys()
+            .map(|d| ChangeHash(*d.as_bytes()))
+            .collect();
+
+        // Build a sub-document with:
+        // 1. Boundary commits (causal deps — needed so member changes apply
+        //    to the OpSet instead of being queued as orphans)
+        // 2. Member commits
+        //
+        // Both in topological order from get_changes.
+        let mut sub_doc = Automerge::new();
         let mut raw = Vec::new();
-        for member in state.members() {
-            let hash = ChangeHash(*member.as_bytes());
-            let change = by_hash
-                .get(&hash)
-                .ok_or(IngestError::MissingChange(*member))?;
-            raw.extend_from_slice(change.raw_bytes());
+        for change in &changes {
+            let hash = change.hash();
+            if boundary.contains(&hash) || members.contains(&hash) {
+                raw.extend_from_slice(change.raw_bytes());
+            }
         }
-        let blob = Blob::new(raw);
+        sub_doc
+            .load_incremental(&raw)
+            .map_err(|e| IngestError::Automerge(e.to_string()))?;
+
+        // save_after(boundary_heads) gives us the compact Document format
+        // for only the member changes (excluding the boundary base state).
+        let boundary_heads: Vec<ChangeHash> = boundary.into_iter().collect();
+        let compact = sub_doc.save_after(&boundary_heads);
+
+        let blob = Blob::new(compact);
         let fragment = state.to_fragment(sedimentree_id, BlobMeta::new(&blob));
         fragments.push(fragment);
         blobs.push(blob);
     }
 
-    // Build loose commits from uncovered changes.
-    let uncovered: Vec<&automerge::Change> = changes
-        .iter()
-        .filter(|c| !covered.contains(&Digest::force_from_bytes(c.hash().0)))
-        .collect();
+    // Loose commits: raw_bytes() per individual change.
+    let mut loose_commits = Vec::with_capacity(changes.len() - covered_count);
+    for change in &changes {
+        let digest = Digest::force_from_bytes(change.hash().0);
+        if covered.contains(&digest) {
+            continue;
+        }
 
-    let mut loose_commits = Vec::with_capacity(uncovered.len());
-    for change in &uncovered {
         let parents: std::collections::BTreeSet<Digest<LooseCommit>> = change
             .deps()
             .iter()
