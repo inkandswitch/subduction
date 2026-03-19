@@ -66,11 +66,17 @@ pub enum IngestError {
 
 /// Result of ingesting an Automerge document.
 ///
-/// Contains the [`Sedimentree`] plus metadata useful for the caller.
+/// Contains the [`Sedimentree`], the corresponding [`Blob`]s, and metadata.
+/// Pass `sedimentree` and `blobs` to [`Subduction::add_sedimentree`] to
+/// store and sync the data.
 #[derive(Debug, Clone)]
 pub struct IngestResult {
-    /// The constructed sedimentree.
+    /// The constructed sedimentree (fragments + loose commits with `BlobMeta`).
     pub sedimentree: Sedimentree,
+
+    /// All blobs referenced by the sedimentree's fragments and loose commits.
+    /// Matched to the sedimentree entries by blob digest.
+    pub blobs: Vec<Blob>,
 
     /// Total number of changes in the source document.
     pub change_count: usize,
@@ -141,6 +147,7 @@ pub fn ingest_automerge(
         changes.iter().map(|c| (c.hash(), c)).collect();
 
     // Build fragments: one blob per fragment state.
+    let mut blobs = Vec::new();
     let mut fragments = Vec::with_capacity(states.len());
     for state in states {
         let mut raw = Vec::new();
@@ -154,6 +161,7 @@ pub fn ingest_automerge(
         let blob = Blob::new(raw);
         let fragment = state.to_fragment(sedimentree_id, BlobMeta::new(&blob));
         fragments.push(fragment);
+        blobs.push(blob);
     }
 
     // Build loose commits from uncovered changes.
@@ -172,6 +180,7 @@ pub fn ingest_automerge(
         let blob = Blob::new(change.raw_bytes().to_vec());
         let commit = LooseCommit::new(sedimentree_id, parents, BlobMeta::new(&blob));
         loose_commits.push(commit);
+        blobs.push(blob);
     }
 
     let fragment_count = fragments.len();
@@ -180,6 +189,7 @@ pub fn ingest_automerge(
 
     Ok(IngestResult {
         sedimentree,
+        blobs,
         change_count,
         covered_count,
         loose_count,

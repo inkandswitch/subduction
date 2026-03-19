@@ -5213,6 +5213,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "subduction_ingest"
+version = "0.1.0"
+dependencies = [
+ "automerge",
+ "automerge_sedimentree",
+ "blake3",
+ "clap",
+ "color-eyre",
+ "eyre",
+ "future_form",
+ "hex",
+ "sedimentree_core",
+ "subduction_core",
+ "subduction_crypto",
+ "subduction_websocket",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tungstenite",
+]
+
+[[package]]
 name = "subduction_iroh"
 version = "0.5.0"
 dependencies = [
