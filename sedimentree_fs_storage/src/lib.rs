@@ -285,8 +285,8 @@ impl Storage<Sendable> for FsStorage {
             //   - orphaned .tmp files (harmless, overwritten on re-save)
             //   - .blob committed but no .signed (CAS allows re-save)
             let blob_data = verified.blob().contents().clone();
-            let blob_temp = blob_path.with_extension("tmp");
-            let signed_temp = signed_path.with_extension("tmp");
+            let blob_temp = blob_path.with_extension("blob.tmp");
+            let signed_temp = signed_path.with_extension("signed.tmp");
 
             tokio::fs::write(&blob_temp, &blob_data).await?;
             tokio::fs::write(&signed_temp, &signed_data).await?;
@@ -504,8 +504,8 @@ impl Storage<Sendable> for FsStorage {
             // Write both temp files first, then rename both.
             // The `.signed` rename is last — it's the CAS marker.
             let blob_data = verified.blob().contents().clone();
-            let blob_temp = blob_path.with_extension("tmp");
-            let signed_temp = signed_path.with_extension("tmp");
+            let blob_temp = blob_path.with_extension("blob.tmp");
+            let signed_temp = signed_path.with_extension("signed.tmp");
 
             tokio::fs::write(&blob_temp, &blob_data).await?;
             tokio::fs::write(&signed_temp, &signed_data).await?;

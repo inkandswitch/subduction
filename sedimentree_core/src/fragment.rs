@@ -405,13 +405,11 @@ impl DecodeFields for Fragment {
 mod tests {
     mod digest_consistency {
         use super::super::*;
-        use crate::crypto::digest::Digest;
+        use crate::{crypto::digest::Digest, sedimentree::Sedimentree};
 
-        /// `Fragment::digest()` must equal `Digest::hash(&fragment)`.
-        ///
-        /// These two values were historically different (the stored digest used
-        /// ad-hoc incremental hashing while `Digest::hash` used the canonical
-        /// `Encode` output). This test prevents that regression.
+        /// `Digest::hash(&fragment)` must be deterministic and must match
+        /// the key used by `Sedimentree`'s fragment map and all storage
+        /// backends.
         #[test]
         fn digest_hash_is_deterministic() {
             let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
@@ -426,9 +424,15 @@ mod tests {
                 BlobMeta::new(&blob),
             );
 
+            // Determinism: same fragment hashes the same way twice.
             let d1: Digest<Fragment> = Digest::hash(&fragment);
             let d2: Digest<Fragment> = Digest::hash(&fragment);
             assert_eq!(d1, d2, "Digest::hash must be deterministic");
+
+            // The digest used as a Sedimentree map key must match.
+            let tree = Sedimentree::new(alloc::vec![fragment.clone()], alloc::vec![]);
+            let (map_key, _) = tree.fragment_entries().next().expect("one fragment");
+            assert_eq!(*map_key, d1, "Sedimentree map key must equal Digest::hash");
         }
     }
 

@@ -233,7 +233,10 @@ async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
         let verified: VerifiedMeta<LooseCommit> =
             VerifiedMeta::seal::<Sendable, _>(&signer, (id, BTreeSet::new()), verified_blob).await;
         expected_digests.insert(Digest::hash(verified.payload()));
-        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+        if let Err(e) = Storage::<Sendable>::save_loose_commit(&storage, id, verified).await {
+            eprintln!("save_loose_commit failed: {e:?}");
+            return Err(e.into());
+        }
     }
 
     let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
