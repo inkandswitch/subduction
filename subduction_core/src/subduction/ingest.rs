@@ -100,6 +100,7 @@ pub(crate) async fn recv_batch_sync_response<
     for (signed_fragment, blob) in diff.missing_fragments {
         let author = PeerId::from(signed_fragment.issuer());
 
+        #[allow(clippy::map_entry)] // async in insertion path
         if !putter_cache.contains_key(&author) {
             match storage.get_putter::<F>(*from, author, id).await {
                 Ok(p) => {
