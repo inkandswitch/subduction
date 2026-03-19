@@ -348,6 +348,11 @@ pub enum AuthenticateError<E> {
     /// This indicates a reflection attack or a self-connection attempt.
     #[error("challenge signed by our own key (reflection attack)")]
     ReflectionAttack,
+
+    /// Simultaneous open: the peer ID from the challenge doesn't match the
+    /// peer ID from the response. This indicates a MITM or protocol violation.
+    #[error("peer ID mismatch between simultaneous open challenge and response")]
+    SimultaneousOpenPeerMismatch,
 }
 
 /// Result of a successful initiator-side handshake.
@@ -476,34 +481,40 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
             // then fall back to our discovery audience if applicable.
             let our_peer_id = PeerId::from(signer.verifying_key());
             let known_audience = Audience::known(our_peer_id);
-            let max_drift = Duration::from_secs(600);
 
-            let their_verified =
-                match verify_challenge(&their_signed_challenge, &known_audience, now, max_drift) {
-                    Ok(v) => v,
-                    Err(HandshakeError::ChallengeValidation(
-                        ChallengeValidationError::InvalidAudience,
-                    )) => {
-                        // Fall back to discovery audience if we initiated with one.
-                        let discovery = match &audience {
-                            Audience::Discover(_) => Some(&audience),
-                            Audience::Known(_) => None,
-                        };
-                        match discovery {
-                            Some(disc) => {
-                                verify_challenge(&their_signed_challenge, disc, now, max_drift)?
-                            }
-                            None => {
-                                return Err(AuthenticateError::Handshake(
-                                    HandshakeError::ChallengeValidation(
-                                        ChallengeValidationError::InvalidAudience,
-                                    ),
-                                ));
-                            }
+            let their_verified = match verify_challenge(
+                &their_signed_challenge,
+                &known_audience,
+                now,
+                SIMULTANEOUS_OPEN_MAX_DRIFT,
+            ) {
+                Ok(v) => v,
+                Err(HandshakeError::ChallengeValidation(
+                    ChallengeValidationError::InvalidAudience,
+                )) => {
+                    // Fall back to discovery audience if we initiated with one.
+                    let discovery = match &audience {
+                        Audience::Discover(_) => Some(&audience),
+                        Audience::Known(_) => None,
+                    };
+                    match discovery {
+                        Some(disc) => verify_challenge(
+                            &their_signed_challenge,
+                            disc,
+                            now,
+                            SIMULTANEOUS_OPEN_MAX_DRIFT,
+                        )?,
+                        None => {
+                            return Err(AuthenticateError::Handshake(
+                                HandshakeError::ChallengeValidation(
+                                    ChallengeValidationError::InvalidAudience,
+                                ),
+                            ));
                         }
                     }
-                    Err(e) => return Err(e.into()),
-                };
+                }
+                Err(e) => return Err(e.into()),
+            };
 
             // Guard: detect challenge signed by our own key (reflection
             // attack or self-connection). Checked AFTER signature verification
@@ -512,6 +523,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
                 return Err(AuthenticateError::ReflectionAttack);
             }
 
+            let expected_peer_id = their_verified.client_id;
             let their_challenge = their_verified.challenge;
 
             // Break the tie deterministically — the side whose signed
@@ -522,6 +534,12 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
                 // Winner: receive the loser's response first (verify they're
                 // legit), then send our response to their challenge.
                 let peer_id = recv_verified_response(&mut handshake, &challenge).await?;
+
+                // The peer who signed the challenge must be the same peer
+                // who signed the response — otherwise MITM.
+                if peer_id != expected_peer_id {
+                    return Err(AuthenticateError::SimultaneousOpenPeerMismatch);
+                }
 
                 let our_response = create_response::<K, _>(signer, &their_challenge, now).await;
                 handshake
@@ -541,6 +559,10 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
                     .map_err(AuthenticateError::Transport)?;
 
                 let peer_id = recv_verified_response(&mut handshake, &challenge).await?;
+
+                if peer_id != expected_peer_id {
+                    return Err(AuthenticateError::SimultaneousOpenPeerMismatch);
+                }
 
                 let (conn, extra) = build_connection(handshake, peer_id);
                 Ok((Authenticated::from_handshake(conn, peer_id), extra))
@@ -1493,6 +1515,7 @@ mod tests {
                     Audience::known(peer_id_b),
                     now,
                     Nonce::random(),
+                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1505,6 +1528,7 @@ mod tests {
                     Audience::known(peer_id_a),
                     now,
                     Nonce::random(),
+                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1582,6 +1606,7 @@ mod tests {
                     Audience::known(PeerId::new([0xAA; 32])),
                     now,
                     Nonce::random(),
+                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1625,6 +1650,7 @@ mod tests {
                     service_a,
                     now,
                     Nonce::random(),
+                    Duration::from_secs(600),
                 )
                 .await
             });
@@ -1637,6 +1663,7 @@ mod tests {
                     service_b,
                     now,
                     Nonce::random(),
+                    Duration::from_secs(600),
                 )
                 .await
             });

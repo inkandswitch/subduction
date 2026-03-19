@@ -260,7 +260,8 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
                 | AuthenticateError::Rejected { .. }
                 | AuthenticateError::UnexpectedMessage
                 | AuthenticateError::ReflectedChallenge
-                | AuthenticateError::ReflectionAttack => false,
+                | AuthenticateError::ReflectionAttack
+                | AuthenticateError::SimultaneousOpenPeerMismatch => false,
             },
         }
     }
