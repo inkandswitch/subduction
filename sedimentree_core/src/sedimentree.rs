@@ -74,11 +74,13 @@ impl FingerprintSummary {
 /// - Which of the requestor's fingerprints it doesn't recognize (echoed back)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintDiff<'a> {
-    /// Fragments the responder has that the requestor is missing.
-    pub local_only_fragments: Vec<&'a Fragment>,
+    /// Fragments the responder has that the requestor is missing,
+    /// paired with their precomputed digests (from the `Sedimentree` map key).
+    pub local_only_fragments: Vec<(&'a Digest<Fragment>, &'a Fragment)>,
 
-    /// Commits the responder has that the requestor is missing.
-    pub local_only_commits: Vec<&'a LooseCommit>,
+    /// Commits the responder has that the requestor is missing,
+    /// paired with their precomputed digests.
+    pub local_only_commits: Vec<(&'a Digest<LooseCommit>, &'a LooseCommit)>,
 
     /// Requestor's commit fingerprints that the responder doesn't have locally.
     /// Echoed back so the requestor can reverse-lookup and send the data.
@@ -225,9 +227,23 @@ impl Sedimentree {
         self.fragments.values()
     }
 
+    /// Iterate over all fragments with their precomputed digests.
+    ///
+    /// The digest is the map key, computed once at insertion time.
+    /// Use this instead of `fragments().map(|f| Digest::hash(f))` to
+    /// avoid re-hashing.
+    pub fn fragment_entries(&self) -> impl Iterator<Item = (&Digest<Fragment>, &Fragment)> {
+        self.fragments.iter()
+    }
+
     /// Iterate over all loose commits in this [`Sedimentree`].
     pub fn loose_commits(&self) -> impl Iterator<Item = &LooseCommit> {
         self.commits.values()
+    }
+
+    /// Iterate over all loose commits with their precomputed digests.
+    pub fn commit_entries(&self) -> impl Iterator<Item = (&Digest<LooseCommit>, &LooseCommit)> {
+        self.commits.iter()
     }
 
     /// Returns true if this [`Sedimentree`] has a commit with the given digest.
@@ -353,20 +369,20 @@ impl Sedimentree {
         let seed = remote.seed();
 
         // Find local items the requestor doesn't have
-        let local_only_commits: Vec<&LooseCommit> = self
+        let local_only_commits: Vec<(&Digest<LooseCommit>, &LooseCommit)> = self
             .commits
-            .values()
-            .filter(|c| {
+            .iter()
+            .filter(|(_, c)| {
                 !remote
                     .commit_fingerprints
                     .contains(&Fingerprint::new(seed, &c.commit_id()))
             })
             .collect();
 
-        let local_only_fragments: Vec<&Fragment> = self
+        let local_only_fragments: Vec<(&Digest<Fragment>, &Fragment)> = self
             .fragments
-            .values()
-            .filter(|f| {
+            .iter()
+            .filter(|(_, f)| {
                 !remote
                     .fragment_fingerprints
                     .contains(&Fingerprint::new(seed, &f.fragment_id()))

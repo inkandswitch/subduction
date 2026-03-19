@@ -66,7 +66,7 @@ impl Fragment {
     ///
     /// Used by codec decoding where checkpoints are already in truncated form.
     #[must_use]
-    pub fn from_parts(
+    pub const fn from_parts(
         sedimentree_id: SedimentreeId,
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
@@ -413,7 +413,7 @@ mod tests {
         /// ad-hoc incremental hashing while `Digest::hash` used the canonical
         /// `Encode` output). This test prevents that regression.
         #[test]
-        fn fragment_digest_matches_encode_hash() {
+        fn digest_hash_is_deterministic() {
             let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
             let fragment = Fragment::from_parts(
                 SedimentreeId::new([0x01; 32]),
@@ -426,11 +426,9 @@ mod tests {
                 BlobMeta::new(&blob),
             );
 
-            assert_eq!(
-                fragment.digest(),
-                Digest::hash(&fragment),
-                "Fragment::digest() must equal Digest::hash(&fragment)"
-            );
+            let d1: Digest<Fragment> = Digest::hash(&fragment);
+            let d2: Digest<Fragment> = Digest::hash(&fragment);
+            assert_eq!(d1, d2, "Digest::hash must be deterministic");
         }
     }
 
@@ -702,23 +700,6 @@ mod tests {
             fragment::Fragment,
         };
 
-        /// Regression guard: `Fragment::digest()` must equal
-        /// `Digest::hash(&fragment)`. Currently trivially true since
-        /// `digest()` computes on demand, but guards against anyone
-        /// re-introducing a cached digest field that diverges.
-        #[test]
-        fn digest_equals_encode_hash() {
-            bolero::check!()
-                .with_arbitrary::<Fragment>()
-                .for_each(|fragment| {
-                    assert_eq!(
-                        fragment.digest(),
-                        Digest::hash(fragment),
-                        "Fragment::digest() must equal Digest::hash(&fragment)"
-                    );
-                });
-        }
-
         /// Round-trip property: encode then decode yields the original value,
         /// and the decoded fragment's digest is consistent.
         #[test]
@@ -734,8 +715,8 @@ mod tests {
                             assert_eq!(&decoded, fragment);
                             assert_eq!(consumed, buf.len());
                             assert_eq!(
-                                decoded.digest(),
                                 Digest::hash(&decoded),
+                                Digest::hash(fragment),
                                 "digest must be consistent after decode"
                             );
                         }

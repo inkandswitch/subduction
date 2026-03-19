@@ -1236,7 +1236,7 @@ where
             verified_blob,
         )
         .await;
-        let fragment_digest = verified_meta.payload().digest();
+        let fragment_digest = Digest::hash(verified_meta.payload());
 
         tracing::debug!(
             "Adding fragment {:?} to sedimentree {:?}",
@@ -2166,13 +2166,13 @@ where
             let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
 
             let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = sedimentree
-                .loose_commits()
-                .map(|c| (Fingerprint::new(seed, &c.commit_id()), Digest::hash(c)))
+                .commit_entries()
+                .map(|(digest, c)| (Fingerprint::new(seed, &c.commit_id()), *digest))
                 .collect();
 
             let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>> = sedimentree
-                .fragments()
-                .map(|f| (Fingerprint::new(seed, &f.fragment_id()), f.digest()))
+                .fragment_entries()
+                .map(|(digest, f)| (Fingerprint::new(seed, &f.fragment_id()), *digest))
                 .collect();
 
             let commit_digests: Vec<Digest<LooseCommit>> = requesting
@@ -2227,7 +2227,7 @@ where
                         .await
                         .map_err(IoError::Storage)?
                         .into_iter()
-                        .map(|vm| (vm.payload().digest(), vm))
+                        .map(|vm| (Digest::hash(vm.payload()), vm))
                         .collect()
                 };
 

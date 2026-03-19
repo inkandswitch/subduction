@@ -168,12 +168,10 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
     Ok(())
 }
 
-/// Verify that `Fragment::digest()` matches the storage key (`Digest::hash`).
+/// Verify that `Digest::hash` on a fragment matches the storage key.
 ///
-/// This is a regression test for a bug where `Fragment::digest()` used ad-hoc
-/// hashing (different field order, no schema prefix) while storage backends
-/// used `Digest::hash(&fragment)` (canonical wire encoding). The digests
-/// didn't match, causing "fragment not found" on reload.
+/// Regression test: storage backends use `Digest::hash(&fragment)` (canonical
+/// wire encoding) as the key. Fragments must be loadable by this digest.
 #[tokio::test]
 async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
@@ -197,26 +195,20 @@ async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
     )
     .await;
 
-    // The two digest computation paths must agree
-    let digest_from_method = verified.payload().digest();
     let digest_from_hash = Digest::hash(verified.payload());
-    assert_eq!(
-        digest_from_method, digest_from_hash,
-        "Fragment::digest() must equal Digest::hash(&fragment)"
-    );
 
     // Save using the storage backend (which uses Digest::hash internally)
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
 
-    // Load using Fragment::digest() — must find the fragment
-    let loaded = Storage::<Sendable>::load_fragment(&storage, id, digest_from_method)
+    // Load using Digest::hash — must find the fragment
+    let loaded = Storage::<Sendable>::load_fragment(&storage, id, digest_from_hash)
         .await?
-        .expect("fragment must be loadable by Fragment::digest()");
+        .expect("fragment must be loadable by Digest::hash");
 
     assert_eq!(
-        loaded.payload().digest(),
-        digest_from_method,
+        Digest::hash(loaded.payload()),
+        digest_from_hash,
         "loaded fragment's digest must match"
     );
 
