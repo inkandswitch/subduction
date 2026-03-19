@@ -53,23 +53,21 @@ pub(crate) async fn recv_batch_sync_response<
         diff.missing_fragments.len()
     );
 
-    let putter = match storage.get_putter::<F>(*from, *from, id).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(
-                "policy rejected batch sync from peer {:?} for sedimentree {:?}: {e}",
-                from,
-                id
-            );
-            return Ok(());
-        }
-    };
-
     for (signed_commit, blob) in diff.missing_commits {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("batch sync commit signature verification failed: {e}");
+                continue;
+            }
+        };
+        let author = PeerId::from(verified.issuer());
+        let putter = match storage.get_putter::<F>(*from, author, id).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "policy rejected commit from {from:?} (author {author:?}) for {id:?}: {e}"
+                );
                 continue;
             }
         };
@@ -90,6 +88,16 @@ pub(crate) async fn recv_batch_sync_response<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("batch sync fragment signature verification failed: {e}");
+                continue;
+            }
+        };
+        let author = PeerId::from(verified.issuer());
+        let putter = match storage.get_putter::<F>(*from, author, id).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "policy rejected fragment from {from:?} (author {author:?}) for {id:?}: {e}"
+                );
                 continue;
             }
         };
