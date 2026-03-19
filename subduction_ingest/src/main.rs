@@ -16,9 +16,9 @@
 use std::{path::PathBuf, sync::Arc};
 
 use automerge::Automerge;
-use automerge_sedimentree::ingest::{IngestResult, ingest_automerge};
+use automerge_sedimentree::ingest::{ingest_automerge_par, IngestResult};
 use clap::Parser;
-use eyre::{Result, WrapErr, eyre};
+use eyre::{eyre, Result, WrapErr};
 use future_form::Sendable;
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
@@ -26,7 +26,7 @@ use subduction_core::{
     subduction::builder::SubductionBuilder, transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient};
+use subduction_websocket::tokio::{client::TokioWebSocketClient, TimeoutTokio, TokioSpawn};
 
 /// Ingest an Automerge document into a Subduction sync server.
 #[derive(Debug, Parser)]
@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
 
     // Ingest: automerge → sedimentree.
     eprintln!("ingesting...");
-    let result = ingest_automerge(&doc, sed_id).wrap_err("ingestion failed")?;
+    let result = ingest_automerge_par(&doc, sed_id).wrap_err("ingestion failed")?;
     print_ingest_stats(&result, sed_id);
 
     if args.dry_run {
@@ -294,8 +294,8 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| eyre!("upload failed: {e}"))?;
 
-    // add_sedimentree already calls sync_with_all_peers internally,
-    // so by this point the data should be on the server.
+    // add_sedimentree calls sync_with_all_peers internally, which awaits
+    // send_requested_data for all fragment/commit messages.
     eprintln!("upload and sync complete");
 
     Ok(())

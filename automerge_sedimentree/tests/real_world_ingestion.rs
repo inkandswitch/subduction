@@ -6,7 +6,7 @@
 //! invariants. Byte-identical reassembly is tested in release mode only
 //! (automerge's `get_changes` has a `debug_assert` that doubles work).
 
-use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
+use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -452,6 +452,54 @@ fn merge_identical_is_idempotent() {
     let mut merged = tree_a;
     merged.merge(tree_b);
     assert_eq!(before, merged.minimal_hash(&m));
+}
+
+/// After minimize, the sedimentree should still have the same number of
+/// loose commits and fragments as before. Loose commits' parents are
+/// remapped to fragment heads so minimize doesn't prune them.
+#[test]
+fn minimize_preserves_all_items_after_ingestion() {
+    let doc = Automerge::load(include_bytes!("../test-vectors/S1.am")).unwrap();
+    let sed_id = sed_id(include_bytes!("../test-vectors/S1.am"));
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).unwrap();
+
+    let before_fragments = result.sedimentree.fragments().count();
+    let before_commits = result.sedimentree.loose_commits().count();
+
+    let minimized = result.sedimentree.minimize(&CountLeadingZeroBytes);
+    let after_fragments = minimized.fragments().count();
+    let after_commits = minimized.loose_commits().count();
+
+    assert_eq!(
+        before_commits, after_commits,
+        "minimize should not drop loose commits (before={before_commits}, after={after_commits})"
+    );
+    assert!(
+        after_fragments <= before_fragments,
+        "minimize should not add fragments"
+    );
+}
+
+/// Fingerprint summary after ingestion should include all items.
+#[test]
+fn fingerprint_summary_includes_all_items_after_ingestion() {
+    let doc = Automerge::load(include_bytes!("../test-vectors/S1.am")).unwrap();
+    let sed_id = sed_id(include_bytes!("../test-vectors/S1.am"));
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).unwrap();
+
+    let seed = FingerprintSeed::new(42, 99);
+    let summary = result.sedimentree.fingerprint_summarize(&seed);
+
+    assert_eq!(
+        summary.commit_fingerprints().len(),
+        result.loose_count,
+        "fingerprint summary should have all loose commits"
+    );
+    assert_eq!(
+        summary.fragment_fingerprints().len(),
+        result.fragment_count,
+        "fingerprint summary should have all fragments"
+    );
 }
 
 // ---------------------------------------------------------------------------

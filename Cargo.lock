@@ -305,6 +305,7 @@ dependencies = [
  "criterion",
  "pprof",
  "rand 0.8.5",
+ "rayon",
  "sedimentree_core",
  "testresult",
  "thiserror 2.0.18",

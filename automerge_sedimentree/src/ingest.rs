@@ -161,70 +161,15 @@ pub fn ingest_automerge(
     // small, no recompression needed).
     let changes = doc.get_changes(&[]);
 
-    let mut blobs = Vec::new();
-    let mut fragments = Vec::with_capacity(states.len());
-    for state in states {
-        let members: Set<ChangeHash> = state
-            .members()
-            .iter()
-            .map(|d| ChangeHash(*d.as_bytes()))
-            .collect();
-        let boundary: Set<ChangeHash> = state
-            .boundary()
-            .keys()
-            .map(|d| ChangeHash(*d.as_bytes()))
-            .collect();
+    let (fragments, fragment_blobs) = compress_fragments(&states, &changes, sedimentree_id)?;
 
-        // Build a sub-document with:
-        // 1. Boundary commits (causal deps — needed so member changes apply
-        //    to the OpSet instead of being queued as orphans)
-        // 2. Member commits
-        //
-        // Both in topological order from get_changes.
-        let mut sub_doc = Automerge::new();
-        let mut raw = Vec::new();
-        for change in &changes {
-            let hash = change.hash();
-            if boundary.contains(&hash) || members.contains(&hash) {
-                raw.extend_from_slice(change.raw_bytes());
-            }
-        }
-        sub_doc
-            .load_incremental(&raw)
-            .map_err(|e| IngestError::Automerge(e.to_string()))?;
-
-        // save_after(boundary_heads) gives us the compact Document format
-        // for only the member changes (excluding the boundary base state).
-        let boundary_heads: Vec<ChangeHash> = boundary.into_iter().collect();
-        let compact = sub_doc.save_after(&boundary_heads);
-
-        let blob = Blob::new(compact);
-        let fragment = state.to_fragment(sedimentree_id, BlobMeta::new(&blob));
-        fragments.push(fragment);
-        blobs.push(blob);
-    }
-
-    // Loose commits: raw_bytes() per individual change.
-    let mut loose_commits = Vec::with_capacity(changes.len() - covered_count);
-    for change in &changes {
-        let digest = Digest::force_from_bytes(change.hash().0);
-        if covered.contains(&digest) {
-            continue;
-        }
-
-        let parents: std::collections::BTreeSet<Digest<LooseCommit>> = change
-            .deps()
-            .iter()
-            .map(|d| Digest::force_from_bytes(d.0))
-            .collect();
-        let blob = Blob::new(change.raw_bytes().to_vec());
-        let commit = LooseCommit::new(sedimentree_id, parents, BlobMeta::new(&blob));
-        loose_commits.push(commit);
-        blobs.push(blob);
-    }
+    let (loose_commits, loose_blobs) =
+        collect_loose_commits(&changes, &covered, &states, sedimentree_id);
 
     let fragment_count = fragments.len();
     let loose_count = loose_commits.len();
+    let mut blobs = fragment_blobs;
+    blobs.extend(loose_blobs);
     let sedimentree = Sedimentree::new(fragments, loose_commits);
 
     Ok(IngestResult {
@@ -235,4 +180,191 @@ pub fn ingest_automerge(
         loose_count,
         fragment_count,
     })
+}
+
+/// Parallel variant of [`ingest_automerge`].
+///
+/// Uses [rayon] to compress fragment blobs concurrently. Each fragment's
+/// `load_incremental` + `save_after` runs on a separate thread. For a
+/// document with N fragments, this gives up to N-way parallelism.
+///
+/// The `get_changes` call (the main bottleneck) is still sequential —
+/// it's internal to automerge and single-threaded.
+#[cfg(feature = "rayon")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
+pub fn ingest_automerge_par(
+    doc: &Automerge,
+    sedimentree_id: SedimentreeId,
+) -> Result<IngestResult, IngestError> {
+    let metadata = doc.get_changes_meta(&[]);
+    let change_count = metadata.len();
+
+    let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
+    let heads: Vec<Digest<LooseCommit>> = doc
+        .get_heads()
+        .iter()
+        .map(|h| Digest::force_from_bytes(h.0))
+        .collect();
+
+    let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
+    let fresh = store
+        .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
+        .map_err(|e| IngestError::Fragment(e.to_string()))?;
+    let states: Vec<_> = fresh.into_iter().cloned().collect();
+
+    let covered: Set<Digest<LooseCommit>> = known
+        .values()
+        .flat_map(|s| s.members().iter().copied())
+        .collect();
+    let covered_count = covered.len();
+
+    let changes = doc.get_changes(&[]);
+
+    let (fragments, fragment_blobs) = compress_fragments_par(&states, &changes, sedimentree_id)?;
+
+    let (loose_commits, loose_blobs) =
+        collect_loose_commits(&changes, &covered, &states, sedimentree_id);
+
+    let fragment_count = fragments.len();
+    let loose_count = loose_commits.len();
+    let mut blobs = fragment_blobs;
+    blobs.extend(loose_blobs);
+    let sedimentree = Sedimentree::new(fragments, loose_commits);
+
+    Ok(IngestResult {
+        sedimentree,
+        blobs,
+        change_count,
+        covered_count,
+        loose_count,
+        fragment_count,
+    })
+}
+
+/// Compress a single fragment: load boundary + members into a sub-doc,
+/// then `save_after(boundary)` for compact output.
+fn compress_one_fragment(
+    state: &FragmentState<OwnedParents>,
+    changes: &[automerge::Change],
+    sedimentree_id: SedimentreeId,
+) -> Result<(sedimentree_core::fragment::Fragment, Blob), IngestError> {
+    let members: Set<ChangeHash> = state
+        .members()
+        .iter()
+        .map(|d| ChangeHash(*d.as_bytes()))
+        .collect();
+    let boundary: Set<ChangeHash> = state
+        .boundary()
+        .keys()
+        .map(|d| ChangeHash(*d.as_bytes()))
+        .collect();
+
+    let mut raw = Vec::new();
+    for change in changes {
+        let hash = change.hash();
+        if boundary.contains(&hash) || members.contains(&hash) {
+            raw.extend_from_slice(change.raw_bytes());
+        }
+    }
+
+    let mut sub_doc = Automerge::new();
+    sub_doc
+        .load_incremental(&raw)
+        .map_err(|e| IngestError::Automerge(e.to_string()))?;
+
+    let boundary_heads: Vec<ChangeHash> = boundary.into_iter().collect();
+    let compact = sub_doc.save_after(&boundary_heads);
+
+    let blob = Blob::new(compact);
+    let fragment = state
+        .clone()
+        .to_fragment(sedimentree_id, BlobMeta::new(&blob));
+    Ok((fragment, blob))
+}
+
+/// Sequential fragment compression.
+fn compress_fragments(
+    states: &[FragmentState<OwnedParents>],
+    changes: &[automerge::Change],
+    sedimentree_id: SedimentreeId,
+) -> Result<(Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>), IngestError> {
+    let mut fragments = Vec::with_capacity(states.len());
+    let mut blobs = Vec::with_capacity(states.len());
+    for state in states {
+        let (fragment, blob) = compress_one_fragment(state, changes, sedimentree_id)?;
+        fragments.push(fragment);
+        blobs.push(blob);
+    }
+    Ok((fragments, blobs))
+}
+
+/// Parallel fragment compression using rayon.
+#[cfg(feature = "rayon")]
+fn compress_fragments_par(
+    states: &[FragmentState<OwnedParents>],
+    changes: &[automerge::Change],
+    sedimentree_id: SedimentreeId,
+) -> Result<(Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>), IngestError> {
+    use rayon::prelude::*;
+
+    let results: Vec<Result<_, IngestError>> = states
+        .par_iter()
+        .map(|state| compress_one_fragment(state, changes, sedimentree_id))
+        .collect();
+
+    let mut fragments = Vec::with_capacity(states.len());
+    let mut blobs = Vec::with_capacity(states.len());
+    for result in results {
+        let (fragment, blob) = result?;
+        fragments.push(fragment);
+        blobs.push(blob);
+    }
+    Ok((fragments, blobs))
+}
+
+/// Collect loose commits (depth-0, not covered by any fragment).
+///
+/// Parent digests that point into a fragment's member set are remapped to the
+/// fragment's head digest. This prevents `Sedimentree::minimize` from
+/// considering the loose commit "covered" by the fragment and pruning it.
+fn collect_loose_commits(
+    changes: &[automerge::Change],
+    covered: &Set<Digest<LooseCommit>>,
+    states: &[FragmentState<OwnedParents>],
+    sedimentree_id: SedimentreeId,
+) -> (Vec<LooseCommit>, Vec<Blob>) {
+    // Build a mapping: covered member digest → fragment head digest.
+    let mut member_to_head: Map<Digest<LooseCommit>, Digest<LooseCommit>> = Map::new();
+    for state in states {
+        let head = state.head_digest();
+        for member in state.members() {
+            if *member != head {
+                member_to_head.insert(*member, head);
+            }
+        }
+    }
+
+    let mut loose_commits = Vec::new();
+    let mut blobs = Vec::new();
+    for change in changes {
+        let digest = Digest::force_from_bytes(change.hash().0);
+        if covered.contains(&digest) {
+            continue;
+        }
+        // Remap parents: if a parent is a fragment member, point to
+        // the fragment head instead so simplify doesn't prune us.
+        let parents: std::collections::BTreeSet<Digest<LooseCommit>> = change
+            .deps()
+            .iter()
+            .map(|d| {
+                let dep = Digest::force_from_bytes(d.0);
+                member_to_head.get(&dep).copied().unwrap_or(dep)
+            })
+            .collect();
+        let blob = Blob::new(change.raw_bytes().to_vec());
+        let commit = LooseCommit::new(sedimentree_id, parents, BlobMeta::new(&blob));
+        loose_commits.push(commit);
+        blobs.push(blob);
+    }
+    (loose_commits, blobs)
 }

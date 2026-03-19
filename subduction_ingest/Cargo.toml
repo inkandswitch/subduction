@@ -14,7 +14,7 @@ rust-version.workspace = true
 
 [dependencies]
 automerge = { workspace = true }
-automerge_sedimentree = { workspace = true, features = ["std"] }
+automerge_sedimentree = { workspace = true, features = ["rayon"] }
 bs58 = { version = "0.5", features = ["check"] }
 clap = { workspace = true }
 color-eyre = { workspace = true }
