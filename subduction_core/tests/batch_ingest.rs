@@ -1,4 +1,4 @@
-//! Tests for batch ingestion methods (`add_commits_batch`, `add_fragments_batch`).
+//! Tests for `add_commits_batch`.
 
 use std::collections::BTreeSet;
 
@@ -16,9 +16,11 @@ async fn add_commits_batch_stores_all_commits() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
+    let commit_count = 10;
 
-    let commits: Vec<(BTreeSet<_>, Blob)> =
-        (0..10).map(|i| (BTreeSet::new(), make_blob(i))).collect();
+    let commits: Vec<(BTreeSet<_>, Blob)> = (0..commit_count)
+        .map(|i| (BTreeSet::new(), make_blob(i)))
+        .collect();
 
     sd.add_commits_batch(sed_id, commits).await?;
 
@@ -26,6 +28,13 @@ async fn add_commits_batch_stores_all_commits() -> TestResult {
     assert!(
         stored.is_some(),
         "sedimentree should exist after batch insert"
+    );
+
+    let count = stored.as_ref().map(Vec::len);
+    assert_eq!(
+        count,
+        Some(commit_count as usize),
+        "all commits should be stored"
     );
 
     Ok(())
@@ -39,23 +48,11 @@ async fn add_commits_batch_empty_is_noop() -> TestResult {
 
     sd.add_commits_batch(sed_id, Vec::new()).await?;
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn add_commits_batch_minimizes_once() -> TestResult {
-    let (sd, _listener, _manager) = new_test_subduction();
-
-    let sed_id = SedimentreeId::new([3u8; 32]);
-
-    // Insert enough commits that minimize_tree has work to do
-    let commits: Vec<(BTreeSet<_>, Blob)> =
-        (0..50).map(|i| (BTreeSet::new(), make_blob(i))).collect();
-
-    sd.add_commits_batch(sed_id, commits).await?;
-
     let stored = sd.get_commits(sed_id).await;
-    assert!(stored.is_some());
+    assert!(
+        stored.is_none(),
+        "empty batch should not create a sedimentree"
+    );
 
     Ok(())
 }

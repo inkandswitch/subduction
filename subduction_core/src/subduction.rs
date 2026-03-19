@@ -1314,6 +1314,10 @@ where
         id: SedimentreeId,
         commits: Vec<(BTreeSet<Digest<LooseCommit>>, Blob)>,
     ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        if commits.is_empty() {
+            return Ok(());
+        }
+
         let self_id = self.peer_id();
         let putter = self
             .storage
@@ -1357,6 +1361,10 @@ where
         id: SedimentreeId,
         fragments: Vec<FragmentBatchItem>,
     ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        if fragments.is_empty() {
+            return Ok(());
+        }
+
         let self_id = self.peer_id();
         let putter = self
             .storage

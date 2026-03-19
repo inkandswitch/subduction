@@ -210,30 +210,9 @@ pub trait CommitStore<'a> {
     /// fragments at the same level are built concurrently, then their
     /// boundaries become the next level's heads.
     ///
-    /// Requires `Self: Sync` (the commit store must be safe to share across
-    /// threads) and `Self::Node: Send + Sync` (fragment states must be
-    /// movable and shareable between threads).
-    ///
-    /// # Performance
-    ///
-    /// For a document with _n_ changes and _k_ fragment boundaries at the
-    /// first level, this gives ~k-way parallelism. With
-    /// [`CountLeadingZeroBytes`], k ≈ n/256, so a 200k-change document
-    /// gets ~800-way parallelism.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FragmentError`] if any lookup fails.
-    /// Parallel variant of [`build_fragment_store`](Self::build_fragment_store).
-    ///
-    /// Processes each depth level of the fragment tree in parallel using
-    /// [rayon](https://docs.rs/rayon). Starting from the given heads, all
-    /// fragments at the same level are built concurrently, then their
-    /// boundaries become the next level's heads.
-    ///
-    /// Each parallel task gets an immutable view of `known_fragment_states`
-    /// for cache hits; newly computed states are merged sequentially after
-    /// each level completes.
+    /// Each parallel task receives a read-only snapshot of
+    /// `known_fragment_states` for deduplication; newly computed states
+    /// are merged sequentially after each level completes.
     ///
     /// # Performance
     ///
@@ -255,7 +234,7 @@ pub trait CommitStore<'a> {
     ) -> Result<Vec<&'b FragmentState<Self::Node>>, FragmentError<'a, Self>>
     where
         Self: Sync,
-        Self::Node: Send + Sync,
+        Self::Node: Send + Sync + Clone,
         Self::LookupError: Send,
     {
         use rayon::prelude::*;
@@ -269,11 +248,13 @@ pub trait CommitStore<'a> {
                 break;
             }
 
-            // Parallel phase: each task gets its own empty cache.
-            // Already-known heads were filtered out by `retain` above.
+            // Parallel phase: snapshot the known states so each task can
+            // deduplicate members against previously computed fragments.
+            let snapshot: Map<Digest<LooseCommit>, FragmentState<Self::Node>> =
+                known_fragment_states.clone();
             let level_results: Vec<Result<_, FragmentError<'a, Self>>> = horizon
                 .par_iter()
-                .filter_map(|&head| match self.fragment(head, &Map::new(), strategy) {
+                .filter_map(|&head| match self.fragment(head, &snapshot, strategy) {
                     Ok(state) => Some(Ok((head, state))),
                     Err(FragmentError::MissingCommit(missing)) => {
                         tracing::debug!(%head, %missing, "skipping head with incomplete history");
