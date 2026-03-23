@@ -44,9 +44,14 @@ extern crate alloc;
 
 use alloc::string::String;
 
+mod js_logger;
+
 // Re-export everything from subduction_wasm and automerge_sedimentree_wasm
 pub use automerge_sedimentree_wasm::*;
 pub use subduction_wasm::*;
+
+// Re-export the JavaScript logger functions
+pub use js_logger::{clear_subduction_logger, set_subduction_logger};
 
 use wasm_bindgen::prelude::*;
 
@@ -140,6 +145,8 @@ mod tracing_setup {
     };
     use wasm_tracing::{WasmLayer, WasmLayerConfig};
 
+    use crate::js_logger::JsCallbackLayer;
+
     /// Global handle for dynamically reloading the log level filter.
     static RELOAD_HANDLE: OnceLock<reload::Handle<LevelFilter, Registry>> = OnceLock::new();
 
@@ -150,11 +157,48 @@ mod tracing_setup {
         config.use_console_methods = true;
 
         let wasm_layer = WasmLayer::new(config);
+        let js_callback_layer = JsCallbackLayer;
         let (filter, reload_handle) = reload::Layer::new(initial_level);
 
         tracing_subscriber::registry()
             .with(filter)
             .with(wasm_layer)
+            .with(js_callback_layer)
+            .init();
+
+        RELOAD_HANDLE.set(reload_handle).ok();
+    }
+
+    pub(crate) fn set_level(
+        level: LevelFilter,
+    ) -> Result<(), std::boxed::Box<dyn std::error::Error + Send + Sync>> {
+        let handle = RELOAD_HANDLE.get().ok_or("tracing not initialized")?;
+        handle.modify(|filter| *filter = level)?;
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "wasm-tracing"))]
+mod tracing_setup {
+    use std::sync::OnceLock;
+
+    use tracing_subscriber::{
+        Registry, filter::LevelFilter, layer::SubscriberExt, reload, util::SubscriberInitExt,
+    };
+
+    use crate::js_logger::JsCallbackLayer;
+
+    /// Global handle for dynamically reloading the log level filter.
+    static RELOAD_HANDLE: OnceLock<reload::Handle<LevelFilter, Registry>> = OnceLock::new();
+
+    pub(crate) fn init(initial_level: LevelFilter) {
+        // Initialize only the JS callback layer and filter when wasm-tracing is disabled
+        let js_callback_layer = JsCallbackLayer;
+        let (filter, reload_handle) = reload::Layer::new(initial_level);
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(js_callback_layer)
             .init();
 
         RELOAD_HANDLE.set(reload_handle).ok();
@@ -224,7 +268,6 @@ pub fn set_subduction_log_level(level: &str) -> Result<(), JsValue> {
         JsValue::from_str("invalid log level: expected one of trace, debug, info, warn, error, off")
     })?;
 
-    #[cfg(feature = "wasm-tracing")]
     tracing_setup::set_level(level_filter)
         .map_err(|e| JsValue::from_str(&alloc::format!("failed to set log level: {e}")))?;
 
@@ -236,6 +279,8 @@ pub fn set_subduction_log_level(level: &str) -> Result<(), JsValue> {
 
 /// Set a panic hook to get better error messages if the code panics.
 ///
+/// Also initializes the tracing infrastructure with the JS callback layer.
+///
 /// # Panics
 ///
 /// Will (ironically) panic if unable to set the global panic handler.
@@ -244,14 +289,12 @@ pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
-    #[cfg(feature = "wasm-tracing")]
-    {
-        let initial_level = read_log_level_from_env()
-            .and_then(|s| parse_level_filter(&s))
-            .unwrap_or(tracing_subscriber::filter::LevelFilter::WARN);
+    // Always initialize tracing, even without wasm-tracing feature
+    let initial_level = read_log_level_from_env()
+        .and_then(|s| parse_level_filter(&s))
+        .unwrap_or(tracing_subscriber::filter::LevelFilter::WARN);
 
-        tracing_setup::init(initial_level);
-    }
+    tracing_setup::init(initial_level);
 }
 
 /// Entry point called when the Wasm module is instantiated.
