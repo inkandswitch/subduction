@@ -22,6 +22,7 @@ automerge = { workspace = true, features = ["wasm"] }
 console_error_panic_hook = { version = "0.1.7", optional = true }
 automerge_sedimentree_wasm = { workspace = true }
 js-sys = { workspace = true }
+parking_lot = { workspace = true }
 subduction_wasm = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
