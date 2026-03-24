@@ -2,7 +2,7 @@
 
 mod commit_dag;
 
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::{collections::BTreeSet, collections::VecDeque, vec, vec::Vec};
 
 use crate::{
     collections::{Entry, Map, Set},
@@ -11,9 +11,25 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, checkpoint::Checkpoint, id::FragmentId},
-    loose_commit::{LooseCommit, id::CommitId},
+    fragment::{checkpoint::Checkpoint, id::FragmentId, Fragment},
+    loose_commit::{id::CommitId, LooseCommit},
 };
+
+/// A reference to a blob in a [`Sedimentree`], used to identify items
+/// in the topologically sorted order returned by
+/// [`Sedimentree::topsorted_blob_order`].
+///
+/// The index corresponds to the position of the fragment or loose commit
+/// in the iteration order of [`Sedimentree::fragments`] or
+/// [`Sedimentree::loose_commits`], respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlobRef {
+    /// A fragment blob, by index into [`Sedimentree::fragments`].
+    Fragment(usize),
+
+    /// A loose commit blob, by index into [`Sedimentree::loose_commits`].
+    LooseCommit(usize),
+}
 
 /// A compact summary of a [`Sedimentree`] for wire transmission.
 ///
@@ -260,6 +276,124 @@ impl Sedimentree {
         depth_metric: &M,
     ) -> bool {
         self.heads(depth_metric).contains(&digest)
+    }
+
+    /// Topologically sort the fragments and loose commits for reassembly.
+    ///
+    /// Returns [`BlobRef`]s in dependency order: deepest fragments first,
+    /// so that each item's causal dependencies are loaded before the item
+    /// itself. This eliminates orphan-queue overhead in consumers that
+    /// reconstruct a document by loading blobs sequentially (e.g. via
+    /// Automerge's `load_incremental`).
+    ///
+    /// The ordering is determined by the sedimentree DAG structure:
+    /// - A fragment depends on any fragment whose head appears in its
+    ///   boundary set.
+    /// - A loose commit depends on any fragment whose head appears in
+    ///   its parent set.
+    ///
+    /// Uses Kahn's algorithm. Panics if the dependency graph contains a
+    /// cycle (which would indicate a corrupt sedimentree).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let order = sedimentree.topsorted_blob_order();
+    /// let fragments: Vec<_> = sedimentree.fragments().collect();
+    /// let loose: Vec<_> = sedimentree.loose_commits().collect();
+    ///
+    /// let mut buf = Vec::new();
+    /// for blob_ref in &order {
+    ///     match blob_ref {
+    ///         BlobRef::Fragment(i) => buf.extend(load_blob(fragments[*i])),
+    ///         BlobRef::LooseCommit(i) => buf.extend(load_blob(loose[*i])),
+    ///     }
+    /// }
+    /// doc.load_incremental(&buf).unwrap();
+    /// ```
+    #[must_use]
+    pub fn topsorted_blob_order(&self) -> Vec<BlobRef> {
+        let fragments: Vec<&Fragment> = self.fragments.values().collect();
+        let loose: Vec<&LooseCommit> = self.commits.values().collect();
+        let n_frags = fragments.len();
+        let n_loose = loose.len();
+        let n_total = n_frags + n_loose;
+
+        if n_total == 0 {
+            return Vec::new();
+        }
+
+        // Map: fragment head digest → fragment index
+        let head_to_frag: Map<Digest<LooseCommit>, usize> = fragments
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.head(), i))
+            .collect();
+
+        // Build in-degree counts and adjacency lists.
+        let mut in_degree = vec![0u32; n_total];
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n_total];
+
+        // Fragment → fragment edges: F_i depends on F_j if F_i's boundary
+        // contains F_j's head.
+        for (i, frag) in fragments.iter().enumerate() {
+            for boundary_digest in frag.boundary() {
+                if let Some(&j) = head_to_frag.get(boundary_digest) {
+                    if i != j {
+                        in_degree[i] += 1;
+                        dependents[j].push(i);
+                    }
+                }
+            }
+        }
+
+        // Loose commit → fragment edges: loose commit L depends on
+        // fragment F if any of L's parents equals F's head.
+        for (li, commit) in loose.iter().enumerate() {
+            let idx = n_frags + li;
+            let mut seen_deps: Set<usize> = Set::new();
+            for parent in commit.parents() {
+                if let Some(&fi) = head_to_frag.get(parent) {
+                    if seen_deps.insert(fi) {
+                        in_degree[idx] += 1;
+                        dependents[fi].push(idx);
+                    }
+                }
+            }
+        }
+
+        // Kahn's algorithm
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        for (i, &deg) in in_degree.iter().enumerate() {
+            if deg == 0 {
+                queue.push_back(i);
+            }
+        }
+
+        let mut order: Vec<BlobRef> = Vec::with_capacity(n_total);
+        while let Some(i) = queue.pop_front() {
+            if i < n_frags {
+                order.push(BlobRef::Fragment(i));
+            } else {
+                order.push(BlobRef::LooseCommit(i - n_frags));
+            }
+            for &dep in &dependents[i] {
+                in_degree[dep] -= 1;
+                if in_degree[dep] == 0 {
+                    queue.push_back(dep);
+                }
+            }
+        }
+
+        assert_eq!(
+            order.len(),
+            n_total,
+            "cycle in sedimentree dependency graph: {} items but only {} sorted",
+            n_total,
+            order.len()
+        );
+
+        order
     }
 
     /// Prune a [`Sedimentree`].
@@ -639,7 +773,7 @@ mod tests {
     mod proptests {
         use core::sync::atomic::{AtomicU64, Ordering};
 
-        use rand::{Rng, SeedableRng, rngs::SmallRng};
+        use rand::{rngs::SmallRng, Rng, SeedableRng};
 
         use super::*;
         use crate::{commit::CountLeadingZeroBytes, fragment::FragmentSummary};
@@ -1601,7 +1735,7 @@ mod tests {
             commit::CountLeadingZeroBytes,
             crypto::fingerprint::{Fingerprint, FingerprintSeed},
             sedimentree::Sedimentree,
-            test_utils::{TestGraph, seeded_rng},
+            test_utils::{seeded_rng, TestGraph},
         };
 
         /// Commits fully covered by a fragment should be pruned by minimize,

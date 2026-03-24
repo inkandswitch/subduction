@@ -264,116 +264,47 @@ fn produces_fragments() {
 // Use S1/S2/S3 (2 changes each) which are instant even in debug.
 // ---------------------------------------------------------------------------
 
-/// Topologically sort fragment blobs and loose commit blobs so that
-/// dependencies (boundary commits, parent commits) are loaded before
-/// the items that reference them.
-///
-/// Returns a single concatenated byte buffer suitable for a single
-/// `load_incremental` call.
-fn topsort_blobs(d: &FullDecomp) -> Vec<u8> {
-    use std::collections::VecDeque;
-
-    // Assign indices: fragments 0..N, loose commits N..N+M
-    let n_frags = d.fragment_state_blobs.len();
-    let n_loose = d.uncovered_blobs.len();
-    let n_total = n_frags + n_loose;
-
-    // Map: fragment head digest → fragment index
-    let head_to_frag: Map<Digest<LooseCommit>, usize> = d
-        .fragment_state_blobs
-        .iter()
-        .enumerate()
-        .map(|(i, (state, _))| (state.head_digest(), i))
-        .collect();
-
-    // Map: any member digest → fragment index (for loose commit parent lookup)
-    let mut member_to_frag: Map<Digest<LooseCommit>, usize> = Map::new();
-    for (i, (state, _)) in d.fragment_state_blobs.iter().enumerate() {
-        for m in state.members() {
-            member_to_frag.insert(*m, i);
-        }
-    }
-
-    // Build adjacency: in_degree[i] = number of deps that must load before i
-    let mut in_degree = vec![0u32; n_total];
-    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n_total];
-
-    // Fragment → fragment edges: if F_i's boundary contains the head of F_j,
-    // then F_i depends on F_j (F_j must load first).
-    for (i, (state, _)) in d.fragment_state_blobs.iter().enumerate() {
-        for boundary_digest in state.boundary().keys() {
-            if let Some(&j) = head_to_frag.get(boundary_digest) {
-                if i != j {
-                    in_degree[i] += 1;
-                    dependents[j].push(i);
-                }
-            }
-        }
-    }
-
-    // Loose commit → fragment edges: if a loose commit's parent is a
-    // fragment member, the fragment must load first.
-    for (li, parents) in d.uncovered_parents.iter().enumerate() {
-        let idx = n_frags + li;
-        let mut seen_deps: Set<usize> = Set::new();
-        for parent in parents {
-            if let Some(&fi) = member_to_frag.get(parent) {
-                if seen_deps.insert(fi) {
-                    in_degree[idx] += 1;
-                    dependents[fi].push(idx);
-                }
-            }
-            // Loose → loose deps are already in topological order from
-            // get_changes, so we don't need to track those edges.
-        }
-    }
-
-    // Kahn's algorithm
-    let mut queue: VecDeque<usize> = VecDeque::new();
-    for i in 0..n_total {
-        if in_degree[i] == 0 {
-            queue.push_back(i);
-        }
-    }
-
-    let mut order: Vec<usize> = Vec::with_capacity(n_total);
-    while let Some(i) = queue.pop_front() {
-        order.push(i);
-        for &dep in &dependents[i] {
-            in_degree[dep] -= 1;
-            if in_degree[dep] == 0 {
-                queue.push_back(dep);
-            }
-        }
-    }
-    assert_eq!(
-        order.len(),
-        n_total,
-        "topsort cycle detected: {} items but only {} sorted",
-        n_total,
-        order.len()
-    );
-
-    // Concatenate blobs in topological order
-    let mut buf = Vec::new();
-    for i in order {
-        if i < n_frags {
-            buf.extend_from_slice(&d.fragment_blobs[i]);
-        } else {
-            buf.extend_from_slice(&d.uncovered_blobs[i - n_frags]);
-        }
-    }
-    buf
-}
-
 fn roundtrip_full(name: &str, bytes: &[u8]) {
+    use sedimentree_core::sedimentree::BlobRef;
+
     let doc = Automerge::load(bytes).expect(name);
     let d = decompose_full(&doc);
+    let (tree, _fragments, _loose) = build_tree(bytes, &d);
 
-    let sorted = topsort_blobs(&d);
+    // Build a lookup from BlobMeta digest → raw bytes.
+    // Sedimentree::fragments()/loose_commits() iterate in BTreeMap order
+    // (by Digest<Fragment>/Digest<LooseCommit>), which differs from the
+    // FullDecomp insertion order. We match them via BlobMeta digest.
+    // Map blob digest → raw bytes for lookup during reassembly.
+    let blob_by_digest: Map<Digest<Blob>, &[u8]> = d
+        .fragment_state_blobs
+        .iter()
+        .map(|(_, blob)| (Digest::hash(blob), blob.as_slice()))
+        .chain(d.uncovered_blobs.iter().map(|raw| {
+            let blob = Blob::new(raw.clone());
+            (Digest::hash(&blob), raw.as_slice())
+        }))
+        .collect();
+
+    let order = tree.topsorted_blob_order();
+    let fragments: Vec<_> = tree.fragments().collect();
+    let loose: Vec<_> = tree.loose_commits().collect();
+
+    let mut buf = Vec::new();
+    for blob_ref in &order {
+        let digest = match blob_ref {
+            BlobRef::Fragment(i) => fragments[*i].summary().blob_meta().digest(),
+            BlobRef::LooseCommit(i) => loose[*i].blob_meta().digest(),
+        };
+        let raw = blob_by_digest
+            .get(&digest)
+            .unwrap_or_else(|| panic!("{name}: blob not found for {blob_ref:?}"));
+        buf.extend_from_slice(raw);
+    }
+
     let mut rebuilt = Automerge::new();
     rebuilt
-        .load_incremental(&sorted)
+        .load_incremental(&buf)
         .expect("load topsorted blobs");
 
     assert_eq!(
