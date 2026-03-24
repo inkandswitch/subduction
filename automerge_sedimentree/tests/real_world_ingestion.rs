@@ -16,7 +16,7 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    sedimentree::Sedimentree,
+    sedimentree::{Sedimentree, SedimentreeItem},
 };
 
 // ---------------------------------------------------------------------------
@@ -265,8 +265,6 @@ fn produces_fragments() {
 // ---------------------------------------------------------------------------
 
 fn roundtrip_full(name: &str, bytes: &[u8]) {
-    use sedimentree_core::sedimentree::BlobRef;
-
     let doc = Automerge::load(bytes).expect(name);
     let d = decompose_full(&doc);
     let (tree, _fragments, _loose) = build_tree(bytes, &d);
@@ -293,8 +291,8 @@ fn roundtrip_full(name: &str, bytes: &[u8]) {
     let mut buf = Vec::new();
     for blob_ref in &order {
         let digest = match blob_ref {
-            BlobRef::Fragment(i) => fragments[*i].summary().blob_meta().digest(),
-            BlobRef::LooseCommit(i) => loose[*i].blob_meta().digest(),
+            SedimentreeItem::Fragment(i) => fragments[*i].summary().blob_meta().digest(),
+            SedimentreeItem::LooseCommit(i) => loose[*i].blob_meta().digest(),
         };
         let raw = blob_by_digest
             .get(&digest)

@@ -13,23 +13,8 @@ use crate::{
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
     fragment::{checkpoint::Checkpoint, id::FragmentId, Fragment},
     loose_commit::{id::CommitId, LooseCommit},
+    topsorted::Topsorted,
 };
-
-/// A reference to a blob in a [`Sedimentree`], used to identify items
-/// in the topologically sorted order returned by
-/// [`Sedimentree::topsorted_blob_order`].
-///
-/// The index corresponds to the position of the fragment or loose commit
-/// in the iteration order of [`Sedimentree::fragments`] or
-/// [`Sedimentree::loose_commits`], respectively.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BlobRef {
-    /// A fragment blob, by index into [`Sedimentree::fragments`].
-    Fragment(usize),
-
-    /// A loose commit blob, by index into [`Sedimentree::loose_commits`].
-    LooseCommit(usize),
-}
 
 /// A compact summary of a [`Sedimentree`] for wire transmission.
 ///
@@ -280,7 +265,7 @@ impl Sedimentree {
 
     /// Topologically sort the fragments and loose commits for reassembly.
     ///
-    /// Returns [`BlobRef`]s in dependency order: deepest fragments first,
+    /// Returns [`SedimentreeItem`]s in dependency order: deepest fragments first,
     /// so that each item's causal dependencies are loaded before the item
     /// itself. This eliminates orphan-queue overhead in consumers that
     /// reconstruct a document by loading blobs sequentially (e.g. via
@@ -303,16 +288,16 @@ impl Sedimentree {
     /// let loose: Vec<_> = sedimentree.loose_commits().collect();
     ///
     /// let mut buf = Vec::new();
-    /// for blob_ref in &order {
-    ///     match blob_ref {
-    ///         BlobRef::Fragment(i) => buf.extend(load_blob(fragments[*i])),
-    ///         BlobRef::LooseCommit(i) => buf.extend(load_blob(loose[*i])),
+    /// for item in &order {
+    ///     match item {
+    ///         SedimentreeItem::Fragment(i) => buf.extend(load_blob(fragments[*i])),
+    ///         SedimentreeItem::LooseCommit(i) => buf.extend(load_blob(loose[*i])),
     ///     }
     /// }
     /// doc.load_incremental(&buf).unwrap();
     /// ```
     #[must_use]
-    pub fn topsorted_blob_order(&self) -> Vec<BlobRef> {
+    pub fn topsorted_blob_order(&self) -> Topsorted<SedimentreeItem> {
         let fragments: Vec<&Fragment> = self.fragments.values().collect();
         let loose: Vec<&LooseCommit> = self.commits.values().collect();
         let n_frags = fragments.len();
@@ -320,7 +305,7 @@ impl Sedimentree {
         let n_total = n_frags + n_loose;
 
         if n_total == 0 {
-            return Vec::new();
+            return Topsorted(Vec::new());
         }
 
         // Map: fragment head digest → fragment index
@@ -370,12 +355,12 @@ impl Sedimentree {
             }
         }
 
-        let mut order: Vec<BlobRef> = Vec::with_capacity(n_total);
+        let mut order: Vec<SedimentreeItem> = Vec::with_capacity(n_total);
         while let Some(i) = queue.pop_front() {
             if i < n_frags {
-                order.push(BlobRef::Fragment(i));
+                order.push(SedimentreeItem::Fragment(i));
             } else {
-                order.push(BlobRef::LooseCommit(i - n_frags));
+                order.push(SedimentreeItem::LooseCommit(i - n_frags));
             }
             for &dep in &dependents[i] {
                 in_degree[dep] -= 1;
@@ -393,7 +378,7 @@ impl Sedimentree {
             order.len()
         );
 
-        order
+        Topsorted(order)
     }
 
     /// Prune a [`Sedimentree`].
@@ -591,6 +576,22 @@ impl Sedimentree {
             .map(CommitOrFragment::Fragment)
             .chain(self.commits.into_values().map(CommitOrFragment::Commit))
     }
+}
+
+/// An item in a [`Sedimentree`], used to identify fragments and loose
+/// commits in the topologically sorted order returned by
+/// [`Sedimentree::topsorted_blob_order`].
+///
+/// The index corresponds to the position of the fragment or loose commit
+/// in the iteration order of [`Sedimentree::fragments`] or
+/// [`Sedimentree::loose_commits`], respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SedimentreeItem {
+    /// A fragment, by index into [`Sedimentree::fragments`].
+    Fragment(usize),
+
+    /// A loose commit, by index into [`Sedimentree::loose_commits`].
+    LooseCommit(usize),
 }
 
 /// An enum over either a [`LooseCommit`] or a [`Fragment`].
