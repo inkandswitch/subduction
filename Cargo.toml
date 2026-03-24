@@ -56,7 +56,7 @@ arbitrary = "1.4"
 async-channel = { version = "2.5", default-features = false }
 async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
-automerge = "0.7.0"
+automerge = { git = "https://github.com/automerge/automerge.git", branch = "main" }
 axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
