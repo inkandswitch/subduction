@@ -107,8 +107,8 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
     // Get all changes with raw bytes in topological order.
     let changes = doc.get_changes(&[]);
 
-    // For each fragment: load boundary + member changes into a sub-doc,
-    // then save_after(boundary) for compact Document format output.
+    // For each fragment: concatenate only the member changes' raw bytes,
+    // preserving the topological order from get_changes.
     let mut fragment_blobs = Vec::new();
     let mut fragment_state_blobs = Vec::new();
     for state in &states {
@@ -117,29 +117,16 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
             .iter()
             .map(|d| ChangeHash(*d.as_bytes()))
             .collect();
-        let boundary: Set<ChangeHash> = state
-            .boundary()
-            .keys()
-            .map(|d| ChangeHash(*d.as_bytes()))
-            .collect();
 
         let mut raw = Vec::new();
         for change in &changes {
-            let hash = change.hash();
-            if boundary.contains(&hash) || members.contains(&hash) {
+            if members.contains(&change.hash()) {
                 raw.extend_from_slice(change.raw_bytes());
             }
         }
 
-        let mut sub_doc = Automerge::new();
-        sub_doc
-            .load_incremental(&raw)
-            .expect("load_incremental for fragment");
-        let boundary_heads: Vec<ChangeHash> = boundary.into_iter().collect();
-        let compact = sub_doc.save_after(&boundary_heads);
-
-        fragment_state_blobs.push((state.clone(), Blob::new(compact.clone())));
-        fragment_blobs.push(compact);
+        fragment_state_blobs.push((state.clone(), Blob::new(raw.clone())));
+        fragment_blobs.push(raw);
     }
 
     // Loose commits: raw_bytes per uncovered change.
@@ -277,19 +264,117 @@ fn produces_fragments() {
 // Use S1/S2/S3 (2 changes each) which are instant even in debug.
 // ---------------------------------------------------------------------------
 
+/// Topologically sort fragment blobs and loose commit blobs so that
+/// dependencies (boundary commits, parent commits) are loaded before
+/// the items that reference them.
+///
+/// Returns a single concatenated byte buffer suitable for a single
+/// `load_incremental` call.
+fn topsort_blobs(d: &FullDecomp) -> Vec<u8> {
+    use std::collections::VecDeque;
+
+    // Assign indices: fragments 0..N, loose commits N..N+M
+    let n_frags = d.fragment_state_blobs.len();
+    let n_loose = d.uncovered_blobs.len();
+    let n_total = n_frags + n_loose;
+
+    // Map: fragment head digest → fragment index
+    let head_to_frag: Map<Digest<LooseCommit>, usize> = d
+        .fragment_state_blobs
+        .iter()
+        .enumerate()
+        .map(|(i, (state, _))| (state.head_digest(), i))
+        .collect();
+
+    // Map: any member digest → fragment index (for loose commit parent lookup)
+    let mut member_to_frag: Map<Digest<LooseCommit>, usize> = Map::new();
+    for (i, (state, _)) in d.fragment_state_blobs.iter().enumerate() {
+        for m in state.members() {
+            member_to_frag.insert(*m, i);
+        }
+    }
+
+    // Build adjacency: in_degree[i] = number of deps that must load before i
+    let mut in_degree = vec![0u32; n_total];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n_total];
+
+    // Fragment → fragment edges: if F_i's boundary contains the head of F_j,
+    // then F_i depends on F_j (F_j must load first).
+    for (i, (state, _)) in d.fragment_state_blobs.iter().enumerate() {
+        for boundary_digest in state.boundary().keys() {
+            if let Some(&j) = head_to_frag.get(boundary_digest) {
+                if i != j {
+                    in_degree[i] += 1;
+                    dependents[j].push(i);
+                }
+            }
+        }
+    }
+
+    // Loose commit → fragment edges: if a loose commit's parent is a
+    // fragment member, the fragment must load first.
+    for (li, parents) in d.uncovered_parents.iter().enumerate() {
+        let idx = n_frags + li;
+        let mut seen_deps: Set<usize> = Set::new();
+        for parent in parents {
+            if let Some(&fi) = member_to_frag.get(parent) {
+                if seen_deps.insert(fi) {
+                    in_degree[idx] += 1;
+                    dependents[fi].push(idx);
+                }
+            }
+            // Loose → loose deps are already in topological order from
+            // get_changes, so we don't need to track those edges.
+        }
+    }
+
+    // Kahn's algorithm
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    for i in 0..n_total {
+        if in_degree[i] == 0 {
+            queue.push_back(i);
+        }
+    }
+
+    let mut order: Vec<usize> = Vec::with_capacity(n_total);
+    while let Some(i) = queue.pop_front() {
+        order.push(i);
+        for &dep in &dependents[i] {
+            in_degree[dep] -= 1;
+            if in_degree[dep] == 0 {
+                queue.push_back(dep);
+            }
+        }
+    }
+    assert_eq!(
+        order.len(),
+        n_total,
+        "topsort cycle detected: {} items but only {} sorted",
+        n_total,
+        order.len()
+    );
+
+    // Concatenate blobs in topological order
+    let mut buf = Vec::new();
+    for i in order {
+        if i < n_frags {
+            buf.extend_from_slice(&d.fragment_blobs[i]);
+        } else {
+            buf.extend_from_slice(&d.uncovered_blobs[i - n_frags]);
+        }
+    }
+    buf
+}
+
 fn roundtrip_full(name: &str, bytes: &[u8]) {
     let doc = Automerge::load(bytes).expect(name);
     let d = decompose_full(&doc);
 
+    let sorted = topsort_blobs(&d);
     let mut rebuilt = Automerge::new();
-    for blob in &d.fragment_blobs {
-        rebuilt.load_incremental(blob).expect("load fragment blob");
-    }
-    for blob in &d.uncovered_blobs {
-        rebuilt
-            .load_incremental(blob)
-            .expect("load loose commit blob");
-    }
+    rebuilt
+        .load_incremental(&sorted)
+        .expect("load topsorted blobs");
 
     assert_eq!(
         doc.get_heads(),

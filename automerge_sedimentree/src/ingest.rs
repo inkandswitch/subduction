@@ -148,14 +148,8 @@ pub fn ingest_automerge(
     // Phase 2: produce blobs.
     //
     // One `get_changes(&[])` call to get all changes with raw bytes in
-    // topological (causal) order. Then for each fragment we:
-    //   1. Filter to member changes, preserving topological order
-    //   2. Concatenate their raw_bytes()
-    //   3. Load into a fresh Automerge doc via load_incremental
-    //   4. save() → compact Document format (unified columnar encoding)
-    //
-    // This produces blobs comparable in size to the original .am file
-    // rather than the inflated per-change or Bundle formats.
+    // topological (causal) order. Then for each fragment we filter to
+    // member changes only and concatenate their `raw_bytes()`.
     //
     // For loose commits: just the individual change's raw_bytes() (already
     // small, no recompression needed).
@@ -241,8 +235,15 @@ pub fn ingest_automerge_par(
     })
 }
 
-/// Compress a single fragment: load boundary + members into a sub-doc,
-/// then `save_after(boundary)` for compact output.
+/// Compress a single fragment: concatenate only the member changes'
+/// raw bytes, preserving the topological order from `get_changes`.
+///
+/// Previous versions loaded boundary + members into a sub-doc and used
+/// `save_after(boundary)` for compact output. This broke on concurrent
+/// DAGs because `save_after` excludes changes reachable from _any_
+/// boundary head — but in a concurrent DAG, member changes can be
+/// ancestors of boundary commits on a different branch, causing them
+/// to be silently dropped.
 fn compress_one_fragment(
     state: &FragmentState<OwnedParents>,
     changes: &[automerge::Change],
@@ -253,29 +254,15 @@ fn compress_one_fragment(
         .iter()
         .map(|d| ChangeHash(*d.as_bytes()))
         .collect();
-    let boundary: Set<ChangeHash> = state
-        .boundary()
-        .keys()
-        .map(|d| ChangeHash(*d.as_bytes()))
-        .collect();
 
     let mut raw = Vec::new();
     for change in changes {
-        let hash = change.hash();
-        if boundary.contains(&hash) || members.contains(&hash) {
+        if members.contains(&change.hash()) {
             raw.extend_from_slice(change.raw_bytes());
         }
     }
 
-    let mut sub_doc = Automerge::new();
-    sub_doc
-        .load_incremental(&raw)
-        .map_err(|e| IngestError::Automerge(e.to_string()))?;
-
-    let boundary_heads: Vec<ChangeHash> = boundary.into_iter().collect();
-    let compact = sub_doc.save_after(&boundary_heads);
-
-    let blob = Blob::new(compact);
+    let blob = Blob::new(raw);
     let fragment = state
         .clone()
         .to_fragment(sedimentree_id, BlobMeta::new(&blob));
