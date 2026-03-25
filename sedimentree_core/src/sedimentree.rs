@@ -330,12 +330,11 @@ impl Sedimentree {
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n_total];
 
         // Fragment → fragment edges: F_i depends on F_j if F_i's boundary
-        // contains F_j's head.
+        // contains F_j's head. Self-loops (i == j) are included so that
+        // Kahn's algorithm detects them as cycles.
         for (i, frag) in fragments.iter().enumerate() {
             for boundary_digest in frag.boundary() {
-                if let Some(&j) = head_to_frag.get(boundary_digest)
-                    && i != j
-                {
+                if let Some(&j) = head_to_frag.get(boundary_digest) {
                     in_degree[i] += 1;
                     dependents[j].push(i);
                 }
@@ -365,7 +364,9 @@ impl Sedimentree {
                 }
                 if let Some(&pli) = digest_to_loose.get(parent) {
                     let parent_idx = n_frags + pli;
-                    if parent_idx != idx && seen_deps.insert(parent_idx) {
+                    // Self-loops (parent_idx == idx) are included so that
+                    // Kahn's algorithm detects them as cycles.
+                    if seen_deps.insert(parent_idx) {
                         in_degree[idx] += 1;
                         dependents[parent_idx].push(idx);
                     }
@@ -700,7 +701,6 @@ pub fn has_commit_boundary<
     clippy::many_single_char_names
 )]
 mod tests {
-    use alloc::vec;
     use testresult::TestResult;
 
     use crate::{

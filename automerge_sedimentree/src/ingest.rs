@@ -45,7 +45,7 @@ use automerge::{Automerge, ChangeHash};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     collections::{Map, Set},
-    commit::{CommitStore, CountLeadingZeroBytes, FragmentState},
+    commit::{CommitStore, CountLeadingZeroBytes, FragmentState, MissingCommitError},
     crypto::digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -57,17 +57,23 @@ use crate::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 /// Errors that can occur during automerge document ingestion.
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
-    /// Fragment construction failed.
-    #[error("fragment construction failed: {0}")]
-    Fragment(String),
+    /// A commit required during fragment construction was missing from the store.
+    #[error(transparent)]
+    MissingCommit(#[from] MissingCommitError),
+}
 
-    /// A fragment member's change was not found in the change set.
-    #[error("change not found for hash: {0}")]
-    MissingChange(ChangeHash),
+/// Extract the [`MissingCommitError`] from a [`FragmentError`] produced by
+/// [`IndexedSedimentreeAutomerge`], whose `LookupError` is
+/// [`Infallible`](core::convert::Infallible).
+fn extract_missing_commit(
+    err: sedimentree_core::commit::FragmentError<'static, IndexedSedimentreeAutomerge>,
+) -> IngestError {
+    use sedimentree_core::commit::FragmentError;
 
-    /// Failed to load or save a sub-document during blob compression.
-    #[error("automerge error during blob compression: {0}")]
-    Automerge(String),
+    match err {
+        FragmentError::MissingCommit(m) => IngestError::MissingCommit(m),
+        FragmentError::LookupError(infallible) => match infallible {},
+    }
 }
 
 /// Result of ingesting an Automerge document.
@@ -115,11 +121,8 @@ pub struct IngestResult {
 ///
 /// # Errors
 ///
-/// Returns [`IngestError::Fragment`] if fragment construction fails (e.g.,
-/// due to missing commits in a partial document).
-///
-/// Returns [`IngestError::MissingChange`] if a fragment member's change
-/// hash is not found in the document's change set.
+/// Returns [`IngestError::MissingCommit`] if a commit required during
+/// fragment construction is absent from the document.
 pub fn ingest_automerge(
     doc: &Automerge,
     sedimentree_id: SedimentreeId,
@@ -138,7 +141,7 @@ pub fn ingest_automerge(
     let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
-        .map_err(|e| IngestError::Fragment(e.to_string()))?;
+        .map_err(extract_missing_commit)?;
     let states: Vec<_> = fresh.into_iter().cloned().collect();
 
     let covered: Set<Digest<LooseCommit>> = known
@@ -210,7 +213,7 @@ pub fn ingest_automerge_par(
     let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
-        .map_err(|e| IngestError::Fragment(e.to_string()))?;
+        .map_err(extract_missing_commit)?;
     let states: Vec<_> = fresh.into_iter().cloned().collect();
 
     let covered: Set<Digest<LooseCommit>> = known

@@ -62,7 +62,7 @@ pub trait CommitStore<'a> {
 
     /// Constructs a single fragment starting from `head_digest`.
     ///
-    /// BFS-walks from the head through parents, collecting all commits
+    /// Walks from the head through parents, collecting all commits
     /// whose depth is _less than or equal to_ the head's depth. Commits
     /// with depth _strictly greater_ than the head become the boundary —
     /// they delimit the fragment and will head deeper (larger) strata.
