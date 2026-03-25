@@ -43,6 +43,13 @@ pub enum FragmentError<'a, S: CommitStore<'a> + ?Sized> {
     /// A commit was missing from the store.
     #[error(transparent)]
     MissingCommit(#[from] MissingCommitError),
+
+    /// The head digest has depth 0 and cannot be a fragment head.
+    ///
+    /// Depth-0 commits are loose commits, not fragment heads. The caller
+    /// should filter them out before calling [`CommitStore::fragment`].
+    #[error("depth-0 commit cannot be a fragment head: {0}")]
+    DepthZeroHead(Digest<LooseCommit>),
 }
 
 /// An abstraction over stores of commits that can be looked up by their digest.
@@ -88,6 +95,9 @@ pub trait CommitStore<'a> {
         strategy: &D,
     ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
         let head_depth = strategy.to_depth(head_digest);
+        if head_depth == Depth(0) {
+            return Err(FragmentError::DepthZeroHead(head_digest));
+        }
 
         let mut visited: Set<Digest<LooseCommit>> = Set::from([head_digest]);
         let mut members: Set<Digest<LooseCommit>> = Set::from([head_digest]);

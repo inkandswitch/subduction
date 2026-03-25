@@ -62,17 +62,22 @@ pub enum IngestError {
     /// A commit required during fragment construction was missing from the store.
     #[error(transparent)]
     MissingCommit(#[from] MissingCommitError),
+
+    /// A depth-0 commit was passed as a fragment head.
+    #[error("depth-0 commit cannot be a fragment head: {0}")]
+    DepthZeroHead(Digest<LooseCommit>),
 }
 
-/// Extract the [`MissingCommitError`] from a [`FragmentError`] produced by
+/// Extract the concrete error from a [`FragmentError`] produced by
 /// [`IndexedSedimentreeAutomerge`], whose `LookupError` is
 /// [`Infallible`](core::convert::Infallible).
 #[allow(clippy::needless_pass_by_value)] // Consumes the error by destructuring
-const fn extract_missing_commit(
+const fn extract_fragment_error(
     err: FragmentError<'static, IndexedSedimentreeAutomerge>,
 ) -> IngestError {
     match err {
         FragmentError::MissingCommit(m) => IngestError::MissingCommit(m),
+        FragmentError::DepthZeroHead(d) => IngestError::DepthZeroHead(d),
         FragmentError::LookupError(infallible) => match infallible {},
     }
 }
@@ -142,7 +147,7 @@ pub fn ingest_automerge(
     let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
-        .map_err(extract_missing_commit)?;
+        .map_err(extract_fragment_error)?;
     let states: Vec<_> = fresh.into_iter().cloned().collect();
 
     let covered: Set<Digest<LooseCommit>> = known
@@ -214,7 +219,7 @@ pub fn ingest_automerge_par(
     let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
-        .map_err(extract_missing_commit)?;
+        .map_err(extract_fragment_error)?;
     let states: Vec<_> = fresh.into_iter().cloned().collect();
 
     let covered: Set<Digest<LooseCommit>> = known

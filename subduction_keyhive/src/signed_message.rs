@@ -4,15 +4,14 @@
 //! This module provides the wrapper type that combines the signed data
 //! with an optional contact card.
 
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
 use core::fmt;
 
 #[cfg(all(feature = "serde", feature = "std"))]
 use crate::error::VerificationError;
 use crate::peer_id::KeyhivePeerId;
+#[cfg(all(feature = "serde", feature = "std"))]
+use alloc::string::ToString;
 #[cfg(all(feature = "serde", feature = "std"))]
 use keyhive_crypto::signed::Signed;
 
