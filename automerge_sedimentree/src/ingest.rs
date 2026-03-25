@@ -39,6 +39,8 @@
 //! println!("loose commits: {}", result.loose_count);
 //! ```
 
+use alloc::collections::BTreeSet;
+
 use automerge::{Automerge, ChangeHash};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -340,7 +342,7 @@ fn collect_loose_commits(
         }
         // Remap parents: if a parent is a fragment member, point to
         // the fragment head instead so simplify doesn't prune us.
-        let parents: std::collections::BTreeSet<Digest<LooseCommit>> = change
+        let parents: BTreeSet<Digest<LooseCommit>> = change
             .deps()
             .iter()
             .map(|d| {

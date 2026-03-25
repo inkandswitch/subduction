@@ -6,20 +6,16 @@
 #[cfg(feature = "std")]
 extern crate std;
 
-#[cfg(feature = "std")]
 pub mod indexed;
-
-#[cfg(feature = "std")]
 pub mod ingest;
 
 extern crate alloc;
 
 use alloc::rc::Rc;
-use core::{cell::RefCell, convert::Infallible};
-use sedimentree_core::collections::Set;
-
 use automerge::{AutoCommit, Automerge, ChangeHash, ChangeMetadata};
+use core::{cell::RefCell, convert::Infallible};
 use sedimentree_core::{
+    collections::Set,
     commit::{CommitStore, Parents},
     crypto::digest::Digest,
     loose_commit::LooseCommit,
