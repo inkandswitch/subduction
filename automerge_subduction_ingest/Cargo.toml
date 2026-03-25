@@ -1,5 +1,5 @@
 [package]
-name = "subduction_ingest"
+name = "automerge_subduction_ingest"
 version = "0.1.0"
 description = "CLI tool for ingesting Automerge documents into Subduction"
 

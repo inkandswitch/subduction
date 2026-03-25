@@ -7,7 +7,7 @@
 //! # Usage
 //!
 //! ```sh
-//! subduction_ingest \
+//! automerge_subduction_ingest \
 //!   --server wss://sync.example.com \
 //!   --ephemeral-key \
 //!   document.am
@@ -30,7 +30,7 @@ use subduction_websocket::tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSock
 
 /// Ingest an Automerge document into a Subduction sync server.
 #[derive(Debug, Parser)]
-#[command(name = "subduction-ingest", version, about)]
+#[command(name = "automerge-subduction-ingest", version, about)]
 struct Args {
     /// Path to the Automerge document file (.am).
     ///

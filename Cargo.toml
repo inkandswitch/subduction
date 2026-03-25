@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "automerge_sedimentree",
   "automerge_sedimentree_wasm",
+  "automerge_subduction_ingest",
   "automerge_subduction_wasm",
   "bijou64",
   "sedimentree_core",
@@ -10,7 +11,6 @@ members = [
   "sedimentree_wasm",
   "subduction_cli",
   "subduction_core",
-  "subduction_ingest",
   "subduction_crypto",
   "subduction_ephemeral",
   "subduction_http_longpoll",

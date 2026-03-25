@@ -330,6 +330,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "automerge_subduction_ingest"
+version = "0.1.0"
+dependencies = [
+ "automerge",
+ "automerge_sedimentree",
+ "bs58",
+ "clap",
+ "color-eyre",
+ "eyre",
+ "future_form",
+ "hex",
+ "sedimentree_core",
+ "subduction_core",
+ "subduction_crypto",
+ "subduction_websocket",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tungstenite",
+]
+
+[[package]]
 name = "automerge_subduction_wasm"
 version = "0.5.0"
 dependencies = [
@@ -5219,28 +5241,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "subduction_ingest"
-version = "0.1.0"
-dependencies = [
- "automerge",
- "automerge_sedimentree",
- "bs58",
- "clap",
- "color-eyre",
- "eyre",
- "future_form",
- "hex",
- "sedimentree_core",
- "subduction_core",
- "subduction_crypto",
- "subduction_websocket",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "tungstenite",
 ]
 
 [[package]]
