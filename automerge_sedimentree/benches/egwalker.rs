@@ -21,13 +21,15 @@
 use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
+use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 use sedimentree_core::{
     blob::BlobMeta,
-    commit::{CountLeadingZeroBytes, CountTrailingZerosInBase},
-    crypto::digest::Digest,
+    collections::Map,
+    commit::{CommitStore, CountLeadingZeroBytes, CountTrailingZerosInBase},
+    crypto::{digest::Digest, fingerprint::FingerprintSeed},
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
@@ -319,8 +321,6 @@ fn bench_minimize(c: &mut Criterion) {
 
 /// Benchmark creating fingerprint summaries of sedimentrees.
 fn bench_fingerprint_summarize(c: &mut Criterion) {
-    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
-
     let mut group = c.benchmark_group("fingerprint_summarize");
     let seed = FingerprintSeed::new(42, 43);
 
@@ -341,8 +341,6 @@ fn bench_fingerprint_summarize(c: &mut Criterion) {
 
 /// Benchmark `diff_remote_fingerprints` (comparing against a fingerprint summary).
 fn bench_diff_remote_fingerprints(c: &mut Criterion) {
-    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
-
     let mut group = c.benchmark_group("diff_remote_fingerprints");
     let seed = FingerprintSeed::new(42, 43);
 
@@ -607,9 +605,6 @@ fn bench_minimal_hash_by_metric(c: &mut Criterion) {
 /// Benchmark `build_fragment_store` — the real automerge→sedimentree
 /// decomposition pipeline using `get_changes_meta` + `from_metadata`.
 fn bench_build_fragment_store(c: &mut Criterion) {
-    use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
-    use sedimentree_core::{collections::Map, commit::CommitStore};
-
     let mut group = c.benchmark_group("build_fragment_store");
 
     for tv in TEST_VECTORS {
