@@ -518,11 +518,99 @@ fn fingerprint_summary_includes_all_items_after_ingestion() {
     );
 }
 
+/// Ingest A2 (3,208 changes) via the production `ingest_automerge` API
+/// and verify the roundtrip: topsorted reassembly must produce the same
+/// document heads and change count.
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn ingest_roundtrip_a2() {
+    let bytes = include_bytes!("../test-vectors/A2.am");
+    let doc = Automerge::load(bytes).expect("A2");
+    let original_heads = doc.get_heads();
+    let original_count = doc.get_changes(&[]).len();
+
+    let sed_id = sed_id(bytes);
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+
+    // Verify ingest accounting: every change is either covered by a
+    // fragment or emitted as a loose commit, with no overlap.
+    assert_eq!(
+        result.covered_count + result.loose_count,
+        original_count,
+        "ingest must account for all changes (covered={}, loose={}, total={})",
+        result.covered_count,
+        result.loose_count,
+        original_count,
+    );
+
+    // Reassemble via topsort
+    let order = result
+        .sedimentree
+        .topsorted_blob_order()
+        .expect("no cycles");
+    let fragments: Vec<_> = result.sedimentree.fragments().collect();
+    let loose: Vec<_> = result.sedimentree.loose_commits().collect();
+
+    let blob_by_digest: Map<Digest<Blob>, &[u8]> = result
+        .blobs
+        .iter()
+        .map(|blob| (Digest::hash(blob), blob.as_slice()))
+        .collect();
+
+    let mut buf = Vec::new();
+    for item in &order {
+        let digest = match item {
+            SedimentreeItem::Fragment(i) => fragments[*i].summary().blob_meta().digest(),
+            SedimentreeItem::LooseCommit(i) => loose[*i].blob_meta().digest(),
+        };
+        let raw = blob_by_digest
+            .get(&digest)
+            .expect("blob not found for item");
+        buf.extend_from_slice(raw);
+    }
+
+    let mut rebuilt = Automerge::new();
+    rebuilt.load_incremental(&buf).expect("load topsorted");
+
+    assert_eq!(rebuilt.get_heads(), original_heads, "heads must match");
+    assert_eq!(
+        rebuilt.get_changes(&[]).len(),
+        original_count,
+        "change count must match"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Real-world document tests (226k changes, ~6MB)
 //
-// The file is not checked in (it contains real user data). Tests skip
-// gracefully when the file is absent.
+// The test file `real-world.am` is not checked in — it contains real user
+// data and is too large for the repository. Tests skip gracefully when the
+// file is absent (the CI egwalker vectors A1/A2/C1/C2/S1-S3 still run).
+//
+// To run these tests locally:
+//
+//   1. Download the document from the shared team drive or regenerate it
+//      from the canonical source. The expected file is the Automerge
+//      binary format (`.am`), ~6 MB, ~226k changes.
+//
+//   2. Place it at:
+//
+//        automerge_sedimentree/test-vectors/real-world.am
+//
+//   3. Run:
+//
+//        cargo test --package automerge_sedimentree --release real_world
+//
+//      The `real_world_metadata_decomposition` test runs in debug mode
+//      too (metadata-only, no `get_changes`). The `real_world_roundtrip`
+//      test requires release mode (~9 seconds).
+//
+//   4. To run *all* roundtrip tests (including the egwalker vectors and
+//      the real-world doc):
+//
+//        cargo test --package automerge_sedimentree --release roundtrip
+//
+// The file is gitignored. Do not check it in.
 // ---------------------------------------------------------------------------
 
 const REAL_WORLD_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-vectors/real-world.am");

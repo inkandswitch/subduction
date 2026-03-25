@@ -1687,6 +1687,85 @@ mod tests {
                         );
                     });
             }
+
+            #[test]
+            fn topsort_respects_all_dependency_edges() {
+                use crate::test_utils::ArbitraryDag;
+
+                bolero::check!()
+                    .with_arbitrary::<ArbitraryDag>()
+                    .for_each(|dag| {
+                        let order = dag
+                            .tree
+                            .topsorted_blob_order()
+                            .expect("acyclic DAG should not produce CycleError");
+
+                        // Build position map: fragment head → position in output
+                        let fragments: Vec<_> = dag.tree.fragments().collect();
+                        let loose: Vec<_> = dag.tree.loose_commits().collect();
+
+                        let mut head_to_pos: Map<Digest<LooseCommit>, usize> = Map::new();
+                        for (pos, item) in order.iter().enumerate() {
+                            match item {
+                                SedimentreeItem::Fragment(i) => {
+                                    head_to_pos.insert(fragments[*i].head(), pos);
+                                }
+                                SedimentreeItem::LooseCommit(_) => {}
+                            }
+                        }
+
+                        // Verify: every fragment's boundary deps appear earlier
+                        for (pos, item) in order.iter().enumerate() {
+                            match item {
+                                SedimentreeItem::Fragment(i) => {
+                                    for boundary_digest in fragments[*i].boundary() {
+                                        if let Some(&dep_pos) =
+                                            head_to_pos.get(boundary_digest)
+                                        {
+                                            assert!(
+                                                dep_pos < pos,
+                                                "fragment dependency must appear before dependent"
+                                            );
+                                        }
+                                    }
+                                }
+                                SedimentreeItem::LooseCommit(i) => {
+                                    for parent in loose[*i].parents() {
+                                        if let Some(&dep_pos) = head_to_pos.get(parent) {
+                                            assert!(
+                                                dep_pos < pos,
+                                                "loose commit's fragment dependency must appear before commit"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Verify: output length matches input
+                        assert_eq!(
+                            order.len(),
+                            fragments.len() + loose.len(),
+                            "topsort must include all items"
+                        );
+                    });
+            }
+
+            #[test]
+            fn topsort_detects_cycles() {
+                use crate::test_utils::CyclicGraph;
+
+                bolero::check!()
+                    .with_arbitrary::<CyclicGraph>()
+                    .for_each(|dag| {
+                        let result = dag.tree.topsorted_blob_order();
+                        assert!(
+                            result.is_err(),
+                            "cyclic graph must produce CycleError, got Ok with {} items",
+                            result.map(|t| t.len()).unwrap_or(0)
+                        );
+                    });
+            }
         }
     }
 
