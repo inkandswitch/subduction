@@ -2,6 +2,8 @@
 //!
 //! These benchmarks use real Automerge documents from the egwalker paper to measure
 //! sedimentree's fragment strategy performance on realistic workloads.
+
+#![allow(clippy::expect_used)]
 //!
 //! Test vectors:
 //! - A1/A2: Automerge editing traces
@@ -19,13 +21,15 @@
 use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
+use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 use sedimentree_core::{
     blob::BlobMeta,
-    commit::{CountLeadingZeroBytes, CountTrailingZerosInBase},
-    crypto::digest::Digest,
+    collections::Map,
+    commit::{CommitStore, CountLeadingZeroBytes, CountTrailingZerosInBase},
+    crypto::{digest::Digest, fingerprint::FingerprintSeed},
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
@@ -166,13 +170,6 @@ enum MetricType {
 }
 
 impl MetricType {
-    const fn name(self) -> &'static str {
-        match self {
-            MetricType::LeadingZeros => "leading_zeros",
-            MetricType::Base10 => "base10",
-        }
-    }
-
     /// Expected fragment rate: 1 in N commits becomes a fragment boundary.
     /// - `LeadingZeros`: 1/256 chance per byte
     /// - `Base10`: 1/10 chance per trailing zero
@@ -302,37 +299,6 @@ fn generate_sedimentree_for_metric(
     Sedimentree::new(fragments, loose_commits)
 }
 
-/// Estimate serialized size of a sedimentree in bytes.
-fn estimate_sedimentree_size(tree: &Sedimentree) -> usize {
-    // Fragment size estimate: head(32) + boundary(~64) + checkpoints(~160) + blob_meta(40) + overhead(~20)
-    let fragment_size = 32 + 64 + 160 + 40 + 20;
-    let fragment_bytes = tree.fragments().count() * fragment_size;
-
-    // Loose commit size: digest(32) + parents(~64) + blob_meta(40) + overhead(~10)
-    let commit_size = 32 + 64 + 40 + 10;
-    let commit_bytes = tree.loose_commits().count() * commit_size;
-
-    fragment_bytes + commit_bytes
-}
-
-/// Benchmark loading Automerge documents.
-fn bench_load_document(c: &mut Criterion) {
-    let mut group = c.benchmark_group("load_document");
-
-    for tv in TEST_VECTORS {
-        group.throughput(Throughput::Bytes(tv.bytes.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(tv.name),
-            tv.bytes,
-            |b, bytes| {
-                b.iter(|| load_automerge(black_box(bytes)));
-            },
-        );
-    }
-
-    group.finish();
-}
-
 /// Benchmark minimizing sedimentrees scaled to document sizes.
 fn bench_minimize(c: &mut Criterion) {
     let mut group = c.benchmark_group("minimize");
@@ -355,8 +321,6 @@ fn bench_minimize(c: &mut Criterion) {
 
 /// Benchmark creating fingerprint summaries of sedimentrees.
 fn bench_fingerprint_summarize(c: &mut Criterion) {
-    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
-
     let mut group = c.benchmark_group("fingerprint_summarize");
     let seed = FingerprintSeed::new(42, 43);
 
@@ -377,8 +341,6 @@ fn bench_fingerprint_summarize(c: &mut Criterion) {
 
 /// Benchmark `diff_remote_fingerprints` (comparing against a fingerprint summary).
 fn bench_diff_remote_fingerprints(c: &mut Criterion) {
-    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
-
     let mut group = c.benchmark_group("diff_remote_fingerprints");
     let seed = FingerprintSeed::new(42, 43);
 
@@ -526,100 +488,6 @@ fn bench_merge(c: &mut Criterion) {
     group.finish();
 }
 
-/// Print statistics about the test vectors (run once for context).
-fn bench_document_stats(c: &mut Criterion) {
-    let mut group = c.benchmark_group("document_stats");
-
-    // Only run once to print stats
-    group.sample_size(10);
-
-    eprintln!();
-    eprintln!("=== Egwalker Test Vector Statistics ===");
-    eprintln!(
-        "{:>4} {:>10} {:>8} {:>8}",
-        "Name", "Bytes", "Changes", "Heads"
-    );
-    eprintln!("{}", "-".repeat(38));
-
-    for tv in TEST_VECTORS {
-        let doc = load_automerge(tv.bytes);
-        let heads = doc.get_heads();
-        let change_count = doc.get_changes(&[]).len();
-
-        eprintln!(
-            "{:>4} {:>10} {:>8} {:>8}",
-            tv.name,
-            tv.bytes.len(),
-            change_count,
-            heads.len(),
-        );
-
-        // Dummy benchmark just to include in the group
-        group.bench_function(BenchmarkId::from_parameter(tv.name), |b| {
-            b.iter(|| black_box(tv.name));
-        });
-    }
-
-    eprintln!();
-
-    group.finish();
-}
-
-/// Print depth metric comparison statistics.
-fn bench_depth_metric_stats(c: &mut Criterion) {
-    let mut group = c.benchmark_group("depth_metric_stats");
-    group.sample_size(10);
-
-    eprintln!();
-    eprintln!("=== Depth Metric Comparison ===");
-    eprintln!();
-    eprintln!(
-        "{:>4} {:>12} {:>10} {:>8} {:>10} {:>10}",
-        "Name", "Metric", "Fragments", "Loose", "Est.Size", "Minimized"
-    );
-    eprintln!("{}", "-".repeat(68));
-
-    let leading_zeros = CountLeadingZeroBytes;
-    #[allow(clippy::expect_used)]
-    let base10 = CountTrailingZerosInBase::new(NonZero::new(10).expect("10 is non-zero"));
-
-    for tv in TEST_VECTORS {
-        let doc = load_automerge(tv.bytes);
-        let change_count = doc.get_changes(&[]).len();
-
-        for metric_type in [MetricType::LeadingZeros, MetricType::Base10] {
-            let tree = generate_sedimentree_for_metric(change_count, metric_type, 42);
-            let fragment_count = tree.fragments().count();
-            let loose_count = tree.loose_commits().count();
-            let est_size = estimate_sedimentree_size(&tree);
-
-            let minimized_count = match metric_type {
-                MetricType::LeadingZeros => tree.minimize(&leading_zeros).fragments().count(),
-                MetricType::Base10 => tree.minimize(&base10).fragments().count(),
-            };
-
-            eprintln!(
-                "{:>4} {:>12} {:>10} {:>8} {:>9}B {:>10}",
-                tv.name,
-                metric_type.name(),
-                fragment_count,
-                loose_count,
-                est_size,
-                minimized_count
-            );
-        }
-    }
-
-    eprintln!();
-
-    // Dummy benchmark
-    group.bench_function("stats", |b| {
-        b.iter(|| black_box("stats"));
-    });
-
-    group.finish();
-}
-
 /// Benchmark minimize with different depth metrics.
 fn bench_minimize_by_metric(c: &mut Criterion) {
     let mut group = c.benchmark_group("minimize_by_metric");
@@ -734,13 +602,51 @@ fn bench_minimal_hash_by_metric(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark `build_fragment_store` — the real automerge→sedimentree
+/// decomposition pipeline using `get_changes_meta` + `from_metadata`.
+fn bench_build_fragment_store(c: &mut Criterion) {
+    let mut group = c.benchmark_group("build_fragment_store");
+
+    for tv in TEST_VECTORS {
+        let doc = load_automerge(tv.bytes);
+        let metadata = doc.get_changes_meta(&[]);
+        let change_count = metadata.len() as u64;
+
+        // Pre-build the index outside the bench loop (we're benchmarking
+        // the fragment building, not the indexing).
+        let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
+        let heads: Vec<Digest<LooseCommit>> = doc
+            .get_heads()
+            .iter()
+            .map(|h| Digest::force_from_bytes(h.0))
+            .collect();
+
+        group.throughput(Throughput::Elements(change_count));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(tv.name),
+            &(store, heads),
+            |b, (store, heads)| {
+                b.iter(|| {
+                    let mut known: Map<
+                        Digest<LooseCommit>,
+                        sedimentree_core::commit::FragmentState<OwnedParents>,
+                    > = Map::new();
+                    store
+                        .build_fragment_store(black_box(heads), &mut known, &CountLeadingZeroBytes)
+                        .expect("build_fragment_store");
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
     targets =
-        bench_document_stats,
-        bench_depth_metric_stats,
-        bench_load_document,
+        bench_build_fragment_store,
         bench_minimize,
         bench_minimize_by_metric,
         bench_fingerprint_summarize,

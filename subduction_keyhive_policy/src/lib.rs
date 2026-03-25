@@ -19,13 +19,12 @@ use futures::{
 };
 use keyhive_core::{
     access::Access,
-    content::reference::ContentRef,
-    crypto::signer::async_signer::AsyncSigner,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
     store::ciphertext::CiphertextStore,
 };
+use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 use sedimentree_core::id::SedimentreeId;
 use serde::Deserialize;
 use subduction_core::{

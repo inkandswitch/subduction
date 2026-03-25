@@ -1,0 +1,48 @@
+[package]
+name = "automerge_subduction_ingest"
+version = "0.1.0"
+description = "CLI tool for ingesting Automerge documents into Subduction"
+
+categories = ["command-line-utilities"]
+keywords = ["automerge", "sedimentree", "subduction"]
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "automerge-subduction-ingest"
+path = "src/main.rs"
+
+[dependencies]
+automerge = { workspace = true }
+automerge_sedimentree = { workspace = true, features = ["rayon"] }
+bs58 = { version = "0.5", features = ["check"] }
+clap = { workspace = true }
+color-eyre = { workspace = true }
+eyre = { workspace = true }
+future_form = { workspace = true }
+hex = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["system_time"] }
+subduction_crypto = { workspace = true }
+subduction_websocket = { workspace = true, features = ["tokio_client"] }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true, default-features = true }
+tracing-subscriber = { workspace = true, default-features = true }
+tungstenite = { workspace = true }
+
+[features]
+default = ["native-tls"]
+native-tls = [
+  "subduction_websocket/tokio_client",
+]
+rustls = [
+  "subduction_websocket/tokio_client_rustls",
+]
+
+[lints]
+workspace = true

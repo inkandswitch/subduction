@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "automerge_sedimentree",
   "automerge_sedimentree_wasm",
+  "automerge_subduction_ingest",
   "automerge_subduction_wasm",
   "bijou64",
   "sedimentree_core",
@@ -32,6 +33,7 @@ authors = [
 
 [workspace.dependencies]
 # Internal crates
+automerge_sedimentree = { version = "0.7.0", path = "automerge_sedimentree", default-features = false }
 automerge_sedimentree_wasm = { version = "0.6.0", path = "automerge_sedimentree_wasm" }
 automerge_subduction_wasm = { version = "0.5.0", path = "automerge_subduction_wasm", default-features = false }
 bijou64 = { version = "0.1.0", path = "bijou64", default-features = false }
@@ -54,7 +56,7 @@ arbitrary = "1.4"
 async-channel = { version = "2.5", default-features = false }
 async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
-automerge = "0.7.0"
+automerge = "0.8.0"
 axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
@@ -83,11 +85,13 @@ hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 js-sys = { version = "0.3.81", default-features = false }
 keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
+keyhive_crypto = { version = "0.1.0", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 nonempty = { version = "0.12.0", default-features = false }
 num-bigint = { version = "0.4.6", default-features = false }
 rand = { version = "0.8.5", default-features = false }
+rayon = "1.11"
 reqwest = { version = "0.12", default-features = false }
 serde = { version = "1.0", default-features = false }
 siphasher = { version = "1.0", default-features = false }
@@ -185,6 +189,25 @@ strip = "debuginfo"
 
 [profile.release.package.automerge_subduction_wasm]
 strip = "debuginfo"
+
+# Optimize heavy dependencies in test/dev builds so that integration tests
+# exercising real Automerge documents finish in reasonable time.
+# Without this, debug-mode HashSet/HashMap and automerge internals are
+# ~10-50x slower than release, making real-document tests impractical.
+[profile.dev.package.automerge]
+opt-level = 2
+
+[profile.dev.package.sedimentree_core]
+opt-level = 2
+
+[profile.test.package.automerge]
+opt-level = 2
+
+[profile.test.package.automerge_sedimentree]
+opt-level = 2
+
+[profile.test.package.sedimentree_core]
+opt-level = 2
 
 # Benchmarks inherit from release, but the workspace release profile is tuned
 # for Wasm (opt-level="z", strip="symbols"). Override for accurate benchmarks

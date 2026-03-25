@@ -6,7 +6,7 @@
 //! Enable with the `test_utils` feature flag.
 
 // Test utilities are allowed to panic for clearer test failures
-#![allow(clippy::panic)]
+#![allow(clippy::expect_used, clippy::panic)]
 
 use alloc::{
     collections::BTreeSet,
@@ -17,9 +17,12 @@ use alloc::{
 
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 
+use core::convert::Infallible;
+
 use crate::{
     blob::{Blob, BlobMeta},
-    collections::Map,
+    collections::{Map, Set},
+    commit::CommitStore,
     crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     fragment::Fragment,
@@ -313,6 +316,20 @@ impl TestGraph {
         Sedimentree::new(fragments, self.commits())
     }
 
+    /// Look up a commit's parent set by digest.
+    ///
+    /// Returns `None` if the digest is not in the graph.
+    #[must_use]
+    pub fn lookup_parents(&self, digest: Digest<LooseCommit>) -> Option<Set<Digest<LooseCommit>>> {
+        self.commits.values().find_map(|c| {
+            if Digest::hash(c) == digest {
+                Some(c.parents().iter().copied().collect())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Create a fragment covering from `head_node` to `boundary_nodes`.
     ///
     /// Optionally include checkpoint nodes.
@@ -339,10 +356,146 @@ impl TestGraph {
     }
 }
 
+impl CommitStore<'_> for TestGraph {
+    type Node = Set<Digest<LooseCommit>>;
+    type LookupError = Infallible;
+
+    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
+        Ok(self.lookup_parents(digest))
+    }
+}
+
 /// Create a seeded RNG for deterministic tests.
 #[must_use]
 pub fn seeded_rng(seed: u64) -> SmallRng {
     SmallRng::seed_from_u64(seed)
+}
+
+/// An arbitrary DAG of fragments and loose commits with real dependency
+/// edges.
+///
+/// Each fragment's boundary references the head of a previously generated
+/// fragment (or nothing, for root fragments). Loose commits' parents may
+/// reference fragment heads.
+///
+/// Use with `bolero::check!().with_arbitrary::<ArbitraryDag>()`.
+#[cfg(feature = "arbitrary")]
+#[derive(Debug)]
+pub struct ArbitraryDag {
+    /// The generated sedimentree.
+    pub tree: Sedimentree,
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for ArbitraryDag {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let sid = SedimentreeId::arbitrary(u)?;
+        let n_frags: usize = u.int_in_range(0..=8)?;
+        let n_loose: usize = u.int_in_range(0..=5)?;
+
+        let mut fragments = Vec::with_capacity(n_frags);
+        let mut heads: Vec<Digest<LooseCommit>> = Vec::with_capacity(n_frags);
+
+        // Use a single RNG seeded once, so each head is unique by construction.
+        let mut rng = SmallRng::seed_from_u64(u.arbitrary()?);
+
+        for _ in 0..n_frags {
+            let head = random_commit_digest(&mut rng);
+            let mut boundary = BTreeSet::new();
+
+            // Each fragment references 0..=2 previous fragment heads
+            let n_deps = u.int_in_range(0..=heads.len().min(2))?;
+            let mut available: Vec<usize> = (0..heads.len()).collect();
+            for _ in 0..n_deps {
+                if available.is_empty() {
+                    break;
+                }
+                let pick = u.choose_index(available.len())?;
+                #[allow(clippy::indexing_slicing)]
+                let idx = available.remove(pick);
+                #[allow(clippy::indexing_slicing)]
+                boundary.insert(heads[idx]);
+            }
+
+            let blob_meta = BlobMeta::arbitrary(u)?;
+            fragments.push(Fragment::new(sid, head, boundary, &[], blob_meta));
+            heads.push(head);
+        }
+
+        let mut commits = Vec::with_capacity(n_loose);
+        for _ in 0..n_loose {
+            let mut parents = BTreeSet::new();
+            // Loose commit may reference 0..=1 fragment heads
+            if !heads.is_empty() && u.arbitrary::<bool>()? {
+                let idx = u.choose_index(heads.len())?;
+                #[allow(clippy::indexing_slicing)]
+                parents.insert(heads[idx]);
+            }
+            let blob_meta = BlobMeta::arbitrary(u)?;
+            commits.push(LooseCommit::new(sid, parents, blob_meta));
+        }
+
+        Ok(ArbitraryDag {
+            tree: Sedimentree::new(fragments, commits),
+        })
+    }
+}
+
+/// An arbitrary sedimentree whose fragment dependency graph contains at
+/// least one cycle.
+///
+/// Generates a linear chain of fragments, then adds a back-edge from the
+/// first fragment to the last, creating a cycle. This models the kind of
+/// corrupt metadata a malicious peer might send.
+///
+/// Use with `bolero::check!().with_arbitrary::<CyclicGraph>()`.
+#[cfg(feature = "arbitrary")]
+#[derive(Debug)]
+pub struct CyclicGraph {
+    /// The generated sedimentree (contains a cycle).
+    pub tree: Sedimentree,
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for CyclicGraph {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let sid = SedimentreeId::arbitrary(u)?;
+
+        // Generate 2..=6 fragments in a valid chain first.
+        let n_frags: usize = u.int_in_range(2..=6)?;
+        let mut heads = Vec::with_capacity(n_frags);
+        let mut fragments = Vec::with_capacity(n_frags);
+
+        // Use a single RNG seeded once, so each head is unique by construction.
+        let mut rng = SmallRng::seed_from_u64(u.arbitrary()?);
+
+        for _ in 0..n_frags {
+            let head = random_commit_digest(&mut rng);
+            let mut boundary = BTreeSet::new();
+            // Reference the previous fragment's head (linear chain)
+            if let Some(&prev) = heads.last() {
+                boundary.insert(prev);
+            }
+            let blob_meta = BlobMeta::arbitrary(u)?;
+            fragments.push(Fragment::new(sid, head, boundary, &[], blob_meta));
+            heads.push(head);
+        }
+
+        // Introduce a cycle: make the first fragment also depend on the
+        // last fragment's head (back-edge).
+        #[allow(clippy::indexing_slicing)]
+        {
+            let last_head = *heads.last().expect("at least 2 fragments");
+            let mut new_boundary = fragments[0].boundary().clone();
+            new_boundary.insert(last_head);
+            let blob_meta = BlobMeta::arbitrary(u)?;
+            fragments[0] = Fragment::new(sid, heads[0], new_boundary, &[], blob_meta);
+        }
+
+        Ok(CyclicGraph {
+            tree: Sedimentree::new(fragments, vec![]),
+        })
+    }
 }
 
 #[cfg(test)]

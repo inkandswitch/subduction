@@ -2,7 +2,11 @@
 
 mod commit_dag;
 
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::{
+    collections::{BTreeSet, VecDeque},
+    vec,
+    vec::Vec,
+};
 
 use crate::{
     collections::{Entry, Map, Set},
@@ -13,6 +17,7 @@ use crate::{
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
     fragment::{Fragment, checkpoint::Checkpoint, id::FragmentId},
     loose_commit::{LooseCommit, id::CommitId},
+    topsorted::Topsorted,
 };
 
 /// A compact summary of a [`Sedimentree`] for wire transmission.
@@ -262,6 +267,146 @@ impl Sedimentree {
         self.heads(depth_metric).contains(&digest)
     }
 
+    /// Topologically sort the fragments and loose commits for reassembly.
+    ///
+    /// Returns [`SedimentreeItem`]s in dependency order: deepest fragments first,
+    /// so that each item's causal dependencies are loaded before the item
+    /// itself. This eliminates orphan-queue overhead in consumers that
+    /// reconstruct a document by loading blobs sequentially (e.g. via
+    /// Automerge's `load_incremental`).
+    ///
+    /// The ordering is determined by the sedimentree DAG structure:
+    /// - A fragment depends on any fragment whose head appears in its
+    ///   boundary set.
+    /// - A loose commit depends on any fragment whose head appears in
+    ///   its parent set.
+    ///
+    /// Uses Kahn's algorithm. Returns [`CycleError`] if the dependency
+    /// graph contains a cycle, which indicates corrupt fragment metadata
+    /// (e.g. from a malicious peer).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CycleError`] if the fragment/commit dependency graph
+    /// contains a cycle.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let order = sedimentree.topsorted_blob_order()?;
+    /// let fragments: Vec<_> = sedimentree.fragments().collect();
+    /// let loose: Vec<_> = sedimentree.loose_commits().collect();
+    ///
+    /// let mut buf = Vec::new();
+    /// for item in &order {
+    ///     match item {
+    ///         SedimentreeItem::Fragment(i) => buf.extend(load_blob(fragments[*i])),
+    ///         SedimentreeItem::LooseCommit(i) => buf.extend(load_blob(loose[*i])),
+    ///     }
+    /// }
+    /// doc.load_incremental(&buf).unwrap();
+    /// ```
+    #[allow(clippy::indexing_slicing)] // Indices bounded by construction from enumerate()
+    pub fn topsorted_blob_order(&self) -> Result<Topsorted<SedimentreeItem>, CycleError> {
+        let fragments: Vec<&Fragment> = self.fragments.values().collect();
+        let loose: Vec<&LooseCommit> = self.commits.values().collect();
+        let n_frags = fragments.len();
+        let n_loose = loose.len();
+        let n_total = n_frags + n_loose;
+
+        if n_total == 0 {
+            return Ok(Topsorted(Vec::new()));
+        }
+
+        // Map: fragment head digest → fragment index
+        let head_to_frag: Map<Digest<LooseCommit>, usize> = fragments
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.head(), i))
+            .collect();
+
+        // Build in-degree counts and adjacency lists.
+        let mut in_degree = vec![0u32; n_total];
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n_total];
+
+        // Fragment → fragment edges: F_i depends on F_j if F_i's boundary
+        // contains F_j's head. Self-loops (i == j) are included so that
+        // Kahn's algorithm detects them as cycles.
+        for (i, frag) in fragments.iter().enumerate() {
+            for boundary_digest in frag.boundary() {
+                if let Some(&j) = head_to_frag.get(boundary_digest) {
+                    in_degree[i] += 1;
+                    dependents[j].push(i);
+                }
+            }
+        }
+
+        // Map: loose commit digest → loose index (for loose→loose edges)
+        let digest_to_loose: Map<Digest<LooseCommit>, usize> = self
+            .commits
+            .keys()
+            .enumerate()
+            .map(|(i, d)| (*d, i))
+            .collect();
+
+        // Loose commit dependency edges:
+        // - L depends on fragment F if any of L's parents equals F's head.
+        // - L depends on loose commit P if any of L's parents equals P's digest.
+        for (li, commit) in loose.iter().enumerate() {
+            let idx = n_frags + li;
+            let mut seen_deps: Set<usize> = Set::new();
+            for parent in commit.parents() {
+                if let Some(&fi) = head_to_frag.get(parent)
+                    && seen_deps.insert(fi)
+                {
+                    in_degree[idx] += 1;
+                    dependents[fi].push(idx);
+                }
+                if let Some(&pli) = digest_to_loose.get(parent) {
+                    let parent_idx = n_frags + pli;
+                    // Self-loops (parent_idx == idx) are included so that
+                    // Kahn's algorithm detects them as cycles.
+                    if seen_deps.insert(parent_idx) {
+                        in_degree[idx] += 1;
+                        dependents[parent_idx].push(idx);
+                    }
+                }
+            }
+        }
+
+        // Kahn's algorithm
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        for (i, &deg) in in_degree.iter().enumerate() {
+            if deg == 0 {
+                queue.push_back(i);
+            }
+        }
+
+        let mut order: Vec<SedimentreeItem> = Vec::with_capacity(n_total);
+        while let Some(i) = queue.pop_front() {
+            if i < n_frags {
+                order.push(SedimentreeItem::Fragment(i));
+            } else {
+                order.push(SedimentreeItem::LooseCommit(i - n_frags));
+            }
+            for &dep in &dependents[i] {
+                in_degree[dep] -= 1;
+                if in_degree[dep] == 0 {
+                    queue.push_back(dep);
+                }
+            }
+        }
+
+        if order.len() != n_total {
+            return Err(CycleError {
+                total: n_total,
+                sorted: order.len(),
+            });
+        }
+
+        Ok(Topsorted(order))
+    }
+
     /// Prune a [`Sedimentree`].
     ///
     /// Minimize the [`Sedimentree`] by removing any fragments that are
@@ -459,6 +604,35 @@ impl Sedimentree {
     }
 }
 
+/// An item in a [`Sedimentree`], used to identify fragments and loose
+/// commits in the topologically sorted order returned by
+/// [`Sedimentree::topsorted_blob_order`].
+///
+/// The index corresponds to the position of the fragment or loose commit
+/// in the iteration order of [`Sedimentree::fragments`] or
+/// [`Sedimentree::loose_commits`], respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SedimentreeItem {
+    /// A fragment, by index into [`Sedimentree::fragments`].
+    Fragment(usize),
+
+    /// A loose commit, by index into [`Sedimentree::loose_commits`].
+    LooseCommit(usize),
+}
+
+/// The sedimentree's fragment/commit dependency graph contains a cycle.
+///
+/// This indicates corrupt metadata — e.g. from a malicious peer sending
+/// fragment metadata with circular boundary→head references. In a
+/// correctly-constructed sedimentree backed by hash-linked commits,
+/// cycles are impossible (they would require a hash collision).
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("cycle in sedimentree dependency graph: {total} items but only {sorted} could be sorted")]
+pub struct CycleError {
+    total: usize,
+    sorted: usize,
+}
+
 /// An enum over either a [`LooseCommit`] or a [`Fragment`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitOrFragment {
@@ -521,8 +695,13 @@ pub fn has_commit_boundary<
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names
+)]
 mod tests {
-    use alloc::vec;
+    use testresult::TestResult;
 
     use crate::{
         blob::{Blob, BlobMeta},
@@ -634,8 +813,230 @@ mod tests {
         assert_eq!(diff.right_missing_fragments.len(), 1); // a_only_fragments
     }
 
+    // ── topsorted_blob_order ──────────────────────────────────────
+
+    /// Build a fragment with a specific head and boundary, suitable for
+    /// testing the dependency graph in `topsorted_blob_order`.
+    fn make_fragment_with_deps(
+        head_bytes: [u8; 32],
+        boundary: BTreeSet<Digest<LooseCommit>>,
+    ) -> Fragment {
+        let sid = make_sedimentree_id(0);
+        let blob_meta = make_blob_meta(0);
+        Fragment::new(
+            sid,
+            Digest::force_from_bytes(head_bytes),
+            boundary,
+            &[],
+            blob_meta,
+        )
+    }
+
+    fn unique_head(id: u8) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[31] = id;
+        bytes
+    }
+
+    #[test]
+    fn topsorted_empty_sedimentree() -> TestResult {
+        let tree = Sedimentree::default();
+        let order = tree.topsorted_blob_order()?;
+        assert!(order.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn topsorted_single_fragment() -> TestResult {
+        let mut tree = Sedimentree::default();
+        let f = make_fragment_with_deps(unique_head(1), BTreeSet::new());
+        tree.add_fragment(f);
+
+        let order = tree.topsorted_blob_order()?;
+        assert_eq!(order.len(), 1);
+        assert_eq!(order[0], SedimentreeItem::Fragment(0));
+        Ok(())
+    }
+
+    #[test]
+    fn topsorted_single_loose_commit() -> TestResult {
+        let mut tree = Sedimentree::default();
+        tree.add_commit(make_commit(1));
+
+        let order = tree.topsorted_blob_order()?;
+        assert_eq!(order.len(), 1);
+        assert_eq!(order[0], SedimentreeItem::LooseCommit(0));
+        Ok(())
+    }
+
+    /// Helper: extract fragment head positions from a topsort ordering.
+    fn fragment_head_positions(order: &[SedimentreeItem], tree: &Sedimentree) -> Vec<[u8; 32]> {
+        let fragments: Vec<_> = tree.fragments().collect();
+        order
+            .iter()
+            .filter_map(|item| match item {
+                SedimentreeItem::Fragment(i) => Some(*fragments[*i].head().as_bytes()),
+                SedimentreeItem::LooseCommit(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn topsorted_linear_chain_deepest_first() -> TestResult {
+        // C (deep) ← B (mid) ← A (shallow)
+        // A.boundary = {B.head}, B.boundary = {C.head}, C.boundary = {}
+        let c_head = unique_head(3);
+        let b_head = unique_head(2);
+        let a_head = unique_head(1);
+
+        let c = make_fragment_with_deps(c_head, BTreeSet::new());
+        let b = make_fragment_with_deps(b_head, BTreeSet::from([Digest::force_from_bytes(c_head)]));
+        let a = make_fragment_with_deps(a_head, BTreeSet::from([Digest::force_from_bytes(b_head)]));
+
+        let mut tree = Sedimentree::default();
+        tree.add_fragment(a);
+        tree.add_fragment(b);
+        tree.add_fragment(c);
+
+        let order = tree.topsorted_blob_order()?;
+        assert_eq!(order.len(), 3);
+
+        let head_order = fragment_head_positions(&order, &tree);
+
+        let c_pos = head_order
+            .iter()
+            .position(|h| *h == c_head)
+            .ok_or("C not found")?;
+        let b_pos = head_order
+            .iter()
+            .position(|h| *h == b_head)
+            .ok_or("B not found")?;
+        let a_pos = head_order
+            .iter()
+            .position(|h| *h == a_head)
+            .ok_or("A not found")?;
+        assert!(c_pos < b_pos, "C (deepest) must come before B");
+        assert!(b_pos < a_pos, "B must come before A (shallowest)");
+        Ok(())
+    }
+
+    #[test]
+    fn topsorted_diamond_dag() -> TestResult {
+        //     D (deep)
+        //    / \
+        //   B   C
+        //    \ /
+        //     A (shallow)
+        let d_head = unique_head(4);
+        let b_head = unique_head(2);
+        let c_head = unique_head(3);
+        let a_head = unique_head(1);
+
+        let d = make_fragment_with_deps(d_head, BTreeSet::new());
+        let b = make_fragment_with_deps(b_head, BTreeSet::from([Digest::force_from_bytes(d_head)]));
+        let c = make_fragment_with_deps(c_head, BTreeSet::from([Digest::force_from_bytes(d_head)]));
+        let a = make_fragment_with_deps(
+            a_head,
+            BTreeSet::from([
+                Digest::force_from_bytes(b_head),
+                Digest::force_from_bytes(c_head),
+            ]),
+        );
+
+        let mut tree = Sedimentree::default();
+        tree.add_fragment(a);
+        tree.add_fragment(b);
+        tree.add_fragment(c);
+        tree.add_fragment(d);
+
+        let order = tree.topsorted_blob_order()?;
+        assert_eq!(order.len(), 4);
+
+        let head_order = fragment_head_positions(&order, &tree);
+
+        let d_pos = head_order
+            .iter()
+            .position(|h| *h == d_head)
+            .ok_or("D not found")?;
+        let b_pos = head_order
+            .iter()
+            .position(|h| *h == b_head)
+            .ok_or("B not found")?;
+        let c_pos = head_order
+            .iter()
+            .position(|h| *h == c_head)
+            .ok_or("C not found")?;
+        let a_pos = head_order
+            .iter()
+            .position(|h| *h == a_head)
+            .ok_or("A not found")?;
+
+        assert!(d_pos < b_pos, "D must come before B");
+        assert!(d_pos < c_pos, "D must come before C");
+        assert!(b_pos < a_pos, "B must come before A");
+        assert!(c_pos < a_pos, "C must come before A");
+        Ok(())
+    }
+
+    #[test]
+    fn topsorted_loose_commit_after_fragment() -> TestResult {
+        let f_head = unique_head(1);
+        let f = make_fragment_with_deps(f_head, BTreeSet::new());
+
+        let sid = make_sedimentree_id(0);
+        let blob_meta = make_blob_meta(99);
+        let loose = LooseCommit::new(
+            sid,
+            BTreeSet::from([Digest::force_from_bytes(f_head)]),
+            blob_meta,
+        );
+
+        let mut tree = Sedimentree::default();
+        tree.add_fragment(f);
+        tree.add_commit(loose);
+
+        let order = tree.topsorted_blob_order()?;
+        assert_eq!(order.len(), 2);
+
+        let frag_pos = order
+            .iter()
+            .position(|i| matches!(i, SedimentreeItem::Fragment(_)))
+            .ok_or("no fragment in order")?;
+        let loose_pos = order
+            .iter()
+            .position(|i| matches!(i, SedimentreeItem::LooseCommit(_)))
+            .ok_or("no loose commit in order")?;
+
+        assert!(
+            frag_pos < loose_pos,
+            "fragment must come before dependent loose commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn topsorted_cycle_returns_error() {
+        let a_head = unique_head(1);
+        let b_head = unique_head(2);
+
+        let a = make_fragment_with_deps(a_head, BTreeSet::from([Digest::force_from_bytes(b_head)]));
+        let b = make_fragment_with_deps(b_head, BTreeSet::from([Digest::force_from_bytes(a_head)]));
+
+        let mut tree = Sedimentree::default();
+        tree.add_fragment(a);
+        tree.add_fragment(b);
+
+        let err = tree
+            .topsorted_blob_order()
+            .expect_err("cycle should produce CycleError");
+        assert_eq!(
+            err.to_string(),
+            "cycle in sedimentree dependency graph: 2 items but only 0 could be sorted"
+        );
+    }
+
     #[cfg(all(test, feature = "bolero"))]
-    #[allow(clippy::similar_names)]
+    #[allow(clippy::expect_used, clippy::indexing_slicing, clippy::similar_names)]
     mod proptests {
         use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -1318,6 +1719,85 @@ mod tests {
                         assert_eq!(
                             min_a, min_b,
                             "minimize(diff-patched a) == minimize(diff-patched b)"
+                        );
+                    });
+            }
+
+            #[test]
+            fn topsort_respects_all_dependency_edges() {
+                use crate::test_utils::ArbitraryDag;
+
+                bolero::check!()
+                    .with_arbitrary::<ArbitraryDag>()
+                    .for_each(|dag| {
+                        let order = dag
+                            .tree
+                            .topsorted_blob_order()
+                            .expect("acyclic DAG should not produce CycleError");
+
+                        // Build position map: fragment head → position in output
+                        let fragments: Vec<_> = dag.tree.fragments().collect();
+                        let loose: Vec<_> = dag.tree.loose_commits().collect();
+
+                        let mut head_to_pos: Map<Digest<LooseCommit>, usize> = Map::new();
+                        for (pos, item) in order.iter().enumerate() {
+                            match item {
+                                SedimentreeItem::Fragment(i) => {
+                                    head_to_pos.insert(fragments[*i].head(), pos);
+                                }
+                                SedimentreeItem::LooseCommit(_) => {}
+                            }
+                        }
+
+                        // Verify: every fragment's boundary deps appear earlier
+                        for (pos, item) in order.iter().enumerate() {
+                            match item {
+                                SedimentreeItem::Fragment(i) => {
+                                    for boundary_digest in fragments[*i].boundary() {
+                                        if let Some(&dep_pos) =
+                                            head_to_pos.get(boundary_digest)
+                                        {
+                                            assert!(
+                                                dep_pos < pos,
+                                                "fragment dependency must appear before dependent"
+                                            );
+                                        }
+                                    }
+                                }
+                                SedimentreeItem::LooseCommit(i) => {
+                                    for parent in loose[*i].parents() {
+                                        if let Some(&dep_pos) = head_to_pos.get(parent) {
+                                            assert!(
+                                                dep_pos < pos,
+                                                "loose commit's fragment dependency must appear before commit"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Verify: output length matches input
+                        assert_eq!(
+                            order.len(),
+                            fragments.len() + loose.len(),
+                            "topsort must include all items"
+                        );
+                    });
+            }
+
+            #[test]
+            fn topsort_detects_cycles() {
+                use crate::test_utils::CyclicGraph;
+
+                bolero::check!()
+                    .with_arbitrary::<CyclicGraph>()
+                    .for_each(|dag| {
+                        let result = dag.tree.topsorted_blob_order();
+                        assert!(
+                            result.is_err(),
+                            "cyclic graph must produce CycleError, got Ok with {} items",
+                            result.map(|t| t.len()).unwrap_or(0)
                         );
                     });
             }

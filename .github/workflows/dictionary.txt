@@ -141,6 +141,7 @@ HSM
 HSMs
 hardcoded
 heatmaps
+hostname
 Heatmaps
 hexdump
 html

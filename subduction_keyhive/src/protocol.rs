@@ -19,13 +19,15 @@ use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 use async_lock::Mutex;
 use keyhive_core::{
     contact_card::ContactCard,
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::digest::Digest,
     event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
     store::ciphertext::CiphertextStore,
+};
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
 
 use crate::{
@@ -691,7 +693,7 @@ where
         .membership_ops_for_agent(agent)
         .await
         .into_iter()
-        .map(|(digest, op)| (digest.into(), op.into()))
+        .map(|(digest, op)| (digest.coerce(), op.into()))
         .collect();
 
     // Prekey ops
@@ -706,7 +708,7 @@ where
     // to support encryption.
 
     ops.into_iter()
-        .map(|(digest, event)| (digest.into(), event.into()))
+        .map(|(digest, event)| (digest.coerce(), event.into()))
         .collect()
 }
 

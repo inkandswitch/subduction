@@ -15,7 +15,9 @@ rust-version.workspace = true
 
 [dependencies]
 automerge = { workspace = true }
+rayon = { workspace = true, optional = true }
 sedimentree_core = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 automerge_sedimentree = { path = ".", features = ["std"] }
@@ -30,6 +32,7 @@ harness = false
 
 [features]
 default = []
+rayon = ["dep:rayon", "sedimentree_core/rayon", "std"]
 std = ["sedimentree_core/std"]
 
 [lints]
