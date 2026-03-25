@@ -5,7 +5,11 @@
 
 use alloc::{string::ToString, sync::Arc, vec::Vec};
 
-use keyhive_core::{archive::Archive, event::static_event::StaticEvent, keyhive::Keyhive};
+use future_form::FutureForm;
+use keyhive_core::{
+    archive::Archive, event::static_event::StaticEvent, keyhive::Keyhive,
+    listener::membership::MembershipListener, store::ciphertext::CiphertextStore,
+};
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 
 use crate::{
@@ -50,7 +54,7 @@ pub async fn save_keyhive_archive<T, S, K>(
 where
     T: ContentRef,
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(archive)?;
 
@@ -80,7 +84,7 @@ pub async fn save_event<T, S, K>(
 where
     T: ContentRef,
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(event)?;
     save_event_bytes(storage, bytes).await
@@ -99,7 +103,7 @@ pub async fn save_event_bytes<S, K>(
 ) -> Result<StorageHash, StorageError>
 where
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     let hash = hash_event_bytes(&bytes);
 
@@ -128,7 +132,7 @@ pub async fn load_archives<T, S, K>(
 where
     T: ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     let raw_archives = storage
         .load_archives()
@@ -156,7 +160,7 @@ pub async fn load_events<T, S, K>(
 where
     T: ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     let raw_events = storage
         .load_events()
@@ -185,7 +189,7 @@ pub async fn load_event_bytes<S, K>(
 ) -> Result<Vec<(StorageHash, Vec<u8>)>, StorageError>
 where
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     storage
         .load_events()
@@ -210,11 +214,11 @@ where
     Signer: AsyncSigner + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     // Load archives
     let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage).await?;
@@ -268,11 +272,11 @@ where
     Signer: AsyncSigner + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    K: FutureForm + ?Sized,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage
