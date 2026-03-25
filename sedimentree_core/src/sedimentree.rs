@@ -2,7 +2,11 @@
 
 mod commit_dag;
 
-use alloc::{collections::BTreeSet, collections::VecDeque, vec, vec::Vec};
+use alloc::{
+    collections::{BTreeSet, VecDeque},
+    vec,
+    vec::Vec,
+};
 
 use crate::{
     collections::{Entry, Map, Set},
@@ -11,8 +15,8 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{checkpoint::Checkpoint, id::FragmentId, Fragment},
-    loose_commit::{id::CommitId, LooseCommit},
+    fragment::{Fragment, checkpoint::Checkpoint, id::FragmentId},
+    loose_commit::{LooseCommit, id::CommitId},
     topsorted::Topsorted,
 };
 
@@ -774,7 +778,7 @@ mod tests {
     mod proptests {
         use core::sync::atomic::{AtomicU64, Ordering};
 
-        use rand::{rngs::SmallRng, Rng, SeedableRng};
+        use rand::{Rng, SeedableRng, rngs::SmallRng};
 
         use super::*;
         use crate::{commit::CountLeadingZeroBytes, fragment::FragmentSummary};
@@ -1736,7 +1740,7 @@ mod tests {
             commit::CountLeadingZeroBytes,
             crypto::fingerprint::{Fingerprint, FingerprintSeed},
             sedimentree::Sedimentree,
-            test_utils::{seeded_rng, TestGraph},
+            test_utils::{TestGraph, seeded_rng},
         };
 
         /// Commits fully covered by a fragment should be pruned by minimize,

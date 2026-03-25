@@ -11,7 +11,7 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
-    fragment::{checkpoint::Checkpoint, Fragment},
+    fragment::{Fragment, checkpoint::Checkpoint},
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,

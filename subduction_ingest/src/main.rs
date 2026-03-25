@@ -16,9 +16,9 @@
 use std::{path::PathBuf, sync::Arc};
 
 use automerge::Automerge;
-use automerge_sedimentree::ingest::{ingest_automerge_par, IngestResult};
+use automerge_sedimentree::ingest::{IngestResult, ingest_automerge_par};
 use clap::Parser;
-use eyre::{eyre, Result, WrapErr};
+use eyre::{Result, WrapErr, eyre};
 use future_form::Sendable;
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
@@ -26,7 +26,7 @@ use subduction_core::{
     subduction::builder::SubductionBuilder, transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::tokio::{client::TokioWebSocketClient, TimeoutTokio, TokioSpawn};
+use subduction_websocket::tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient};
 
 /// Ingest an Automerge document into a Subduction sync server.
 #[derive(Debug, Parser)]
