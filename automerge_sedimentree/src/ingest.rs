@@ -156,8 +156,9 @@ pub fn ingest_automerge(
     // For loose commits: just the individual change's raw_bytes() (already
     // small, no recompression needed).
     let changes = doc.get_changes(&[]);
+    let index = ChangeIndex::new(&changes);
 
-    let (fragments, fragment_blobs) = compress_fragments(&states, &changes, sedimentree_id)?;
+    let (fragments, fragment_blobs) = compress_fragments(&states, &index, sedimentree_id)?;
 
     let (loose_commits, loose_blobs) =
         collect_loose_commits(&changes, &covered, &states, sedimentree_id);
@@ -215,8 +216,9 @@ pub fn ingest_automerge_par(
     let covered_count = covered.len();
 
     let changes = doc.get_changes(&[]);
+    let index = ChangeIndex::new(&changes);
 
-    let (fragments, fragment_blobs) = compress_fragments_par(&states, &changes, sedimentree_id)?;
+    let (fragments, fragment_blobs) = compress_fragments_par(&states, &index, sedimentree_id)?;
 
     let (loose_commits, loose_blobs) =
         collect_loose_commits(&changes, &covered, &states, sedimentree_id);
@@ -237,6 +239,24 @@ pub fn ingest_automerge_par(
     })
 }
 
+/// Pre-indexed change data for efficient per-fragment blob construction.
+///
+/// Built once from the full `get_changes(&[])` output, then shared
+/// across all fragment compressions. Each entry stores the raw bytes
+/// of a change keyed by its hash, in topological order.
+struct ChangeIndex<'a> {
+    /// `(ChangeHash, raw_bytes)` in topological order.
+    entries: Vec<(ChangeHash, &'a [u8])>,
+}
+
+impl<'a> ChangeIndex<'a> {
+    fn new(changes: &'a [automerge::Change]) -> Self {
+        Self {
+            entries: changes.iter().map(|c| (c.hash(), c.raw_bytes())).collect(),
+        }
+    }
+}
+
 /// Compress a single fragment: concatenate only the member changes'
 /// raw bytes, preserving the topological order from `get_changes`.
 ///
@@ -248,7 +268,7 @@ pub fn ingest_automerge_par(
 /// to be silently dropped.
 fn compress_one_fragment(
     state: &FragmentState<OwnedParents>,
-    changes: &[automerge::Change],
+    index: &ChangeIndex<'_>,
     sedimentree_id: SedimentreeId,
 ) -> Result<(sedimentree_core::fragment::Fragment, Blob), IngestError> {
     let members: Set<ChangeHash> = state
@@ -258,9 +278,9 @@ fn compress_one_fragment(
         .collect();
 
     let mut raw = Vec::new();
-    for change in changes {
-        if members.contains(&change.hash()) {
-            raw.extend_from_slice(change.raw_bytes());
+    for &(hash, bytes) in &index.entries {
+        if members.contains(&hash) {
+            raw.extend_from_slice(bytes);
         }
     }
 
@@ -274,13 +294,13 @@ fn compress_one_fragment(
 /// Sequential fragment compression.
 fn compress_fragments(
     states: &[FragmentState<OwnedParents>],
-    changes: &[automerge::Change],
+    index: &ChangeIndex<'_>,
     sedimentree_id: SedimentreeId,
 ) -> Result<(Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>), IngestError> {
     let mut fragments = Vec::with_capacity(states.len());
     let mut blobs = Vec::with_capacity(states.len());
     for state in states {
-        let (fragment, blob) = compress_one_fragment(state, changes, sedimentree_id)?;
+        let (fragment, blob) = compress_one_fragment(state, index, sedimentree_id)?;
         fragments.push(fragment);
         blobs.push(blob);
     }
@@ -291,14 +311,14 @@ fn compress_fragments(
 #[cfg(feature = "rayon")]
 fn compress_fragments_par(
     states: &[FragmentState<OwnedParents>],
-    changes: &[automerge::Change],
+    index: &ChangeIndex<'_>,
     sedimentree_id: SedimentreeId,
 ) -> Result<(Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>), IngestError> {
     use rayon::prelude::*;
 
     let results: Vec<Result<_, IngestError>> = states
         .par_iter()
-        .map(|state| compress_one_fragment(state, changes, sedimentree_id))
+        .map(|state| compress_one_fragment(state, index, sedimentree_id))
         .collect();
 
     let mut fragments = Vec::with_capacity(states.len());
@@ -341,7 +361,7 @@ fn collect_loose_commits(
             continue;
         }
         // Remap parents: if a parent is a fragment member, point to
-        // the fragment head instead so simplify doesn't prune us.
+        // the fragment head instead so minimize doesn't prune us.
         let parents: BTreeSet<Digest<LooseCommit>> = change
             .deps()
             .iter()

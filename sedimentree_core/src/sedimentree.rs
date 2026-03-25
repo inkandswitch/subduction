@@ -342,8 +342,17 @@ impl Sedimentree {
             }
         }
 
-        // Loose commit → fragment edges: loose commit L depends on
-        // fragment F if any of L's parents equals F's head.
+        // Map: loose commit digest → loose index (for loose→loose edges)
+        let digest_to_loose: Map<Digest<LooseCommit>, usize> = self
+            .commits
+            .keys()
+            .enumerate()
+            .map(|(i, d)| (*d, i))
+            .collect();
+
+        // Loose commit dependency edges:
+        // - L depends on fragment F if any of L's parents equals F's head.
+        // - L depends on loose commit P if any of L's parents equals P's digest.
         for (li, commit) in loose.iter().enumerate() {
             let idx = n_frags + li;
             let mut seen_deps: Set<usize> = Set::new();
@@ -352,6 +361,13 @@ impl Sedimentree {
                     if seen_deps.insert(fi) {
                         in_degree[idx] += 1;
                         dependents[fi].push(idx);
+                    }
+                }
+                if let Some(&pli) = digest_to_loose.get(parent) {
+                    let parent_idx = n_frags + pli;
+                    if parent_idx != idx && seen_deps.insert(parent_idx) {
+                        in_degree[idx] += 1;
+                        dependents[parent_idx].push(idx);
                     }
                 }
             }

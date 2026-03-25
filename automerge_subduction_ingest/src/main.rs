@@ -289,13 +289,16 @@ async fn main() -> Result<()> {
         "uploading {} fragments + {} loose commits...",
         result.fragment_count, result.loose_count
     );
-    subduction
-        .add_sedimentree(sed_id, result.sedimentree, result.blobs)
-        .await
-        .map_err(|e| eyre!("upload failed: {e}"))?;
+    let timeout_dur = std::time::Duration::from_secs(args.timeout);
+    tokio::time::timeout(timeout_dur, async {
+        subduction
+            .add_sedimentree(sed_id, result.sedimentree, result.blobs)
+            .await
+            .map_err(|e| eyre!("upload failed: {e}"))
+    })
+    .await
+    .map_err(|_| eyre!("sync timed out after {}s", args.timeout))??;
 
-    // add_sedimentree calls sync_with_all_peers internally, which awaits
-    // send_requested_data for all fragment/commit messages.
     eprintln!("upload and sync complete");
 
     Ok(())

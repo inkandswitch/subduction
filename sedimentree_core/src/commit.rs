@@ -68,9 +68,11 @@ pub trait CommitStore<'a> {
     /// they delimit the fragment and will head deeper (larger) strata.
     ///
     /// Same-depth commits encountered during the walk are absorbed as
-    /// members and recorded as checkpoints. This means a depth-N fragment
-    /// spans all the way back to the next depth-(N+1)+ commit, rather
-    /// than stopping at each depth-N peer.
+    /// members but are _not_ recorded as checkpoints. Only commits whose
+    /// depth is strictly between 0 and the head's depth (`0 < depth <
+    /// head_depth`) are recorded as checkpoints. This means a depth-N
+    /// fragment spans all the way back to the next depth-(N+1)+ commit,
+    /// rather than stopping at each depth-N peer.
     ///
     /// `head_digest` must have depth > 0; depth-0 commits are loose
     /// commits, not fragment heads.
@@ -109,9 +111,7 @@ pub trait CommitStore<'a> {
             let node = self
                 .lookup(digest)
                 .map_err(FragmentError::LookupError)?
-                .ok_or(FragmentError::MissingCommit(MissingCommitError(
-                    head_digest,
-                )))?;
+                .ok_or(FragmentError::MissingCommit(MissingCommitError(digest)))?;
 
             let depth = strategy.to_depth(digest);
             if depth > head_depth {
@@ -192,7 +192,7 @@ pub trait CommitStore<'a> {
             // Depth-0 commits are loose commits, not fragment heads.
             // Walk their parents so we still discover deeper boundaries.
             if strategy.to_depth(head) == Depth(0) {
-                if let Ok(Some(node)) = self.lookup(head) {
+                if let Some(node) = self.lookup(head).map_err(FragmentError::LookupError)? {
                     queue.extend(node.parents());
                 }
                 continue;
@@ -285,18 +285,19 @@ pub trait CommitStore<'a> {
                 });
 
                 while let Some(d) = pending.pop() {
-                    if let Ok(Some(node)) = self.lookup(d) {
-                        for p in node.parents() {
-                            if known_fragment_states.contains_key(&p) {
-                                continue;
+                    let Some(node) = self.lookup(d).map_err(FragmentError::LookupError)? else {
+                        continue;
+                    };
+                    for p in node.parents() {
+                        if known_fragment_states.contains_key(&p) {
+                            continue;
+                        }
+                        if strategy.to_depth(p) == Depth(0) {
+                            if visited_d0.insert(p) {
+                                pending.push(p);
                             }
-                            if strategy.to_depth(p) == Depth(0) {
-                                if visited_d0.insert(p) {
-                                    pending.push(p);
-                                }
-                            } else {
-                                horizon.push(p);
-                            }
+                        } else {
+                            horizon.push(p);
                         }
                     }
                 }
