@@ -6,7 +6,7 @@
 use alloc::{string::ToString, sync::Arc, vec::Vec};
 
 use keyhive_core::{archive::Archive, event::static_event::StaticEvent, keyhive::Keyhive};
-use keyhive_crypto::signer::async_signer::AsyncSigner;
+use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 
 use crate::{
     collections::{Map, Set},
@@ -48,7 +48,7 @@ pub async fn save_keyhive_archive<T, S, K>(
     archive: &Archive<T>,
 ) -> Result<(), StorageError>
 where
-    T: keyhive_crypto::content::reference::ContentRef,
+    T: ContentRef,
     S: KeyhiveStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
@@ -78,7 +78,7 @@ pub async fn save_event<T, S, K>(
     event: &StaticEvent<T>,
 ) -> Result<StorageHash, StorageError>
 where
-    T: keyhive_crypto::content::reference::ContentRef,
+    T: ContentRef,
     S: KeyhiveStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
@@ -126,7 +126,7 @@ pub async fn load_archives<T, S, K>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, Archive<T>)>, StorageError>
 where
-    T: keyhive_crypto::content::reference::ContentRef + serde::de::DeserializeOwned,
+    T: ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
@@ -154,7 +154,7 @@ pub async fn load_events<T, S, K>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, StaticEvent<T>)>, StorageError>
 where
-    T: keyhive_crypto::content::reference::ContentRef + serde::de::DeserializeOwned,
+    T: ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
@@ -208,7 +208,7 @@ pub async fn ingest_from_storage<Signer, T, P, C, L, R, S, K>(
 ) -> Result<Vec<Arc<StaticEvent<T>>>, StorageError>
 where
     Signer: AsyncSigner + Clone,
-    T: keyhive_crypto::content::reference::ContentRef + serde::de::DeserializeOwned,
+    T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
     L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
@@ -266,7 +266,7 @@ pub async fn compact<Signer, T, P, C, L, R, S, K>(
 ) -> Result<(), StorageError>
 where
     Signer: AsyncSigner + Clone,
-    T: keyhive_crypto::content::reference::ContentRef + serde::de::DeserializeOwned,
+    T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
     L: keyhive_core::listener::membership::MembershipListener<Signer, T>,

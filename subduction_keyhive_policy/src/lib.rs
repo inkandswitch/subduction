@@ -60,7 +60,7 @@ pub enum FetchDisallowedError {
     DocumentNotFound,
 
     /// The peer does not have sufficient access to fetch from this document.
-    #[error("peer does not have Pull access")]
+    #[error("peer does not have Relay access")]
     InsufficientAccess,
 }
 
@@ -80,7 +80,7 @@ pub enum PutDisallowedError {
     DocumentNotFound,
 
     /// The author does not have sufficient access to write to this document.
-    #[error("author does not have Write access")]
+    #[error("author does not have Edit access")]
     InsufficientAccess,
 }
 
@@ -178,10 +178,10 @@ impl<
 
             let members = doc.lock().await.transitive_members().await;
 
-            // Check if the peer has at least Pull access
+            // Check if the peer has at least Relay access
             if members
                 .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Pull)
+                .is_some_and(|(_, access)| *access >= Access::Relay)
             {
                 Ok(())
             } else {
@@ -212,10 +212,10 @@ impl<
 
             let members = doc.lock().await.transitive_members().await;
 
-            // Check if the author has at least Write access
+            // Check if the author has at least Edit access
             if members
                 .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Write)
+                .is_some_and(|(_, access)| *access >= Access::Edit)
             {
                 Ok(())
             } else {
@@ -249,7 +249,7 @@ impl<
 
                 if members
                     .get(&identifier)
-                    .is_some_and(|(_, access)| *access >= Access::Pull)
+                    .is_some_and(|(_, access)| *access >= Access::Relay)
                 {
                     authorized.push(sedimentree_id);
                 }
@@ -359,7 +359,7 @@ impl<
 
             if members
                 .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Pull)
+                .is_some_and(|(_, access)| *access >= Access::Relay)
             {
                 Ok(())
             } else {
@@ -392,7 +392,7 @@ impl<
 
             if members
                 .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Write)
+                .is_some_and(|(_, access)| *access >= Access::Edit)
             {
                 Ok(())
             } else {
@@ -426,7 +426,7 @@ impl<
 
                 if members
                     .get(&identifier)
-                    .is_some_and(|(_, access)| *access >= Access::Pull)
+                    .is_some_and(|(_, access)| *access >= Access::Relay)
                 {
                     authorized.push(sedimentree_id);
                 }
