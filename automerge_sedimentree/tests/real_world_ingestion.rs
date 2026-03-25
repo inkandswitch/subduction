@@ -284,7 +284,9 @@ fn roundtrip_full(name: &str, bytes: &[u8]) {
         }))
         .collect();
 
-    let order = tree.topsorted_blob_order();
+    let order = tree
+        .topsorted_blob_order()
+        .expect("no cycles in test fixture");
     let fragments: Vec<_> = tree.fragments().collect();
     let loose: Vec<_> = tree.loose_commits().collect();
 
