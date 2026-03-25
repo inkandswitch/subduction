@@ -60,7 +60,7 @@ pub enum FetchDisallowedError {
     DocumentNotFound,
 
     /// The peer does not have sufficient access to fetch from this document.
-    #[error("peer does not have Relay access")]
+    #[error("insufficient access to fetch: requires at least Relay")]
     InsufficientAccess,
 }
 
@@ -80,7 +80,7 @@ pub enum PutDisallowedError {
     DocumentNotFound,
 
     /// The author does not have sufficient Edit access to this document.
-    #[error("author does not have Edit access")]
+    #[error("insufficient access to put: requires at least Edit")]
     InsufficientAccess,
 }
 
