@@ -6,7 +6,7 @@
 //! Enable with the `test_utils` feature flag.
 
 // Test utilities are allowed to panic for clearer test failures
-#![allow(clippy::panic)]
+#![allow(clippy::expect_used, clippy::panic)]
 
 use alloc::{
     collections::BTreeSet,

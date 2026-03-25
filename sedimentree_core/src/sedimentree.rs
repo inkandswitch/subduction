@@ -333,11 +333,11 @@ impl Sedimentree {
         // contains F_j's head.
         for (i, frag) in fragments.iter().enumerate() {
             for boundary_digest in frag.boundary() {
-                if let Some(&j) = head_to_frag.get(boundary_digest) {
-                    if i != j {
-                        in_degree[i] += 1;
-                        dependents[j].push(i);
-                    }
+                if let Some(&j) = head_to_frag.get(boundary_digest)
+                    && i != j
+                {
+                    in_degree[i] += 1;
+                    dependents[j].push(i);
                 }
             }
         }
@@ -357,11 +357,11 @@ impl Sedimentree {
             let idx = n_frags + li;
             let mut seen_deps: Set<usize> = Set::new();
             for parent in commit.parents() {
-                if let Some(&fi) = head_to_frag.get(parent) {
-                    if seen_deps.insert(fi) {
-                        in_degree[idx] += 1;
-                        dependents[fi].push(idx);
-                    }
+                if let Some(&fi) = head_to_frag.get(parent)
+                    && seen_deps.insert(fi)
+                {
+                    in_degree[idx] += 1;
+                    dependents[fi].push(idx);
                 }
                 if let Some(&pli) = digest_to_loose.get(parent) {
                     let parent_idx = n_frags + pli;
