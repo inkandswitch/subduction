@@ -79,7 +79,7 @@ pub enum PutDisallowedError {
     #[error("document not found")]
     DocumentNotFound,
 
-    /// The author does not have sufficient access to write to this document.
+    /// The author does not have sufficient Edit access to this document.
     #[error("author does not have Edit access")]
     InsufficientAccess,
 }
