@@ -158,7 +158,7 @@ pub fn ingest_automerge(
     let changes = doc.get_changes(&[]);
     let index = ChangeIndex::new(&changes);
 
-    let (fragments, fragment_blobs) = compress_fragments(&states, &index, sedimentree_id)?;
+    let (fragments, fragment_blobs) = compress_fragments(&states, &index, sedimentree_id);
 
     let (loose_commits, loose_blobs) =
         collect_loose_commits(&changes, &covered, &states, sedimentree_id);
@@ -187,6 +187,10 @@ pub fn ingest_automerge(
 ///
 /// The `get_changes` call (the main bottleneck) is still sequential —
 /// it's internal to automerge and single-threaded.
+///
+/// # Errors
+///
+/// Returns [`IngestError`] if fragment construction or blob compression fails.
 #[cfg(feature = "rayon")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 pub fn ingest_automerge_par(
@@ -218,7 +222,7 @@ pub fn ingest_automerge_par(
     let changes = doc.get_changes(&[]);
     let index = ChangeIndex::new(&changes);
 
-    let (fragments, fragment_blobs) = compress_fragments_par(&states, &index, sedimentree_id)?;
+    let (fragments, fragment_blobs) = compress_fragments_par(&states, &index, sedimentree_id);
 
     let (loose_commits, loose_blobs) =
         collect_loose_commits(&changes, &covered, &states, sedimentree_id);
@@ -270,7 +274,7 @@ fn compress_one_fragment(
     state: &FragmentState<OwnedParents>,
     index: &ChangeIndex<'_>,
     sedimentree_id: SedimentreeId,
-) -> Result<(sedimentree_core::fragment::Fragment, Blob), IngestError> {
+) -> (sedimentree_core::fragment::Fragment, Blob) {
     let members: Set<ChangeHash> = state
         .members()
         .iter()
@@ -288,7 +292,7 @@ fn compress_one_fragment(
     let fragment = state
         .clone()
         .to_fragment(sedimentree_id, BlobMeta::new(&blob));
-    Ok((fragment, blob))
+    (fragment, blob)
 }
 
 /// Sequential fragment compression.
@@ -296,15 +300,15 @@ fn compress_fragments(
     states: &[FragmentState<OwnedParents>],
     index: &ChangeIndex<'_>,
     sedimentree_id: SedimentreeId,
-) -> Result<(Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>), IngestError> {
+) -> (Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>) {
     let mut fragments = Vec::with_capacity(states.len());
     let mut blobs = Vec::with_capacity(states.len());
     for state in states {
-        let (fragment, blob) = compress_one_fragment(state, index, sedimentree_id)?;
+        let (fragment, blob) = compress_one_fragment(state, index, sedimentree_id);
         fragments.push(fragment);
         blobs.push(blob);
     }
-    Ok((fragments, blobs))
+    (fragments, blobs)
 }
 
 /// Parallel fragment compression using rayon.
@@ -313,22 +317,15 @@ fn compress_fragments_par(
     states: &[FragmentState<OwnedParents>],
     index: &ChangeIndex<'_>,
     sedimentree_id: SedimentreeId,
-) -> Result<(Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>), IngestError> {
+) -> (Vec<sedimentree_core::fragment::Fragment>, Vec<Blob>) {
     use rayon::prelude::*;
 
-    let results: Vec<Result<_, IngestError>> = states
+    let (fragments, blobs): (Vec<_>, Vec<_>) = states
         .par_iter()
         .map(|state| compress_one_fragment(state, index, sedimentree_id))
-        .collect();
+        .unzip();
 
-    let mut fragments = Vec::with_capacity(states.len());
-    let mut blobs = Vec::with_capacity(states.len());
-    for result in results {
-        let (fragment, blob) = result?;
-        fragments.push(fragment);
-        blobs.push(blob);
-    }
-    Ok((fragments, blobs))
+    (fragments, blobs)
 }
 
 /// Collect loose commits (depth-0, not covered by any fragment).

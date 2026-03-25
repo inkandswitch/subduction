@@ -6,6 +6,15 @@
 //! invariants. Byte-identical reassembly is tested in release mode only
 //! (automerge's `get_changes` has a `debug_assert` that doubles work).
 
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::doc_markdown,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unwrap_used
+)]
+
 use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
@@ -334,7 +343,7 @@ fn roundtrip_full(name: &str, bytes: &[u8]) {
 /// Report blob sizes for all vectors that have fragments.
 /// Release-only because it calls get_changes.
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn blob_size_report() {
     for (name, bytes) in [
         ("A1", &include_bytes!("../test-vectors/A1.am")[..]),
@@ -344,8 +353,8 @@ fn blob_size_report() {
     ] {
         let doc = Automerge::load(bytes).expect(name);
         let d = decompose_full(&doc);
-        let frag_bytes: usize = d.fragment_blobs.iter().map(|b| b.len()).sum();
-        let loose_bytes: usize = d.uncovered_blobs.iter().map(|b| b.len()).sum();
+        let frag_bytes: usize = d.fragment_blobs.iter().map(Vec::len).sum();
+        let loose_bytes: usize = d.uncovered_blobs.iter().map(Vec::len).sum();
         let original = bytes.len();
         let ratio = (frag_bytes + loose_bytes) as f64 / original as f64;
         eprintln!(
@@ -375,25 +384,25 @@ fn roundtrip_s3() {
 // A1/A2/C1/C2 full roundtrips — only run in release mode because
 // automerge's get_changes has a debug_assert that doubles work.
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn roundtrip_a1() {
     roundtrip_full("A1", include_bytes!("../test-vectors/A1.am"));
 }
 
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn roundtrip_a2() {
     roundtrip_full("A2", include_bytes!("../test-vectors/A2.am"));
 }
 
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn roundtrip_c1() {
     roundtrip_full("C1", include_bytes!("../test-vectors/C1.am"));
 }
 
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn roundtrip_c2() {
     roundtrip_full("C2", include_bytes!("../test-vectors/C2.am"));
 }
@@ -509,7 +518,7 @@ fn fingerprint_summary_includes_all_items_after_ingestion() {
 /// and verify the roundtrip: topsorted reassembly must produce the same
 /// document heads and change count.
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn ingest_roundtrip_a2() {
     let bytes = include_bytes!("../test-vectors/A2.am");
     let doc = Automerge::load(bytes).expect("A2");
@@ -638,7 +647,7 @@ fn real_world_metadata_decomposition() {
 /// Full bundle roundtrip on the real-world doc.
 /// Only runs in release mode, and only when the file is present.
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn real_world_roundtrip() {
     let Some(bytes) = load_real_world() else {
         eprintln!("skipping: real-world.am not found at {REAL_WORLD_PATH}");

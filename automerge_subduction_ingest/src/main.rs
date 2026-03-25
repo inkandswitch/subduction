@@ -53,7 +53,7 @@ struct Args {
     ///
     /// By default, derived from the filename (minus extension) as an
     /// `automerge:` URL. The base58check-decoded bytes (typically 16-byte
-    /// UUID) are zero-padded to 32 bytes for the SedimentreeId.
+    /// UUID) are zero-padded to 32 bytes for the `SedimentreeId`.
     #[arg(long, value_name = "ID")]
     doc_id: Option<String>,
 
@@ -139,6 +139,7 @@ fn sed_id_from_bs58check(encoded: &str) -> Result<SedimentreeId> {
         eyre::bail!("document ID too long: {} bytes (max 32)", decoded.len());
     }
     let mut padded = [0u8; 32];
+    #[allow(clippy::indexing_slicing)] // len checked above
     padded[..decoded.len()].copy_from_slice(&decoded);
     Ok(SedimentreeId::new(padded))
 }
@@ -165,7 +166,7 @@ fn parse_doc_id(input: &str) -> Result<SedimentreeId> {
 
 /// Derive a document ID from the filename (minus extension), treating
 /// the stem as a base58check-encoded automerge document ID.
-fn sed_id_from_filename(path: &PathBuf) -> Result<SedimentreeId> {
+fn sed_id_from_filename(path: &std::path::Path) -> Result<SedimentreeId> {
     let stem = path
         .file_stem()
         .ok_or_else(|| eyre!("file has no name: {}", path.display()))?

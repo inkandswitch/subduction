@@ -694,8 +694,14 @@ pub fn has_commit_boundary<
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names
+)]
 mod tests {
     use alloc::vec;
+    use testresult::TestResult;
 
     use crate::{
         blob::{Blob, BlobMeta},
@@ -833,35 +839,50 @@ mod tests {
     }
 
     #[test]
-    fn topsorted_empty_sedimentree() {
+    fn topsorted_empty_sedimentree() -> TestResult {
         let tree = Sedimentree::default();
-        let order = tree.topsorted_blob_order().expect("no cycle");
+        let order = tree.topsorted_blob_order()?;
         assert!(order.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn topsorted_single_fragment() {
+    fn topsorted_single_fragment() -> TestResult {
         let mut tree = Sedimentree::default();
         let f = make_fragment_with_deps(unique_head(1), BTreeSet::new());
         tree.add_fragment(f);
 
-        let order = tree.topsorted_blob_order().expect("no cycle");
+        let order = tree.topsorted_blob_order()?;
         assert_eq!(order.len(), 1);
         assert_eq!(order[0], SedimentreeItem::Fragment(0));
+        Ok(())
     }
 
     #[test]
-    fn topsorted_single_loose_commit() {
+    fn topsorted_single_loose_commit() -> TestResult {
         let mut tree = Sedimentree::default();
         tree.add_commit(make_commit(1));
 
-        let order = tree.topsorted_blob_order().expect("no cycle");
+        let order = tree.topsorted_blob_order()?;
         assert_eq!(order.len(), 1);
         assert_eq!(order[0], SedimentreeItem::LooseCommit(0));
+        Ok(())
+    }
+
+    /// Helper: extract fragment head positions from a topsort ordering.
+    fn fragment_head_positions(order: &[SedimentreeItem], tree: &Sedimentree) -> Vec<[u8; 32]> {
+        let fragments: Vec<_> = tree.fragments().collect();
+        order
+            .iter()
+            .filter_map(|item| match item {
+                SedimentreeItem::Fragment(i) => Some(*fragments[*i].head().as_bytes()),
+                SedimentreeItem::LooseCommit(_) => None,
+            })
+            .collect()
     }
 
     #[test]
-    fn topsorted_linear_chain_deepest_first() {
+    fn topsorted_linear_chain_deepest_first() -> TestResult {
         // C (deep) ← B (mid) ← A (shallow)
         // A.boundary = {B.head}, B.boundary = {C.head}, C.boundary = {}
         let c_head = unique_head(3);
@@ -877,39 +898,35 @@ mod tests {
         tree.add_fragment(b);
         tree.add_fragment(c);
 
-        let order = tree.topsorted_blob_order().expect("no cycle");
+        let order = tree.topsorted_blob_order()?;
         assert_eq!(order.len(), 3);
 
-        // Map SedimentreeItem indices back to heads for verification.
-        let fragments: Vec<_> = tree.fragments().collect();
-        let head_order: Vec<[u8; 32]> = order
-            .iter()
-            .map(|item| match item {
-                SedimentreeItem::Fragment(i) => *fragments[*i].head().as_bytes(),
-                SedimentreeItem::LooseCommit(_) => panic!("unexpected loose commit"),
-            })
-            .collect();
+        let head_order = fragment_head_positions(&order, &tree);
 
-        // C must come before B, B must come before A
-        let c_pos = head_order.iter().position(|h| *h == c_head).unwrap();
-        let b_pos = head_order.iter().position(|h| *h == b_head).unwrap();
-        let a_pos = head_order.iter().position(|h| *h == a_head).unwrap();
+        let c_pos = head_order
+            .iter()
+            .position(|h| *h == c_head)
+            .ok_or("C not found")?;
+        let b_pos = head_order
+            .iter()
+            .position(|h| *h == b_head)
+            .ok_or("B not found")?;
+        let a_pos = head_order
+            .iter()
+            .position(|h| *h == a_head)
+            .ok_or("A not found")?;
         assert!(c_pos < b_pos, "C (deepest) must come before B");
         assert!(b_pos < a_pos, "B must come before A (shallowest)");
+        Ok(())
     }
 
     #[test]
-    fn topsorted_diamond_dag() {
+    fn topsorted_diamond_dag() -> TestResult {
         //     D (deep)
         //    / \
         //   B   C
         //    \ /
         //     A (shallow)
-        //
-        // A.boundary = {B.head, C.head}
-        // B.boundary = {D.head}
-        // C.boundary = {D.head}
-        // D.boundary = {}
         let d_head = unique_head(4);
         let b_head = unique_head(2);
         let c_head = unique_head(3);
@@ -932,33 +949,37 @@ mod tests {
         tree.add_fragment(c);
         tree.add_fragment(d);
 
-        let order = tree.topsorted_blob_order().expect("no cycle");
+        let order = tree.topsorted_blob_order()?;
         assert_eq!(order.len(), 4);
 
-        let fragments: Vec<_> = tree.fragments().collect();
-        let head_order: Vec<[u8; 32]> = order
-            .iter()
-            .map(|item| match item {
-                SedimentreeItem::Fragment(i) => *fragments[*i].head().as_bytes(),
-                SedimentreeItem::LooseCommit(_) => panic!("unexpected loose commit"),
-            })
-            .collect();
+        let head_order = fragment_head_positions(&order, &tree);
 
-        let d_pos = head_order.iter().position(|h| *h == d_head).unwrap();
-        let b_pos = head_order.iter().position(|h| *h == b_head).unwrap();
-        let c_pos = head_order.iter().position(|h| *h == c_head).unwrap();
-        let a_pos = head_order.iter().position(|h| *h == a_head).unwrap();
+        let d_pos = head_order
+            .iter()
+            .position(|h| *h == d_head)
+            .ok_or("D not found")?;
+        let b_pos = head_order
+            .iter()
+            .position(|h| *h == b_head)
+            .ok_or("B not found")?;
+        let c_pos = head_order
+            .iter()
+            .position(|h| *h == c_head)
+            .ok_or("C not found")?;
+        let a_pos = head_order
+            .iter()
+            .position(|h| *h == a_head)
+            .ok_or("A not found")?;
 
         assert!(d_pos < b_pos, "D must come before B");
         assert!(d_pos < c_pos, "D must come before C");
         assert!(b_pos < a_pos, "B must come before A");
         assert!(c_pos < a_pos, "C must come before A");
+        Ok(())
     }
 
     #[test]
-    fn topsorted_loose_commit_after_fragment() {
-        // Fragment F with head H, loose commit L whose parent is H.
-        // F must come before L.
+    fn topsorted_loose_commit_after_fragment() -> TestResult {
         let f_head = unique_head(1);
         let f = make_fragment_with_deps(f_head, BTreeSet::new());
 
@@ -974,28 +995,27 @@ mod tests {
         tree.add_fragment(f);
         tree.add_commit(loose);
 
-        let order = tree.topsorted_blob_order().expect("no cycle");
+        let order = tree.topsorted_blob_order()?;
         assert_eq!(order.len(), 2);
 
         let frag_pos = order
             .iter()
             .position(|i| matches!(i, SedimentreeItem::Fragment(_)))
-            .unwrap();
+            .ok_or("no fragment in order")?;
         let loose_pos = order
             .iter()
             .position(|i| matches!(i, SedimentreeItem::LooseCommit(_)))
-            .unwrap();
+            .ok_or("no loose commit in order")?;
 
         assert!(
             frag_pos < loose_pos,
             "fragment must come before dependent loose commit"
         );
+        Ok(())
     }
 
     #[test]
     fn topsorted_cycle_returns_error() {
-        // Create two fragments that reference each other's heads.
-        // A.boundary = {B.head}, B.boundary = {A.head}
         let a_head = unique_head(1);
         let b_head = unique_head(2);
 
@@ -1006,10 +1026,9 @@ mod tests {
         tree.add_fragment(a);
         tree.add_fragment(b);
 
-        let result = tree.topsorted_blob_order();
-        assert!(result.is_err(), "cycle should produce CycleError");
-
-        let err = result.unwrap_err();
+        let err = tree
+            .topsorted_blob_order()
+            .expect_err("cycle should produce CycleError");
         assert_eq!(
             err.to_string(),
             "cycle in sedimentree dependency graph: 2 items but only 0 could be sorted"
@@ -1017,7 +1036,7 @@ mod tests {
     }
 
     #[cfg(all(test, feature = "bolero"))]
-    #[allow(clippy::similar_names)]
+    #[allow(clippy::expect_used, clippy::indexing_slicing, clippy::similar_names)]
     mod proptests {
         use core::sync::atomic::{AtomicU64, Ordering};
 

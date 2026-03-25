@@ -2,6 +2,8 @@
 //!
 //! These benchmarks use real Automerge documents from the egwalker paper to measure
 //! sedimentree's fragment strategy performance on realistic workloads.
+
+#![allow(clippy::expect_used)]
 //!
 //! Test vectors:
 //! - A1/A2: Automerge editing traces

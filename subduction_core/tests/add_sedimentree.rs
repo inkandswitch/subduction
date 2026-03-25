@@ -1,6 +1,19 @@
 //! Tests for `add_sedimentree` — verifying that fragments and loose commits
 //! survive the full pipeline: sign → store → in-memory tree → minimize →
 //! fingerprint summary.
+
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::doc_markdown,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::missing_const_for_fn,
+    clippy::map_unwrap_or,
+    clippy::panic,
+    clippy::redundant_closure_for_method_calls,
+    clippy::unwrap_used,
+    unused_variables
+)]
 //!
 //! These tests reproduce the ingestion scenario where a client uploads
 //! fragments + loose commits and the server must retain all of them.

@@ -6,7 +6,14 @@
 //! - Same-depth boundaries are absorbed into the current fragment
 //! - Strictly deeper commits form boundaries
 //! - All non-depth-0 commits in the DAG are covered by exactly one fragment
-//! - Checkpoints are interior depth boundaries (0 < depth < head_depth)
+//! - Checkpoints are interior depth boundaries (0 < depth < `head_depth`)
+
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unwrap_used
+)]
 
 use sedimentree_core::{
     collections::{Map, Set},
@@ -18,7 +25,7 @@ use sedimentree_core::{
 
 type Known = Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>;
 
-/// Helper: run `build_fragment_store` on a TestGraph starting from named heads.
+/// Helper: run `build_fragment_store` on a `TestGraph` starting from named heads.
 fn run_fragment_store(
     graph: &TestGraph,
     head_names: &[&str],
@@ -79,7 +86,7 @@ fn linear_single_depth_1_boundary() {
         &[("a", "b"), ("b", "c"), ("c", "d")],
     );
 
-    let (fresh, known) = run_fragment_store(&graph, &["d"]);
+    let (fresh, _known) = run_fragment_store(&graph, &["d"]);
     assert_eq!(fresh.len(), 1, "should produce exactly 1 fragment");
 
     let frag = &fresh[0];
