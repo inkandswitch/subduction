@@ -6,7 +6,7 @@
 //! invariants. Byte-identical reassembly is tested in release mode only
 //! (automerge's `get_changes` has a `debug_assert` that doubles work).
 
-use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
+use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
