@@ -4,11 +4,10 @@
 
 #![allow(
     clippy::cast_precision_loss,
-    clippy::doc_markdown,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::missing_const_for_fn,
     clippy::map_unwrap_or,
+    clippy::missing_const_for_fn,
     clippy::panic,
     clippy::redundant_closure_for_method_calls,
     clippy::unwrap_used,
@@ -209,7 +208,7 @@ async fn loose_commits_with_interior_parents_may_be_pruned() -> TestResult {
 }
 
 /// The fingerprint summary should include all items from the in-memory tree.
-/// This verifies the full flow: add_sedimentree → fingerprint_summarize.
+/// This verifies the full flow: `add_sedimentree` → `fingerprint_summarize`.
 #[tokio::test]
 async fn fingerprint_summary_has_all_items_after_add_sedimentree() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();

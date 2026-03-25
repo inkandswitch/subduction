@@ -8,7 +8,6 @@
 
 #![allow(
     clippy::cast_precision_loss,
-    clippy::doc_markdown,
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
@@ -341,7 +340,7 @@ fn roundtrip_full(name: &str, bytes: &[u8]) {
 }
 
 /// Report blob sizes for all vectors that have fragments.
-/// Release-only because it calls get_changes.
+/// Release-only because it calls `get_changes`.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn blob_size_report() {
