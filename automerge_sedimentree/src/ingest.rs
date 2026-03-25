@@ -45,7 +45,9 @@ use automerge::{Automerge, ChangeHash};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     collections::{Map, Set},
-    commit::{CommitStore, CountLeadingZeroBytes, FragmentState, MissingCommitError},
+    commit::{
+        CommitStore, CountLeadingZeroBytes, FragmentError, FragmentState, MissingCommitError,
+    },
     crypto::digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -55,7 +57,7 @@ use sedimentree_core::{
 use crate::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 
 /// Errors that can occur during automerge document ingestion.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
 pub enum IngestError {
     /// A commit required during fragment construction was missing from the store.
     #[error(transparent)]
@@ -65,11 +67,10 @@ pub enum IngestError {
 /// Extract the [`MissingCommitError`] from a [`FragmentError`] produced by
 /// [`IndexedSedimentreeAutomerge`], whose `LookupError` is
 /// [`Infallible`](core::convert::Infallible).
-fn extract_missing_commit(
-    err: sedimentree_core::commit::FragmentError<'static, IndexedSedimentreeAutomerge>,
+#[allow(clippy::needless_pass_by_value)] // Consumes the error by destructuring
+const fn extract_missing_commit(
+    err: FragmentError<'static, IndexedSedimentreeAutomerge>,
 ) -> IngestError {
-    use sedimentree_core::commit::FragmentError;
-
     match err {
         FragmentError::MissingCommit(m) => IngestError::MissingCommit(m),
         FragmentError::LookupError(infallible) => match infallible {},
