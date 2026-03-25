@@ -6,7 +6,7 @@
 //! invariants. Byte-identical reassembly is tested in release mode only
 //! (automerge's `get_changes` has a `debug_assert` that doubles work).
 
-use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
+use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -18,10 +18,6 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
     sedimentree::{Sedimentree, SedimentreeItem},
 };
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Lightweight decomposition using only `get_changes_meta` (fast in debug).
 /// Does NOT extract raw bytes — just builds the fragment index.
@@ -259,11 +255,6 @@ fn produces_fragments() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Full roundtrip tests (require get_changes — slow in debug, fast in release)
-// Use S1/S2/S3 (2 changes each) which are instant even in debug.
-// ---------------------------------------------------------------------------
-
 fn roundtrip_full(name: &str, bytes: &[u8]) {
     let doc = Automerge::load(bytes).expect(name);
     let d = decompose_full(&doc);
@@ -406,10 +397,6 @@ fn roundtrip_c1() {
 fn roundtrip_c2() {
     roundtrip_full("C2", include_bytes!("../test-vectors/C2.am"));
 }
-
-// ---------------------------------------------------------------------------
-// Sedimentree structural tests (use S1 for speed — full decomp is cheap)
-// ---------------------------------------------------------------------------
 
 static S1: &[u8] = include_bytes!("../test-vectors/S1.am");
 
