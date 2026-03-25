@@ -156,11 +156,7 @@ async fn add_sedimentree_survives_minimize() -> TestResult {
 
     sd.add_sedimentree(sed_id, sedimentree, blobs).await?;
 
-    // The in-memory tree is not minimized by add_sedimentree, but let's check
-    // that fingerprint_summarize (which reads from the in-memory tree) has all items.
-    let seed = FingerprintSeed::new(42, 99);
-
-    // Use get_commits/get_fragments as proxy for in-memory state
+    // Verify all items survive in the in-memory tree.
     let commits = sd.get_commits(sed_id).await.unwrap_or_default();
     let fragments = sd.get_fragments(sed_id).await.unwrap_or_default();
 
@@ -170,10 +166,13 @@ async fn add_sedimentree_survives_minimize() -> TestResult {
     Ok(())
 }
 
-/// Loose commits whose parents point to INTERIOR fragment members (not heads)
-/// may get pruned by minimize. This test documents the behavior.
-#[tokio::test]
-async fn loose_commits_with_interior_parents_may_be_pruned() -> TestResult {
+/// Loose commits whose parents point to interior fragment members
+/// (checkpoints) survive `minimize` — they are _not_ pruned. The parent
+/// remapping in `ingest_automerge` (which rewrites interior-member parents
+/// to the fragment head) is a correctness optimization for topsort
+/// ordering, not a requirement for `minimize` data retention.
+#[test]
+fn minimize_keeps_loose_commits_with_interior_parents() {
     let sed_id = make_sed_id(0x30);
 
     // Fragment with interior member at [0x50; 32]
@@ -185,26 +184,18 @@ async fn loose_commits_with_interior_parents_may_be_pruned() -> TestResult {
     let (c1, _c1_blob) = make_loose_commit(sed_id, &[interior_member], 10);
 
     let tree = Sedimentree::new(vec![frag1], vec![c1]);
+    assert_eq!(
+        tree.loose_commits().count(),
+        1,
+        "pre-minimize: 1 loose commit"
+    );
+
     let minimized = tree.minimize(&CountLeadingZeroBytes);
-
-    let original_commits = tree.loose_commits().count();
-    let minimized_commits = minimized.loose_commits().count();
-
-    // This documents the current behavior: minimize MAY prune commits
-    // whose parents are interior fragment members (checkpoints).
-    // If this assertion fails, it means minimize behavior changed.
-    eprintln!("interior parent test: original={original_commits}, minimized={minimized_commits}");
-
-    // The key insight: if this prunes to 0, it means the parent remapping
-    // in ingest_automerge is NECESSARY to prevent data loss.
-    if minimized_commits < original_commits {
-        eprintln!(
-            "WARNING: minimize pruned {diff} loose commits with interior parents",
-            diff = original_commits - minimized_commits
-        );
-    }
-
-    Ok(())
+    assert_eq!(
+        minimized.loose_commits().count(),
+        1,
+        "minimize must retain loose commits even when parents are interior fragment members"
+    );
 }
 
 /// The fingerprint summary should include all items from the in-memory tree.

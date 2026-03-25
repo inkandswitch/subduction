@@ -13,6 +13,10 @@ readme = "README.md"
 repository.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "automerge-subduction-ingest"
+path = "src/main.rs"
+
 [dependencies]
 automerge = { workspace = true }
 automerge_sedimentree = { workspace = true, features = ["rayon"] }
