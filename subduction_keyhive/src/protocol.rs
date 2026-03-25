@@ -693,7 +693,7 @@ where
         .membership_ops_for_agent(agent)
         .await
         .into_iter()
-        .map(|(digest, op)| (digest.into(), op.into()))
+        .map(|(digest, op)| (digest.coerce(), op.into()))
         .collect();
 
     // Prekey ops
@@ -708,7 +708,7 @@ where
     // to support encryption.
 
     ops.into_iter()
-        .map(|(digest, event)| (digest.into(), event.into()))
+        .map(|(digest, event)| (digest.coerce(), event.into()))
         .collect()
 }
 
