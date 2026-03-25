@@ -502,7 +502,8 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "beekem"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#b9e21e14fbc452a0efa25f787a1c46f669e551d1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57357a1e2f8899fb78779b0364e9430beb2fd20b241136e02d4022f919ff2398"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2962,8 +2963,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.2.0-alpha.1"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#b9e21e14fbc452a0efa25f787a1c46f669e551d1"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "034630cc927df6c8a0166cb8d73fb10aa3c61173056a0b60891d9775925a5ac5"
 dependencies = [
  "beekem",
  "bincode",
@@ -2990,7 +2992,8 @@ dependencies = [
 [[package]]
 name = "keyhive_crypto"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#b9e21e14fbc452a0efa25f787a1c46f669e551d1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "429decc39976cec079b5af15f9b42584848a6766b1fb181ee88d74a77a0e9f7a"
 dependencies = [
  "bincode",
  "blake3",
@@ -3813,9 +3816,9 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pkarr"
-version = "5.0.3"
+version = "5.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f950360d31be432c0c9467fba5024a94f55128e7f32bc9d32db140369f24c77"
+checksum = "d7bfb9143bbba379f246211eb68074d78db9cc048e4c5701f3b0e6cb1ec67ca2"
 dependencies = [
  "async-compat",
  "base32",
@@ -4980,9 +4983,9 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simple-dns"
-version = "0.9.3"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dee851d0e5e7af3721faea1843e8015e820a234f81fda3dea9247e15bac9a86a"
+checksum = "df350943049174c4ae8ced56c604e28270258faec12a6a48637a7655287c9ce0"
 dependencies = [
  "bitflags 2.11.0",
 ]

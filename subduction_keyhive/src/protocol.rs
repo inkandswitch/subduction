@@ -19,7 +19,6 @@ use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 use async_lock::Mutex;
 use keyhive_core::{
     contact_card::ContactCard,
-    crypto::digest::Digest,
     event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
@@ -27,7 +26,8 @@ use keyhive_core::{
     store::ciphertext::CiphertextStore,
 };
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, digest::Digest, signed::Signed,
+    signer::async_signer::AsyncSigner,
 };
 
 use crate::{
