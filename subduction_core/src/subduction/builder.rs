@@ -425,7 +425,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.depth_metric.clone(),
         ));
 
-        let send_heads_counter = handler.send_heads_counter().clone();
+        let send_counter = handler.send_counter().clone();
 
         let (sd, listener, manager) = Subduction::new(
             handler.clone(),
@@ -436,7 +436,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             subscriptions,
             self.storage,
             pending_blob_requests,
-            send_heads_counter,
+            send_counter,
             nonce_cache,
             self.timer,
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),

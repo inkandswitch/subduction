@@ -187,12 +187,12 @@ pub struct Subduction<
     /// Primary cleanup happens on sync completion.
     pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
 
-    /// Shared monotonic counter for outgoing heads, per sedimentree.
+    /// Shared monotonic counter for outgoing messages, per peer.
     ///
     /// Shared with [`SyncHandler`] so all outgoing heads (from both
     /// `Subduction` methods and the handler's dispatch) use the same
     /// counter sequence.
-    send_heads_counter: Arc<Mutex<Map<SedimentreeId, u64>>>,
+    send_counter: Arc<Mutex<Map<PeerId, u64>>>,
 
     manager_channel: Sender<Command<Authenticated<C, F>>>,
     msg_queue: async_channel::Receiver<(Authenticated<C, F>, H::Message)>,
@@ -287,7 +287,7 @@ where
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<S, P>,
         pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
-        send_heads_counter: Arc<Mutex<Map<SedimentreeId, u64>>>,
+        send_counter: Arc<Mutex<Map<PeerId, u64>>>,
         nonce_cache: NonceCache,
         timer: O,
         default_call_timeout: Duration,
@@ -333,7 +333,7 @@ where
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
             pending_blob_requests,
-            send_heads_counter,
+            send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -1060,10 +1060,10 @@ where
         Ok(())
     }
 
-    /// Get the next send counter value for a given sedimentree, incrementing it atomically.
-    async fn next_send_counter(&self, id: SedimentreeId) -> u64 {
-        let mut counters = self.send_heads_counter.lock().await;
-        let counter = counters.entry(id).or_insert(0);
+    /// Get the next send counter value for a given peer, incrementing it atomically.
+    async fn next_send_counter(&self, peer: PeerId) -> u64 {
+        let mut counters = self.send_counter.lock().await;
+        let counter = counters.entry(peer).or_insert(0);
         *counter += 1;
         *counter
     }
@@ -1116,22 +1116,12 @@ where
 
         self.minimize_tree(id).await;
 
-        let sender_heads = RemoteHeads {
-            counter: self.next_send_counter(id).await,
-            heads: self
-                .sedimentrees
-                .get_cloned(&id)
-                .await
-                .map(|s| s.heads(&self.depth_metric))
-                .unwrap_or_default(),
-        };
-        let sync_msg = SyncMessage::LooseCommit {
-            id,
-            commit: signed_for_wire,
-            blob,
-            sender_heads,
-        };
-        let msg: H::Message = sync_msg.into();
+        let heads = self
+            .sedimentrees
+            .get_cloned(&id)
+            .await
+            .map(|s| s.heads(&self.depth_metric))
+            .unwrap_or_default();
         {
             let conns = {
                 let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
@@ -1149,6 +1139,17 @@ where
             for conn in conns {
                 let peer_id = conn.peer_id();
                 tracing::debug!("Propagating commit for sedimentree {:?} to {}", id, peer_id);
+
+                let msg: H::Message = SyncMessage::LooseCommit {
+                    id,
+                    commit: signed_for_wire.clone(),
+                    blob: blob.clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.next_send_counter(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                }
+                .into();
 
                 if let Err(e) = conn.send(&msg).await {
                     tracing::info!(
@@ -1220,22 +1221,12 @@ where
 
         self.minimize_tree(id).await;
 
-        let sender_heads = RemoteHeads {
-            counter: self.next_send_counter(id).await,
-            heads: self
-                .sedimentrees
-                .get_cloned(&id)
-                .await
-                .map(|s| s.heads(&self.depth_metric))
-                .unwrap_or_default(),
-        };
-        let sync_msg = SyncMessage::Fragment {
-            id,
-            fragment: signed_for_wire,
-            blob,
-            sender_heads,
-        };
-        let msg: H::Message = sync_msg.into();
+        let heads = self
+            .sedimentrees
+            .get_cloned(&id)
+            .await
+            .map(|s| s.heads(&self.depth_metric))
+            .unwrap_or_default();
 
         let conns = {
             let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
@@ -1258,6 +1249,18 @@ where
                 id,
                 peer_id
             );
+
+            let msg: H::Message = SyncMessage::Fragment {
+                id,
+                fragment: signed_for_wire.clone(),
+                blob: blob.clone(),
+                sender_heads: RemoteHeads {
+                    counter: self.next_send_counter(peer_id).await,
+                    heads: heads.clone(),
+                },
+            }
+            .into();
+
             if let Err(e) = conn.send(&msg).await {
                 tracing::info!(
                     "peer {} disconnected: {}",
@@ -2263,7 +2266,7 @@ where
         let (requested_commit_digests, requested_fragment_digests, sender_heads) = {
             let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
             let sender_heads = RemoteHeads {
-                counter: self.next_send_counter(id).await,
+                counter: self.next_send_counter(conn.peer_id()).await,
                 heads: sedimentree.heads(&self.depth_metric),
             };
 
