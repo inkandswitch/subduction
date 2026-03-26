@@ -1,7 +1,10 @@
 //! Error types.
 
 use crate::policy::JsPolicyDenied;
-use alloc::string::{String, ToString};
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+};
 use future_form::Local;
 use subduction_core::subduction::error::{
     AddConnectionError, HydrationError, IoError, ListenError, WriteError,
