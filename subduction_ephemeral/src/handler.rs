@@ -46,11 +46,29 @@ use crate::{
 /// and a receiver for inbound [`EphemeralEvent`]s.
 #[allow(clippy::type_complexity)]
 pub struct EphemeralHandler<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> {
+    /// Inbound subscriptions: which peers are subscribed to receive ephemeral messages from us.
     ephemeral_subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+    /// Outbound subscriptions: sedimentree IDs we want to receive ephemeral messages for.
+    outgoing_subscriptions: Arc<Mutex<Set<SedimentreeId>>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
     policy: E,
     callback_tx: Sender<EphemeralEvent>,
     max_payload_size: usize,
+}
+
+impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone> Clone
+    for EphemeralHandler<F, C, E>
+{
+    fn clone(&self) -> Self {
+        Self {
+            ephemeral_subscriptions: self.ephemeral_subscriptions.clone(),
+            outgoing_subscriptions: self.outgoing_subscriptions.clone(),
+            connections: self.connections.clone(),
+            policy: self.policy.clone(),
+            callback_tx: self.callback_tx.clone(),
+            max_payload_size: self.max_payload_size,
+        }
+    }
 }
 
 impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> core::fmt::Debug
@@ -76,6 +94,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
 
         let handler = Self {
             ephemeral_subscriptions: Arc::new(Mutex::new(Map::new())),
+            outgoing_subscriptions: Arc::new(Mutex::new(Set::new())),
             connections,
             policy,
             callback_tx: tx,
@@ -104,20 +123,31 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
             return;
         }
 
-        let subscriber_peers: Vec<PeerId> = {
+        // Peers subscribed to us (inbound) — we relay to them directly.
+        let mut target_peers: Set<PeerId> = {
             let subs = self.ephemeral_subscriptions.lock().await;
             subs.get(&id)
                 .map(|peers| peers.iter().copied().collect())
                 .unwrap_or_default()
         };
 
-        if subscriber_peers.is_empty() {
+        // If we have an outgoing subscription for this ID, also send to
+        // all connected peers — they're the relays we subscribed to.
+        let is_outgoing = self.outgoing_subscriptions.lock().await.contains(&id);
+        if is_outgoing {
+            let conns = self.connections.lock().await;
+            for peer in conns.keys() {
+                target_peers.insert(*peer);
+            }
+        }
+
+        if target_peers.is_empty() {
             return;
         }
 
         let authorized_peers = self
             .policy
-            .filter_authorized_subscribers(id, subscriber_peers)
+            .filter_authorized_subscribers(id, target_peers.into_iter().collect())
             .await;
 
         if authorized_peers.is_empty() {
@@ -147,6 +177,114 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
                     peer = %conn.peer_id(),
                     error = %e,
                     "ephemeral fan-out send failed"
+                );
+            }
+        }
+    }
+
+    /// Subscribe to ephemeral messages for the given sedimentree IDs.
+    ///
+    /// Sends `Subscribe` to all connected peers and tracks the IDs so
+    /// that newly connected peers (via [`subscribe_peer`](Self::subscribe_peer))
+    /// also receive the subscription request.
+    pub async fn subscribe(&self, ids: Vec<SedimentreeId>)
+    where
+        C: Connection<F, EphemeralMessage>,
+    {
+        if ids.is_empty() {
+            return;
+        }
+
+        {
+            let mut outgoing = self.outgoing_subscriptions.lock().await;
+            for id in &ids {
+                outgoing.insert(*id);
+            }
+        }
+
+        let msg = EphemeralMessage::Subscribe { ids };
+        self.send_to_all_peers(&msg).await;
+    }
+
+    /// Unsubscribe from ephemeral messages for the given sedimentree IDs.
+    ///
+    /// Sends `Unsubscribe` to all connected peers and removes the IDs
+    /// from outgoing subscription tracking.
+    pub async fn unsubscribe(&self, ids: Vec<SedimentreeId>)
+    where
+        C: Connection<F, EphemeralMessage>,
+    {
+        if ids.is_empty() {
+            return;
+        }
+
+        {
+            let mut outgoing = self.outgoing_subscriptions.lock().await;
+            for id in &ids {
+                outgoing.remove(id);
+            }
+        }
+
+        let msg = EphemeralMessage::Unsubscribe { ids };
+        self.send_to_all_peers(&msg).await;
+    }
+
+    /// Send current outgoing ephemeral subscriptions to a specific peer.
+    ///
+    /// Call this after a new peer connects so they know to send us
+    /// ephemeral messages for our subscribed sedimentree IDs.
+    pub async fn subscribe_peer(&self, peer_id: PeerId)
+    where
+        C: Connection<F, EphemeralMessage>,
+    {
+        let ids: Vec<SedimentreeId> = {
+            let outgoing = self.outgoing_subscriptions.lock().await;
+            if outgoing.is_empty() {
+                return;
+            }
+            outgoing.iter().copied().collect()
+        };
+
+        let msg = EphemeralMessage::Subscribe { ids };
+
+        let targets: Vec<Authenticated<C, F>> = {
+            let conns = self.connections.lock().await;
+            conns
+                .get(&peer_id)
+                .into_iter()
+                .flat_map(|peer_conns| peer_conns.iter().cloned())
+                .collect()
+        };
+
+        for conn in &targets {
+            if let Err(e) = conn.send(&msg).await {
+                debug!(
+                    peer = %conn.peer_id(),
+                    error = %e,
+                    "ephemeral subscribe_peer send failed"
+                );
+            }
+        }
+    }
+
+    async fn send_to_all_peers(&self, msg: &EphemeralMessage)
+    where
+        C: Connection<F, EphemeralMessage>,
+    {
+        let targets: Vec<Authenticated<C, F>> = {
+            let conns = self.connections.lock().await;
+            conns
+                .values()
+                .flat_map(|peer_conns| peer_conns.iter().cloned())
+                .collect()
+        };
+
+        for conn in &targets {
+            if let Err(e) = conn.send(msg).await {
+                debug!(
+                    peer = %conn.peer_id(),
+                    error = %e,
+                    "ephemeral send failed"
                 );
             }
         }
