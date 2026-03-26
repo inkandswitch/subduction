@@ -43,14 +43,18 @@ use super::{DEFAULT_LOCAL_SERVICE_NAME, JsTransport};
 /// 2. **From WebSocket** — authenticate via [`SubductionWebSocket`] then convert:
 ///
 ///    ```js
-///    const wsAuth = await SubductionWebSocket.tryConnect(url, signer, peerId, timeout);
+///    const wsAuth = await SubductionWebSocket.tryConnect(url, signer, peerId, (peerId) => {
+///        console.log(`${peerId} disconnected`);
+///    });
 ///    const auth = wsAuth.toTransport();
 ///    ```
 ///
 /// 3. **From HTTP long-poll** — same pattern via [`SubductionLongPoll`]:
 ///
 ///    ```js
-///    const lpAuth = await SubductionLongPoll.tryConnect(url, signer, peerId, timeout);
+///    const lpAuth = await SubductionLongPoll.tryConnect(url, signer, peerId, (peerId) => {
+///        console.log(`${peerId} disconnected`);
+///    });
 ///    const auth = lpAuth.toTransport();
 ///    ```
 #[wasm_bindgen(js_name = AuthenticatedTransport)]

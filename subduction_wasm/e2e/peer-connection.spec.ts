@@ -433,50 +433,44 @@ test.describe("onDisconnect Callback", () => {
         const url = new URL(wsUrl);
         const serviceName = wsUrl.replace("ws://", "");
 
-        // Track disconnect callback invocations
-        let capturedServerPeerId: string | null = null;
-        let disconnectedPeerId: string | null = null;
-        const disconnectPromise = new Promise<string>((resolve) => {
-          // tryDiscover with onDisconnect callback
-          SubductionWebSocket.tryDiscover(url, signer, serviceName, (peerId: any) => {
-            disconnectedPeerId = peerId.toString();
-            resolve(disconnectedPeerId);
-          }).then(async (authenticated: any) => {
-            capturedServerPeerId = authenticated.peerId.toString();
-            await syncer.addConnection(authenticated.toTransport());
+        // onDisconnect sets this global — no promises needed since
+        // Transport::disconnect() fires the callback synchronously.
+        (window as any).__disconnectedPeerId = null;
 
-            // Wait briefly for connection to stabilize
-            await new Promise(r => setTimeout(r, 200));
+        const authenticated = await SubductionWebSocket.tryDiscover(
+          url,
+          signer,
+          serviceName,
+          (peerId: any) => {
+            (window as any).__disconnectedPeerId = peerId.toString();
+          }
+        );
 
-            // Trigger disconnect
-            await syncer.disconnectAll();
+        const serverPeerId = authenticated.peerId.toString();
+        await syncer.addConnection(authenticated.toTransport());
 
-            // If callback doesn't fire within 3s, timeout
-            setTimeout(() => resolve("TIMEOUT"), 3000);
-          });
-        });
+        // Wait briefly for connection to stabilize
+        await new Promise(r => setTimeout(r, 200));
 
-        const callbackPeerId = await disconnectPromise;
+        // Trigger disconnect — callback fires synchronously
+        await syncer.disconnectAll();
 
         return {
-          callbackFired: callbackPeerId !== "TIMEOUT",
-          callbackPeerId,
-          serverPeerId: capturedServerPeerId,
+          callbackPeerId: (window as any).__disconnectedPeerId,
+          serverPeerId,
           error: null,
         };
       } catch (error) {
         return {
-          callbackFired: false,
           callbackPeerId: null,
+          serverPeerId: null,
           error: error instanceof Error ? error.message : String(error),
         };
       }
     }, currentWsUrl);
 
     expect(result.error).toBeNull();
-    expect(result.callbackFired).toBe(true);
     expect(result.callbackPeerId).toBeTruthy();
-    expect(result.callbackPeerId).not.toBe("TIMEOUT");
     expect(result.callbackPeerId).toBe(result.serverPeerId);
   });
 

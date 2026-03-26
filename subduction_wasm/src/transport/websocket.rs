@@ -47,9 +47,11 @@ pub struct WasmWebSocket {
     /// Shared handle to the channel sender, used to close the channel on
     /// disconnect or when the browser WebSocket's `onclose` fires.
     inbound_closer: Rc<async_channel::Sender<Vec<u8>>>,
-    /// Optional callback fired when the WebSocket closes.
-    ///
     on_disconnect: OnDisconnect,
+    /// Prevent `onmessage`/`onclose` closures from being leaked via `.forget()`.
+    /// Stored here so they are dropped when the last clone of the transport drops.
+    _onmessage: Rc<Closure<dyn FnMut(MessageEvent)>>,
+    _onclose: Rc<Closure<dyn FnMut(Event)>>,
 }
 
 impl WasmWebSocket {
@@ -87,18 +89,20 @@ impl WasmWebSocket {
             close_callback.take_and_fire();
         });
 
-        ws.set_binary_type(BinaryType::Arraybuffer);
-        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-        ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+        let onmessage = Rc::new(onmessage);
+        let onclose = Rc::new(onclose);
 
-        onmessage.forget();
-        onclose.forget();
+        ws.set_binary_type(BinaryType::Arraybuffer);
+        ws.set_onmessage(Some(onmessage.as_ref().as_ref().unchecked_ref()));
+        ws.set_onclose(Some(onclose.as_ref().as_ref().unchecked_ref()));
 
         Self {
             socket: ws,
             inbound_reader,
             inbound_closer: inbound_writer,
             on_disconnect,
+            _onmessage: onmessage,
+            _onclose: onclose,
         }
     }
 }
@@ -445,6 +449,9 @@ impl Transport<Local> for WasmWebSocket {
                 tracing::debug!("WebSocket::close() failed (may already be closed): {e:?}");
             }
             self.inbound_closer.close();
+            // Fire the disconnect callback immediately rather than waiting
+            // for the browser's asynchronous onclose event.
+            self.on_disconnect.take_and_fire();
             Ok(())
         }
         .boxed_local()

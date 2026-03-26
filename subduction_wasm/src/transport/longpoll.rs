@@ -269,7 +269,7 @@ impl WasmLongPoll {
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
+    /// * `on_disconnect` - Optional callback invoked with the peer's [`PeerId`] when the connection closes
     ///
     /// # Errors
     ///
