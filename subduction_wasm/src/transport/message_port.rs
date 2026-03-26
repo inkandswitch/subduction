@@ -161,6 +161,15 @@ impl WasmMessagePortTransport {
         self.port.close();
         resolved_void()
     }
+
+    /// Register a callback to be invoked when the transport disconnects.
+    ///
+    /// Part of the [`Transport`](super::JsTransport) interface contract.
+    /// `MessagePort` transports are local (in-process), so disconnect
+    /// notification is typically unnecessary — this is a no-op that
+    /// satisfies the interface.
+    #[wasm_bindgen(js_name = onDisconnect)]
+    pub fn on_disconnect(&self, _callback: &js_sys::Function) {}
 }
 
 /// Convenience factory — equivalent to `new MessagePortTransport(port)`.

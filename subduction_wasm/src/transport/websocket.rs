@@ -371,11 +371,11 @@ impl WasmWebSocket {
         let _ = Transport::<Local>::disconnect(self).await;
     }
 
-    /// Register a raw callback to be invoked when the WebSocket closes.
+    /// Register a callback to be invoked when the WebSocket closes.
     ///
     /// Part of the [`Transport`](super::JsTransport) interface contract.
-    /// Called internally by factory methods (`tryConnect`, `tryDiscover`)
-    /// after the handshake completes — not exposed to JS directly.
+    /// Typically called by internal wiring (factory methods like `tryConnect`
+    /// and `tryDiscover`) rather than directly by user code.
     ///
     /// The callback is fired from the browser WebSocket's `onclose` handler.
     #[wasm_bindgen(js_name = onDisconnect)]
@@ -439,7 +439,9 @@ impl Transport<Local> for WasmWebSocket {
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async {
-            drop(self.socket.close());
+            if let Err(e) = self.socket.close() {
+                tracing::debug!("WebSocket::close() failed (may already be closed): {e:?}");
+            }
             self.inbound_closer.close();
             Ok(())
         }

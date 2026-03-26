@@ -153,10 +153,10 @@ impl WasmHttpLongPoll {
         Ok(())
     }
 
-    /// Register a raw callback to be invoked when the transport disconnects.
+    /// Register a callback to be invoked when the transport disconnects.
     ///
     /// Part of the [`Transport`](super::JsTransport) interface contract.
-    /// Called internally — not exposed to JS directly.
+    /// Typically called by internal wiring rather than directly by user code.
     #[wasm_bindgen(js_name = onDisconnect)]
     pub fn on_disconnect(&self, callback: js_sys::Function) {
         let closure = Closure::<dyn Fn()>::new(move || {
