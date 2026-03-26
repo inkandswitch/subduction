@@ -219,7 +219,7 @@ impl WasmSubduction {
         );
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
-        let send_heads_counter = sync_handler.send_heads_counter().clone();
+        let send_counter = sync_handler.send_counter().clone();
         let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -231,7 +231,7 @@ impl WasmSubduction {
             subscriptions,
             powerbox,
             pending_blob_requests,
-            send_heads_counter,
+            send_counter,
             NonceCache::default(),
             JsTimeout,
             Duration::from_secs(30),
@@ -380,7 +380,7 @@ impl WasmSubduction {
         );
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
-        let send_heads_counter = sync_handler.send_heads_counter().clone();
+        let send_counter = sync_handler.send_counter().clone();
         let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -392,7 +392,7 @@ impl WasmSubduction {
             subscriptions,
             powerbox,
             pending_blob_requests,
-            send_heads_counter,
+            send_counter,
             NonceCache::default(),
             JsTimeout,
             Duration::from_secs(30),
@@ -666,10 +666,7 @@ impl WasmSubduction {
         transport: &WasmAuthenticatedTransport,
     ) -> Result<bool, WasmAddConnectionError> {
         let peer_id = transport.inner().peer_id();
-        let is_new = self
-            .core
-            .add_connection(transport.inner().clone())
-            .await?;
+        let is_new = self.core.add_connection(transport.inner().clone()).await?;
         if is_new {
             self.ephemeral_handler.subscribe_peer(peer_id).await;
         }

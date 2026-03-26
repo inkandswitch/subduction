@@ -270,29 +270,7 @@ impl From<DataRequestRejected> for SyncMessage {
     }
 }
 
-/// A remote peer's heads for a sedimentree, with a monotonic counter
-/// for ordering in the face of out-of-order delivery.
-///
-/// The counter is scoped per (sender, sedimentree) and incremented each time
-/// the sender computes new heads. Receivers should only accept updates where
-/// `counter` is strictly greater than the last seen value.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RemoteHeads {
-    /// Monotonic counter — higher means newer.
-    pub counter: u64,
-    /// The heads (tip commits) of the sedimentree.
-    pub heads: Vec<Digest<LooseCommit>>,
-}
-
-impl RemoteHeads {
-    /// Returns `true` if there are no heads.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.heads.is_empty()
-    }
-}
+use crate::remote_heads::RemoteHeads;
 
 /// A unique identifier for a particular request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -464,7 +442,10 @@ impl SyncMessage {
                     + (req.fingerprint_summary.fragment_fingerprints().len() * 8)
             }
             SyncMessage::BatchSyncResponse(resp) => {
-                32 + 8 + 32 + 1 + sync_result_size(&resp.result)
+                32 + 8
+                    + 32
+                    + 1
+                    + sync_result_size(&resp.result)
                     + remote_heads_size(&resp.responder_heads)
             }
             SyncMessage::RemoveSubscriptions(unsub) => 2 + (unsub.ids.len() * 32),

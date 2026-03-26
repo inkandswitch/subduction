@@ -19,6 +19,7 @@ use subduction_core::{
     handler::Handler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     storage::metrics::MetricsStorage,
     subduction::error::{IoError, ListenError},
     transport::message::MessageTransport,
@@ -53,19 +54,14 @@ impl core::fmt::Debug for CliHandler {
     }
 }
 
-impl subduction_core::handler::RemoteHeadsNotifier for CliHandler {
+impl RemoteHeadsNotifier for CliHandler {
     fn notify_remote_heads(
         &self,
         id: sedimentree_core::id::SedimentreeId,
         peer: PeerId,
-        heads: subduction_core::connection::message::RemoteHeads,
+        heads: RemoteHeads,
     ) {
-        subduction_core::handler::RemoteHeadsNotifier::notify_remote_heads(
-            self.sync.as_ref(),
-            id,
-            peer,
-            heads,
-        );
+        RemoteHeadsNotifier::notify_remote_heads(self.sync.as_ref(), id, peer, heads);
     }
 }
 
@@ -162,10 +158,11 @@ mod tests {
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::message::{
-            BatchSyncResponse, RemoteHeads, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
+            BatchSyncResponse, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
         },
         handler::Handler,
         peer::id::PeerId,
+        remote_heads::RemoteHeads,
     };
     use subduction_ephemeral::message::EphemeralMessage;
     use subduction_keyhive::KeyhiveMessage;

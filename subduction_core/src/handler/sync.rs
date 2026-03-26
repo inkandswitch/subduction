@@ -35,8 +35,8 @@ use crate::{
     authenticated::Authenticated,
     connection::{
         message::{
-            BatchSyncRequest, BatchSyncResponse, RemoteHeads, RequestId, RequestedData, SyncDiff,
-            SyncMessage, SyncResult,
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
+            SyncResult,
         },
         Connection,
     },
@@ -67,26 +67,7 @@ use super::Handler;
 ///
 /// [`SubductionBuilder::build`]: crate::subduction::builder::SubductionBuilder::build
 /// [`Subduction`]: crate::subduction::Subduction
-/// Observer for remote heads notifications.
-///
-/// Called with `(sedimentree_id, peer_id, heads)` whenever a remote peer
-/// reports its heads — either via a `HeadsUpdate` message or via
-/// `sender_heads` on subscription pushes.
-pub trait RemoteHeadsObserver {
-    /// Called when a remote peer reports its heads for a sedimentree.
-    fn on_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads);
-}
-
-/// A no-op [`RemoteHeadsObserver`] that discards all notifications.
-///
-/// This is the default observer used when remote heads notifications
-/// are not needed.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoRemoteHeadsObserver;
-
-impl RemoteHeadsObserver for NoRemoteHeadsObserver {
-    fn on_remote_heads(&self, _id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {}
-}
+use crate::remote_heads::{NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsObserver};
 
 /// The default sync protocol handler for Subduction.
 ///
@@ -119,10 +100,10 @@ pub struct SyncHandler<
     pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
     depth_metric: M,
     remote_heads_observer: R,
-    /// Sender-side counter: incremented each time we send heads for a sedimentree.
-    send_heads_counter: Arc<Mutex<Map<SedimentreeId, u64>>>,
-    /// Receiver-side counter: tracks the latest counter seen per (peer, sedimentree).
-    recv_heads_counter: Arc<Mutex<Map<(PeerId, SedimentreeId), u64>>>,
+    /// Sender-side counter: incremented each time we send a message to a peer.
+    send_counter: Arc<Mutex<Map<PeerId, u64>>>,
+    /// Receiver-side counter: tracks the latest counter seen per peer.
+    recv_counter: Arc<Mutex<Map<PeerId, u64>>>,
 }
 
 impl<
@@ -159,8 +140,8 @@ impl<
             pending_blob_requests: self.pending_blob_requests.clone(),
             depth_metric: self.depth_metric.clone(),
             remote_heads_observer: self.remote_heads_observer.clone(),
-            send_heads_counter: self.send_heads_counter.clone(),
-            recv_heads_counter: self.recv_heads_counter.clone(),
+            send_counter: self.send_counter.clone(),
+            recv_counter: self.recv_counter.clone(),
         }
     }
 }
@@ -198,8 +179,8 @@ impl<
             pending_blob_requests,
             depth_metric,
             remote_heads_observer: NoRemoteHeadsObserver,
-            send_heads_counter: Arc::new(Mutex::new(Map::new())),
-            recv_heads_counter: Arc::new(Mutex::new(Map::new())),
+            send_counter: Arc::new(Mutex::new(Map::new())),
+            recv_counter: Arc::new(Mutex::new(Map::new())),
         }
     }
 }
@@ -233,8 +214,8 @@ impl<
             pending_blob_requests,
             depth_metric,
             remote_heads_observer,
-            send_heads_counter: Arc::new(Mutex::new(Map::new())),
-            recv_heads_counter: Arc::new(Mutex::new(Map::new())),
+            send_counter: Arc::new(Mutex::new(Map::new())),
+            recv_counter: Arc::new(Mutex::new(Map::new())),
         }
     }
 
@@ -245,8 +226,8 @@ impl<
     /// the same monotonic counter per sedimentree.
     ///
     /// [`Subduction`]: crate::subduction::Subduction
-    pub fn send_heads_counter(&self) -> &Arc<Mutex<Map<SedimentreeId, u64>>> {
-        &self.send_heads_counter
+    pub fn send_counter(&self) -> &Arc<Mutex<Map<PeerId, u64>>> {
+        &self.send_counter
     }
 }
 
@@ -325,10 +306,10 @@ impl<
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         // Filter out stale updates: only forward if the counter is
-        // strictly greater than the last seen value for this (peer, id).
+        // strictly greater than the last seen value for this peer.
         let is_stale = {
-            let mut counters = self.recv_heads_counter.lock_blocking();
-            let last = counters.entry((peer, id)).or_insert(0);
+            let mut counters = self.recv_counter.lock_blocking();
+            let last = counters.entry(peer).or_insert(0);
             if heads.counter <= *last {
                 true
             } else {
@@ -574,28 +555,33 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
-            let sender_heads = self.compute_heads(id).await;
+            let heads = self.heads_for(id).await;
 
             // Send HeadsUpdate back to the originating peer
             let heads_msg = SyncMessage::HeadsUpdate {
                 id,
-                heads: sender_heads.clone(),
+                heads: RemoteHeads {
+                    counter: self.next_send_counter(*from).await,
+                    heads: heads.clone(),
+                },
             };
             if let Err(e) = conn.send(&heads_msg).await {
                 tracing::info!("peer {} disconnected while sending HeadsUpdate: {e}", from);
             }
 
             // Broadcast to subscribers (excluding sender)
-            let msg = SyncMessage::LooseCommit {
-                id,
-                commit: signed_for_wire,
-                blob,
-                sender_heads,
-            };
-
             let conns = self.get_authorized_subscriber_conns(id, from).await;
             for conn in conns {
                 let peer_id = conn.peer_id();
+                let msg = SyncMessage::LooseCommit {
+                    id,
+                    commit: signed_for_wire.clone(),
+                    blob: blob.clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.next_send_counter(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                };
                 if let Err(e) = conn.send(&msg).await {
                     tracing::warn!("peer {peer_id} disconnected: {e}");
                     self.remove_connection(&conn).await;
@@ -665,28 +651,33 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
-            let sender_heads = self.compute_heads(id).await;
+            let heads = self.heads_for(id).await;
 
             // Send HeadsUpdate back to the originating peer
             let heads_msg = SyncMessage::HeadsUpdate {
                 id,
-                heads: sender_heads.clone(),
+                heads: RemoteHeads {
+                    counter: self.next_send_counter(*from).await,
+                    heads: heads.clone(),
+                },
             };
             if let Err(e) = conn.send(&heads_msg).await {
                 tracing::info!("peer {} disconnected while sending HeadsUpdate: {e}", from);
             }
 
             // Broadcast to subscribers (excluding sender)
-            let msg = SyncMessage::Fragment {
-                id,
-                fragment: signed_for_wire,
-                blob,
-                sender_heads,
-            };
-
             let conns = self.get_authorized_subscriber_conns(id, from).await;
             for conn in conns {
                 let peer_id = conn.peer_id();
+                let msg = SyncMessage::Fragment {
+                    id,
+                    fragment: signed_for_wire.clone(),
+                    blob: blob.clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.next_send_counter(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                };
                 if let Err(e) = conn.send(&msg).await {
                     tracing::warn!("peer {peer_id} disconnected: {e}");
                     self.remove_connection(&conn).await;
@@ -804,12 +795,9 @@ impl<
             )
         };
 
-        let responder_heads = {
-            let counter = self.next_send_counter(id).await;
-            RemoteHeads {
-                counter,
-                heads: raw_heads,
-            }
+        let responder_heads = RemoteHeads {
+            counter: self.next_send_counter(conn.peer_id()).await,
+            heads: raw_heads,
         };
 
         for digest in local_commit_digests {
@@ -925,23 +913,20 @@ impl<
         ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
     }
 
-    async fn next_send_counter(&self, id: SedimentreeId) -> u64 {
-        let mut counters = self.send_heads_counter.lock().await;
-        let counter = counters.entry(id).or_insert(0);
+    async fn next_send_counter(&self, peer: PeerId) -> u64 {
+        let mut counters = self.send_counter.lock().await;
+        let counter = counters.entry(peer).or_insert(0);
         *counter += 1;
         *counter
     }
 
-    async fn compute_heads(&self, id: SedimentreeId) -> RemoteHeads {
-        let heads = {
-            let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
-            locked
-                .get(&id)
-                .map(|s| s.heads(&self.depth_metric))
-                .unwrap_or_default()
-        };
-        let counter = self.next_send_counter(id).await;
-        RemoteHeads { counter, heads }
+    /// Compute the current heads for a sedimentree (without a counter).
+    async fn heads_for(&self, id: SedimentreeId) -> Vec<Digest<LooseCommit>> {
+        let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
+        locked
+            .get(&id)
+            .map(|s| s.heads(&self.depth_metric))
+            .unwrap_or_default()
     }
 
     async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {

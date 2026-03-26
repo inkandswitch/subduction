@@ -4,13 +4,15 @@
 //! to JavaScript callbacks, allowing programmatic capture and analysis of logs
 //! from WASM code.
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use core::fmt;
 use js_sys::Function;
 use parking_lot::RwLock;
 use tracing::Level;
-use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
+use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 use wasm_bindgen::prelude::*;
 
 /// Global storage for the JavaScript logger callback.
@@ -154,7 +156,8 @@ impl tracing::field::Visit for FieldVisitor {
         if field.name() == "message" {
             self.message = value.to_string();
         } else {
-            self.fields.push((field.name().to_string(), value.to_string()));
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
         }
     }
 

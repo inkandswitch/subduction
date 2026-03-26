@@ -4,7 +4,7 @@
 //! sent/received). They are _not_ wire types — they are never serialized
 //! or sent over the network.
 
-use crate::connection::message::RemoteHeads;
+use crate::remote_heads::RemoteHeads;
 
 /// Statistics from a sync operation.
 ///

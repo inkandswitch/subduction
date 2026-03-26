@@ -108,8 +108,9 @@ impl Decode for CliWireMessage {
 mod tests {
     use super::*;
     use sedimentree_core::{codec::encode::Encode, id::SedimentreeId};
-    use subduction_core::connection::message::{
-        BatchSyncResponse, RemoteHeads, RemoveSubscriptions, RequestId, SyncResult,
+    use subduction_core::{
+        connection::message::{BatchSyncResponse, RemoveSubscriptions, RequestId, SyncResult},
+        remote_heads::RemoteHeads,
     };
     use testresult::TestResult;
 
