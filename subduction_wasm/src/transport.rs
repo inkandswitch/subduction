@@ -15,14 +15,13 @@ use wasm_refgen::wasm_refgen;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::{self, Promise};
-use wasm_bindgen::closure::Closure;
 use subduction_core::{
     connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId},
     handshake::Handshake,
     transport::Transport,
 };
 use thiserror::Error;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{closure::Closure, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;
@@ -35,7 +34,9 @@ use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 /// Stored as a [`Closure`] so it is properly dropped (not leaked) when the
 /// connection is cleaned up or a new callback is registered.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct OnDisconnect(#[allow(clippy::type_complexity)] Rc<RefCell<Option<Closure<dyn Fn()>>>>);
+pub(crate) struct OnDisconnect(
+    #[allow(clippy::type_complexity)] Rc<RefCell<Option<Closure<dyn Fn()>>>>,
+);
 
 impl OnDisconnect {
     /// Store a disconnect callback.

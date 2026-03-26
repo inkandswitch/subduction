@@ -25,7 +25,9 @@ use thiserror::Error;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use web_sys::{BinaryType, Event, MessageEvent, Url, WebSocket, js_sys};
 
-use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner, transport::OnDisconnect};
+use crate::{
+    error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner, transport::OnDisconnect,
+};
 use subduction_core::{
     authenticated::Authenticated,
     handshake::{self, audience::Audience},

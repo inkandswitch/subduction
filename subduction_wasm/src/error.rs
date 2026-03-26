@@ -168,6 +168,10 @@ impl From<WasmLongPollConnectError> for JsValue {
 /// Error returned when a handshake fails.
 #[derive(Debug, Error)]
 pub enum WasmHandshakeError {
+    /// The handshake protocol failed (authentication, transport, decoding, etc.).
+    #[error(transparent)]
+    Authenticate(Box<subduction_core::handshake::AuthenticateError<WasmHandshakeError>>),
+
     /// WebSocket error during handshake.
     #[error("WebSocket error: {0}")]
     WebSocket(String),
@@ -187,6 +191,14 @@ pub enum WasmHandshakeError {
     /// Response doesn't match our challenge.
     #[error("response doesn't match challenge")]
     ChallengeMismatch,
+}
+
+impl From<subduction_core::handshake::AuthenticateError<WasmHandshakeError>>
+    for WasmHandshakeError
+{
+    fn from(err: subduction_core::handshake::AuthenticateError<WasmHandshakeError>) -> Self {
+        Self::Authenticate(Box::new(err))
+    }
 }
 
 impl From<WasmHandshakeError> for JsValue {

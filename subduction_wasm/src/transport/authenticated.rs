@@ -5,7 +5,7 @@
 //! All transport types (WebSocket, HTTP long-poll, custom JS) converge
 //! to this type before being registered with Subduction.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 use future_form::Local;
 use subduction_core::{
@@ -117,8 +117,7 @@ impl WasmAuthenticatedTransport {
             now,
             nonce,
         )
-        .await
-        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+        .await?;
 
         tracing::info!("Handshake complete: authenticated peer {peer_id}");
 
@@ -169,8 +168,7 @@ impl WasmAuthenticatedTransport {
             now,
             nonce,
         )
-        .await
-        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+        .await?;
 
         tracing::info!("Discovery handshake complete: authenticated peer {peer_id}");
 
@@ -224,8 +222,7 @@ impl WasmAuthenticatedTransport {
             now,
             max_drift,
         )
-        .await
-        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+        .await?;
 
         tracing::info!("Handshake complete (responder): authenticated peer {peer_id}");
 
@@ -281,8 +278,7 @@ impl WasmAuthenticatedTransport {
             now,
             max_drift,
         )
-        .await
-        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+        .await?;
 
         tracing::info!("Discovery handshake complete (responder): authenticated peer {peer_id}");
 
