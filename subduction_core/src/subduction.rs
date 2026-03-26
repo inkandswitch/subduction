@@ -530,7 +530,7 @@ where
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
                         }
-                        tracing::info!("removed failed connection from peer {}", peer_id);
+                        tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
                 }
                 // Second: receive new messages
@@ -592,7 +592,7 @@ where
                 closed_result = self.connection_closed.recv().fuse() => {
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
-                        tracing::info!(
+                        tracing::warn!(
                             "Connection {conn_id} from peer {peer_id} closed, removing"
                         );
                         if self.remove_connection(&conn).await == Some(true) {
@@ -1433,7 +1433,7 @@ where
         for conn in conns {
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
-                tracing::info!("peer {peer_id} disconnected: {e}");
+                tracing::warn!("peer {peer_id} disconnected: {e}");
                 self.remove_connection(&conn).await;
             }
         }
@@ -1877,7 +1877,7 @@ where
                                         Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
                                             let msg: H::Message = SyncMessage::from(DataRequestRejected { id }).into();
                                             if let Err(send_err) = conn.send(&msg).await {
-                                                tracing::info!("peer {peer_id} disconnected while sending DataRequestRejected: {send_err}");
+                                                tracing::warn!("peer {peer_id} disconnected while sending DataRequestRejected: {send_err}");
                                             }
                                             tracing::warn!(
                                                 "failed to send requested data to peer {:?}: {e}",
