@@ -3,7 +3,8 @@
 use sedimentree_core::id::SedimentreeId;
 use sedimentree_wasm::{digest::WasmDigest, sedimentree_id::WasmSedimentreeId};
 use subduction_core::{
-    connection::message::RemoteHeads, handler::sync::RemoteHeadsObserver, peer::id::PeerId,
+    peer::id::PeerId,
+    remote_heads::{RemoteHeads, RemoteHeadsObserver},
 };
 use wasm_bindgen::JsValue;
 

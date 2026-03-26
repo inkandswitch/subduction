@@ -15,10 +15,11 @@ use subduction_core::{
     authenticated::Authenticated,
     connection::{
         Connection,
-        message::{BatchSyncResponse, RemoteHeads, SyncMessage},
+        message::{BatchSyncResponse, SyncMessage},
     },
-    handler::{Handler, RemoteHeadsNotifier},
+    handler::Handler,
     peer::id::PeerId,
+    remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     storage::traits::Storage,
     subduction::error::{IoError, ListenError},
 };
