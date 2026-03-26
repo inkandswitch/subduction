@@ -35,7 +35,9 @@ use super::{DEFAULT_LOCAL_SERVICE_NAME, JsTransport};
 ///    [`setup`](Self::setup):
 ///
 ///    ```js
-///    const auth = await AuthenticatedTransport.setup(myTransport, signer, peerId);
+///    const auth = await AuthenticatedTransport.setup(myTransport, signer, peerId, (peerId) => {
+///        console.log(`${peerId} disconnected`);
+///    });
 ///    ```
 ///
 /// 2. **From WebSocket** — authenticate via [`SubductionWebSocket`] then convert:
@@ -100,6 +102,7 @@ impl WasmAuthenticatedTransport {
         transport: JsTransport,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
         let audience = Audience::known(expected_peer_id.clone().into());
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -119,9 +122,13 @@ impl WasmAuthenticatedTransport {
 
         tracing::info!("Handshake complete: authenticated peer {peer_id}");
 
-        Ok(Self {
+        let result = Self {
             inner: authenticated,
-        })
+        };
+        if let Some(cb) = on_disconnect {
+            install_js_disconnect_callback(&result, cb);
+        }
+        Ok(result)
     }
 
     /// Run the Subduction handshake over a custom transport using discovery
@@ -146,6 +153,7 @@ impl WasmAuthenticatedTransport {
         transport: JsTransport,
         signer: &JsSigner,
         service_name: Option<String>,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
         let service_name = service_name.unwrap_or_else(|| DEFAULT_LOCAL_SERVICE_NAME.into());
         let audience = Audience::discover(service_name.as_bytes());
@@ -166,9 +174,13 @@ impl WasmAuthenticatedTransport {
 
         tracing::info!("Discovery handshake complete: authenticated peer {peer_id}");
 
-        Ok(Self {
+        let result = Self {
             inner: authenticated,
-        })
+        };
+        if let Some(cb) = on_disconnect {
+            install_js_disconnect_callback(&result, cb);
+        }
+        Ok(result)
     }
 
     /// Accept an incoming handshake over a custom transport (responder side).
@@ -190,6 +202,7 @@ impl WasmAuthenticatedTransport {
         transport: JsTransport,
         signer: &JsSigner,
         max_drift_seconds: Option<u32>,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
         use core::time::Duration;
         use subduction_core::nonce_cache::NonceCache;
@@ -216,9 +229,13 @@ impl WasmAuthenticatedTransport {
 
         tracing::info!("Handshake complete (responder): authenticated peer {peer_id}");
 
-        Ok(Self {
+        let result = Self {
             inner: authenticated,
-        })
+        };
+        if let Some(cb) = on_disconnect {
+            install_js_disconnect_callback(&result, cb);
+        }
+        Ok(result)
     }
 
     /// Accept an incoming discovery handshake, verifying the service name.
@@ -241,6 +258,7 @@ impl WasmAuthenticatedTransport {
         transport: JsTransport,
         signer: &JsSigner,
         service_name: String,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
         use core::time::Duration;
         use subduction_core::nonce_cache::NonceCache;
@@ -268,9 +286,13 @@ impl WasmAuthenticatedTransport {
 
         tracing::info!("Discovery handshake complete (responder): authenticated peer {peer_id}");
 
-        Ok(Self {
+        let result = Self {
             inner: authenticated,
-        })
+        };
+        if let Some(cb) = on_disconnect {
+            install_js_disconnect_callback(&result, cb);
+        }
+        Ok(result)
     }
 
     /// The verified peer identity.
@@ -279,28 +301,21 @@ impl WasmAuthenticatedTransport {
     pub fn peer_id(&self) -> WasmPeerId {
         self.inner.peer_id().into()
     }
+}
 
-    /// Register a callback that fires when the underlying transport disconnects.
-    ///
-    /// The callback receives the peer's [`PeerId`] as its sole argument.
-    /// Works for any transport type (WebSocket, long-poll, custom).
-    ///
-    /// ```js
-    /// const auth = await AuthenticatedTransport.setup(transport, signer, peerId);
-    /// auth.onDisconnect((peerId) => {
-    ///   console.log(`peer ${peerId} disconnected`);
-    /// });
-    /// ```
-    #[wasm_bindgen(js_name = onDisconnect)]
-    pub fn on_disconnect(&self, callback: js_sys::Function) {
-        let peer_id: JsValue = WasmPeerId::from(self.inner.peer_id()).into();
-        let wrapper = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
-            if let Err(e) = callback.call1(&JsValue::NULL, &peer_id) {
-                tracing::error!("onDisconnect callback threw: {e:?}");
-            }
-        });
-        let func: js_sys::Function = wrapper.as_ref().unchecked_ref::<js_sys::Function>().clone();
-        wrapper.forget();
-        self.inner.inner().inner().js_on_disconnect(&func);
-    }
+/// Install a PeerId-injecting disconnect callback on a `JsTransport`.
+///
+/// The [`Closure`] is leaked via `.forget()` because the JS function must
+/// outlive the `WasmAuthenticatedTransport` (which is consumed by
+/// `add_connection`). The leak is bounded: one `Closure` per connection.
+fn install_js_disconnect_callback(auth: &WasmAuthenticatedTransport, callback: js_sys::Function) {
+    let peer_id: JsValue = WasmPeerId::from(auth.inner.peer_id()).into();
+    let wrapper = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+        if let Err(e) = callback.call1(&JsValue::NULL, &peer_id) {
+            tracing::error!("onDisconnect callback threw: {e:?}");
+        }
+    });
+    let func: js_sys::Function = wrapper.as_ref().unchecked_ref::<js_sys::Function>().clone();
+    wrapper.forget();
+    auth.inner.inner().inner().js_on_disconnect(&func);
 }

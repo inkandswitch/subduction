@@ -635,6 +635,7 @@ impl WasmSubduction {
             transport,
             self.core.signer(),
             Some(service_name),
+            None,
         )
         .await?;
 
@@ -666,6 +667,7 @@ impl WasmSubduction {
             transport,
             self.core.signer(),
             service_name,
+            None,
         )
         .await?;
 
@@ -706,11 +708,13 @@ impl WasmSubduction {
                 transport_a,
                 a.core.signer(),
                 Some(DEFAULT_LOCAL_SERVICE_NAME.into()),
+                None,
             ),
             WasmAuthenticatedTransport::accept_discover(
                 transport_b,
                 b.core.signer(),
                 DEFAULT_LOCAL_SERVICE_NAME.into(),
+                None,
             ),
         )
         .await

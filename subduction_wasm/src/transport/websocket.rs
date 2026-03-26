@@ -25,7 +25,7 @@ use thiserror::Error;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use web_sys::{BinaryType, Event, MessageEvent, Url, WebSocket, js_sys};
 
-use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
+use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner, transport::OnDisconnect};
 use subduction_core::{
     authenticated::Authenticated,
     handshake::{self, audience::Audience},
@@ -46,7 +46,8 @@ pub struct WasmWebSocket {
     /// disconnect or when the browser WebSocket's `onclose` fires.
     inbound_closer: Rc<async_channel::Sender<Vec<u8>>>,
     /// Optional callback fired when the WebSocket closes.
-    on_disconnect: Rc<RefCell<Option<js_sys::Function>>>,
+    ///
+    on_disconnect: OnDisconnect,
 }
 
 impl WasmWebSocket {
@@ -54,7 +55,7 @@ impl WasmWebSocket {
     fn from_open_socket(ws: WebSocket) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(64);
         let inbound_writer = Rc::new(inbound_writer);
-        let on_disconnect: Rc<RefCell<Option<js_sys::Function>>> = Rc::default();
+        let on_disconnect = OnDisconnect::default();
 
         let msg_writer = inbound_writer.clone();
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
@@ -81,14 +82,7 @@ impl WasmWebSocket {
         let onclose = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             tracing::warn!("WebSocket connection closed");
             close_writer.close();
-            // Clone out of the RefCell before calling into JS — a re-entrant
-            // call to onDisconnect from the callback would panic otherwise.
-            let cb = close_callback.borrow().clone();
-            if let Some(cb) = cb
-                && let Err(e) = cb.call0(&JsValue::NULL)
-            {
-                tracing::error!("onDisconnect callback threw: {e:?}");
-            }
+            close_callback.take_and_fire();
         });
 
         ws.set_binary_type(BinaryType::Arraybuffer);
@@ -129,6 +123,7 @@ impl WasmWebSocket {
         ws: &WebSocket,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
         // Ensure WebSocket is ready
         let ws = Self::wait_for_open(ws.clone()).await?;
@@ -154,6 +149,9 @@ impl WasmWebSocket {
             authenticated.peer_id()
         );
 
+        if let Some(cb) = on_disconnect {
+            install_disconnect_callback(&authenticated, cb);
+        }
         Ok(WasmAuthenticatedWebSocket {
             inner: authenticated,
         })
@@ -176,10 +174,13 @@ impl WasmWebSocket {
         address: &Url,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
-        Self::connect_authenticated(address, signer, expected_peer_id)
-            .await
-            .map(|inner| WasmAuthenticatedWebSocket { inner })
+        let inner = Self::connect_authenticated(address, signer, expected_peer_id).await?;
+        if let Some(cb) = on_disconnect {
+            install_disconnect_callback(&inner, cb);
+        }
+        Ok(WasmAuthenticatedWebSocket { inner })
     }
 
     /// Connect to a WebSocket server using discovery mode.
@@ -206,10 +207,13 @@ impl WasmWebSocket {
         address: &Url,
         signer: &JsSigner,
         service_name: Option<String>,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
-        Self::connect_discover_authenticated(address, signer, service_name)
-            .await
-            .map(|inner| WasmAuthenticatedWebSocket { inner })
+        let inner = Self::connect_discover_authenticated(address, signer, service_name).await?;
+        if let Some(cb) = on_disconnect {
+            install_disconnect_callback(&inner, cb);
+        }
+        Ok(WasmAuthenticatedWebSocket { inner })
     }
 
     /// Connect and return an `Authenticated<WasmWebSocket, Local>`.
@@ -365,13 +369,31 @@ impl WasmWebSocket {
         let _ = Transport::<Local>::disconnect(self).await;
     }
 
-    /// Register a callback to be invoked when the WebSocket closes.
+    /// Register a raw callback to be invoked when the WebSocket closes.
     ///
     /// Part of the [`Transport`](super::JsTransport) interface contract.
+    /// Called internally by factory methods (`tryConnect`, `tryDiscover`)
+    /// after the handshake completes — not exposed to JS directly.
+    ///
     /// The callback is fired from the browser WebSocket's `onclose` handler.
     #[wasm_bindgen(js_name = onDisconnect)]
     pub fn on_disconnect(&self, callback: js_sys::Function) {
-        *self.on_disconnect.borrow_mut() = Some(callback);
+        let closure = Closure::<dyn Fn()>::new(move || {
+            if let Err(e) = callback.call0(&JsValue::NULL) {
+                tracing::error!("onDisconnect callback threw: {e:?}");
+            }
+        });
+        self.on_disconnect.set(closure);
+    }
+}
+
+impl WasmWebSocket {
+    /// Set the disconnect callback directly (no wrapping).
+    ///
+    /// Used by `WasmAuthenticatedWebSocket` and `tryConnect`/`tryDiscover`
+    /// to install a PeerId-injecting closure after the handshake completes.
+    pub(crate) fn set_on_disconnect(&self, closure: Closure<dyn Fn()>) {
+        self.on_disconnect.set(closure);
     }
 }
 
@@ -547,6 +569,24 @@ impl From<WasmSendError> for JsValue {
     }
 }
 
+/// Install a PeerId-injecting disconnect callback on a `WasmWebSocket`.
+///
+/// Creates a [`Closure`] that calls `callback(peer_id)` and stores it on
+/// the inner transport. The closure is properly dropped when the transport
+/// is cleaned up — no `.forget()` leak.
+fn install_disconnect_callback(
+    auth: &Authenticated<WasmWebSocket, Local>,
+    callback: js_sys::Function,
+) {
+    let peer_id: JsValue = WasmPeerId::from(auth.peer_id()).into();
+    let closure = Closure::<dyn Fn()>::new(move || {
+        if let Err(e) = callback.call1(&JsValue::NULL, &peer_id) {
+            tracing::error!("onDisconnect callback threw: {e:?}");
+        }
+    });
+    auth.inner().set_on_disconnect(closure);
+}
+
 /// An authenticated WebSocket transport.
 ///
 /// This wrapper proves that the connection has completed the Subduction handshake
@@ -567,29 +607,6 @@ impl WasmAuthenticatedWebSocket {
     #[wasm_bindgen(getter, js_name = peerId)]
     pub fn peer_id(&self) -> WasmPeerId {
         self.inner.peer_id().into()
-    }
-
-    /// Register a callback that fires when the underlying WebSocket closes.
-    ///
-    /// The callback receives the peer's [`PeerId`] as its sole argument.
-    ///
-    /// ```js
-    /// const auth = await SubductionWebSocket.tryDiscover(url, signer);
-    /// auth.onDisconnect((peerId) => {
-    ///   console.log(`peer ${peerId} disconnected`);
-    /// });
-    /// ```
-    #[wasm_bindgen(js_name = onDisconnect)]
-    pub fn on_disconnect(&self, callback: js_sys::Function) {
-        let peer_id: JsValue = WasmPeerId::from(self.inner.peer_id()).into();
-        let wrapper = Closure::<dyn Fn()>::new(move || {
-            if let Err(e) = callback.call1(&JsValue::NULL, &peer_id) {
-                tracing::error!("onDisconnect callback threw: {e:?}");
-            }
-        });
-        let func: js_sys::Function = wrapper.as_ref().unchecked_ref::<js_sys::Function>().clone();
-        wrapper.forget();
-        *self.inner.inner().on_disconnect.borrow_mut() = Some(func);
     }
 
     /// Convert to a transport-erased [`AuthenticatedTransport`](super::WasmAuthenticatedTransport).
