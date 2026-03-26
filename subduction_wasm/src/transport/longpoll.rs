@@ -17,11 +17,11 @@ use subduction_http_longpoll::{
     client::HttpLongPollClient, session::SessionId, transport::HttpLongPollTransport,
 };
 use thiserror::Error;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{closure::Closure, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 
 use super::fetch_client::FetchHttpClient;
-use crate::{peer_id::WasmPeerId, signer::JsSigner, timer};
+use crate::{peer_id::WasmPeerId, signer::JsSigner, timer, transport::OnDisconnect};
 
 // ---------------------------------------------------------------------------
 // Timeout: direct `globalThis.setTimeout` binding
@@ -62,16 +62,28 @@ impl Timeout<Local> for JsTimeout {
 
 /// JS-facing wrapper around [`HttpLongPollTransport`] that exposes the
 /// byte-oriented [`Transport`](super::JsTransport) interface
-/// (`sendBytes`/`recvBytes`/`disconnect`) so it can be used as a
+/// (`sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`) so it can be used as a
 /// duck-typed `JsTransport` from JavaScript.
 #[wasm_bindgen(js_name = SubductionHttpLongPoll)]
 #[derive(Debug, Clone)]
-pub struct WasmHttpLongPoll(HttpLongPollTransport);
+pub struct WasmHttpLongPoll {
+    inner: HttpLongPollTransport,
+    /// Optional callback fired when the transport disconnects.
+    on_disconnect: OnDisconnect,
+}
 
 impl WasmHttpLongPoll {
     /// Wrap a raw long-poll transport for JS exposure.
     pub(crate) fn new(transport: HttpLongPollTransport) -> Self {
-        Self(transport)
+        Self {
+            inner: transport,
+            on_disconnect: OnDisconnect::default(),
+        }
+    }
+
+    /// Fire the disconnect callback if registered.
+    fn fire_on_disconnect(&self) {
+        self.on_disconnect.take_and_fire();
     }
 }
 
@@ -112,7 +124,7 @@ impl WasmHttpLongPoll {
     /// Returns an error if the outbound channel is closed.
     #[wasm_bindgen(js_name = sendBytes)]
     pub async fn send_bytes(&self, bytes: &[u8]) -> Result<(), WasmHttpLongPollError> {
-        Transport::<Local>::send_bytes(&self.0, bytes).await?;
+        Transport::<Local>::send_bytes(&self.inner, bytes).await?;
         Ok(())
     }
 
@@ -123,19 +135,36 @@ impl WasmHttpLongPoll {
     /// Returns an error if the inbound channel is closed.
     #[wasm_bindgen(js_name = recvBytes)]
     pub async fn recv_bytes(&self) -> Result<js_sys::Uint8Array, WasmHttpLongPollError> {
-        let bytes = Transport::<Local>::recv_bytes(&self.0).await?;
+        let bytes = Transport::<Local>::recv_bytes(&self.inner).await?;
         Ok(js_sys::Uint8Array::from(bytes.as_slice()))
     }
 
     /// Disconnect from the peer gracefully.
+    ///
+    /// Fires the `onDisconnect` callback if one is registered.
     ///
     /// # Errors
     ///
     /// Returns an error if the disconnect fails.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn disconnect(&self) -> Result<(), WasmHttpLongPollError> {
-        Transport::<Local>::disconnect(&self.0).await?;
+        Transport::<Local>::disconnect(&self.inner).await?;
+        self.fire_on_disconnect();
         Ok(())
+    }
+
+    /// Register a callback to be invoked when the transport disconnects.
+    ///
+    /// Part of the [`Transport`](super::JsTransport) interface contract.
+    /// Typically called by internal wiring rather than directly by user code.
+    #[wasm_bindgen(js_name = onDisconnect)]
+    pub fn on_disconnect(&self, callback: js_sys::Function) {
+        let closure = Closure::<dyn Fn()>::new(move || {
+            if let Err(e) = callback.call0(&JsValue::NULL) {
+                tracing::error!("onDisconnect callback threw: {e:?}");
+            }
+        });
+        self.on_disconnect.set(closure);
     }
 }
 
@@ -150,6 +179,7 @@ impl WasmHttpLongPoll {
 pub struct WasmAuthenticatedLongPoll {
     inner: Authenticated<HttpLongPollTransport, Local>,
     session_id: SessionId,
+    on_disconnect: Option<js_sys::Function>,
 }
 
 #[wasm_bindgen(js_class = AuthenticatedLongPoll)]
@@ -172,9 +202,21 @@ impl WasmAuthenticatedLongPoll {
     #[must_use]
     #[wasm_bindgen(js_name = toTransport)]
     pub fn to_transport(self) -> super::WasmAuthenticatedTransport {
-        super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
+        let peer_id = self.inner.peer_id();
+        let on_disconnect = self.on_disconnect;
+        super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(move |lp| {
+            let wasm_lp = WasmHttpLongPoll::new(lp);
+            if let Some(cb) = on_disconnect {
+                let peer_id: JsValue = WasmPeerId::from(peer_id).into();
+                let closure = Closure::<dyn Fn()>::new(move || {
+                    if let Err(e) = cb.call1(&JsValue::NULL, &peer_id) {
+                        tracing::error!("onDisconnect callback threw: {e:?}");
+                    }
+                });
+                wasm_lp.on_disconnect.set(closure);
+            }
             let transport: super::JsTransport =
-                wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
+                wasm_bindgen::JsValue::from(wasm_lp).unchecked_into();
             MessageTransport::new(transport)
         }))
     }
@@ -227,7 +269,7 @@ impl WasmLongPoll {
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
+    /// * `on_disconnect` - Optional callback invoked with the peer's [`PeerId`] when the connection closes
     ///
     /// # Errors
     ///
@@ -237,6 +279,7 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
         let client = make_client(base_url);
 
@@ -252,6 +295,7 @@ impl WasmLongPoll {
         Ok(WasmAuthenticatedLongPoll {
             inner: result.authenticated,
             session_id: result.session_id,
+            on_disconnect,
         })
     }
 
@@ -271,6 +315,7 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         service_name: Option<String>,
+        on_disconnect: Option<js_sys::Function>,
     ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
         let client = make_client(base_url);
         let service_name = service_name.unwrap_or_else(|| host_from_url(base_url));
@@ -287,6 +332,7 @@ impl WasmLongPoll {
         Ok(WasmAuthenticatedLongPoll {
             inner: result.authenticated,
             session_id: result.session_id,
+            on_disconnect,
         })
     }
 

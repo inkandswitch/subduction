@@ -421,6 +421,94 @@ test.describe("Known Peer ID Connection", () => {
   });
 });
 
+test.describe("onDisconnect Callback", () => {
+  test("should fire onDisconnect callback with peer ID on explicit disconnect", async ({ page }) => {
+    const result = await page.evaluate(async (wsUrl) => {
+      const { Subduction, MemoryStorage, SubductionWebSocket, WebCryptoSigner } = window.subduction;
+
+      try {
+        const signer = await WebCryptoSigner.setup();
+        const storage = new MemoryStorage();
+        const syncer = new Subduction(signer, storage);
+        const url = new URL(wsUrl);
+        const serviceName = wsUrl.replace("ws://", "");
+
+        // onDisconnect sets this global — no promises needed since
+        // Transport::disconnect() fires the callback synchronously.
+        (window as any).__disconnectedPeerId = null;
+
+        const authenticated = await SubductionWebSocket.tryDiscover(
+          url,
+          signer,
+          serviceName,
+          (peerId: any) => {
+            (window as any).__disconnectedPeerId = peerId.toString();
+          }
+        );
+
+        const serverPeerId = authenticated.peerId.toString();
+        await syncer.addConnection(authenticated.toTransport());
+
+        // Wait briefly for connection to stabilize
+        await new Promise(r => setTimeout(r, 200));
+
+        // Trigger disconnect — callback fires synchronously
+        await syncer.disconnectAll();
+
+        return {
+          callbackPeerId: (window as any).__disconnectedPeerId,
+          serverPeerId,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          callbackPeerId: null,
+          serverPeerId: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }, currentWsUrl);
+
+    expect(result.error).toBeNull();
+    expect(result.callbackPeerId).toBeTruthy();
+    expect(result.callbackPeerId).toBe(result.serverPeerId);
+  });
+
+  test("should register onDisconnect callback without error", async ({ page }) => {
+    const result = await page.evaluate(async (wsUrl) => {
+      const { SubductionWebSocket, WebCryptoSigner } = window.subduction;
+
+      try {
+        const signer = await WebCryptoSigner.setup();
+        const url = new URL(wsUrl);
+        const serviceName = wsUrl.replace("ws://", "");
+
+        const authenticated = await SubductionWebSocket.tryDiscover(
+          url,
+          signer,
+          serviceName,
+          (peerId: any) => {
+            // Callback registered but not expected to fire in this test
+          }
+        );
+
+        return {
+          hasPeerId: !!authenticated.peerId,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          hasPeerId: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }, currentWsUrl);
+
+    expect(result.error).toBeNull();
+    expect(result.hasPeerId).toBe(true);
+  });
+});
+
 test.describe("tryDiscover Optional Parameters", () => {
   // These tests verify that optional parameters can be omitted from JS calls.
   // The connection will succeed since the server supports discovery mode.

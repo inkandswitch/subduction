@@ -406,7 +406,7 @@ impl<
             for conn in conns {
                 let peer_id = conn.peer_id();
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::info!("peer {peer_id} disconnected: {e}");
+                    tracing::warn!("peer {peer_id} disconnected: {e}");
                     self.remove_connection(&conn).await;
                 }
             }
@@ -483,7 +483,7 @@ impl<
             for conn in conns {
                 let peer_id = conn.peer_id();
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::info!("peer {peer_id} disconnected: {e}");
+                    tracing::warn!("peer {peer_id} disconnected: {e}");
                     self.remove_connection(&conn).await;
                 }
             }
@@ -631,7 +631,7 @@ impl<
         }
         .into();
         if let Err(e) = conn.send(&msg).await {
-            tracing::info!("peer {} disconnected: {e}", conn.peer_id());
+            tracing::warn!("peer {} disconnected: {e}", conn.peer_id());
         }
 
         Ok(())

@@ -635,6 +635,7 @@ impl WasmSubduction {
             transport,
             self.core.signer(),
             Some(service_name),
+            None,
         )
         .await?;
 
@@ -666,6 +667,7 @@ impl WasmSubduction {
             transport,
             self.core.signer(),
             service_name,
+            None,
         )
         .await?;
 
@@ -688,8 +690,8 @@ impl WasmSubduction {
     pub async fn link(a: &WasmSubduction, b: &WasmSubduction) -> Result<(), WasmConnectError> {
         use crate::transport::message_port::WasmMessagePortTransport;
 
-        let channel = web_sys::MessageChannel::new()
-            .map_err(|e| WasmHandshakeError::WebSocket(alloc::format!("{e:?}")))?;
+        let channel =
+            web_sys::MessageChannel::new().map_err(|e| WasmHandshakeError::Transport(e.into()))?;
 
         let port1 = channel.port1();
         let port2 = channel.port2();
@@ -706,11 +708,13 @@ impl WasmSubduction {
                 transport_a,
                 a.core.signer(),
                 Some(DEFAULT_LOCAL_SERVICE_NAME.into()),
+                None,
             ),
             WasmAuthenticatedTransport::accept_discover(
                 transport_b,
                 b.core.signer(),
                 DEFAULT_LOCAL_SERVICE_NAME.into(),
+                None,
             ),
         )
         .await

@@ -70,6 +70,9 @@ jobs:
       - name: Build Wasm packages
         run: cd ./subduction_wasm && pnpm build
 
+      - name: Build e2e server Wasm (web target)
+        run: wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release
+
       - name: Build subduction_cli (needed for peer-connection and long-poll tests)
         run: cargo build --release -p subduction_cli
 

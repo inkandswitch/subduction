@@ -1,14 +1,17 @@
 //! Error types.
 
 use crate::policy::JsPolicyDenied;
-use alloc::string::{String, ToString};
-use future_form::Local;
-use subduction_core::subduction::error::{
-    AddConnectionError, HydrationError, IoError, ListenError, WriteError,
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
 };
-
+use future_form::Local;
+use subduction_core::{
+    handshake::AuthenticateError,
+    subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
+};
 use thiserror::Error;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsValue;
 
 use crate::{
     transport::{
@@ -165,12 +168,41 @@ impl From<WasmLongPollConnectError> for JsValue {
     }
 }
 
+/// A JS exception captured as an error source.
+///
+/// Wraps a [`JsValue`] so it can be used with `thiserror` (which requires
+/// `Display`). The `Display` impl delegates to `Debug` since `JsValue`
+/// does not implement `Display`.
+pub struct JsError(JsValue);
+
+impl core::fmt::Debug for JsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl core::fmt::Display for JsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl From<JsValue> for JsError {
+    fn from(value: JsValue) -> Self {
+        Self(value)
+    }
+}
+
 /// Error returned when a handshake fails.
 #[derive(Debug, Error)]
 pub enum WasmHandshakeError {
-    /// WebSocket error during handshake.
-    #[error("WebSocket error: {0}")]
-    WebSocket(String),
+    /// The handshake protocol failed (authentication, transport, decoding, etc.).
+    #[error(transparent)]
+    Authenticate(Box<AuthenticateError<WasmHandshakeError>>),
+
+    /// JS transport error during handshake (e.g., `send`/`recv` failure).
+    #[error("transport error: {0}")]
+    Transport(JsError),
 
     /// Invalid message received during handshake.
     #[error("invalid handshake message: {0}")]
@@ -187,6 +219,12 @@ pub enum WasmHandshakeError {
     /// Response doesn't match our challenge.
     #[error("response doesn't match challenge")]
     ChallengeMismatch,
+}
+
+impl From<AuthenticateError<WasmHandshakeError>> for WasmHandshakeError {
+    fn from(err: AuthenticateError<WasmHandshakeError>) -> Self {
+        Self::Authenticate(Box::new(err))
+    }
 }
 
 impl From<WasmHandshakeError> for JsValue {
