@@ -426,7 +426,6 @@ test.describe("onDisconnect Callback", () => {
     const result = await page.evaluate(async (wsUrl) => {
       const { Subduction, MemoryStorage, SubductionWebSocket, WebCryptoSigner } = window.subduction;
 
-      let step = "init";
       try {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
@@ -437,7 +436,6 @@ test.describe("onDisconnect Callback", () => {
         // onDisconnect sets this global — no promises needed since
         // Transport::disconnect() fires the callback synchronously.
         (window as any).__disconnectedPeerId = null;
-        step = "tryDiscover";
 
         const authenticated = await SubductionWebSocket.tryDiscover(
           url,
@@ -448,21 +446,13 @@ test.describe("onDisconnect Callback", () => {
           }
         );
 
-        step = "peerId";
         const serverPeerId = authenticated.peerId.toString();
-
-        step = "toTransport";
-        const transport = authenticated.toTransport();
-
-        step = "addConnection";
-        await syncer.addConnection(transport);
+        await syncer.addConnection(authenticated.toTransport());
 
         // Wait briefly for connection to stabilize
-        step = "stabilize";
         await new Promise(r => setTimeout(r, 200));
 
         // Trigger disconnect — callback fires synchronously
-        step = "disconnectAll";
         await syncer.disconnectAll();
 
         return {
@@ -474,7 +464,7 @@ test.describe("onDisconnect Callback", () => {
         return {
           callbackPeerId: null,
           serverPeerId: null,
-          error: `[${step}] ${error instanceof Error ? error.message : String(error)}`,
+          error: error instanceof Error ? error.message : String(error),
         };
       }
     }, currentWsUrl);
