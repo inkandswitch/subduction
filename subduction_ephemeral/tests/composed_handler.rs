@@ -17,7 +17,7 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
-        message::{BatchSyncResponse, RequestId, SyncMessage, SyncResult},
+        message::{BatchSyncResponse, RemoteHeads, RequestId, SyncMessage, SyncResult},
         test_utils::ChannelMockConnection,
     },
     handler::Handler,
@@ -116,7 +116,8 @@ impl WireEnvelope for TestWireMessage {
                 | SyncMessage::DataRequestRejected(_)
                 | SyncMessage::Fragment { .. }
                 | SyncMessage::LooseCommit { .. }
-                | SyncMessage::RemoveSubscriptions(_) => None,
+                | SyncMessage::RemoveSubscriptions(_)
+                | SyncMessage::HeadsUpdate { .. } => None,
             },
             Self::Ephemeral(_) => None,
         }
@@ -161,7 +162,8 @@ impl Handler<Sendable, TestConn> for TrackingSyncHandler {
             | SyncMessage::DataRequestRejected(_)
             | SyncMessage::Fragment { .. }
             | SyncMessage::LooseCommit { .. }
-            | SyncMessage::RemoveSubscriptions(_) => None,
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -309,6 +311,7 @@ fn as_batch_sync_response_extracts_from_sync() {
         req_id,
         id: SedimentreeId::new([1; 32]),
         result: SyncResult::NotFound,
+        responder_heads: RemoteHeads::default(),
     };
 
     let wire = TestWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));

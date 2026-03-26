@@ -41,7 +41,8 @@ mod generators {
     };
     use subduction_core::{
         connection::message::{
-            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncResult,
+            BatchSyncRequest, BatchSyncResponse, RemoteHeads, RequestId, RequestedData, SyncDiff,
+            SyncResult,
         },
         peer::id::PeerId,
         storage::key::StorageKey,
@@ -220,6 +221,7 @@ mod generators {
                 num_fragments,
                 blob_size,
             )),
+            responder_heads: RemoteHeads::default(),
         }
     }
 }
@@ -362,7 +364,7 @@ mod id {
 
 mod message {
     use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-    use subduction_core::connection::message::SyncMessage;
+    use subduction_core::connection::message::{RemoteHeads, SyncMessage};
 
     use super::generators::{
         batch_sync_request_from_seed, batch_sync_response_from_seed, blob_digest_from_seed,
@@ -395,6 +397,7 @@ mod message {
                         id: black_box(id),
                         commit: black_box(commit.clone()),
                         blob: black_box(blob.clone()),
+                        sender_heads: RemoteHeads::default(),
                     });
                 },
             );
@@ -415,6 +418,7 @@ mod message {
                         id: black_box(id),
                         fragment: black_box(fragment.clone()),
                         blob: black_box(blob.clone()),
+                        sender_heads: RemoteHeads::default(),
                     });
                 },
             );
@@ -474,6 +478,7 @@ mod message {
             id: sedimentree_id_from_seed(1),
             commit: signed_loose_commit_from_seed(1),
             blob: blob_from_seed(1, 64),
+            sender_heads: RemoteHeads::default(),
         };
         group.bench_function("loose_commit_none", |b| {
             b.iter(|| black_box(&msg_loose).request_id());
@@ -509,7 +514,7 @@ mod sync {
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{
-        BatchSyncRequest, BatchSyncResponse, SyncMessage, SyncResult,
+        BatchSyncRequest, BatchSyncResponse, RemoteHeads, SyncMessage, SyncResult,
     };
 
     use super::generators::{
@@ -630,6 +635,7 @@ mod sync {
                             id: black_box(id),
                             req_id: black_box(req_id),
                             result: SyncResult::Ok(black_box(diff)),
+                            responder_heads: RemoteHeads::default(),
                         },
                         BatchSize::SmallInput,
                     );
@@ -845,7 +851,7 @@ mod collections {
 
 mod cloning {
     use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-    use subduction_core::connection::{id::ConnectionId, message::SyncMessage};
+    use subduction_core::connection::{id::ConnectionId, message::{RemoteHeads, SyncMessage}};
 
     use super::generators::{
         batch_sync_response_from_seed, blob_from_seed, request_id_from_seed,
@@ -916,6 +922,7 @@ mod cloning {
             id: sedimentree_id_from_seed(1),
             commit: signed_loose_commit_from_seed(1),
             blob: blob_from_seed(1, 256),
+            sender_heads: RemoteHeads::default(),
         };
         group.bench_function("message/loose_commit_256b", |b| {
             b.iter(|| black_box(&msg_loose).clone());
@@ -925,6 +932,7 @@ mod cloning {
             id: sedimentree_id_from_seed(1),
             fragment: signed_fragment_from_seed(1),
             blob: blob_from_seed(1, 1024),
+            sender_heads: RemoteHeads::default(),
         };
         group.bench_function("message/fragment_1kb", |b| {
             b.iter(|| black_box(&msg_fragment).clone());

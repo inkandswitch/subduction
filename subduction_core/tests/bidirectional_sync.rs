@@ -21,7 +21,9 @@ use futures::future::Aborted;
 use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
+        message::{
+            BatchSyncRequest, BatchSyncResponse, RemoteHeads, RequestId, SyncMessage, SyncResult,
+        },
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     handler::sync::SyncHandler,
@@ -108,6 +110,23 @@ async fn make_test_fragment(
     (verified.into_signed(), blob, summary)
 }
 
+/// Receive the next non-HeadsUpdate message from the channel,
+/// discarding any HeadsUpdate messages that arrive first.
+async fn recv_skipping_heads_updates(
+    rx: &async_channel::Receiver<SyncMessage>,
+) -> Option<SyncMessage> {
+    loop {
+        let msg = tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .ok()?
+            .ok()?;
+        if matches!(msg, SyncMessage::HeadsUpdate { .. }) {
+            continue;
+        }
+        return Some(msg);
+    }
+}
+
 /// Test that when responder has commits the requestor doesn't know about,
 /// the response includes them in `missing_commits` (and `requesting` is empty).
 #[tokio::test]
@@ -135,6 +154,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
             id: sedimentree_id,
             commit: commit_a.clone(),
             blob: blob_a.clone(),
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -170,8 +190,8 @@ async fn test_responder_requests_missing_commits() -> TestResult {
     // Since Bob has nothing and Alice has commit A:
     // - missing_commits should contain commit A (what Bob needs)
     // - requesting should be empty (Alice doesn't need anything from Bob)
-    let response = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
-        .await?
+    let response = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
         .expect("should receive response");
 
     let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
@@ -243,8 +263,8 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
     // Alice should respond with:
     // - missing_commits: empty (Bob already has everything Alice has, which is nothing)
     // - requesting: should include commit_b_fp (Alice wants what Bob has)
-    let response = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
-        .await?
+    let response = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
         .expect("should receive response");
 
     let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
@@ -306,6 +326,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             id: sedimentree_id,
             commit: commit_a.clone(),
             blob: blob_a.clone(),
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -334,6 +355,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             id: sedimentree_id,
             commit: commit_b.clone(),
             blob: blob_b.clone(),
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -370,10 +392,9 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Alice should send BatchSyncResponse with:
     // - missing_commits: [commit_a] (what Bob needs)
     // - requesting: [commit_b_fp] (what Alice wants from Bob, echoed as fingerprint)
-    let response =
-        tokio::time::timeout(Duration::from_millis(100), alice_handle.outbound_rx.recv())
-            .await?
-            .expect("should receive response from Alice");
+    let response = recv_skipping_heads_updates(&alice_handle.outbound_rx)
+        .await
+        .expect("should receive response from Alice");
 
     let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
@@ -405,6 +426,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
                 nonce: 1,
             },
             result: SyncResult::Ok(diff.clone()),
+            responder_heads: RemoteHeads::default(),
         }))
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -469,8 +491,8 @@ async fn test_responder_requests_fragments() -> TestResult {
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let response = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
-        .await?
+    let response = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
         .expect("should receive response");
 
     let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
@@ -516,6 +538,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
             id: sedimentree_id,
             commit: commit.clone(),
             blob: blob.clone(),
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -544,8 +567,8 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let response = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
-        .await?
+    let response = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
         .expect("should receive response");
 
     let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {

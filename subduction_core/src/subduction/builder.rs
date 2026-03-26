@@ -425,6 +425,8 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.depth_metric.clone(),
         ));
 
+        let send_heads_counter = handler.send_heads_counter().clone();
+
         let (sd, listener, manager) = Subduction::new(
             handler.clone(),
             self.discovery_id,
@@ -434,6 +436,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             subscriptions,
             self.storage,
             pending_blob_requests,
+            send_heads_counter,
             nonce_cache,
             self.timer,
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
@@ -514,6 +517,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             subscriptions,
             self.storage,
             pending_blob_requests,
+            Arc::new(Mutex::new(Map::new())),
             nonce_cache,
             self.timer,
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
@@ -606,6 +610,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             subscriptions,
             self.storage,
             pending_blob_requests,
+            Arc::new(Mutex::new(Map::new())),
             nonce_cache,
             self.timer,
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),

@@ -18,7 +18,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::SyncMessage,
+        message::{RemoteHeads, SyncMessage},
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
@@ -66,6 +66,7 @@ async fn test_sendable_single_commit() -> TestResult {
             id: sedimentree_id,
             commit,
             blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 
@@ -117,6 +118,7 @@ async fn test_sendable_multiple_sequential() -> TestResult {
                 id: sedimentree_id,
                 commit,
                 blob,
+                sender_heads: RemoteHeads::default(),
             })
             .await?;
 
@@ -167,6 +169,7 @@ async fn test_sendable_same_sedimentree() -> TestResult {
                 id: sedimentree_id,
                 commit,
                 blob,
+                sender_heads: RemoteHeads::default(),
             })
             .await?;
 
@@ -218,6 +221,7 @@ async fn test_local_single_commit() -> TestResult {
                     id: sedimentree_id,
                     commit,
                     blob,
+                    sender_heads: RemoteHeads::default(),
                 })
                 .await?;
 
@@ -275,6 +279,7 @@ async fn test_local_multiple_sequential() -> TestResult {
                         id: sedimentree_id,
                         commit,
                         blob,
+                        sender_heads: RemoteHeads::default(),
                     })
                     .await?;
 
@@ -331,6 +336,7 @@ async fn test_local_same_sedimentree() -> TestResult {
                         id: sedimentree_id,
                         commit,
                         blob,
+                        sender_heads: RemoteHeads::default(),
                     })
                     .await?;
 
