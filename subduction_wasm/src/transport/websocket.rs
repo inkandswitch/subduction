@@ -452,13 +452,13 @@ impl Transport<Local> for WasmWebSocket {
 }
 
 impl subduction_core::handshake::Handshake<Local> for WasmWebSocket {
-    type Error = crate::error::WasmHandshakeError;
+    type Error = WasmHandshakeError;
 
     fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
-            self.socket.send_with_u8_array(&bytes).map_err(|e| {
-                crate::error::WasmHandshakeError::WebSocket(alloc::format!("{e:?}"))
-            })?;
+            self.socket
+                .send_with_u8_array(&bytes)
+                .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
             Ok(())
         }
         .boxed_local()
@@ -467,7 +467,7 @@ impl subduction_core::handshake::Handshake<Local> for WasmWebSocket {
     fn recv(&mut self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::Error>> {
         async move {
             let bytes = self.inbound_reader.recv().await.map_err(|_| {
-                crate::error::WasmHandshakeError::WebSocket("inbound channel closed".into())
+                WasmHandshakeError::Transport(JsValue::from_str("inbound channel closed").into())
             })?;
             Ok(bytes)
         }

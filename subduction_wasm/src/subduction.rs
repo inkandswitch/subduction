@@ -690,8 +690,8 @@ impl WasmSubduction {
     pub async fn link(a: &WasmSubduction, b: &WasmSubduction) -> Result<(), WasmConnectError> {
         use crate::transport::message_port::WasmMessagePortTransport;
 
-        let channel = web_sys::MessageChannel::new()
-            .map_err(|e| WasmHandshakeError::WebSocket(alloc::format!("{e:?}")))?;
+        let channel =
+            web_sys::MessageChannel::new().map_err(|e| WasmHandshakeError::Transport(e.into()))?;
 
         let port1 = channel.port1();
         let port2 = channel.port2();

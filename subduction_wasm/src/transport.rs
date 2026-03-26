@@ -9,7 +9,7 @@ pub mod nonce;
 mod on_disconnect;
 pub mod websocket;
 
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{string::ToString, vec::Vec};
 use wasm_refgen::wasm_refgen;
 
 use future_form::Local;
@@ -24,7 +24,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::peer_id::WasmPeerId;
+use crate::{error::WasmHandshakeError, peer_id::WasmPeerId};
 
 use self::nonce::WasmNonce;
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
@@ -129,14 +129,14 @@ impl Transport<Local> for JsTransport {
 }
 
 impl Handshake<Local> for JsTransport {
-    type Error = crate::error::WasmHandshakeError;
+    type Error = WasmHandshakeError;
 
     fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         let array = js_sys::Uint8Array::from(bytes.as_slice());
         async move {
             JsFuture::from(self.js_send_bytes(&array))
                 .await
-                .map_err(|e| crate::error::WasmHandshakeError::WebSocket(format!("{e:?}")))?;
+                .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
             Ok(())
         }
         .boxed_local()
@@ -146,13 +146,11 @@ impl Handshake<Local> for JsTransport {
         async move {
             let value = JsFuture::from(self.js_recv_bytes())
                 .await
-                .map_err(|e| crate::error::WasmHandshakeError::WebSocket(format!("{e:?}")))?;
+                .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
 
-            let array: js_sys::Uint8Array = value.dyn_into().map_err(|v| {
-                crate::error::WasmHandshakeError::WebSocket(format!(
-                    "expected Uint8Array, got {v:?}"
-                ))
-            })?;
+            let array: js_sys::Uint8Array = value
+                .dyn_into()
+                .map_err(|v| WasmHandshakeError::Transport(v.into()))?;
 
             Ok(array.to_vec())
         }
