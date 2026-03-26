@@ -48,10 +48,6 @@ pub struct WasmWebSocket {
     /// disconnect or when the browser WebSocket's `onclose` fires.
     inbound_closer: Rc<async_channel::Sender<Vec<u8>>>,
     on_disconnect: OnDisconnect,
-    /// Prevent `onmessage`/`onclose` closures from being leaked via `.forget()`.
-    /// Stored here so they are dropped when the last clone of the transport drops.
-    _onmessage: Rc<Closure<dyn FnMut(MessageEvent)>>,
-    _onclose: Rc<Closure<dyn FnMut(Event)>>,
 }
 
 impl WasmWebSocket {
@@ -89,20 +85,21 @@ impl WasmWebSocket {
             close_callback.take_and_fire();
         });
 
-        let onmessage = Rc::new(onmessage);
-        let onclose = Rc::new(onclose);
-
         ws.set_binary_type(BinaryType::Arraybuffer);
-        ws.set_onmessage(Some(onmessage.as_ref().as_ref().unchecked_ref()));
-        ws.set_onclose(Some(onclose.as_ref().as_ref().unchecked_ref()));
+        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+
+        // These closures must outlive the Rust struct because the browser
+        // WebSocket JS object retains references to them via onmessage/onclose.
+        // The leak is bounded: one pair per connection.
+        onmessage.forget();
+        onclose.forget();
 
         Self {
             socket: ws,
             inbound_reader,
             inbound_closer: inbound_writer,
             on_disconnect,
-            _onmessage: onmessage,
-            _onclose: onclose,
         }
     }
 }
