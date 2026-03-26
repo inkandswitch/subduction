@@ -88,7 +88,12 @@ impl From<SyncStats> for WasmSyncStats {
             fragments_received: stats.fragments_received,
             commits_sent: stats.commits_sent,
             fragments_sent: stats.fragments_sent,
-            remote_heads: stats.remote_heads.heads.into_iter().map(WasmDigest::from).collect(),
+            remote_heads: stats
+                .remote_heads
+                .heads
+                .into_iter()
+                .map(WasmDigest::from)
+                .collect(),
         }
     }
 }

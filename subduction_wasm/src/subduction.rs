@@ -666,10 +666,7 @@ impl WasmSubduction {
         transport: &WasmAuthenticatedTransport,
     ) -> Result<bool, WasmAddConnectionError> {
         let peer_id = transport.inner().peer_id();
-        let is_new = self
-            .core
-            .add_connection(transport.inner().clone())
-            .await?;
+        let is_new = self.core.add_connection(transport.inner().clone()).await?;
         if is_new {
             self.ephemeral_handler.subscribe_peer(peer_id).await;
         }

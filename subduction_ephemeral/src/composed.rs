@@ -7,8 +7,10 @@ use alloc::boxed::Box;
 use core::fmt::Debug;
 
 use future_form::{FutureForm, Sendable};
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
-use sedimentree_core::id::SedimentreeId;
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    id::SedimentreeId,
+};
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
@@ -80,16 +82,10 @@ impl<SyncH, EphH, W> ComposedHandler<SyncH, EphH, W> {
             _wire: core::marker::PhantomData,
         }
     }
-
 }
 
 impl<SyncH: RemoteHeadsNotifier, EphH, W> RemoteHeadsNotifier for ComposedHandler<SyncH, EphH, W> {
-    fn notify_remote_heads(
-        &self,
-        id: SedimentreeId,
-        peer: PeerId,
-        heads: RemoteHeads,
-    ) {
+    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.sync.notify_remote_heads(id, peer, heads);
     }
 }

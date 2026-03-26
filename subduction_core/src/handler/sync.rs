@@ -36,8 +36,8 @@ use crate::{
     connection::{
         Connection,
         message::{
-            BatchSyncRequest, BatchSyncResponse, RemoteHeads, RequestId, RequestedData, SyncDiff,
-            SyncMessage, SyncResult,
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
+            SyncResult,
         },
     },
     peer::id::PeerId,
@@ -67,27 +67,7 @@ use super::Handler;
 ///
 /// [`SubductionBuilder::build`]: crate::subduction::builder::SubductionBuilder::build
 /// [`Subduction`]: crate::subduction::Subduction
-/// Observer for remote heads notifications.
-///
-/// Called with `(sedimentree_id, peer_id, heads)` whenever a remote peer
-/// reports its heads — either via a `HeadsUpdate` message or via
-/// `sender_heads` on subscription pushes.
-pub trait RemoteHeadsObserver {
-    /// Called when a remote peer reports its heads for a sedimentree.
-    fn on_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads);
-}
-
-/// A no-op [`RemoteHeadsObserver`] that discards all notifications.
-///
-/// This is the default observer used when remote heads notifications
-/// are not needed.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoRemoteHeadsObserver;
-
-impl RemoteHeadsObserver for NoRemoteHeadsObserver {
-    fn on_remote_heads(&self, _id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {
-    }
-}
+use crate::remote_heads::{NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsObserver};
 
 /// The default sync protocol handler for Subduction.
 ///
@@ -275,7 +255,9 @@ impl<
         M: DepthMetric,
         R: RemoteHeadsObserver
 )]
-impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C> for SyncHandler<K, S, C, P, M, N, R> {
+impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
+    for SyncHandler<K, S, C, P, M, N, R>
+{
     type Message = SyncMessage;
     type HandlerError = ListenError<K, S, C, SyncMessage>;
 
@@ -322,12 +304,7 @@ impl<
     const N: usize,
 > super::RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
 {
-    fn notify_remote_heads(
-        &self,
-        id: SedimentreeId,
-        peer: PeerId,
-        heads: RemoteHeads,
-    ) {
+    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         // Filter out stale updates: only forward if the counter is
         // strictly greater than the last seen value for this (peer, id).
         let is_stale = {
@@ -415,8 +392,7 @@ impl<
                     self.remote_heads_observer
                         .on_remote_heads(id, from, sender_heads);
                 }
-                self.recv_fragment(&from, id, &fragment, blob, conn)
-                    .await?;
+                self.recv_fragment(&from, id, &fragment, blob, conn).await?;
             }
             SyncMessage::BatchSyncRequest(BatchSyncRequest {
                 id,
@@ -508,8 +484,7 @@ impl<
                     heads.heads.len()
                 );
                 if !heads.is_empty() {
-                    self.remote_heads_observer
-                        .on_remote_heads(id, from, heads);
+                    self.remote_heads_observer.on_remote_heads(id, from, heads);
                 }
             }
         }
@@ -812,7 +787,10 @@ impl<
 
         let responder_heads = {
             let counter = self.next_send_counter(id).await;
-            RemoteHeads { counter, heads: raw_heads }
+            RemoteHeads {
+                counter,
+                heads: raw_heads,
+            }
         };
 
         for digest in local_commit_digests {

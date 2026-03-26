@@ -851,7 +851,10 @@ mod collections {
 
 mod cloning {
     use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-    use subduction_core::connection::{id::ConnectionId, message::{RemoteHeads, SyncMessage}};
+    use subduction_core::connection::{
+        id::ConnectionId,
+        message::{RemoteHeads, SyncMessage},
+    };
 
     use super::generators::{
         batch_sync_response_from_seed, blob_from_seed, request_id_from_seed,

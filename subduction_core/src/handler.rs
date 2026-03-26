@@ -51,39 +51,12 @@
 pub mod sync;
 
 use future_form::FutureForm;
-use sedimentree_core::{
-    codec::{decode::Decode, encode::Encode},
-    id::SedimentreeId,
-};
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use crate::{
-    authenticated::Authenticated,
-    connection::message::{BatchSyncResponse, RemoteHeads},
-    peer::id::PeerId,
+    authenticated::Authenticated, connection::message::BatchSyncResponse, peer::id::PeerId,
+    remote_heads::RemoteHeadsNotifier,
 };
-
-/// Trait for handlers that can notify the application of remote heads updates.
-///
-/// [`Subduction`] calls this when it receives `responder_heads` in a
-/// [`BatchSyncResponse`] during sync. Handlers that also process
-/// subscription pushes and `HeadsUpdate` messages (like [`SyncHandler`])
-/// should call this from their own dispatch logic too.
-///
-/// Implementing this trait allows all remote-heads notifications to flow
-/// through a single path regardless of which protocol step produced them.
-///
-/// [`Subduction`]: crate::subduction::Subduction
-/// [`SyncHandler`]: crate::handler::sync::SyncHandler
-pub trait RemoteHeadsNotifier {
-    /// Notify the application of a remote peer's current heads for a sedimentree.
-    fn notify_remote_heads(
-        &self,
-        id: SedimentreeId,
-        peer: PeerId,
-        heads: RemoteHeads,
-    );
-
-}
 
 /// A handler for messages received from authenticated peers.
 ///
