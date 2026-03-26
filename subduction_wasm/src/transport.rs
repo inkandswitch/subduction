@@ -6,10 +6,10 @@ pub mod longpoll;
 pub mod message;
 pub mod message_port;
 pub mod nonce;
+mod on_disconnect;
 pub mod websocket;
 
-use alloc::{format, rc::Rc, string::ToString, vec::Vec};
-use core::cell::RefCell;
+use alloc::{format, string::ToString, vec::Vec};
 use wasm_refgen::wasm_refgen;
 
 use future_form::Local;
@@ -21,7 +21,7 @@ use subduction_core::{
     transport::Transport,
 };
 use thiserror::Error;
-use wasm_bindgen::{closure::Closure, prelude::*};
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;
@@ -29,35 +29,7 @@ use crate::peer_id::WasmPeerId;
 use self::nonce::WasmNonce;
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
-/// Shared, optional disconnect callback.
-///
-/// Stored as a [`Closure`] so it is properly dropped (not leaked) when the
-/// connection is cleaned up or a new callback is registered.
-#[derive(Debug, Default, Clone)]
-pub(crate) struct OnDisconnect(
-    #[allow(clippy::type_complexity)] Rc<RefCell<Option<Closure<dyn Fn()>>>>,
-);
-
-impl OnDisconnect {
-    /// Store a disconnect callback.
-    pub(crate) fn set(&self, closure: Closure<dyn Fn()>) {
-        *self.0.borrow_mut() = Some(closure);
-    }
-
-    /// Take and invoke the callback (if any).
-    ///
-    /// The closure is consumed so it cannot fire twice, and the borrow is
-    /// released before calling into JS to avoid re-entrant `RefCell` panics.
-    pub(crate) fn take_and_fire(&self) {
-        let closure = self.0.borrow_mut().take();
-        if let Some(closure) = closure {
-            let func: &js_sys::Function = closure.as_ref().unchecked_ref();
-            if let Err(e) = func.call0(&JsValue::NULL) {
-                tracing::error!("onDisconnect callback threw: {e:?}");
-            }
-        }
-    }
-}
+pub(crate) use on_disconnect::OnDisconnect;
 
 /// Default service name for local (non-network) discovery handshakes.
 ///
