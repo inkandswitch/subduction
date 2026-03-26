@@ -75,6 +75,7 @@ pub struct WasmMessagePortTransport {
     port: Rc<Port>,
     queue: SharedQueue,
     _onmessage: Closure<dyn FnMut(JsValue)>,
+    on_disconnect: RefCell<Option<Function>>,
 }
 
 impl core::fmt::Debug for WasmMessagePortTransport {
@@ -118,6 +119,7 @@ impl WasmMessagePortTransport {
             port: Rc::new(port),
             queue,
             _onmessage: onmessage,
+            on_disconnect: RefCell::new(None),
         }
     }
 
@@ -156,20 +158,25 @@ impl WasmMessagePortTransport {
         })
     }
 
-    /// Disconnect (close the port).
+    /// Disconnect (close the port) and fire the `onDisconnect` callback if registered.
     pub fn disconnect(&self) -> Promise {
         self.port.close();
+        if let Some(cb) = self.on_disconnect.borrow_mut().take()
+            && let Err(e) = cb.call0(&JsValue::NULL)
+        {
+            tracing::error!("onDisconnect callback threw: {e:?}");
+        }
         resolved_void()
     }
 
     /// Register a callback to be invoked when the transport disconnects.
     ///
     /// Part of the [`Transport`](super::JsTransport) interface contract.
-    /// `MessagePort` transports are local (in-process), so disconnect
-    /// notification is typically unnecessary — this is a no-op that
-    /// satisfies the interface.
+    /// Typically called by internal wiring rather than directly by user code.
     #[wasm_bindgen(js_name = onDisconnect)]
-    pub fn on_disconnect(&self, _callback: &js_sys::Function) {}
+    pub fn on_disconnect(&self, callback: &js_sys::Function) {
+        *self.on_disconnect.borrow_mut() = Some(callback.clone());
+    }
 }
 
 /// Convenience factory — equivalent to `new MessagePortTransport(port)`.

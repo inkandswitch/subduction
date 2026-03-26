@@ -434,6 +434,7 @@ test.describe("onDisconnect Callback", () => {
         const serviceName = wsUrl.replace("ws://", "");
 
         // Track disconnect callback invocations
+        let capturedServerPeerId: string | null = null;
         let disconnectedPeerId: string | null = null;
         const disconnectPromise = new Promise<string>((resolve) => {
           // tryDiscover with onDisconnect callback
@@ -441,7 +442,7 @@ test.describe("onDisconnect Callback", () => {
             disconnectedPeerId = peerId.toString();
             resolve(disconnectedPeerId);
           }).then(async (authenticated: any) => {
-            const serverPeerId = authenticated.peerId.toString();
+            capturedServerPeerId = authenticated.peerId.toString();
             await syncer.addConnection(authenticated.toTransport());
 
             // Wait briefly for connection to stabilize
@@ -460,6 +461,7 @@ test.describe("onDisconnect Callback", () => {
         return {
           callbackFired: callbackPeerId !== "TIMEOUT",
           callbackPeerId,
+          serverPeerId: capturedServerPeerId,
           error: null,
         };
       } catch (error) {
@@ -475,9 +477,10 @@ test.describe("onDisconnect Callback", () => {
     expect(result.callbackFired).toBe(true);
     expect(result.callbackPeerId).toBeTruthy();
     expect(result.callbackPeerId).not.toBe("TIMEOUT");
+    expect(result.callbackPeerId).toBe(result.serverPeerId);
   });
 
-  test("should fire onDisconnect with correct peer ID on server close", async ({ page }) => {
+  test("should register onDisconnect callback without error", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
       const { SubductionWebSocket, WebCryptoSigner } = window.subduction;
 
@@ -486,31 +489,22 @@ test.describe("onDisconnect Callback", () => {
         const url = new URL(wsUrl);
         const serviceName = wsUrl.replace("ws://", "");
 
-        let callbackPeerId: string | null = null;
         const authenticated = await SubductionWebSocket.tryDiscover(
           url,
           signer,
           serviceName,
           (peerId: any) => {
-            callbackPeerId = peerId.toString();
+            // Callback registered but not expected to fire in this test
           }
         );
 
-        const expectedPeerId = authenticated.peerId.toString();
-
         return {
-          hasPeerId: !!expectedPeerId,
-          expectedPeerId,
-          // We can't easily trigger a server-side close in this test,
-          // so we verify the callback was registered without error
-          registeredSuccessfully: true,
+          hasPeerId: !!authenticated.peerId,
           error: null,
         };
       } catch (error) {
         return {
           hasPeerId: false,
-          expectedPeerId: null,
-          registeredSuccessfully: false,
           error: error instanceof Error ? error.message : String(error),
         };
       }
@@ -518,7 +512,6 @@ test.describe("onDisconnect Callback", () => {
 
     expect(result.error).toBeNull();
     expect(result.hasPeerId).toBe(true);
-    expect(result.registeredSuccessfully).toBe(true);
   });
 });
 

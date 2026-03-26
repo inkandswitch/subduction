@@ -115,7 +115,7 @@ impl WasmWebSocket {
     /// * `ws` - An existing WebSocket (CONNECTING or OPEN)
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds
+    /// * `on_disconnect` - Optional callback invoked with the peer's [`PeerId`] when the connection closes
     ///
     /// # Errors
     ///
@@ -166,6 +166,8 @@ impl WasmWebSocket {
     /// * `address` - The WebSocket URL to connect to
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
+    /// * `on_disconnect` - Optional callback invoked with the peer's [`PeerId`] when the connection closes
+    ///
     /// # Errors
     ///
     /// Returns an error if:
@@ -195,9 +197,9 @@ impl WasmWebSocket {
     ///
     /// * `address` - The WebSocket URL to connect to
     /// * `signer` - The client's signer for authentication
-    /// * `timeout_milliseconds` - Request timeout in milliseconds. Defaults to 30000 (30s).
     /// * `service_name` - The service name for discovery (e.g., `localhost:8080`).
     ///   If omitted, the host is extracted from the URL.
+    /// * `on_disconnect` - Optional callback invoked with the peer's [`PeerId`] when the connection closes
     ///
     /// # Errors
     ///
