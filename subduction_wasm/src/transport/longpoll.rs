@@ -4,8 +4,9 @@
 //! via HTTP long-poll from browser/worker environments.
 
 use alloc::string::{String, ToString};
-use core::time::Duration;
+use core::{cell::RefCell, time::Duration};
 
+use alloc::rc::Rc;
 use future_form::Local;
 use futures::FutureExt;
 use subduction_core::{
@@ -62,16 +63,33 @@ impl Timeout<Local> for JsTimeout {
 
 /// JS-facing wrapper around [`HttpLongPollTransport`] that exposes the
 /// byte-oriented [`Transport`](super::JsTransport) interface
-/// (`sendBytes`/`recvBytes`/`disconnect`) so it can be used as a
+/// (`sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`) so it can be used as a
 /// duck-typed `JsTransport` from JavaScript.
 #[wasm_bindgen(js_name = SubductionHttpLongPoll)]
 #[derive(Debug, Clone)]
-pub struct WasmHttpLongPoll(HttpLongPollTransport);
+pub struct WasmHttpLongPoll {
+    inner: HttpLongPollTransport,
+    /// Optional callback fired when the transport disconnects.
+    on_disconnect: Rc<RefCell<Option<js_sys::Function>>>,
+}
 
 impl WasmHttpLongPoll {
     /// Wrap a raw long-poll transport for JS exposure.
     pub(crate) fn new(transport: HttpLongPollTransport) -> Self {
-        Self(transport)
+        Self {
+            inner: transport,
+            on_disconnect: Rc::default(),
+        }
+    }
+
+    /// Fire the disconnect callback if registered.
+    fn fire_on_disconnect(&self) {
+        let cb = self.on_disconnect.borrow().clone();
+        if let Some(cb) = cb
+            && let Err(e) = cb.call0(&JsValue::NULL)
+        {
+            tracing::error!("onDisconnect callback threw: {e:?}");
+        }
     }
 }
 
@@ -112,7 +130,7 @@ impl WasmHttpLongPoll {
     /// Returns an error if the outbound channel is closed.
     #[wasm_bindgen(js_name = sendBytes)]
     pub async fn send_bytes(&self, bytes: &[u8]) -> Result<(), WasmHttpLongPollError> {
-        Transport::<Local>::send_bytes(&self.0, bytes).await?;
+        Transport::<Local>::send_bytes(&self.inner, bytes).await?;
         Ok(())
     }
 
@@ -123,19 +141,30 @@ impl WasmHttpLongPoll {
     /// Returns an error if the inbound channel is closed.
     #[wasm_bindgen(js_name = recvBytes)]
     pub async fn recv_bytes(&self) -> Result<js_sys::Uint8Array, WasmHttpLongPollError> {
-        let bytes = Transport::<Local>::recv_bytes(&self.0).await?;
+        let bytes = Transport::<Local>::recv_bytes(&self.inner).await?;
         Ok(js_sys::Uint8Array::from(bytes.as_slice()))
     }
 
     /// Disconnect from the peer gracefully.
+    ///
+    /// Fires the `onDisconnect` callback if one is registered.
     ///
     /// # Errors
     ///
     /// Returns an error if the disconnect fails.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn disconnect(&self) -> Result<(), WasmHttpLongPollError> {
-        Transport::<Local>::disconnect(&self.0).await?;
+        Transport::<Local>::disconnect(&self.inner).await?;
+        self.fire_on_disconnect();
         Ok(())
+    }
+
+    /// Register a callback to be invoked when the transport disconnects.
+    ///
+    /// Part of the [`Transport`](super::JsTransport) interface contract.
+    #[wasm_bindgen(js_name = onDisconnect)]
+    pub fn on_disconnect(&self, callback: js_sys::Function) {
+        *self.on_disconnect.borrow_mut() = Some(callback);
     }
 }
 

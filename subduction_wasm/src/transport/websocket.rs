@@ -81,7 +81,10 @@ impl WasmWebSocket {
         let onclose = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             tracing::warn!("WebSocket connection closed");
             close_writer.close();
-            if let Some(cb) = close_callback.borrow().as_ref()
+            // Clone out of the RefCell before calling into JS — a re-entrant
+            // call to onDisconnect from the callback would panic otherwise.
+            let cb = close_callback.borrow().clone();
+            if let Some(cb) = cb
                 && let Err(e) = cb.call0(&JsValue::NULL)
             {
                 tracing::error!("onDisconnect callback threw: {e:?}");
