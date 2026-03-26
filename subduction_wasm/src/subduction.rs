@@ -102,7 +102,15 @@ use crate::policy::{JsPolicy, make_open_policy};
 type WasmConn = MessageTransport<JsTransport>;
 
 type WasmHandler = ComposedHandler<
-    SyncHandler<Local, JsStorage, WasmConn, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>,
+    SyncHandler<
+        Local,
+        JsStorage,
+        WasmConn,
+        JsPolicy,
+        WasmHashMetric,
+        WASM_SHARD_COUNT,
+        crate::remote_heads::JsRemoteHeadsObserver,
+    >,
     EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy>,
     crate::wire::WireMessage,
 >;
@@ -164,6 +172,7 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
         policy: Option<JsPolicy>,
+        on_remote_heads: Option<js_sys::Function>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -185,13 +194,18 @@ impl WasmSubduction {
         let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
         let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
-        let sync_handler = SyncHandler::new(
+        let observer = match on_remote_heads {
+            Some(f) => crate::remote_heads::JsRemoteHeadsObserver::with_callback(f),
+            None => crate::remote_heads::JsRemoteHeadsObserver::new(),
+        };
+        let sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             powerbox.clone(),
             pending_blob_requests.clone(),
             depth_metric.clone(),
+            observer.clone(),
         );
 
         let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
@@ -200,6 +214,7 @@ impl WasmSubduction {
             EphemeralConfig::default(),
         );
 
+        let send_heads_counter = sync_handler.send_heads_counter().clone();
         let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -211,6 +226,7 @@ impl WasmSubduction {
             subscriptions,
             powerbox,
             pending_blob_requests,
+            send_heads_counter,
             NonceCache::default(),
             JsTimeout,
             Duration::from_secs(30),
@@ -269,6 +285,7 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
         policy: Option<JsPolicy>,
+        on_remote_heads: Option<js_sys::Function>,
     ) -> Result<Self, WasmHydrationError> {
         use subduction_core::storage::traits::Storage as _;
 
@@ -323,13 +340,18 @@ impl WasmSubduction {
         let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
         let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
-        let sync_handler = SyncHandler::new(
+        let observer = match on_remote_heads {
+            Some(f) => crate::remote_heads::JsRemoteHeadsObserver::with_callback(f),
+            None => crate::remote_heads::JsRemoteHeadsObserver::new(),
+        };
+        let sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             powerbox.clone(),
             pending_blob_requests.clone(),
             depth_metric.clone(),
+            observer.clone(),
         );
 
         let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
@@ -338,6 +360,7 @@ impl WasmSubduction {
             EphemeralConfig::default(),
         );
 
+        let send_heads_counter = sync_handler.send_heads_counter().clone();
         let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -349,6 +372,7 @@ impl WasmSubduction {
             subscriptions,
             powerbox,
             pending_blob_requests,
+            send_heads_counter,
             NonceCache::default(),
             JsTimeout,
             Duration::from_secs(30),
@@ -1094,7 +1118,7 @@ impl PeerBatchSyncResult {
     #[must_use]
     #[wasm_bindgen(getter)]
     pub fn stats(&self) -> WasmSyncStats {
-        self.stats
+        self.stats.clone()
     }
 
     /// Errors that occurred during the batch sync.
@@ -1133,7 +1157,7 @@ impl WasmPeerResultMap {
             .get(&peer_id.clone().into())
             .map(|(success, stats, conn_errs)| PeerBatchSyncResult {
                 success: *success,
-                stats: *stats,
+                stats: stats.clone(),
                 transport_errors: conn_errs.iter().map(|(_conn, err)| err.clone()).collect(),
             })
     }
@@ -1145,7 +1169,7 @@ impl WasmPeerResultMap {
         for (success, stats, conn_errs) in self.0.values() {
             results.push(PeerBatchSyncResult {
                 success: *success,
-                stats: *stats,
+                stats: stats.clone(),
                 transport_errors: conn_errs.iter().map(|(_conn, err)| err.clone()).collect(),
             });
         }

@@ -53,6 +53,22 @@ impl core::fmt::Debug for CliHandler {
     }
 }
 
+impl subduction_core::handler::RemoteHeadsNotifier for CliHandler {
+    fn notify_remote_heads(
+        &self,
+        id: sedimentree_core::id::SedimentreeId,
+        peer: PeerId,
+        heads: subduction_core::connection::message::RemoteHeads,
+    ) {
+        subduction_core::handler::RemoteHeadsNotifier::notify_remote_heads(
+            self.sync.as_ref(),
+            id,
+            peer,
+            heads,
+        );
+    }
+}
+
 impl Handler<Sendable, CliConn> for CliHandler {
     type Message = CliWireMessage;
     type HandlerError = CliListenError;
@@ -71,7 +87,8 @@ impl Handler<Sendable, CliConn> for CliHandler {
                 | subduction_core::connection::message::SyncMessage::DataRequestRejected(_)
                 | subduction_core::connection::message::SyncMessage::Fragment { .. }
                 | subduction_core::connection::message::SyncMessage::LooseCommit { .. }
-                | subduction_core::connection::message::SyncMessage::RemoveSubscriptions(_) => None,
+                | subduction_core::connection::message::SyncMessage::RemoveSubscriptions(_)
+                | subduction_core::connection::message::SyncMessage::HeadsUpdate { .. } => None,
             },
             CliWireMessage::Ephemeral(_) | CliWireMessage::Keyhive(_) => None,
         }
@@ -145,7 +162,7 @@ mod tests {
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::message::{
-            BatchSyncResponse, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
+            BatchSyncResponse, RemoteHeads, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
         },
         handler::Handler,
         peer::id::PeerId,
@@ -173,6 +190,7 @@ mod tests {
             req_id: test_request_id(),
             id: SedimentreeId::new([0xAA; 32]),
             result: SyncResult::NotFound,
+            responder_heads: RemoteHeads::default(),
         };
         let msg = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
 

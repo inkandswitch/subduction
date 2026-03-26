@@ -110,7 +110,8 @@ impl subduction_ephemeral::composed::WireEnvelope for WireMessage {
                 | SyncMessage::DataRequestRejected(_)
                 | SyncMessage::Fragment { .. }
                 | SyncMessage::LooseCommit { .. }
-                | SyncMessage::RemoveSubscriptions(_) => None,
+                | SyncMessage::RemoveSubscriptions(_)
+                | SyncMessage::HeadsUpdate { .. } => None,
             },
             Self::Ephemeral(_) => None,
         }

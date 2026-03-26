@@ -72,8 +72,8 @@ use crate::{
         managed::{ManagedCall, ManagedConnection},
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
-            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult,
+            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RemoteHeads, RequestedData,
+            SyncDiff, SyncMessage, SyncResult,
         },
         stats::{SendCount, SyncStats},
     },
@@ -186,6 +186,13 @@ pub struct Subduction<
     /// Primary cleanup happens on sync completion.
     pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
 
+    /// Shared monotonic counter for outgoing heads, per sedimentree.
+    ///
+    /// Shared with [`SyncHandler`] so all outgoing heads (from both
+    /// `Subduction` methods and the handler's dispatch) use the same
+    /// counter sequence.
+    send_heads_counter: Arc<Mutex<Map<SedimentreeId, u64>>>,
+
     manager_channel: Sender<Command<Authenticated<C, F>>>,
     msg_queue: async_channel::Receiver<(Authenticated<C, F>, H::Message)>,
     connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<C, F>)>,
@@ -279,6 +286,7 @@ where
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<S, P>,
         pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
+        send_heads_counter: Arc<Mutex<Map<SedimentreeId, u64>>>,
         nonce_cache: NonceCache,
         timer: O,
         default_call_timeout: Duration,
@@ -324,6 +332,7 @@ where
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
             pending_blob_requests,
+            send_heads_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -946,6 +955,7 @@ where
                         id,
                         result,
                         req_id: resp_batch_id,
+                        responder_heads: _,
                     } = ManagedCall::<F, H::Message>::call(
                         &managed,
                         BatchSyncRequest {
@@ -1020,67 +1030,6 @@ where
         }
     }
 
-    /// Add a new sedimentree locally and propagate it to all connected peers.
-    ///
-    /// # Errors
-    ///
-    /// * [`WriteError::Io`] if a storage or network error occurs.
-    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
-    pub async fn add_sedimentree(
-        &self,
-        id: SedimentreeId,
-        sedimentree: Sedimentree,
-        blobs: Vec<Blob>,
-    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
-        use sedimentree_core::collections::Map;
-
-        let self_id = self.peer_id();
-        let putter = self
-            .storage
-            .get_putter::<F>(self_id, self_id, id)
-            .await
-            .map_err(WriteError::PutDisallowed)?;
-
-        // Index blobs by digest for matching with commits/fragments
-        let blobs_by_digest: Map<Digest<Blob>, Blob> =
-            blobs.into_iter().map(|b| (Digest::hash(&b), b)).collect();
-
-        // Sign commits and pair with their blobs
-        let mut verified_commits = Vec::with_capacity(sedimentree.loose_commits().count());
-        for commit in sedimentree.loose_commits() {
-            let blob_digest = commit.blob_meta().digest();
-            let blob = blobs_by_digest
-                .get(&blob_digest)
-                .cloned()
-                .ok_or_else(|| WriteError::MissingBlob(blob_digest))?;
-            let verified_sig = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
-            let verified_meta = VerifiedMeta::new(verified_sig, blob)
-                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            verified_commits.push(verified_meta);
-        }
-
-        // Sign fragments and pair with their blobs
-        let mut verified_fragments = Vec::with_capacity(sedimentree.fragments().count());
-        for fragment in sedimentree.fragments() {
-            let blob_digest = fragment.summary().blob_meta().digest();
-            let blob = blobs_by_digest
-                .get(&blob_digest)
-                .cloned()
-                .ok_or_else(|| WriteError::MissingBlob(blob_digest))?;
-            let verified_sig = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
-            let verified_meta = VerifiedMeta::new(verified_sig, blob)
-                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            verified_fragments.push(verified_meta);
-        }
-
-        self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
-            .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        self.sync_with_all_peers(id, true, None).await?;
-        Ok(())
-    }
-
     /// Remove a sedimentree locally and delete all associated data from storage.
     ///
     /// # Errors
@@ -1108,6 +1057,14 @@ where
         }
 
         Ok(())
+    }
+
+    /// Get the next send counter value for a given sedimentree, incrementing it atomically.
+    async fn next_send_counter(&self, id: SedimentreeId) -> u64 {
+        let mut counters = self.send_heads_counter.lock().await;
+        let counter = counters.entry(id).or_insert(0);
+        *counter += 1;
+        *counter
     }
 
     /***********************
@@ -1158,10 +1115,20 @@ where
 
         self.minimize_tree(id).await;
 
+        let sender_heads = RemoteHeads {
+            counter: self.next_send_counter(id).await,
+            heads: self
+                .sedimentrees
+                .get_cloned(&id)
+                .await
+                .map(|s| s.heads(&self.depth_metric))
+                .unwrap_or_default(),
+        };
         let sync_msg = SyncMessage::LooseCommit {
             id,
             commit: signed_for_wire,
             blob,
+            sender_heads,
         };
         let msg: H::Message = sync_msg.into();
         {
@@ -1252,10 +1219,20 @@ where
 
         self.minimize_tree(id).await;
 
+        let sender_heads = RemoteHeads {
+            counter: self.next_send_counter(id).await,
+            heads: self
+                .sedimentrees
+                .get_cloned(&id)
+                .await
+                .map(|s| s.heads(&self.depth_metric))
+                .unwrap_or_default(),
+        };
         let sync_msg = SyncMessage::Fragment {
             id,
             fragment: signed_for_wire,
             blob,
+            sender_heads,
         };
         let msg: H::Message = sync_msg.into();
 
@@ -1437,6 +1414,91 @@ where
                 self.remove_connection(&conn).await;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync methods — require the handler to implement `RemoteHeadsNotifier`
+// so that `responder_heads` from `BatchSyncResponse` can be surfaced.
+// ---------------------------------------------------------------------------
+
+impl<
+    'a,
+    F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
+    S: Storage<F>,
+    C: Connection<F, H::Message> + PartialEq + 'a,
+    H: Handler<F, C> + crate::handler::RemoteHeadsNotifier,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
+    O: Timeout<F> + Clone,
+    M: DepthMetric,
+    const N: usize,
+> Subduction<'a, F, S, C, H, P, Sig, O, M, N>
+where
+    H::Message: From<SyncMessage>,
+    H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
+    ManagedConnection<C, F, O>:
+        ManagedCall<F, H::Message, SendError = <C as Connection<F, H::Message>>::SendError>,
+{
+    /// Add a new sedimentree locally and propagate it to all connected peers.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] if a storage or network error occurs.
+    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
+    pub async fn add_sedimentree(
+        &self,
+        id: SedimentreeId,
+        sedimentree: Sedimentree,
+        blobs: Vec<Blob>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        use sedimentree_core::collections::Map;
+
+        let self_id = self.peer_id();
+        let putter = self
+            .storage
+            .get_putter::<F>(self_id, self_id, id)
+            .await
+            .map_err(WriteError::PutDisallowed)?;
+
+        // Index blobs by digest for matching with commits/fragments
+        let blobs_by_digest: Map<Digest<Blob>, Blob> =
+            blobs.into_iter().map(|b| (Digest::hash(&b), b)).collect();
+
+        // Sign commits and pair with their blobs
+        let mut verified_commits = Vec::with_capacity(sedimentree.loose_commits().count());
+        for commit in sedimentree.loose_commits() {
+            let blob_digest = commit.blob_meta().digest();
+            let blob = blobs_by_digest
+                .get(&blob_digest)
+                .cloned()
+                .ok_or_else(|| WriteError::MissingBlob(blob_digest))?;
+            let verified_sig = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
+            let verified_meta = VerifiedMeta::new(verified_sig, blob)
+                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
+            verified_commits.push(verified_meta);
+        }
+
+        // Sign fragments and pair with their blobs
+        let mut verified_fragments = Vec::with_capacity(sedimentree.fragments().count());
+        for fragment in sedimentree.fragments() {
+            let blob_digest = fragment.summary().blob_meta().digest();
+            let blob = blobs_by_digest
+                .get(&blob_digest)
+                .cloned()
+                .ok_or_else(|| WriteError::MissingBlob(blob_digest))?;
+            let verified_sig = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
+            let verified_meta = VerifiedMeta::new(verified_sig, blob)
+                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
+            verified_fragments.push(verified_meta);
+        }
+
+        self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
+            .await
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
+        self.sync_with_all_peers(id, true, None).await?;
+        Ok(())
     }
 
     /// Request a batch sync from a given peer for a given sedimentree ID.
@@ -1769,7 +1831,19 @@ where
 
                         match result {
                             Err(e) => conn_errs.push((conn.clone(), e)),
-                            Ok(BatchSyncResponse { result, .. }) => {
+                            Ok(BatchSyncResponse {
+                                result,
+                                responder_heads,
+                                ..
+                            }) => {
+                                if !responder_heads.is_empty() {
+                                    self.handler.notify_remote_heads(
+                                        id,
+                                        *peer_id,
+                                        responder_heads.clone(),
+                                    );
+                                }
+                                stats.remote_heads = responder_heads;
                                 let SyncDiff {
                                     missing_commits,
                                     missing_fragments,
@@ -2047,7 +2121,30 @@ where
 
         (had_success, stats, call_errs, io_errs)
     }
+}
 
+// ---------------------------------------------------------------------------
+// Public utilities and private helpers — no `RemoteHeadsNotifier` bound.
+// ---------------------------------------------------------------------------
+
+impl<
+    'a,
+    F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
+    S: Storage<F>,
+    C: Connection<F, H::Message> + PartialEq + 'a,
+    H: Handler<F, C>,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
+    O: Timeout<F> + Clone,
+    M: DepthMetric,
+    const N: usize,
+> Subduction<'a, F, S, C, H, P, Sig, O, M, N>
+where
+    H::Message: From<SyncMessage>,
+    H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
+    ManagedConnection<C, F, O>:
+        ManagedCall<F, H::Message, SendError = <C as Connection<F, H::Message>>::SendError>,
+{
     /********************
      * PUBLIC UTILITIES *
      ********************/
@@ -2162,8 +2259,12 @@ where
         };
 
         // Resolve requested fingerprints → digests via reverse-lookup tables
-        let (requested_commit_digests, requested_fragment_digests) = {
+        let (requested_commit_digests, requested_fragment_digests, sender_heads) = {
             let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
+            let sender_heads = RemoteHeads {
+                counter: self.next_send_counter(id).await,
+                heads: sedimentree.heads(&self.depth_metric),
+            };
 
             let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = sedimentree
                 .commit_entries()
@@ -2199,7 +2300,7 @@ where
                 })
                 .collect();
 
-            (commit_digests, fragment_digests)
+            (commit_digests, fragment_digests, sender_heads)
         };
 
         // Load commits and fragments from storage (compound with blobs), build wire messages
@@ -2239,6 +2340,7 @@ where
                         id,
                         commit: verified.signed().clone(),
                         blob: verified.blob().clone(),
+                        sender_heads: sender_heads.clone(),
                     }
                     .into();
                     Some((true, msg))
@@ -2253,6 +2355,7 @@ where
                         id,
                         fragment: verified.signed().clone(),
                         blob: verified.blob().clone(),
+                        sender_heads: sender_heads.clone(),
                     }
                     .into();
                     Some((false, msg))
@@ -2743,6 +2846,7 @@ mod tests {
                 subscriptions,
                 storage,
                 pending,
+                Arc::new(Mutex::new(Map::new())),
                 NonceCache::default(),
                 InstantTimeout,
                 Duration::from_secs(30),
@@ -2768,6 +2872,7 @@ mod tests {
             id,
             commit: signed_commit,
             blob,
+            sender_heads: RemoteHeads::default(),
         };
         let _ = handler.handle(&sender_conn, msg).await;
 
@@ -2810,6 +2915,7 @@ mod tests {
                 subscriptions,
                 storage,
                 pending,
+                Arc::new(Mutex::new(Map::new())),
                 NonceCache::default(),
                 InstantTimeout,
                 Duration::from_secs(30),
@@ -2835,6 +2941,7 @@ mod tests {
             id,
             fragment: signed_fragment,
             blob,
+            sender_heads: RemoteHeads::default(),
         };
         let _ = handler.handle(&sender_conn, msg).await;
 

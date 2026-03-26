@@ -4,12 +4,14 @@
 //! sent/received). They are _not_ wire types — they are never serialized
 //! or sent over the network.
 
+use crate::connection::message::RemoteHeads;
+
 /// Statistics from a sync operation.
 ///
 /// Tracks how many commits and fragments were sent and received during a sync.
 /// The "sent" counts reflect items that were _successfully_ sent over the wire,
 /// not just items that were requested.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SyncStats {
     /// Number of commits received from the peer.
@@ -23,17 +25,22 @@ pub struct SyncStats {
 
     /// Number of fragments successfully sent to the peer.
     pub fragments_sent: usize,
+
+    /// The remote peer's heads for this sedimentree, as reported
+    /// in the `BatchSyncResponse`.
+    pub remote_heads: RemoteHeads,
 }
 
 impl SyncStats {
     /// Create stats with zero counts.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             commits_received: 0,
             fragments_received: 0,
             commits_sent: 0,
             fragments_sent: 0,
+            remote_heads: RemoteHeads::default(),
         }
     }
 

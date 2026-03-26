@@ -113,7 +113,8 @@ impl WasmMessage {
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -134,7 +135,8 @@ impl WasmMessage {
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -151,7 +153,8 @@ impl WasmMessage {
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -169,7 +172,8 @@ impl WasmMessage {
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -190,7 +194,8 @@ impl WasmMessage {
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -206,7 +211,8 @@ impl WasmMessage {
             | SyncMessage::BlobsResponse { .. }
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -222,7 +228,8 @@ impl WasmMessage {
             | SyncMessage::BlobsResponse { .. }
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 }

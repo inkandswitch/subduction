@@ -55,6 +55,9 @@ pub enum SyncMessage {
 
         /// The [`Blob`] containing the commit data.
         blob: Blob,
+
+        /// The sender's heads for this sedimentree after ingesting this commit.
+        sender_heads: RemoteHeads,
     },
 
     /// A single fragment being sent for a particular [`Sedimentree`].
@@ -67,6 +70,9 @@ pub enum SyncMessage {
 
         /// The [`Blob`] containing the fragment data.
         blob: Blob,
+
+        /// The sender's heads for this sedimentree after ingesting this fragment.
+        sender_heads: RemoteHeads,
     },
 
     /// A request for blobs by their [`Digest`]s within a specific sedimentree.
@@ -96,6 +102,18 @@ pub enum SyncMessage {
 
     /// Notification that a data request was rejected due to authorization failure.
     DataRequestRejected(DataRequestRejected),
+
+    /// Notification of a peer's current heads for a sedimentree.
+    ///
+    /// Sent by the responder after ingesting requested data from the
+    /// second half of the 1.5 RTT sync, so the requester learns the
+    /// responder's updated heads.
+    HeadsUpdate {
+        /// The sedimentree these heads are for.
+        id: SedimentreeId,
+        /// The sender's current heads after ingesting data.
+        heads: RemoteHeads,
+    },
 }
 
 impl SyncMessage {
@@ -110,7 +128,8 @@ impl SyncMessage {
             | SyncMessage::BlobsRequest { .. }
             | SyncMessage::BlobsResponse { .. }
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_) => None,
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -126,6 +145,7 @@ impl SyncMessage {
             SyncMessage::BatchSyncResponse(_) => "BatchSyncResponse",
             SyncMessage::RemoveSubscriptions(_) => "RemoveSubscriptions",
             SyncMessage::DataRequestRejected(_) => "DataRequestRejected",
+            SyncMessage::HeadsUpdate { .. } => "HeadsUpdate",
         }
     }
 
@@ -139,7 +159,8 @@ impl SyncMessage {
             | SyncMessage::BlobsResponse { id, .. }
             | SyncMessage::BatchSyncRequest(BatchSyncRequest { id, .. })
             | SyncMessage::BatchSyncResponse(BatchSyncResponse { id, .. })
-            | SyncMessage::DataRequestRejected(DataRequestRejected { id }) => Some(*id),
+            | SyncMessage::DataRequestRejected(DataRequestRejected { id })
+            | SyncMessage::HeadsUpdate { id, .. } => Some(*id),
             SyncMessage::RemoveSubscriptions(_) => None,
         }
     }
@@ -187,6 +208,10 @@ pub struct BatchSyncResponse {
 
     /// The result of the sync request.
     pub result: SyncResult,
+
+    /// The responder's heads for this sedimentree at the time
+    /// the response was generated.
+    pub responder_heads: RemoteHeads,
 }
 
 /// The result of a batch sync request.
@@ -242,6 +267,30 @@ pub struct DataRequestRejected {
 impl From<DataRequestRejected> for SyncMessage {
     fn from(rejection: DataRequestRejected) -> Self {
         SyncMessage::DataRequestRejected(rejection)
+    }
+}
+
+/// A remote peer's heads for a sedimentree, with a monotonic counter
+/// for ordering in the face of out-of-order delivery.
+///
+/// The counter is scoped per (sender, sedimentree) and incremented each time
+/// the sender computes new heads. Receivers should only accept updates where
+/// `counter` is strictly greater than the last seen value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RemoteHeads {
+    /// Monotonic counter — higher means newer.
+    pub counter: u64,
+    /// The heads (tip commits) of the sedimentree.
+    pub heads: Vec<Digest<LooseCommit>>,
+}
+
+impl RemoteHeads {
+    /// Returns `true` if there are no heads.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.heads.is_empty()
     }
 }
 
@@ -330,18 +379,22 @@ mod tags {
     pub(super) const BATCH_SYNC_RESPONSE: u8 = 0x05;
     pub(super) const REMOVE_SUBSCRIPTIONS: u8 = 0x06;
     pub(super) const DATA_REQUEST_REJECTED: u8 = 0x07;
+    pub(super) const HEADS_UPDATE: u8 = 0x08;
 }
 
 mod min_sizes {
-    // sed_id(32) + Signed<LooseCommit>::MIN_SIZE(166) + blob_len_prefix(bijou64 min=1)
-    pub(super) const LOOSE_COMMIT: usize = 32 + 166 + 1;
-    pub(super) const FRAGMENT: usize = 32 + 200 + 1;
+    // sed_id(32) + counter(8) + heads_count(4) + Signed<LooseCommit>::MIN_SIZE(166) + blob_len_prefix(bijou64 min=1)
+    pub(super) const LOOSE_COMMIT: usize = 32 + 8 + 4 + 166 + 1;
+    pub(super) const FRAGMENT: usize = 32 + 8 + 4 + 200 + 1;
     pub(super) const BLOBS_REQUEST: usize = 32 + 2;
     pub(super) const BLOBS_RESPONSE: usize = 32 + 2;
     pub(super) const BATCH_SYNC_REQUEST: usize = 32 + 32 + 8 + 1 + 16 + 2 + 2;
-    pub(super) const BATCH_SYNC_RESPONSE: usize = 32 + 8 + 32 + 1;
+    // requestor(32) + nonce(8) + sed_id(32) + result_tag(1) + counter(8) + heads_count(4)
+    pub(super) const BATCH_SYNC_RESPONSE: usize = 32 + 8 + 32 + 1 + 8 + 4;
     pub(super) const REMOVE_SUBSCRIPTIONS: usize = 2;
     pub(super) const DATA_REQUEST_REJECTED: usize = 32;
+    // sed_id(32) + counter(8) + head_count(4)
+    pub(super) const HEADS_UPDATE: usize = 32 + 8 + 4;
 }
 
 mod result_tags {
@@ -368,15 +421,27 @@ impl SyncMessage {
 
     fn payload_size(&self) -> usize {
         match self {
-            SyncMessage::LooseCommit { commit, blob, .. } => {
+            SyncMessage::LooseCommit {
+                commit,
+                blob,
+                sender_heads,
+                ..
+            } => {
                 32 + commit.as_bytes().len()
                     + bijou64::encoded_len(blob.as_slice().len() as u64)
                     + blob.as_slice().len()
+                    + remote_heads_size(sender_heads)
             }
-            SyncMessage::Fragment { fragment, blob, .. } => {
+            SyncMessage::Fragment {
+                fragment,
+                blob,
+                sender_heads,
+                ..
+            } => {
                 32 + fragment.as_bytes().len()
                     + bijou64::encoded_len(blob.as_slice().len() as u64)
                     + blob.as_slice().len()
+                    + remote_heads_size(sender_heads)
             }
             SyncMessage::BlobsRequest { digests, .. } => 32 + 2 + (digests.len() * 32),
             SyncMessage::BlobsResponse { blobs, .. } => {
@@ -400,11 +465,18 @@ impl SyncMessage {
             }
             SyncMessage::BatchSyncResponse(resp) => {
                 32 + 8 + 32 + 1 + sync_result_size(&resp.result)
+                    + remote_heads_size(&resp.responder_heads)
             }
             SyncMessage::RemoveSubscriptions(unsub) => 2 + (unsub.ids.len() * 32),
             SyncMessage::DataRequestRejected(_) => 32,
+            SyncMessage::HeadsUpdate { id: _, heads } => 32 + remote_heads_size(heads),
         }
     }
+}
+
+/// Size of a [`RemoteHeads`] on the wire: u64 counter + u32 count + 32 bytes per digest.
+fn remote_heads_size(heads: &RemoteHeads) -> usize {
+    8 + 4 + heads.heads.len() * 32
 }
 
 impl Encode for SyncMessage {
@@ -474,13 +546,31 @@ fn encode_message(msg: &SyncMessage) -> Vec<u8> {
     buf.extend_from_slice(&(total_size as u32).to_be_bytes());
 
     match msg {
-        SyncMessage::LooseCommit { id, commit, blob } => {
+        SyncMessage::LooseCommit {
+            id,
+            commit,
+            blob,
+            sender_heads,
+        } => {
             buf.push(tags::LOOSE_COMMIT);
-            encode_loose_commit(&mut buf, id, commit, blob);
+            buf.extend_from_slice(id.as_bytes());
+            encode_remote_heads(&mut buf, sender_heads);
+            buf.extend_from_slice(commit.as_bytes());
+            bijou64::encode(blob.as_slice().len() as u64, &mut buf);
+            buf.extend_from_slice(blob.as_slice());
         }
-        SyncMessage::Fragment { id, fragment, blob } => {
+        SyncMessage::Fragment {
+            id,
+            fragment,
+            blob,
+            sender_heads,
+        } => {
             buf.push(tags::FRAGMENT);
-            encode_fragment(&mut buf, id, fragment, blob);
+            buf.extend_from_slice(id.as_bytes());
+            encode_remote_heads(&mut buf, sender_heads);
+            buf.extend_from_slice(fragment.as_bytes());
+            bijou64::encode(blob.as_slice().len() as u64, &mut buf);
+            buf.extend_from_slice(blob.as_slice());
         }
         SyncMessage::BlobsRequest { id, digests } => {
             buf.push(tags::BLOBS_REQUEST);
@@ -505,6 +595,11 @@ fn encode_message(msg: &SyncMessage) -> Vec<u8> {
         SyncMessage::DataRequestRejected(rejected) => {
             buf.push(tags::DATA_REQUEST_REJECTED);
             encode_data_request_rejected(&mut buf, rejected);
+        }
+        SyncMessage::HeadsUpdate { id, heads } => {
+            buf.push(tags::HEADS_UPDATE);
+            buf.extend_from_slice(id.as_bytes());
+            encode_remote_heads(&mut buf, heads);
         }
     }
 
@@ -575,6 +670,7 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
         tags::BATCH_SYNC_RESPONSE => (min_sizes::BATCH_SYNC_RESPONSE, "BatchSyncResponse"),
         tags::REMOVE_SUBSCRIPTIONS => (min_sizes::REMOVE_SUBSCRIPTIONS, "RemoveSubscriptions"),
         tags::DATA_REQUEST_REJECTED => (min_sizes::DATA_REQUEST_REJECTED, "DataRequestRejected"),
+        tags::HEADS_UPDATE => (min_sizes::HEADS_UPDATE, "HeadsUpdate"),
         _ => {
             return Err(InvalidEnumTag {
                 tag,
@@ -601,32 +697,28 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
         tags::BATCH_SYNC_RESPONSE => decode_batch_sync_response(payload),
         tags::REMOVE_SUBSCRIPTIONS => decode_remove_subscriptions(payload),
         tags::DATA_REQUEST_REJECTED => decode_data_request_rejected(payload),
+        tags::HEADS_UPDATE => decode_heads_update(payload),
         _ => unreachable!("tag validated above"),
     }
 }
 
-fn encode_loose_commit(
-    buf: &mut Vec<u8>,
-    id: &SedimentreeId,
-    commit: &Signed<LooseCommit>,
-    blob: &Blob,
-) {
-    buf.extend_from_slice(id.as_bytes());
-    buf.extend_from_slice(commit.as_bytes());
-    bijou64::encode(blob.as_slice().len() as u64, buf);
-    buf.extend_from_slice(blob.as_slice());
+fn encode_remote_heads(buf: &mut Vec<u8>, remote_heads: &RemoteHeads) {
+    buf.extend_from_slice(&remote_heads.counter.to_be_bytes());
+    #[allow(clippy::cast_possible_truncation)]
+    buf.extend_from_slice(&(remote_heads.heads.len() as u32).to_be_bytes());
+    for digest in &remote_heads.heads {
+        buf.extend_from_slice(digest.as_bytes());
+    }
 }
 
-fn encode_fragment(
-    buf: &mut Vec<u8>,
-    id: &SedimentreeId,
-    fragment: &Signed<Fragment>,
-    blob: &Blob,
-) {
-    buf.extend_from_slice(id.as_bytes());
-    buf.extend_from_slice(fragment.as_bytes());
-    bijou64::encode(blob.as_slice().len() as u64, buf);
-    buf.extend_from_slice(blob.as_slice());
+fn decode_remote_heads(payload: &[u8], offset: &mut usize) -> Result<RemoteHeads, DecodeError> {
+    let counter = read_u64(payload, offset)?;
+    let count = read_u32(payload, offset)? as usize;
+    let mut heads = Vec::with_capacity(count);
+    for _ in 0..count {
+        heads.push(Digest::force_from_bytes(read_array::<32>(payload, offset)?));
+    }
+    Ok(RemoteHeads { counter, heads })
 }
 
 fn encode_blobs_request(buf: &mut Vec<u8>, id: &SedimentreeId, digests: &[Digest<Blob>]) {
@@ -691,6 +783,8 @@ fn encode_batch_sync_response(buf: &mut Vec<u8>, resp: &BatchSyncResponse) {
             buf.push(result_tags::UNAUTHORIZED);
         }
     }
+
+    encode_remote_heads(buf, &resp.responder_heads);
 }
 
 fn encode_sync_diff(buf: &mut Vec<u8>, diff: &SyncDiff) {
@@ -738,6 +832,7 @@ fn decode_loose_commit(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
+    let sender_heads = decode_remote_heads(payload, &mut offset)?;
 
     let commit = Signed::<LooseCommit>::try_decode(
         payload
@@ -766,13 +861,19 @@ fn decode_loose_commit(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
             .to_vec(),
     );
 
-    Ok(SyncMessage::LooseCommit { id, commit, blob })
+    Ok(SyncMessage::LooseCommit {
+        id,
+        commit,
+        blob,
+        sender_heads,
+    })
 }
 
 fn decode_fragment(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
+    let sender_heads = decode_remote_heads(payload, &mut offset)?;
 
     let fragment = Signed::<Fragment>::try_decode(
         payload
@@ -801,7 +902,12 @@ fn decode_fragment(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
             .to_vec(),
     );
 
-    Ok(SyncMessage::Fragment { id, fragment, blob })
+    Ok(SyncMessage::Fragment {
+        id,
+        fragment,
+        blob,
+        sender_heads,
+    })
 }
 
 fn decode_blobs_request(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
@@ -918,10 +1024,13 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<SyncMessage, DecodeError
         }
     };
 
+    let responder_heads = decode_remote_heads(payload, &mut offset)?;
+
     Ok(SyncMessage::BatchSyncResponse(BatchSyncResponse {
         req_id,
         id,
         result,
+        responder_heads,
     }))
 }
 
@@ -1029,6 +1138,15 @@ fn decode_remove_subscriptions(payload: &[u8]) -> Result<SyncMessage, DecodeErro
     }))
 }
 
+fn decode_heads_update(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
+    let mut offset = 0;
+
+    let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
+    let heads = decode_remote_heads(payload, &mut offset)?;
+
+    Ok(SyncMessage::HeadsUpdate { id, heads })
+}
+
 fn decode_data_request_rejected(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let mut offset = 0;
 
@@ -1060,6 +1178,21 @@ fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, DecodeError> {
             })?,
     );
     *offset += 2;
+    Ok(val)
+}
+
+fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, DecodeError> {
+    let val = u32::from_be_bytes(
+        buf.get(*offset..*offset + 4)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(BufferTooShort {
+                reading: ReadingType::U32,
+                offset: *offset,
+                need: 4,
+                have: buf.len().saturating_sub(*offset),
+            })?,
+    );
+    *offset += 4;
     Ok(val)
 }
 
@@ -1144,6 +1277,7 @@ mod tests {
                 id,
                 commit: signed_commit,
                 blob: Blob::new(Vec::from([3u8; 16])),
+                sender_heads: RemoteHeads::default(),
             };
             assert_eq!(msg.request_id(), None);
         }
@@ -1167,6 +1301,7 @@ mod tests {
                 id,
                 fragment: signed_fragment,
                 blob: Blob::new(Vec::from([3u8; 16])),
+                sender_heads: RemoteHeads::default(),
             };
             assert_eq!(msg.request_id(), None);
         }
