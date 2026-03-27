@@ -256,19 +256,21 @@ sequenceDiagram
     Note right of B: Load blobs for what A needs
     Note right of B: Echo fingerprints for what B needs
 
-    B->>A: BatchSyncResponse { req_id, id, diff }
+    B->>A: BatchSyncResponse { req_id, id, diff, responder_heads }
 
     Note left of A: Verify req_id matches
     Note left of A: Store missing commits
     Note left of A: Store missing fragments
     Note left of A: Store blobs
+    Note left of A: Notify heads observer (staleness-filtered)
 
     alt Responder requested data
         Note left of A: Build reverse-lookup table
         Note left of A: Resolve fingerprints → items
-        A-->>B: LooseCommit messages (fire-and-forget)
-        A-->>B: Fragment messages (fire-and-forget)
+        A-->>B: LooseCommit { sender_heads } (fire-and-forget)
+        A-->>B: Fragment { sender_heads } (fire-and-forget)
         Note right of B: Store received data
+        Note right of B: Notify heads observer (staleness-filtered)
     end
 
     Note over A,B: Sedimentrees Synchronized (1.5 RT)
@@ -360,11 +362,11 @@ for fp in response.diff.requesting.commit_fingerprints {
 
 The protocol completes bidirectional sync in 1.5 round trips:
 
-| Step | Direction | Content                                                       |
-|------|-----------|---------------------------------------------------------------|
-| 1    | A → B     | `BatchSyncRequest` with A's fingerprint summary               |
-| 2    | B → A     | `BatchSyncResponse` with data A needs + fingerprints B wants  |
-| 3    | A → B     | Fire-and-forget messages with data B requested                |
+| Step | Direction | Content                                                                       |
+|------|-----------|-------------------------------------------------------------------------------|
+| 1    | A → B     | `BatchSyncRequest` with A's fingerprint summary                               |
+| 2    | B → A     | `BatchSyncResponse` with data A needs + fingerprints B wants + `responder_heads` |
+| 3    | A → B     | Fire-and-forget messages with data B requested, each carrying `sender_heads`  |
 
 After step 3, both peers have each other's data.
 

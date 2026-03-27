@@ -647,6 +647,7 @@ where
                 }
                 RemoveResult::WasLast(_) => {
                     // Don't put anything back, peer entry stays removed
+                    self.send_counter.clear_peer(&peer_id).await;
 
                     #[cfg(feature = "metrics")]
                     crate::metrics::connection_closed();
@@ -678,6 +679,8 @@ where
                 .collect()
         };
         self.multiplexers.lock().await.clear();
+
+        self.send_counter.clear_all().await;
 
         #[cfg(feature = "metrics")]
         for _ in &all_conns {
@@ -712,6 +715,8 @@ where
         self.multiplexers.lock().await.remove(peer_id);
 
         if let Some(conns) = peer_conns {
+            self.send_counter.clear_peer(peer_id).await;
+
             #[cfg(feature = "metrics")]
             for _ in &conns {
                 crate::metrics::connection_closed();
@@ -1110,12 +1115,13 @@ where
 
         self.minimize_tree(id).await;
 
-        let heads = self
-            .sedimentrees
-            .get_cloned(&id)
-            .await
-            .map(|s| s.heads(&self.depth_metric))
-            .unwrap_or_default();
+        let heads = {
+            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            shard
+                .get(&id)
+                .map(|s| s.heads(&self.depth_metric))
+                .unwrap_or_default()
+        };
         {
             let conns = {
                 let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
@@ -1146,12 +1152,14 @@ where
                 .into();
 
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::info!(
+                    tracing::warn!(
                         "peer {} disconnected: {}",
                         peer_id,
                         IoError::<F, S, C, H::Message>::ConnSend(e)
                     );
-                    self.remove_connection(&conn).await;
+                    if self.remove_connection(&conn).await == Some(true) {
+                        self.send_counter.clear_peer(&peer_id).await;
+                    }
                 }
             }
         }
@@ -1215,12 +1223,13 @@ where
 
         self.minimize_tree(id).await;
 
-        let heads = self
-            .sedimentrees
-            .get_cloned(&id)
-            .await
-            .map(|s| s.heads(&self.depth_metric))
-            .unwrap_or_default();
+        let heads = {
+            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            shard
+                .get(&id)
+                .map(|s| s.heads(&self.depth_metric))
+                .unwrap_or_default()
+        };
 
         let conns = {
             let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
@@ -1256,12 +1265,14 @@ where
             .into();
 
             if let Err(e) = conn.send(&msg).await {
-                tracing::info!(
+                tracing::warn!(
                     "peer {} disconnected: {}",
                     peer_id,
                     IoError::<F, S, C, H::Message>::ConnSend(e)
                 );
-                self.remove_connection(&conn).await;
+                if self.remove_connection(&conn).await == Some(true) {
+                    self.send_counter.clear_peer(&peer_id).await;
+                }
             }
         }
 
@@ -1409,7 +1420,9 @@ where
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
                 tracing::warn!("peer {peer_id} disconnected: {e}");
-                self.remove_connection(&conn).await;
+                if self.remove_connection(&conn).await == Some(true) {
+                    self.send_counter.clear_peer(&peer_id).await;
+                }
             }
         }
     }
@@ -1594,7 +1607,14 @@ where
 
             match result {
                 Err(e) => conn_errs.push((conn, e)),
-                Ok(BatchSyncResponse { result, .. }) => {
+                Ok(BatchSyncResponse {
+                    result,
+                    responder_heads,
+                    ..
+                }) => {
+                    self.handler
+                        .notify_remote_heads(id, conn.peer_id(), responder_heads.clone());
+                    stats.remote_heads = responder_heads;
                     let SyncDiff {
                         missing_commits,
                         missing_fragments,
@@ -1834,13 +1854,11 @@ where
                                 responder_heads,
                                 ..
                             }) => {
-                                if !responder_heads.is_empty() {
-                                    self.handler.notify_remote_heads(
-                                        id,
-                                        *peer_id,
-                                        responder_heads.clone(),
-                                    );
-                                }
+                                self.handler.notify_remote_heads(
+                                    id,
+                                    *peer_id,
+                                    responder_heads.clone(),
+                                );
                                 stats.remote_heads = responder_heads;
                                 let SyncDiff {
                                     missing_commits,

@@ -55,4 +55,11 @@ impl PeerCounter {
     pub async fn clear_peer(&self, peer: &PeerId) {
         self.0.lock().await.remove(peer);
     }
+
+    /// Remove all per-peer counters.
+    ///
+    /// Call this when all connections are being torn down (e.g., `disconnect_all`).
+    pub async fn clear_all(&self) {
+        self.0.lock().await.clear();
+    }
 }

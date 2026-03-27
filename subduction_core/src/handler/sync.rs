@@ -52,21 +52,6 @@ use crate::{
 };
 
 use super::Handler;
-
-/// The default sync protocol handler for Subduction.
-///
-/// Processes the standard [`SyncMessage`] protocol: commits, fragments,
-/// batch sync requests/responses, blob requests/responses, and
-/// subscription management.
-///
-/// # Construction
-///
-/// Built automatically by [`SubductionBuilder::build`], or manually
-/// via [`SyncHandler::new`] for custom setups. Holds `Arc` clones of
-/// the shared state that [`Subduction`] also references.
-///
-/// [`SubductionBuilder::build`]: crate::subduction::builder::SubductionBuilder::build
-/// [`Subduction`]: crate::subduction::Subduction
 use crate::{
     peer::counter::PeerCounter,
     remote_heads::{
@@ -361,9 +346,7 @@ impl<
                 blob,
                 sender_heads,
             } => {
-                if !sender_heads.is_empty() {
-                    self.heads_notifier.notify(id, from, sender_heads);
-                }
+                self.heads_notifier.notify(id, from, sender_heads);
                 self.recv_commit(&from, id, &commit, blob, conn).await?;
             }
             SyncMessage::Fragment {
@@ -372,9 +355,7 @@ impl<
                 blob,
                 sender_heads,
             } => {
-                if !sender_heads.is_empty() {
-                    self.heads_notifier.notify(id, from, sender_heads);
-                }
+                self.heads_notifier.notify(id, from, sender_heads);
                 self.recv_fragment(&from, id, &fragment, blob, conn).await?;
             }
             SyncMessage::BatchSyncRequest(BatchSyncRequest {
@@ -461,9 +442,7 @@ impl<
                     "peer {from} reports heads for sedimentree {id:?}: {} heads",
                     heads.heads.len()
                 );
-                if !heads.is_empty() {
-                    self.heads_notifier.notify(id, from, heads);
-                }
+                self.heads_notifier.notify(id, from, heads);
             }
         }
 
@@ -544,7 +523,7 @@ impl<
                 },
             };
             if let Err(e) = conn.send(&heads_msg).await {
-                tracing::info!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+                tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
             }
 
             // Broadcast to subscribers (excluding sender)
@@ -640,7 +619,7 @@ impl<
                 },
             };
             if let Err(e) = conn.send(&heads_msg).await {
-                tracing::info!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+                tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
             }
 
             // Broadcast to subscribers (excluding sender)
