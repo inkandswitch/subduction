@@ -39,7 +39,8 @@
   "sideEffects": [
     "./dist/esm/node.js",
     "./dist/esm/web.js",
-    "./dist/esm/workerd.js"
+    "./dist/esm/workerd.js",
+    "./dist/esm/bundler.js"
   ],
   "exports": {
     ".": {
