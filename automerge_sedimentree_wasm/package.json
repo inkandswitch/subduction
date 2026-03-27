@@ -1,6 +1,6 @@
 {
   "name": "@automerge/automerge-sedimentree",
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.0",
   "description": "Wasm bindings for storing Automerge documents in Sedimentree",
   "publishConfig": {
     "access": "public"

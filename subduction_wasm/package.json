@@ -1,6 +1,6 @@
 {
   "name": "@automerge/subduction",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Wasm/JavaScript bindings for Subduction (browser and Node.js)",
   "publishConfig": {
     "access": "public"
