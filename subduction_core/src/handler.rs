@@ -55,7 +55,6 @@ use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use crate::{
     authenticated::Authenticated, connection::message::BatchSyncResponse, peer::id::PeerId,
-    remote_heads::RemoteHeadsNotifier,
 };
 
 /// A handler for messages received from authenticated peers.

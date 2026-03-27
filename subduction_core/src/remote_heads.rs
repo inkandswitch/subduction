@@ -9,7 +9,7 @@
 //! - [`RemoteHeadsObserver`] — application-facing callback for heads updates
 //! - [`RemoteHeadsNotifier`] — handler-level entry point with staleness filtering
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 
 use async_lock::Mutex;
 use sedimentree_core::{
@@ -79,7 +79,7 @@ impl RemoteHeadsObserver for NoRemoteHeadsObserver {
 /// ```
 pub struct FilteredHeadsNotifier<R: RemoteHeadsObserver> {
     observer: R,
-    recv_counter: Mutex<Map<PeerId, u64>>,
+    recv_counter: Arc<Mutex<Map<PeerId, u64>>>,
 }
 
 impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
@@ -87,7 +87,7 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
     pub fn new(observer: R) -> Self {
         Self {
             observer,
-            recv_counter: Mutex::new(Map::new()),
+            recv_counter: Arc::new(Mutex::new(Map::new())),
         }
     }
 
@@ -95,21 +95,21 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
     ///
     /// Uses [`Mutex::try_lock`] for `no_std`/Wasm compatibility. If the
     /// lock is contended (rare — held for nanoseconds), the update is
-    /// forwarded without filtering.
+    /// dropped rather than forwarded unfiltered.
     pub fn notify(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        let is_stale = self.recv_counter.try_lock().is_some_and(|mut counters| {
-            let last = counters.entry(peer).or_insert(0);
-            if heads.counter <= *last {
-                true
-            } else {
-                *last = heads.counter;
-                false
-            }
-        });
+        let Some(mut counters) = self.recv_counter.try_lock() else {
+            tracing::debug!("recv_counter contended, dropping heads update for peer {peer}");
+            return;
+        };
 
-        if !is_stale {
-            self.observer.on_remote_heads(id, peer, heads);
+        let last = counters.entry(peer).or_insert(0);
+        if heads.counter <= *last {
+            return;
         }
+        *last = heads.counter;
+        drop(counters);
+
+        self.observer.on_remote_heads(id, peer, heads);
     }
 }
 
@@ -125,7 +125,7 @@ impl<R: RemoteHeadsObserver + Clone> Clone for FilteredHeadsNotifier<R> {
     fn clone(&self) -> Self {
         Self {
             observer: self.observer.clone(),
-            recv_counter: Mutex::new(Map::new()),
+            recv_counter: self.recv_counter.clone(),
         }
     }
 }

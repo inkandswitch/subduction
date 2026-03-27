@@ -137,6 +137,7 @@ Git's
 Grafana
 GroupId
 HChaCha
+HeadsUpdate
 HSM
 HSMs
 hardcoded
@@ -269,6 +270,7 @@ README
 Reconnection
 reconnection
 recurse
+RemoteHeads
 RemoveSubscriptions
 ReplayedNonce
 repo
@@ -283,6 +285,7 @@ Retryable
 revoker
 RLE
 RPC
+RTT
 Ryzen
 runtimes
 Scalable
@@ -368,6 +371,7 @@ WebAssembly
 WebCrypto
 WebCryptoSigner
 WebKit
+WebRTC
 WebSocket
 WTF
 www

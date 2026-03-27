@@ -70,7 +70,8 @@ use super::Handler;
 use crate::{
     peer::counter::PeerCounter,
     remote_heads::{
-        FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsObserver,
+        FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsNotifier,
+        RemoteHeadsObserver,
     },
 };
 
@@ -301,7 +302,7 @@ impl<
     M: DepthMetric,
     R: RemoteHeadsObserver,
     const N: usize,
-> super::RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
+> RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);

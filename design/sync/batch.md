@@ -23,14 +23,16 @@ sequenceDiagram
     Note right of B: Set diff on u64 fingerprints
     Note right of B: Gather missing data
 
-    B->>A: BatchSyncResponse { diff, requesting }
+    B->>A: BatchSyncResponse { diff, requesting, responder_heads }
     Note left of A: Store received data
+    Note left of A: Notify heads observer (staleness-filtered)
 
-    A-->>B: Fire-and-forget: requested data
+    A-->>B: LooseCommit / Fragment { sender_heads }
     Note right of B: Store received data
+    Note right of B: Notify heads observer (staleness-filtered)
 ```
 
-The requester learns what they're missing; the responder provides it and also requests what _they're_ missing. The requester then sends the requested data as fire-and-forget messages.
+The requester learns what they're missing; the responder provides it (with its current heads) and also requests what _they're_ missing. The requester then sends the requested data as fire-and-forget messages, each stamped with a per-peer monotonic counter via `sender_heads`.
 
 ## Fingerprint-Based Reconciliation
 

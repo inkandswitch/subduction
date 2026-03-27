@@ -258,14 +258,16 @@ impl WasmSubduction {
             }
         });
 
-        if let Some(callback) = on_ephemeral {
-            let observer = crate::ephemeral::JsEphemeralObserver::new(callback);
-            wasm_bindgen_futures::spawn_local(async move {
-                while let Ok(event) = ephemeral_rx.recv().await {
-                    observer.on_event(event.id, event.sender, &event.payload);
+        // Always drain the ephemeral channel to prevent "channel full" warnings
+        // in EphemeralHandler when no JS callback is registered.
+        let observer = on_ephemeral.map(crate::ephemeral::JsEphemeralObserver::new);
+        wasm_bindgen_futures::spawn_local(async move {
+            while let Ok(event) = ephemeral_rx.recv().await {
+                if let Some(ref obs) = observer {
+                    obs.on_event(event.id, event.sender, &event.payload);
                 }
-            });
-        }
+            }
+        });
 
         Self {
             core,
@@ -420,14 +422,16 @@ impl WasmSubduction {
             }
         });
 
-        if let Some(callback) = on_ephemeral {
-            let observer = crate::ephemeral::JsEphemeralObserver::new(callback);
-            wasm_bindgen_futures::spawn_local(async move {
-                while let Ok(event) = ephemeral_rx.recv().await {
-                    observer.on_event(event.id, event.sender, &event.payload);
+        // Always drain the ephemeral channel to prevent "channel full" warnings
+        // in EphemeralHandler when no JS callback is registered.
+        let observer = on_ephemeral.map(crate::ephemeral::JsEphemeralObserver::new);
+        wasm_bindgen_futures::spawn_local(async move {
+            while let Ok(event) = ephemeral_rx.recv().await {
+                if let Some(ref obs) = observer {
+                    obs.on_event(event.id, event.sender, &event.payload);
                 }
-            });
-        }
+            }
+        });
 
         Ok(Self {
             core,
