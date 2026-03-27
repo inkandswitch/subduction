@@ -41,10 +41,10 @@ mod generators {
     };
     use subduction_core::{
         connection::message::{
-            BatchSyncRequest, BatchSyncResponse, RemoteHeads, RequestId, RequestedData, SyncDiff,
-            SyncResult,
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncResult,
         },
         peer::id::PeerId,
+        remote_heads::RemoteHeads,
         storage::key::StorageKey,
     };
     use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
@@ -513,8 +513,9 @@ mod sync {
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
-    use subduction_core::connection::message::{
-        BatchSyncRequest, BatchSyncResponse, RemoteHeads, SyncMessage, SyncResult,
+    use subduction_core::{
+        connection::message::{BatchSyncRequest, BatchSyncResponse, SyncMessage, SyncResult},
+        remote_heads::RemoteHeads,
     };
 
     use super::generators::{

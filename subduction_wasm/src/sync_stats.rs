@@ -63,7 +63,10 @@ impl WasmSyncStats {
         self.commits_sent + self.fragments_sent
     }
 
-    /// Returns true if no data was exchanged.
+    /// Returns true if no commits or fragments were transferred.
+    ///
+    /// Note: `remoteHeads` may still be non-empty (heads metadata is not
+    /// considered "data" for this check).
     #[must_use]
     #[wasm_bindgen(getter, js_name = isEmpty)]
     pub fn is_empty(&self) -> bool {

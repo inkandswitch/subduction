@@ -27,7 +27,7 @@ static JS_LOGGER: RwLock<Option<Function>> = RwLock::new(None);
 ///
 /// The callback will be invoked with four arguments:
 /// - `level`: string - One of "trace", "debug", "info", "warn", "error"
-/// - `target`: string - The Rust module path (e.g., "automerge_subduction::protocol")
+/// - `target`: string - The Rust module path (e.g., `automerge_subduction::protocol`)
 /// - `message`: string - The log message
 /// - `fields`: object - Additional structured fields as key-value pairs
 ///
@@ -47,8 +47,12 @@ static JS_LOGGER: RwLock<Option<Function>> = RwLock::new(None);
 /// - Heavy processing in the callback may impact performance
 /// - For async processing, collect logs quickly and process them later
 #[wasm_bindgen]
+#[allow(clippy::expect_used)]
 pub fn set_subduction_logger(callback: Function) {
-    *JS_LOGGER.write().expect("JS_LOGGER poisoned") = Some(callback);
+    match JS_LOGGER.write() {
+        Ok(mut guard) => *guard = Some(callback),
+        Err(poisoned) => tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}"),
+    }
 }
 
 /// Clears the JavaScript logger callback.
@@ -58,7 +62,10 @@ pub fn set_subduction_logger(callback: Function) {
 /// is registered.
 #[wasm_bindgen]
 pub fn clear_subduction_logger() {
-    *JS_LOGGER.write().expect("JS_LOGGER poisoned") = None;
+    match JS_LOGGER.write() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}"),
+    }
 }
 
 /// Custom tracing layer that forwards events to JavaScript.
@@ -74,7 +81,13 @@ where
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         // Check if a JavaScript callback is registered
-        let callback_opt = JS_LOGGER.read().expect("JS_LOGGER poisoned").clone();
+        let callback_opt = match JS_LOGGER.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}");
+                return;
+            }
+        };
 
         if let Some(callback) = callback_opt {
             let metadata = event.metadata();
@@ -105,6 +118,7 @@ where
 }
 
 /// Converts a tracing level to its string representation.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn level_to_str(level: &Level) -> &'static str {
     match *level {
         Level::TRACE => "trace",

@@ -20,6 +20,7 @@ pub struct JsEphemeralObserver {
 
 impl JsEphemeralObserver {
     /// Create a new observer wrapping a JS callback function.
+    #[must_use]
     pub fn new(callback: js_sys::Function) -> Self {
         Self { callback }
     }

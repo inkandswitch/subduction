@@ -454,6 +454,15 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     ///
     /// Returns `(subduction, listener_future, manager_future)`.
     ///
+    /// A fresh [`PeerCounter`] is created for `Subduction`. If your custom
+    /// handler also stamps outgoing messages with counters (e.g., wraps a
+    /// [`SyncHandler`]), you must share the same `PeerCounter` between
+    /// the handler and `Subduction` — use [`build`] or [`build_composed`]
+    /// instead, which handle this automatically.
+    ///
+    /// [`PeerCounter`]: crate::peer::counter::PeerCounter
+    /// [`SyncHandler`]: crate::handler::sync::SyncHandler
+    ///
     /// # Example
     ///
     /// ```ignore

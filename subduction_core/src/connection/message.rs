@@ -695,7 +695,10 @@ fn encode_remote_heads(buf: &mut Vec<u8>, remote_heads: &RemoteHeads) {
 fn decode_remote_heads(payload: &[u8], offset: &mut usize) -> Result<RemoteHeads, DecodeError> {
     let counter = read_u64(payload, offset)?;
     let count = read_u32(payload, offset)? as usize;
-    let mut heads = Vec::with_capacity(count);
+    // Cap allocation based on remaining payload to prevent OOM from untrusted input.
+    let remaining = payload.len().saturating_sub(*offset);
+    let capacity = core::cmp::min(count, remaining / 32);
+    let mut heads = Vec::with_capacity(capacity);
     for _ in 0..count {
         heads.push(Digest::force_from_bytes(read_array::<32>(payload, offset)?));
     }

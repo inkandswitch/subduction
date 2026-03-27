@@ -109,8 +109,8 @@ async fn make_test_fragment(
     (verified.into_signed(), blob, summary)
 }
 
-/// Receive the next non-HeadsUpdate message from the channel,
-/// discarding any HeadsUpdate messages that arrive first.
+/// Receive the next non-`HeadsUpdate` message from the channel,
+/// discarding any `HeadsUpdate` messages that arrive first.
 async fn recv_skipping_heads_updates(
     rx: &async_channel::Receiver<SyncMessage>,
 ) -> Option<SyncMessage> {

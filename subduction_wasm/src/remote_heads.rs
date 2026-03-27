@@ -21,11 +21,13 @@ pub struct JsRemoteHeadsObserver {
 
 impl JsRemoteHeadsObserver {
     /// Create a new observer with no callback (notifications are discarded).
+    #[must_use]
     pub fn new() -> Self {
         Self { callback: None }
     }
 
     /// Create a new observer wrapping a JS callback function.
+    #[must_use]
     pub fn with_callback(callback: js_sys::Function) -> Self {
         Self {
             callback: Some(callback),

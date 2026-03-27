@@ -539,6 +539,7 @@ where
                         // Connection is broken — remove from conns map.
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
+                            self.send_counter.clear_peer(&peer_id).await;
                         }
                         tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
@@ -607,6 +608,7 @@ where
                         );
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
+                            self.send_counter.clear_peer(&peer_id).await;
                         }
                     }
                 }

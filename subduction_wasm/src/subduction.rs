@@ -168,6 +168,7 @@ impl WasmSubduction {
     /// cannot be cast to a `Function`.
     #[must_use]
     #[wasm_bindgen(constructor)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         signer: JsSigner,
         storage: JsStorage,
@@ -296,6 +297,7 @@ impl WasmSubduction {
     ///
     /// Returns [`WasmHydrationError`] if hydration fails.
     #[wasm_bindgen]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub async fn hydrate(
         signer: JsSigner,
         storage: JsStorage,

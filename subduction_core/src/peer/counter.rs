@@ -46,4 +46,13 @@ impl PeerCounter {
         };
         counter.fetch_add(1, Ordering::Relaxed) + 1
     }
+
+    /// Remove the counter for a peer that has fully disconnected.
+    ///
+    /// Call this from connection cleanup paths when a peer's last
+    /// connection is removed. If the peer reconnects, a fresh counter
+    /// starting at 1 will be created on the next [`next`](Self::next) call.
+    pub async fn clear_peer(&self, peer: &PeerId) {
+        self.0.lock().await.remove(peer);
+    }
 }
