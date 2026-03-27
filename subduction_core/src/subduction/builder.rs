@@ -72,7 +72,7 @@ use crate::{
     handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
-    peer::id::PeerId,
+    peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, traits::Storage},
@@ -425,6 +425,8 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.depth_metric.clone(),
         ));
 
+        let send_counter = handler.send_counter().clone();
+
         let (sd, listener, manager) = Subduction::new(
             handler.clone(),
             self.discovery_id,
@@ -434,6 +436,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             subscriptions,
             self.storage,
             pending_blob_requests,
+            send_counter,
             nonce_cache,
             self.timer,
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
@@ -450,6 +453,15 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     /// custom handler implementation.
     ///
     /// Returns `(subduction, listener_future, manager_future)`.
+    ///
+    /// A fresh [`PeerCounter`] is created for `Subduction`. If your custom
+    /// handler also stamps outgoing messages with counters (e.g., wraps a
+    /// [`SyncHandler`]), you must share the same `PeerCounter` between
+    /// the handler and `Subduction` — use [`build`] or [`build_composed`]
+    /// instead, which handle this automatically.
+    ///
+    /// [`PeerCounter`]: crate::peer::counter::PeerCounter
+    /// [`SyncHandler`]: crate::handler::sync::SyncHandler
     ///
     /// # Example
     ///
@@ -514,6 +526,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             subscriptions,
             self.storage,
             pending_blob_requests,
+            PeerCounter::default(),
             nonce_cache,
             self.timer,
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
@@ -595,6 +608,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.depth_metric.clone(),
         ));
 
+        let send_counter = sync_handler.send_counter().clone();
         let handler = compose(sync_handler);
 
         Subduction::new(
@@ -606,6 +620,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             subscriptions,
             self.storage,
             pending_blob_requests,
+            send_counter,
             nonce_cache,
             self.timer,
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),

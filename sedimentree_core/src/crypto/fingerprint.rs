@@ -62,8 +62,8 @@ impl FingerprintSeed {
     pub fn random() -> Self {
         let mut bytes = [0u8; 16];
         getrandom::getrandom(&mut bytes).expect("OS RNG unavailable");
-        let key0 = u64::from_le_bytes(bytes[..8].try_into().expect("checked length"));
-        let key1 = u64::from_le_bytes(bytes[8..].try_into().expect("checked length"));
+        let key0 = u64::from_be_bytes(bytes[..8].try_into().expect("checked length"));
+        let key1 = u64::from_be_bytes(bytes[8..].try_into().expect("checked length"));
         Self::new(key0, key1)
     }
 
@@ -78,8 +78,8 @@ impl FingerprintSeed {
 impl serde::Serialize for FingerprintSeed {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut bytes = [0u8; 16];
-        bytes[..8].copy_from_slice(&self.key0.to_le_bytes());
-        bytes[8..].copy_from_slice(&self.key1.to_le_bytes());
+        bytes[..8].copy_from_slice(&self.key0.to_be_bytes());
+        bytes[8..].copy_from_slice(&self.key1.to_be_bytes());
         serializer.serialize_bytes(&bytes)
     }
 }
@@ -101,13 +101,13 @@ impl<'de> serde::Deserialize<'de> for FingerprintSeed {
                 if v.len() != 16 {
                     return Err(E::invalid_length(v.len(), &"16 bytes"));
                 }
-                let key0 = u64::from_le_bytes(
+                let key0 = u64::from_be_bytes(
                     v.get(..8)
                         .expect("checked length")
                         .try_into()
                         .expect("checked length"),
                 );
-                let key1 = u64::from_le_bytes(
+                let key1 = u64::from_be_bytes(
                     v.get(8..)
                         .expect("checked length")
                         .try_into()

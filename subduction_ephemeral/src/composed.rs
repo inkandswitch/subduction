@@ -7,7 +7,10 @@ use alloc::boxed::Box;
 use core::fmt::Debug;
 
 use future_form::{FutureForm, Sendable};
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    id::SedimentreeId,
+};
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
@@ -16,6 +19,7 @@ use subduction_core::{
     },
     handler::Handler,
     peer::id::PeerId,
+    remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     storage::traits::Storage,
     subduction::error::{IoError, ListenError},
 };
@@ -79,7 +83,15 @@ impl<SyncH, EphH, W> ComposedHandler<SyncH, EphH, W> {
             _wire: core::marker::PhantomData,
         }
     }
+}
 
+impl<SyncH: RemoteHeadsNotifier, EphH, W> RemoteHeadsNotifier for ComposedHandler<SyncH, EphH, W> {
+    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
+        self.sync.notify_remote_heads(id, peer, heads);
+    }
+}
+
+impl<SyncH, EphH, W> ComposedHandler<SyncH, EphH, W> {
     /// Access the sync sub-handler.
     #[must_use]
     pub const fn sync(&self) -> &SyncH {

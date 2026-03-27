@@ -23,6 +23,7 @@ use subduction_core::{
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
 };
@@ -66,6 +67,7 @@ async fn test_sendable_single_commit() -> TestResult {
             id: sedimentree_id,
             commit,
             blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 
@@ -117,6 +119,7 @@ async fn test_sendable_multiple_sequential() -> TestResult {
                 id: sedimentree_id,
                 commit,
                 blob,
+                sender_heads: RemoteHeads::default(),
             })
             .await?;
 
@@ -167,6 +170,7 @@ async fn test_sendable_same_sedimentree() -> TestResult {
                 id: sedimentree_id,
                 commit,
                 blob,
+                sender_heads: RemoteHeads::default(),
             })
             .await?;
 
@@ -218,6 +222,7 @@ async fn test_local_single_commit() -> TestResult {
                     id: sedimentree_id,
                     commit,
                     blob,
+                    sender_heads: RemoteHeads::default(),
                 })
                 .await?;
 
@@ -275,6 +280,7 @@ async fn test_local_multiple_sequential() -> TestResult {
                         id: sedimentree_id,
                         commit,
                         blob,
+                        sender_heads: RemoteHeads::default(),
                     })
                     .await?;
 
@@ -331,6 +337,7 @@ async fn test_local_same_sedimentree() -> TestResult {
                         id: sedimentree_id,
                         commit,
                         blob,
+                        sender_heads: RemoteHeads::default(),
                     })
                     .await?;
 

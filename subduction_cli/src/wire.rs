@@ -108,8 +108,9 @@ impl Decode for CliWireMessage {
 mod tests {
     use super::*;
     use sedimentree_core::{codec::encode::Encode, id::SedimentreeId};
-    use subduction_core::connection::message::{
-        BatchSyncResponse, RemoveSubscriptions, RequestId, SyncResult,
+    use subduction_core::{
+        connection::message::{BatchSyncResponse, RemoveSubscriptions, RequestId, SyncResult},
+        remote_heads::RemoteHeads,
     };
     use testresult::TestResult;
 
@@ -163,6 +164,7 @@ mod tests {
                 req_id: test_request_id(),
                 id: SedimentreeId::new([0xFF; 32]),
                 result: SyncResult::NotFound,
+                responder_heads: RemoteHeads::default(),
             };
             let msg = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp)));
 

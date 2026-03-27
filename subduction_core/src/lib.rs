@@ -100,6 +100,7 @@ pub mod multiplexer;
 pub mod nonce_cache;
 pub mod peer;
 pub mod policy;
+pub mod remote_heads;
 pub mod sharded_map;
 pub mod storage;
 pub mod subduction;

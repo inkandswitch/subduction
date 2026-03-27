@@ -14,6 +14,7 @@ use subduction_core::{
     },
     multiplexer::Multiplexer,
     peer::id::PeerId,
+    remote_heads::RemoteHeads,
     transport::{Transport, message::MessageTransport},
 };
 use testresult::TestResult;
@@ -29,11 +30,12 @@ const fn test_request_id(peer: PeerId, nonce: u64) -> RequestId {
     }
 }
 
-const fn test_batch_sync_response(req_id: RequestId) -> BatchSyncResponse {
+fn test_batch_sync_response(req_id: RequestId) -> BatchSyncResponse {
     BatchSyncResponse {
         req_id,
         id: SedimentreeId::new([1u8; 32]),
         result: SyncResult::NotFound,
+        responder_heads: RemoteHeads::default(),
     }
 }
 

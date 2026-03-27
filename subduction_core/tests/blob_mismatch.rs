@@ -25,6 +25,7 @@ use subduction_core::{
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
 };
@@ -144,6 +145,7 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
             id: sedimentree_id,
             commit,
             blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 
@@ -190,6 +192,7 @@ async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
             id: sedimentree_id,
             fragment,
             blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 
@@ -229,6 +232,7 @@ async fn recv_commit_accepts_valid_blob() -> TestResult {
             id: sedimentree_id,
             commit,
             blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 
@@ -276,6 +280,7 @@ async fn recv_fragment_accepts_valid_blob() -> TestResult {
             id: sedimentree_id,
             fragment,
             blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 
@@ -315,6 +320,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
             id: sedimentree_id,
             commit: bad_commit,
             blob: bad_blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 
@@ -328,6 +334,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
             id: sedimentree_id,
             commit: good_commit,
             blob: good_blob,
+            sender_heads: RemoteHeads::default(),
         })
         .await?;
 

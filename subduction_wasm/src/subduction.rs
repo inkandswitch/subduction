@@ -102,10 +102,20 @@ use crate::policy::{JsPolicy, make_open_policy};
 type WasmConn = MessageTransport<JsTransport>;
 
 type WasmHandler = ComposedHandler<
-    SyncHandler<Local, JsStorage, WasmConn, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>,
+    SyncHandler<
+        Local,
+        JsStorage,
+        WasmConn,
+        JsPolicy,
+        WasmHashMetric,
+        WASM_SHARD_COUNT,
+        crate::remote_heads::JsRemoteHeadsObserver,
+    >,
     EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy>,
     crate::wire::WireMessage,
 >;
+
+type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy>;
 
 type WasmSubductionCore = Subduction<
     'static,
@@ -125,6 +135,7 @@ type WasmSubductionCore = Subduction<
 pub struct WasmSubduction {
     core: Arc<WasmSubductionCore>,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
+    ephemeral_handler: WasmEphemeralHandler,
 }
 
 impl core::fmt::Debug for WasmSubduction {
@@ -157,6 +168,7 @@ impl WasmSubduction {
     /// cannot be cast to a `Function`.
     #[must_use]
     #[wasm_bindgen(constructor)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         signer: JsSigner,
         storage: JsStorage,
@@ -164,6 +176,8 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
         policy: Option<JsPolicy>,
+        on_remote_heads: Option<js_sys::Function>,
+        on_ephemeral: Option<js_sys::Function>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -185,21 +199,28 @@ impl WasmSubduction {
         let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
         let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
-        let sync_handler = SyncHandler::new(
+        let observer = match on_remote_heads {
+            Some(f) => crate::remote_heads::JsRemoteHeadsObserver::with_callback(f),
+            None => crate::remote_heads::JsRemoteHeadsObserver::new(),
+        };
+        let sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             powerbox.clone(),
             pending_blob_requests.clone(),
             depth_metric.clone(),
+            observer.clone(),
         );
 
-        let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
+        let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
             connections.clone(),
             OpenEphemeralPolicy,
             EphemeralConfig::default(),
         );
+        let ephemeral_for_wasm = ephemeral_handler.clone();
 
+        let send_counter = sync_handler.send_counter().clone();
         let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -211,6 +232,7 @@ impl WasmSubduction {
             subscriptions,
             powerbox,
             pending_blob_requests,
+            send_counter,
             NonceCache::default(),
             JsTimeout,
             Duration::from_secs(30),
@@ -236,7 +258,22 @@ impl WasmSubduction {
             }
         });
 
-        Self { core, js_storage }
+        // Always drain the ephemeral channel to prevent "channel full" warnings
+        // in EphemeralHandler when no JS callback is registered.
+        let observer = on_ephemeral.map(crate::ephemeral::JsEphemeralObserver::new);
+        wasm_bindgen_futures::spawn_local(async move {
+            while let Ok(event) = ephemeral_rx.recv().await {
+                if let Some(ref obs) = observer {
+                    obs.on_event(event.id, event.sender, &event.payload);
+                }
+            }
+        });
+
+        Self {
+            core,
+            js_storage,
+            ephemeral_handler: ephemeral_for_wasm,
+        }
     }
 
     /// Hydrate a [`Subduction`] instance from external storage.
@@ -262,6 +299,7 @@ impl WasmSubduction {
     ///
     /// Returns [`WasmHydrationError`] if hydration fails.
     #[wasm_bindgen]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub async fn hydrate(
         signer: JsSigner,
         storage: JsStorage,
@@ -269,6 +307,8 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
         policy: Option<JsPolicy>,
+        on_remote_heads: Option<js_sys::Function>,
+        on_ephemeral: Option<js_sys::Function>,
     ) -> Result<Self, WasmHydrationError> {
         use subduction_core::storage::traits::Storage as _;
 
@@ -323,21 +363,28 @@ impl WasmSubduction {
         let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
         let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
-        let sync_handler = SyncHandler::new(
+        let observer = match on_remote_heads {
+            Some(f) => crate::remote_heads::JsRemoteHeadsObserver::with_callback(f),
+            None => crate::remote_heads::JsRemoteHeadsObserver::new(),
+        };
+        let sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             powerbox.clone(),
             pending_blob_requests.clone(),
             depth_metric.clone(),
+            observer.clone(),
         );
 
-        let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
+        let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
             connections.clone(),
             OpenEphemeralPolicy,
             EphemeralConfig::default(),
         );
+        let ephemeral_for_wasm = ephemeral_handler.clone();
 
+        let send_counter = sync_handler.send_counter().clone();
         let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -349,6 +396,7 @@ impl WasmSubduction {
             subscriptions,
             powerbox,
             pending_blob_requests,
+            send_counter,
             NonceCache::default(),
             JsTimeout,
             Duration::from_secs(30),
@@ -374,7 +422,22 @@ impl WasmSubduction {
             }
         });
 
-        Ok(Self { core, js_storage })
+        // Always drain the ephemeral channel to prevent "channel full" warnings
+        // in EphemeralHandler when no JS callback is registered.
+        let observer = on_ephemeral.map(crate::ephemeral::JsEphemeralObserver::new);
+        wasm_bindgen_futures::spawn_local(async move {
+            while let Ok(event) = ephemeral_rx.recv().await {
+                if let Some(ref obs) = observer {
+                    obs.on_event(event.id, event.sender, &event.payload);
+                }
+            }
+        });
+
+        Ok(Self {
+            core,
+            js_storage,
+            ephemeral_handler: ephemeral_for_wasm,
+        })
     }
 
     /// Add a Sedimentree.
@@ -517,6 +580,7 @@ impl WasmSubduction {
                 MessageTransport::new(transport)
             }))
             .await?;
+        self.ephemeral_handler.subscribe_peer(peer_id).await;
         Ok(peer_id.into())
     }
 
@@ -554,6 +618,7 @@ impl WasmSubduction {
                 MessageTransport::new(transport)
             }))
             .await?;
+        self.ephemeral_handler.subscribe_peer(peer_id).await;
         Ok(peer_id.into())
     }
 
@@ -606,10 +671,12 @@ impl WasmSubduction {
         &self,
         transport: &WasmAuthenticatedTransport,
     ) -> Result<bool, WasmAddConnectionError> {
-        self.core
-            .add_connection(transport.inner().clone())
-            .await
-            .map_err(Into::into)
+        let peer_id = transport.inner().peer_id();
+        let is_new = self.core.add_connection(transport.inner().clone()).await?;
+        if is_new {
+            self.ephemeral_handler.subscribe_peer(peer_id).await;
+        }
+        Ok(is_new)
     }
 
     /// Connect to a peer over any [`Transport`](JsTransport) using discovery mode.
@@ -641,6 +708,7 @@ impl WasmSubduction {
 
         let peer_id = authenticated.inner().peer_id();
         self.core.add_connection(authenticated.into_inner()).await?;
+        self.ephemeral_handler.subscribe_peer(peer_id).await;
         Ok(peer_id.into())
     }
 
@@ -673,6 +741,7 @@ impl WasmSubduction {
 
         let peer_id = authenticated.inner().peer_id();
         self.core.add_connection(authenticated.into_inner()).await?;
+        self.ephemeral_handler.subscribe_peer(peer_id).await;
         Ok(peer_id.into())
     }
 
@@ -727,6 +796,13 @@ impl WasmSubduction {
         .await?;
 
         tracing::info!("linked two Subduction instances (new_a={result_a}, new_b={result_b})");
+
+        // Send outgoing ephemeral subscriptions to the newly connected peers
+        let peer_b = b.core.peer_id();
+        let peer_a = a.core.peer_id();
+        a.ephemeral_handler.subscribe_peer(peer_b).await;
+        b.ephemeral_handler.subscribe_peer(peer_a).await;
+
         Ok(())
     }
 
@@ -1025,6 +1101,37 @@ impl WasmSubduction {
         }
     }
 
+    // ── Ephemeral messaging ────────────────────────────────────────────
+
+    /// Publish an ephemeral message to all subscribers of a sedimentree.
+    ///
+    /// The payload is opaque bytes — encoding is the caller's responsibility.
+    /// Messages are fire-and-forget; delivery is best-effort.
+    #[wasm_bindgen(js_name = publishEphemeral)]
+    pub async fn publish_ephemeral(&self, id: &WasmSedimentreeId, payload: &[u8]) {
+        self.ephemeral_handler
+            .publish(id.clone().into(), payload.to_vec())
+            .await;
+    }
+
+    /// Subscribe to ephemeral messages for the given sedimentree IDs
+    /// from all connected peers.
+    #[wasm_bindgen(js_name = subscribeEphemeral)]
+    pub async fn subscribe_ephemeral(&self, ids: Vec<WasmSedimentreeId>) {
+        let sed_ids: Vec<SedimentreeId> = ids.into_iter().map(SedimentreeId::from).collect();
+        self.ephemeral_handler.subscribe(sed_ids).await;
+    }
+
+    /// Unsubscribe from ephemeral messages for the given sedimentree IDs
+    /// from all connected peers.
+    #[wasm_bindgen(js_name = unsubscribeEphemeral)]
+    pub async fn unsubscribe_ephemeral(&self, ids: Vec<WasmSedimentreeId>) {
+        let sed_ids: Vec<SedimentreeId> = ids.into_iter().map(SedimentreeId::from).collect();
+        self.ephemeral_handler.unsubscribe(sed_ids).await;
+    }
+
+    // ── Queries ──────────────────────────────────────────────────────────
+
     /// Get all known Sedimentree IDs
     #[wasm_bindgen(js_name = sedimentreeIds)]
     pub async fn sedimentree_ids(&self) -> Vec<WasmSedimentreeId> {
@@ -1098,7 +1205,7 @@ impl PeerBatchSyncResult {
     #[must_use]
     #[wasm_bindgen(getter)]
     pub fn stats(&self) -> WasmSyncStats {
-        self.stats
+        self.stats.clone()
     }
 
     /// Errors that occurred during the batch sync.
@@ -1137,7 +1244,7 @@ impl WasmPeerResultMap {
             .get(&peer_id.clone().into())
             .map(|(success, stats, conn_errs)| PeerBatchSyncResult {
                 success: *success,
-                stats: *stats,
+                stats: stats.clone(),
                 transport_errors: conn_errs.iter().map(|(_conn, err)| err.clone()).collect(),
             })
     }
@@ -1149,7 +1256,7 @@ impl WasmPeerResultMap {
         for (success, stats, conn_errs) in self.0.values() {
             results.push(PeerBatchSyncResult {
                 success: *success,
-                stats: *stats,
+                stats: stats.clone(),
                 transport_errors: conn_errs.iter().map(|(_conn, err)| err.clone()).collect(),
             });
         }

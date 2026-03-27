@@ -32,11 +32,13 @@ pub fn start() {
     set_panic_hook();
 }
 
+pub mod ephemeral;
 pub mod error;
 pub mod fragment;
 pub mod memory_signer;
 pub mod peer_id;
 pub mod policy;
+pub mod remote_heads;
 pub mod signer;
 pub mod subduction;
 pub mod sync_stats;

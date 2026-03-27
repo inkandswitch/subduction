@@ -22,6 +22,7 @@ use subduction_core::{
     },
     handler::Handler,
     peer::id::PeerId,
+    remote_heads::RemoteHeads,
 };
 use subduction_ephemeral::{
     composed::{ComposedHandler, Dispatched, WireEnvelope},
@@ -116,7 +117,8 @@ impl WireEnvelope for TestWireMessage {
                 | SyncMessage::DataRequestRejected(_)
                 | SyncMessage::Fragment { .. }
                 | SyncMessage::LooseCommit { .. }
-                | SyncMessage::RemoveSubscriptions(_) => None,
+                | SyncMessage::RemoveSubscriptions(_)
+                | SyncMessage::HeadsUpdate { .. } => None,
             },
             Self::Ephemeral(_) => None,
         }
@@ -161,7 +163,8 @@ impl Handler<Sendable, TestConn> for TrackingSyncHandler {
             | SyncMessage::DataRequestRejected(_)
             | SyncMessage::Fragment { .. }
             | SyncMessage::LooseCommit { .. }
-            | SyncMessage::RemoveSubscriptions(_) => None,
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -309,6 +312,7 @@ fn as_batch_sync_response_extracts_from_sync() {
         req_id,
         id: SedimentreeId::new([1; 32]),
         result: SyncResult::NotFound,
+        responder_heads: RemoteHeads::default(),
     };
 
     let wire = TestWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));

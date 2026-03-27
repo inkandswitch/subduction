@@ -52,6 +52,13 @@ use crate::{
 };
 
 use super::Handler;
+use crate::{
+    peer::counter::PeerCounter,
+    remote_heads::{
+        FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsNotifier,
+        RemoteHeadsObserver,
+    },
+};
 
 /// The default sync protocol handler for Subduction.
 ///
@@ -75,6 +82,7 @@ pub struct SyncHandler<
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize = 256,
+    R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
@@ -82,6 +90,8 @@ pub struct SyncHandler<
     storage: StoragePowerbox<S, P>,
     pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
     depth_metric: M,
+    heads_notifier: FilteredHeadsNotifier<R>,
+    send_counter: PeerCounter,
 }
 
 impl<
@@ -90,8 +100,9 @@ impl<
     C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
+    R: RemoteHeadsObserver,
     const N: usize,
-> core::fmt::Debug for SyncHandler<F, S, C, P, M, N>
+> core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -104,8 +115,9 @@ impl<
     C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric + Clone,
+    R: RemoteHeadsObserver + Clone,
     const N: usize,
-> Clone for SyncHandler<F, S, C, P, M, N>
+> Clone for SyncHandler<F, S, C, P, M, N, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -115,6 +127,8 @@ impl<
             storage: self.storage.clone(),
             pending_blob_requests: self.pending_blob_requests.clone(),
             depth_metric: self.depth_metric.clone(),
+            heads_notifier: self.heads_notifier.clone(),
+            send_counter: self.send_counter.clone(),
         }
     }
 }
@@ -126,7 +140,7 @@ impl<
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> SyncHandler<F, S, C, P, M, N>
+> SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -136,7 +150,7 @@ impl<
     ///
     /// [`Subduction::new`]: crate::subduction::Subduction::new
     #[allow(clippy::type_complexity)]
-    pub const fn new(
+    pub fn new(
         sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
@@ -151,7 +165,54 @@ impl<
             storage,
             pending_blob_requests,
             depth_metric,
+            heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
+            send_counter: PeerCounter::default(),
         }
+    }
+}
+
+impl<
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N, R>
+{
+    /// Create a new `SyncHandler` with a custom remote heads observer.
+    #[allow(clippy::type_complexity)]
+    pub fn with_remote_heads_observer(
+        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
+        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+        subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+        storage: StoragePowerbox<S, P>,
+        pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
+        depth_metric: M,
+        remote_heads_observer: R,
+    ) -> Self {
+        Self {
+            sedimentrees,
+            connections,
+            subscriptions,
+            storage,
+            pending_blob_requests,
+            depth_metric,
+            heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
+            send_counter: PeerCounter::default(),
+        }
+    }
+
+    /// Returns a shared reference to the per-peer send counter.
+    ///
+    /// Pass a clone to [`Subduction`] so that outgoing messages stamped
+    /// by either `SyncHandler` or `Subduction` share the same monotonic
+    /// counter per peer.
+    ///
+    /// [`Subduction`]: crate::subduction::Subduction
+    pub const fn send_counter(&self) -> &PeerCounter {
+        &self.send_counter
     }
 }
 
@@ -171,13 +232,17 @@ impl<
         C::SendError: Send + 'static,
         C::RecvError: Send + 'static,
         C::DisconnectionError: Send + 'static,
+        R: RemoteHeadsObserver + Send + Sync,
     Local where
         S: Storage<Local> + core::fmt::Debug,
         C: Connection<Local, SyncMessage> + PartialEq + Clone + core::fmt::Debug + 'static,
         P: StoragePolicy<Local>,
-        M: DepthMetric
+        M: DepthMetric,
+        R: RemoteHeadsObserver
 )]
-impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K, S, C, P, M, N> {
+impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
+    for SyncHandler<K, S, C, P, M, N, R>
+{
     type Message = SyncMessage;
     type HandlerError = ListenError<K, S, C, SyncMessage>;
 
@@ -190,7 +255,8 @@ impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K,
             | SyncMessage::DataRequestRejected(_)
             | SyncMessage::Fragment { .. }
             | SyncMessage::LooseCommit { .. }
-            | SyncMessage::RemoveSubscriptions(_) => None,
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
         }
     }
 
@@ -210,6 +276,25 @@ impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K,
 }
 
 // ---------------------------------------------------------------------------
+// RemoteHeadsNotifier implementation
+// ---------------------------------------------------------------------------
+
+impl<
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
+{
+    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
+        self.heads_notifier.notify(id, peer, heads);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch + recv_* methods (self-contained copies from Subduction)
 // ---------------------------------------------------------------------------
 
@@ -219,8 +304,9 @@ impl<
     C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
+    R: RemoteHeadsObserver,
     const N: usize,
-> SyncHandler<F, S, C, P, M, N>
+> SyncHandler<F, S, C, P, M, N, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
@@ -243,12 +329,34 @@ impl<
         #[cfg(feature = "metrics")]
         let _timer = crate::metrics::DispatchTimer::new();
 
+        // Note: remote heads arrive via three paths:
+        //
+        // 1. `responder_heads` in `BatchSyncResponse` — handled by
+        //    `Subduction::sync_with_all_peers` via `RemoteHeadsNotifier`.
+        //
+        // 2. `sender_heads` on subscription-push `LooseCommit`/`Fragment`
+        //    messages — handled here in dispatch.
+        //
+        // 3. `HeadsUpdate` messages (post-ingestion ack from the 1.5 RTT
+        //    second half) — handled here in dispatch.
         match message {
-            SyncMessage::LooseCommit { id, commit, blob } => {
-                self.recv_commit(&from, id, &commit, blob).await?;
+            SyncMessage::LooseCommit {
+                id,
+                commit,
+                blob,
+                sender_heads,
+            } => {
+                self.heads_notifier.notify(id, from, sender_heads);
+                self.recv_commit(&from, id, &commit, blob, conn).await?;
             }
-            SyncMessage::Fragment { id, fragment, blob } => {
-                self.recv_fragment(&from, id, &fragment, blob).await?;
+            SyncMessage::Fragment {
+                id,
+                fragment,
+                blob,
+                sender_heads,
+            } => {
+                self.heads_notifier.notify(id, from, sender_heads);
+                self.recv_fragment(&from, id, &fragment, blob, conn).await?;
             }
             SyncMessage::BatchSyncRequest(BatchSyncRequest {
                 id,
@@ -329,6 +437,13 @@ impl<
             }) => {
                 tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
             }
+            SyncMessage::HeadsUpdate { id, heads } => {
+                tracing::debug!(
+                    "peer {from} reports heads for sedimentree {id:?}: {} heads",
+                    heads.heads.len()
+                );
+                self.heads_notifier.notify(id, from, heads);
+            }
         }
 
         Ok(())
@@ -344,6 +459,7 @@ impl<
         id: SedimentreeId,
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
+        conn: &Authenticated<C, F>,
     ) -> Result<bool, IoError<F, S, C, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
@@ -396,15 +512,33 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
-            let msg = SyncMessage::LooseCommit {
-                id,
-                commit: signed_for_wire,
-                blob,
-            };
+            let heads = self.heads_for(id).await;
 
+            // Send HeadsUpdate back to the originating peer
+            let heads_msg = SyncMessage::HeadsUpdate {
+                id,
+                heads: RemoteHeads {
+                    counter: self.send_counter.next(*from).await,
+                    heads: heads.clone(),
+                },
+            };
+            if let Err(e) = conn.send(&heads_msg).await {
+                tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+            }
+
+            // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
             for conn in conns {
                 let peer_id = conn.peer_id();
+                let msg = SyncMessage::LooseCommit {
+                    id,
+                    commit: signed_for_wire.clone(),
+                    blob: blob.clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.send_counter.next(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                };
                 if let Err(e) = conn.send(&msg).await {
                     tracing::warn!("peer {peer_id} disconnected: {e}");
                     self.remove_connection(&conn).await;
@@ -421,6 +555,7 @@ impl<
         id: SedimentreeId,
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
+        conn: &Authenticated<C, F>,
     ) -> Result<bool, IoError<F, S, C, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
@@ -473,15 +608,33 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
-            let msg = SyncMessage::Fragment {
-                id,
-                fragment: signed_for_wire,
-                blob,
-            };
+            let heads = self.heads_for(id).await;
 
+            // Send HeadsUpdate back to the originating peer
+            let heads_msg = SyncMessage::HeadsUpdate {
+                id,
+                heads: RemoteHeads {
+                    counter: self.send_counter.next(*from).await,
+                    heads: heads.clone(),
+                },
+            };
+            if let Err(e) = conn.send(&heads_msg).await {
+                tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+            }
+
+            // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
             for conn in conns {
                 let peer_id = conn.peer_id();
+                let msg = SyncMessage::Fragment {
+                    id,
+                    fragment: signed_for_wire.clone(),
+                    blob: blob.clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.send_counter.next(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                };
                 if let Err(e) = conn.send(&msg).await {
                     tracing::warn!("peer {peer_id} disconnected: {e}");
                     self.remove_connection(&conn).await;
@@ -516,6 +669,7 @@ impl<
                     id,
                     req_id,
                     result: SyncResult::Unauthorized,
+                    responder_heads: RemoteHeads::default(),
                 }
                 .into();
                 if let Err(e) = conn.send(&msg).await {
@@ -552,6 +706,7 @@ impl<
             local_fragment_digests,
             our_missing_commit_fingerprints,
             our_missing_fragment_fingerprints,
+            raw_heads,
         ) = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
@@ -580,6 +735,7 @@ impl<
                 their_fingerprints.fragment_fingerprints().len()
             );
 
+            let heads = sedimentree.heads(&self.depth_metric);
             let diff = sedimentree.diff_remote_fingerprints(their_fingerprints);
             (
                 diff.local_only_commits
@@ -592,7 +748,13 @@ impl<
                     .collect::<Vec<_>>(),
                 diff.remote_only_commit_fingerprints,
                 diff.remote_only_fragment_fingerprints,
+                heads,
             )
+        };
+
+        let responder_heads = RemoteHeads {
+            counter: self.send_counter.next(conn.peer_id()).await,
+            heads: raw_heads,
         };
 
         for digest in local_commit_digests {
@@ -628,6 +790,7 @@ impl<
             id,
             req_id,
             result: SyncResult::Ok(sync_diff),
+            responder_heads,
         }
         .into();
         if let Err(e) = conn.send(&msg).await {
@@ -705,6 +868,15 @@ impl<
 
     async fn minimize_tree(&self, id: SedimentreeId) {
         ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
+    }
+
+    /// Compute the current heads for a sedimentree (without a counter).
+    async fn heads_for(&self, id: SedimentreeId) -> Vec<Digest<LooseCommit>> {
+        let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
+        locked
+            .get(&id)
+            .map(|s| s.heads(&self.depth_metric))
+            .unwrap_or_default()
     }
 
     async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
