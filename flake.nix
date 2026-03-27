@@ -92,7 +92,7 @@
 
         wasm-bodge = wasm-bodge-rustPlatform.buildRustPackage rec {
           pname = "wasm-bodge";
-          version = "0.2.1";
+          version = "0.2.2";
           src = pkgs.fetchFromGitHub {
             owner = "alexjg";
             repo = "wasm-bodge";
