@@ -21,14 +21,13 @@ use futures::future::Aborted;
 use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
-        message::{
-            BatchSyncRequest, BatchSyncResponse, RemoteHeads, RequestId, SyncMessage, SyncResult,
-        },
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
 };

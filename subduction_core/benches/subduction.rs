@@ -364,7 +364,7 @@ mod id {
 
 mod message {
     use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-    use subduction_core::connection::message::{RemoteHeads, SyncMessage};
+    use subduction_core::{connection::message::SyncMessage, remote_heads::RemoteHeads};
 
     use super::generators::{
         batch_sync_request_from_seed, batch_sync_response_from_seed, blob_digest_from_seed,
@@ -851,9 +851,9 @@ mod collections {
 
 mod cloning {
     use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-    use subduction_core::connection::{
-        id::ConnectionId,
-        message::{RemoteHeads, SyncMessage},
+    use subduction_core::{
+        connection::{id::ConnectionId, message::SyncMessage},
+        remote_heads::RemoteHeads,
     };
 
     use super::generators::{

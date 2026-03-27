@@ -17,11 +17,12 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
-        message::{BatchSyncResponse, RemoteHeads, RequestId, SyncMessage, SyncResult},
+        message::{BatchSyncResponse, RequestId, SyncMessage, SyncResult},
         test_utils::ChannelMockConnection,
     },
     handler::Handler,
     peer::id::PeerId,
+    remote_heads::RemoteHeads,
 };
 use subduction_ephemeral::{
     composed::{ComposedHandler, Dispatched, WireEnvelope},

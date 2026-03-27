@@ -9,13 +9,12 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         Connection,
-        message::{
-            BatchSyncRequest, BatchSyncResponse, RemoteHeads, RequestId, SyncMessage, SyncResult,
-        },
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
         test_utils::ChannelTransport,
     },
     multiplexer::Multiplexer,
     peer::id::PeerId,
+    remote_heads::RemoteHeads,
     transport::{Transport, message::MessageTransport},
 };
 use testresult::TestResult;

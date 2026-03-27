@@ -19,12 +19,13 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::{RemoteHeads, SyncMessage},
+        message::SyncMessage,
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
 };

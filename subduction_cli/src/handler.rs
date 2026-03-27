@@ -158,10 +158,11 @@ mod tests {
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::message::{
-            BatchSyncResponse, RemoteHeads, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
+            BatchSyncResponse, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
         },
         handler::Handler,
         peer::id::PeerId,
+        remote_heads::RemoteHeads,
     };
     use subduction_ephemeral::message::EphemeralMessage;
     use subduction_keyhive::KeyhiveMessage;
