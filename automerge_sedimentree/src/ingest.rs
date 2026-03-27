@@ -39,7 +39,7 @@
 //! println!("loose commits: {}", result.loose_count);
 //! ```
 
-use alloc::collections::BTreeSet;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use automerge::{Automerge, ChangeHash};
 use sedimentree_core::{
