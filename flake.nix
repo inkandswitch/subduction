@@ -96,10 +96,10 @@
           src = pkgs.fetchFromGitHub {
             owner = "alexjg";
             repo = "wasm-bodge";
-            rev = "v${version}";
-            hash = "sha256-dUlcAmhX1b87cvzv0+fLjVy+vnWR48FwjjrePl0KMfc=";
+            tag = "v${version}";
+            hash = "sha256-HAWtOyeguTiOzcj2K6YUTKtzmYFJ0Z085fAMm1iYaCo=";
           };
-          cargoHash = "sha256-CHZ5gzn1PczucqahQi+k9QjVdrTweK1TqNSrDXMRYUE=";
+          cargoHash = "sha256-FUbDbXmcT3Kbrm42jOEqbqbhiGb7/4+Xbo+eWFEMy2I=";
           nativeBuildInputs = [ unstable.cargo-auditable ];
           doCheck = false; # tests require npm/puppeteer infrastructure
         };
