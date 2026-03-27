@@ -198,7 +198,7 @@
         packages = {
           subduction_cli = pkgs.rustPlatform.buildRustPackage {
             pname = "subduction_cli";
-            version = "0.9.1";
+            version = "0.10.0";
             meta = {
               description = "CLI for running a Subduction sync server";
               longDescription = ''
