@@ -18,13 +18,15 @@ sequenceDiagram
 
     Note over A: Local change occurs
 
-    A->>S: LooseCommit { id, commit, blob }
+    A->>S: LooseCommit { id, commit, blob, sender_heads }
+    Note over S: Store commit, notify heads observer
     Note over S: Forward to subscribed + authorized peers
-    S->>B: LooseCommit { id, commit, blob }
-    S->>C: LooseCommit { id, commit, blob }
+    S->>A: HeadsUpdate { id, heads }
+    S->>B: LooseCommit { id, commit, blob, sender_heads }
+    S->>C: LooseCommit { id, commit, blob, sender_heads }
 
-    Note over B: Store commit + blob
-    Note over C: Store commit + blob
+    Note over B: Store commit + blob, notify heads observer
+    Note over C: Store commit + blob, notify heads observer
 ```
 
 Changes propagate only to peers who have subscribed to that sedimentree.
@@ -38,6 +40,7 @@ Message::LooseCommit {
     id: SedimentreeId,             // Which sedimentree this commit belongs to
     commit: Signed<LooseCommit>,   // Signed commit metadata
     blob: Blob,                    // The commit's data
+    sender_heads: RemoteHeads,     // Sender's current heads for this sedimentree
 }
 ```
 
@@ -45,6 +48,8 @@ A loose commit is a change that hasn't yet been rolled into a fragment. The `Sig
 - Ed25519 signature from the author
 - Author's verifying key (used for authorization)
 - Binary-encoded commit payload (content digest, parent references, blob metadata)
+
+The `sender_heads` carries the sender's current tip commits for the sedimentree, alongside a per-peer monotonic counter. The receiver uses the counter to detect out-of-order messages and the heads to update its view of the sender's state. See [`RemoteHeads`](./batch.md#remoteheads) for details.
 
 See [protocol.md](../protocol.md#serialization) for the `Signed<T>` envelope format and encoding rules.
 
@@ -55,8 +60,20 @@ Message::Fragment {
     id: SedimentreeId,          // Which sedimentree this fragment belongs to
     fragment: Signed<Fragment>, // Signed fragment metadata
     blob: Blob,                 // The fragment's data
+    sender_heads: RemoteHeads,  // Sender's current heads for this sedimentree
 }
 ```
+
+### HeadsUpdate (Post-Ingestion Acknowledgment)
+
+```rust
+Message::HeadsUpdate {
+    id: SedimentreeId,     // Which sedimentree
+    heads: RemoteHeads,    // Updated heads after ingesting the sender's data
+}
+```
+
+After ingesting a commit or fragment, the receiver sends a `HeadsUpdate` back to the originating peer. This completes the _1.5 RTT second half_ — the originating peer learns that the receiver has processed its data and can see the updated heads.
 
 A fragment is created when a commit's hash has enough leading zero bytes to trigger a checkpoint at that depth. Fragments consolidate multiple commits into a single structure.
 
@@ -115,7 +132,8 @@ Sent as WebSocket binary frames with a maximum size of 5 MB. No request ID — t
 | **Low latency** | Push immediately on change |
 | **Consistency** | Content-addressed deduplication |
 | **Idempotency** | Same commit can be received multiple times safely |
-| **Ordering** | No guarantees; CRDT handles conflicts |
+| **Ordering** | Per-peer monotonic counter on `RemoteHeads`; staleness-filtered on receive |
+| **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver` |
 
 ## Sequence Diagram (Commit)
 
@@ -127,14 +145,17 @@ sequenceDiagram
     Note left of A: Create new commit locally
     Note left of A: Store commit + blob
 
-    A->>B: LooseCommit { id, commit, blob }
+    A->>B: LooseCommit { id, commit, blob, sender_heads }
 
     Note right of B: Verify authorization
-    Note right of B: Store commit
-    Note right of B: Store blob
+    Note right of B: Store commit + blob
     Note right of B: Update sedimentree
+    Note right of B: Notify heads observer (staleness-filtered)
 
-    Note over A,B: Commit Propagated
+    B->>A: HeadsUpdate { id, heads }
+    Note left of A: Notify heads observer
+
+    Note over A,B: Commit Propagated (1.5 RTT)
 ```
 
 ## Sequence Diagram (Fragment Boundary)
@@ -169,11 +190,24 @@ storage.save_loose_commit(id, commit.clone()).await?;
 storage.save_blob(id, blob.clone()).await?;
 sedimentree.add_commit(commit.clone());
 
+// Compute current heads (without counter — stamped per-peer below)
+let heads = sedimentree.heads(&depth_metric);
+
 // Forward to subscribed and authorized peers
-let msg: M = SyncMessage::LooseCommit { id, commit, blob }.into();
 let subscriber_conns = get_authorized_subscriber_conns(id, &self.peer_id()).await;
 for conn in subscriber_conns {
-    if let Err(e) = Connection::<K, M>::send(&conn, &msg).await {
+    let peer_id = conn.peer_id();
+    // Each peer gets a unique counter from the shared PeerCounter.
+    let msg: M = SyncMessage::LooseCommit {
+        id,
+        commit: commit.clone(),
+        blob: blob.clone(),
+        sender_heads: RemoteHeads {
+            counter: send_counter.next(peer_id).await,
+            heads: heads.clone(),
+        },
+    }.into();
+    if let Err(e) = conn.send(&msg).await {
         // Connection failed, unregister it
         unregister(&conn).await;
     }
@@ -190,7 +224,12 @@ if depth > Depth(0) {
 ### Receiving a Commit
 
 ```rust
-let Message::LooseCommit { id, signed_commit, blob } = msg;
+let Message::LooseCommit { id, signed_commit, blob, sender_heads } = msg;
+
+// Notify heads observer (staleness-filtered via FilteredHeadsNotifier)
+if !sender_heads.is_empty() {
+    heads_notifier.notify(id, sender_peer_id, sender_heads);
+}
 
 // Verify signature; author extracted from signature, not sender
 let verified = signed_commit.verify()?;
@@ -203,10 +242,31 @@ let putter = policy.authorize_put(sender_peer_id, author, id).await?;
 putter.save_loose_commit(verified).await?;
 putter.save_blob(blob.clone()).await?;
 
+// Send HeadsUpdate back to originating peer
+let heads_msg = SyncMessage::HeadsUpdate {
+    id,
+    heads: RemoteHeads {
+        counter: send_counter.next(sender_peer_id).await,
+        heads: sedimentree.heads(&depth_metric),
+    },
+};
+conn.send(&heads_msg).await?;
+
 // Forward to subscribed and authorized peers (excluding sender)
+let heads = sedimentree.heads(&depth_metric);
 let subscriber_conns = get_authorized_subscriber_conns(id, &sender_peer_id).await;
-for conn in subscriber_conns {
-    Connection::<K, M>::send(&conn, &msg).await?;
+for sub_conn in subscriber_conns {
+    let peer_id = sub_conn.peer_id();
+    let msg: M = SyncMessage::LooseCommit {
+        id,
+        commit: signed_commit.clone(),
+        blob: blob.clone(),
+        sender_heads: RemoteHeads {
+            counter: send_counter.next(peer_id).await,
+            heads: heads.clone(),
+        },
+    }.into();
+    sub_conn.send(&msg).await?;
 }
 ```
 

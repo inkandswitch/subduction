@@ -65,6 +65,18 @@ sequenceDiagram
 - Low-latency updates
 - Continuous synchronization
 
+## Remote Heads Tracking
+
+Both batch and incremental sync carry [`RemoteHeads`](./batch.md#remoteheads) — the sender's current tip commits for the sedimentree, alongside a per-peer monotonic counter. This enables:
+
+- **Staleness detection**: receivers discard out-of-order updates on non-TCP transports
+- **Application awareness**: the `RemoteHeadsObserver` callback notifies the application when a peer's heads change, enabling UI updates (e.g., showing which version a collaborator is viewing)
+- **1.5 RTT acknowledgment**: after ingesting a commit/fragment, the receiver sends a `HeadsUpdate` back, so the sender knows its data was processed
+
+The counter is shared across all handlers via [`PeerCounter`] — a single monotonic sequence per peer regardless of which handler (sync, ephemeral, keyhive) produced the message.
+
+[`PeerCounter`]: ../../subduction_core/src/peer/counter.rs
+
 ## Consistency Model
 
 Both protocols are **eventually consistent**:
@@ -73,5 +85,6 @@ Both protocols are **eventually consistent**:
 2. Batch sync recovers from missed messages
 3. Content-addressing ensures identical data has identical hashes
 4. Idempotent storage means duplicates are harmless
+5. Per-peer monotonic counters ensure heads are never reverted by out-of-order delivery
 
 If incremental messages are lost (network issues, peer offline), batch sync on reconnection will catch up.

@@ -93,9 +93,10 @@ When `subscribe: true`, the responder adds the requester to the subscription set
 
 ```rust
 struct BatchSyncResponse {
-    req_id: RequestId, // Must match the request
-    id: SedimentreeId, // Which sedimentree was synced
-    diff: SyncDiff,    // The data the requester is missing
+    req_id: RequestId,                // Must match the request
+    id: SedimentreeId,                // Which sedimentree was synced
+    diff: SyncDiff,                   // The data the requester is missing
+    responder_heads: RemoteHeads,     // Responder's current heads for this sedimentree
 }
 
 struct SyncDiff {
@@ -200,6 +201,28 @@ enum Message {
 
 Sent as WebSocket binary frames with a maximum size of 5 MB.
 
+### RemoteHeads
+
+```rust
+struct RemoteHeads {
+    counter: u64,                          // Per-peer monotonic counter (higher = newer)
+    heads: Vec<Digest<LooseCommit>>,       // Tip commits of the sedimentree
+}
+```
+
+The `counter` is stamped by a shared [`PeerCounter`] at send time — each message
+to a given peer gets a unique, strictly increasing value. Receivers use this to
+detect and discard out-of-order or stale heads on non-TCP transports (e.g., QUIC,
+WebRTC, relay).
+
+The `responder_heads` on `BatchSyncResponse` and the `sender_heads` on fire-and-forget
+`LooseCommit`/`Fragment` messages both carry `RemoteHeads`. The application receives
+heads notifications via `RemoteHeadsObserver::on_remote_heads(id, peer, heads)`,
+filtered through a per-peer staleness check that drops updates where
+`counter <= last_seen`.
+
+[`PeerCounter`]: ../../subduction_core/src/peer/counter.rs
+
 ## Properties
 
 | Property                  | Mechanism                                                 |
@@ -209,7 +232,8 @@ Sent as WebSocket binary frames with a maximum size of 5 MB.
 | **Bidirectional**         | 1.5 RT completes sync in both directions                  |
 | **Correlation**           | `RequestId` links response to request                     |
 | **Self-confirming**       | Running sync twice confirms success                       |
-| **Precompute-resistance** | Random per-request seed prevents chosen-collision attacks |
+| **Precompute-resistance** | Random per-request seed prevents chosen-collision attacks  |
+| **Monotonic ordering**    | Per-peer counter prevents stale heads on non-TCP transports |
 
 ## Sequence Diagram (Success)
 
@@ -301,7 +325,7 @@ BatchSyncResponse {
 
 ### Handling Requested Data (Requester Side)
 
-After receiving the response, the requester builds a reverse-lookup table and sends the data the responder requested:
+After receiving the response, the requester builds a reverse-lookup table and sends the data the responder requested. Each message carries `sender_heads` stamped with a fresh per-peer counter:
 
 ```rust
 // Build reverse-lookup: Fingerprint → Digest
@@ -311,12 +335,19 @@ let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> =
         .map(|c| (Fingerprint::new(&seed, &c.commit_id()), c.digest()))
         .collect();
 
+let heads = sedimentree.heads(&depth_metric);
+
 // Resolve fingerprints → items and send (fire-and-forget)
+// Each message gets a unique counter from the shared PeerCounter.
 for fp in response.diff.requesting.commit_fingerprints {
     if let Some(digest) = commit_fp_to_digest.get(&fp) {
         if let Some(commit) = storage.load_commit(id, *digest).await? {
             let blob = storage.load_blob(id, commit.blob_meta().digest()).await?;
-            Connection::<K, SyncMessage>::send(&conn, &SyncMessage::LooseCommit { id, commit, blob }).await?;
+            let sender_heads = RemoteHeads {
+                counter: send_counter.next(conn.peer_id()).await,
+                heads: heads.clone(),
+            };
+            conn.send(&SyncMessage::LooseCommit { id, commit, blob, sender_heads }).await?;
         }
     }
 }
