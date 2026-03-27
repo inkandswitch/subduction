@@ -1,4 +1,4 @@
-//! WASM ephemeral message observer that forwards events to a JS callback.
+//! Wasm ephemeral message observer that forwards events to a JS callback.
 
 use sedimentree_core::id::SedimentreeId;
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;

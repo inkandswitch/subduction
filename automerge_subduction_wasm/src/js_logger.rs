@@ -2,7 +2,7 @@
 //!
 //! This module provides a custom `tracing::Layer` that forwards tracing events
 //! to JavaScript callbacks, allowing programmatic capture and analysis of logs
-//! from WASM code.
+//! from Wasm code.
 
 use alloc::{
     string::{String, ToString},
@@ -10,16 +10,17 @@ use alloc::{
 };
 use core::fmt;
 use js_sys::Function;
-use parking_lot::RwLock;
+use std::sync::RwLock;
 use tracing::Level;
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 use wasm_bindgen::prelude::*;
 
 /// Global storage for the JavaScript logger callback.
 ///
-/// Uses `RwLock` for interior mutability, allowing the callback to be set
-/// and cleared while the layer remains active. The layer is initialized once
-/// at module startup, and this callback is checked on each tracing event.
+/// Uses `std::sync::RwLock` for interior mutability in a `static`, allowing
+/// the callback to be set and cleared while the layer remains active.
+/// The layer is initialized once at module startup, and this callback is
+/// checked on each tracing event.
 static JS_LOGGER: RwLock<Option<Function>> = RwLock::new(None);
 
 /// Sets a JavaScript callback to receive all tracing output.
@@ -47,7 +48,7 @@ static JS_LOGGER: RwLock<Option<Function>> = RwLock::new(None);
 /// - For async processing, collect logs quickly and process them later
 #[wasm_bindgen]
 pub fn set_subduction_logger(callback: Function) {
-    *JS_LOGGER.write() = Some(callback);
+    *JS_LOGGER.write().expect("JS_LOGGER poisoned") = Some(callback);
 }
 
 /// Clears the JavaScript logger callback.
@@ -57,13 +58,13 @@ pub fn set_subduction_logger(callback: Function) {
 /// is registered.
 #[wasm_bindgen]
 pub fn clear_subduction_logger() {
-    *JS_LOGGER.write() = None;
+    *JS_LOGGER.write().expect("JS_LOGGER poisoned") = None;
 }
 
 /// Custom tracing layer that forwards events to JavaScript.
 ///
 /// This layer is installed once at module initialization and remains active
-/// throughout the lifetime of the WASM module. It checks for a registered
+/// throughout the lifetime of the Wasm module. It checks for a registered
 /// callback on each event and forwards the event if one is present.
 pub(crate) struct JsCallbackLayer;
 
@@ -73,7 +74,7 @@ where
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         // Check if a JavaScript callback is registered
-        let callback_opt = JS_LOGGER.read().clone();
+        let callback_opt = JS_LOGGER.read().expect("JS_LOGGER poisoned").clone();
 
         if let Some(callback) = callback_opt {
             let metadata = event.metadata();

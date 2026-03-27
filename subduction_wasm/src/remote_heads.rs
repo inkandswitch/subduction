@@ -1,4 +1,4 @@
-//! WASM [`RemoteHeadsObserver`] that forwards notifications to a JS callback.
+//! Wasm [`RemoteHeadsObserver`] that forwards notifications to a JS callback.
 
 use sedimentree_core::id::SedimentreeId;
 use sedimentree_wasm::{digest::WasmDigest, sedimentree_id::WasmSedimentreeId};

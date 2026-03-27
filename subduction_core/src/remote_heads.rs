@@ -11,7 +11,10 @@
 
 use alloc::vec::Vec;
 
-use sedimentree_core::{crypto::digest::Digest, id::SedimentreeId, loose_commit::LooseCommit};
+use async_lock::Mutex;
+use sedimentree_core::{
+    collections::Map, crypto::digest::Digest, id::SedimentreeId, loose_commit::LooseCommit,
+};
 
 use crate::peer::id::PeerId;
 
@@ -27,6 +30,7 @@ use crate::peer::id::PeerId;
 pub struct RemoteHeads {
     /// Monotonic per-peer counter — higher means newer.
     pub counter: u64,
+
     /// The heads (tip commits) of the sedimentree.
     pub heads: Vec<Digest<LooseCommit>>,
 }
@@ -34,7 +38,7 @@ pub struct RemoteHeads {
 impl RemoteHeads {
     /// Returns `true` if there are no heads.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.heads.is_empty()
     }
 }
@@ -58,6 +62,72 @@ pub struct NoRemoteHeadsObserver;
 
 impl RemoteHeadsObserver for NoRemoteHeadsObserver {
     fn on_remote_heads(&self, _id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {}
+}
+
+/// Wraps a [`RemoteHeadsObserver`] with a per-peer staleness filter.
+///
+/// The observer is only reachable through [`notify`](Self::notify), which
+/// checks the monotonic counter before forwarding. This makes it impossible
+/// to bypass the staleness filter.
+///
+/// ```text
+/// incoming RemoteHeads ──► FilteredHeadsNotifier::notify
+///                              │
+///                              ├─ counter <= last seen? → drop (stale)
+///                              │
+///                              └─ counter > last seen? → observer.on_remote_heads(...)
+/// ```
+pub struct FilteredHeadsNotifier<R: RemoteHeadsObserver> {
+    observer: R,
+    recv_counter: Mutex<Map<PeerId, u64>>,
+}
+
+impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
+    /// Create a new filtered notifier wrapping the given observer.
+    pub fn new(observer: R) -> Self {
+        Self {
+            observer,
+            recv_counter: Mutex::new(Map::new()),
+        }
+    }
+
+    /// Notify the observer if the heads are not stale.
+    ///
+    /// Uses [`Mutex::try_lock`] for `no_std`/Wasm compatibility. If the
+    /// lock is contended (rare — held for nanoseconds), the update is
+    /// forwarded without filtering.
+    pub fn notify(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
+        let is_stale = self.recv_counter.try_lock().is_some_and(|mut counters| {
+            let last = counters.entry(peer).or_insert(0);
+            if heads.counter <= *last {
+                true
+            } else {
+                *last = heads.counter;
+                false
+            }
+        });
+
+        if !is_stale {
+            self.observer.on_remote_heads(id, peer, heads);
+        }
+    }
+}
+
+impl<R: RemoteHeadsObserver + core::fmt::Debug> core::fmt::Debug for FilteredHeadsNotifier<R> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FilteredHeadsNotifier")
+            .field("observer", &self.observer)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: RemoteHeadsObserver + Clone> Clone for FilteredHeadsNotifier<R> {
+    fn clone(&self) -> Self {
+        Self {
+            observer: self.observer.clone(),
+            recv_counter: Mutex::new(Map::new()),
+        }
+    }
 }
 
 /// Trait for handlers that can notify the application of remote heads updates.

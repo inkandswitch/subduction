@@ -17,7 +17,7 @@
 
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -34,11 +34,11 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use crate::{
     authenticated::Authenticated,
     connection::{
+        Connection,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
             SyncResult,
         },
-        Connection,
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
@@ -67,7 +67,12 @@ use super::Handler;
 ///
 /// [`SubductionBuilder::build`]: crate::subduction::builder::SubductionBuilder::build
 /// [`Subduction`]: crate::subduction::Subduction
-use crate::remote_heads::{NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsObserver};
+use crate::{
+    peer::counter::PeerCounter,
+    remote_heads::{
+        FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsObserver,
+    },
+};
 
 /// The default sync protocol handler for Subduction.
 ///
@@ -99,22 +104,19 @@ pub struct SyncHandler<
     storage: StoragePowerbox<S, P>,
     pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
     depth_metric: M,
-    remote_heads_observer: R,
-    /// Sender-side counter: incremented each time we send a message to a peer.
-    send_counter: Arc<Mutex<Map<PeerId, u64>>>,
-    /// Receiver-side counter: tracks the latest counter seen per peer.
-    recv_counter: Arc<Mutex<Map<PeerId, u64>>>,
+    heads_notifier: FilteredHeadsNotifier<R>,
+    send_counter: PeerCounter,
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -122,14 +124,14 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric + Clone,
-        R: RemoteHeadsObserver + Clone,
-        const N: usize,
-    > Clone for SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric + Clone,
+    R: RemoteHeadsObserver + Clone,
+    const N: usize,
+> Clone for SyncHandler<F, S, C, P, M, N, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -139,21 +141,20 @@ impl<
             storage: self.storage.clone(),
             pending_blob_requests: self.pending_blob_requests.clone(),
             depth_metric: self.depth_metric.clone(),
-            remote_heads_observer: self.remote_heads_observer.clone(),
+            heads_notifier: self.heads_notifier.clone(),
             send_counter: self.send_counter.clone(),
-            recv_counter: self.recv_counter.clone(),
         }
     }
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -178,22 +179,21 @@ impl<
             storage,
             pending_blob_requests,
             depth_metric,
-            remote_heads_observer: NoRemoteHeadsObserver,
-            send_counter: Arc::new(Mutex::new(Map::new())),
-            recv_counter: Arc::new(Mutex::new(Map::new())),
+            heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
+            send_counter: PeerCounter::default(),
         }
     }
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
@@ -213,20 +213,19 @@ impl<
             storage,
             pending_blob_requests,
             depth_metric,
-            remote_heads_observer,
-            send_counter: Arc::new(Mutex::new(Map::new())),
-            recv_counter: Arc::new(Mutex::new(Map::new())),
+            heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
+            send_counter: PeerCounter::default(),
         }
     }
 
-    /// Returns a shared reference to the send-side heads counter.
+    /// Returns a shared reference to the per-peer send counter.
     ///
-    /// Pass a clone of this `Arc` to [`Subduction`] so that outgoing
-    /// messages stamped by either `SyncHandler` or `Subduction` share
-    /// the same monotonic counter per sedimentree.
+    /// Pass a clone to [`Subduction`] so that outgoing messages stamped
+    /// by either `SyncHandler` or `Subduction` share the same monotonic
+    /// counter per peer.
     ///
     /// [`Subduction`]: crate::subduction::Subduction
-    pub fn send_counter(&self) -> &Arc<Mutex<Map<PeerId, u64>>> {
+    pub const fn send_counter(&self) -> &PeerCounter {
         &self.send_counter
     }
 }
@@ -295,32 +294,17 @@ impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
 // ---------------------------------------------------------------------------
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > super::RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> super::RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        // Filter out stale updates: only forward if the counter is
-        // strictly greater than the last seen value for this peer.
-        let is_stale = {
-            let mut counters = self.recv_counter.lock_blocking();
-            let last = counters.entry(peer).or_insert(0);
-            if heads.counter <= *last {
-                true
-            } else {
-                *last = heads.counter;
-                false
-            }
-        };
-
-        if !is_stale {
-            self.remote_heads_observer.on_remote_heads(id, peer, heads);
-        }
+        self.heads_notifier.notify(id, peer, heads);
     }
 }
 
@@ -329,14 +313,14 @@ impl<
 // ---------------------------------------------------------------------------
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
@@ -377,8 +361,7 @@ impl<
                 sender_heads,
             } => {
                 if !sender_heads.is_empty() {
-                    self.remote_heads_observer
-                        .on_remote_heads(id, from, sender_heads);
+                    self.heads_notifier.notify(id, from, sender_heads);
                 }
                 self.recv_commit(&from, id, &commit, blob, conn).await?;
             }
@@ -389,8 +372,7 @@ impl<
                 sender_heads,
             } => {
                 if !sender_heads.is_empty() {
-                    self.remote_heads_observer
-                        .on_remote_heads(id, from, sender_heads);
+                    self.heads_notifier.notify(id, from, sender_heads);
                 }
                 self.recv_fragment(&from, id, &fragment, blob, conn).await?;
             }
@@ -411,12 +393,7 @@ impl<
                 self.recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
                     .await?;
             }
-            SyncMessage::BatchSyncResponse(BatchSyncResponse {
-                id,
-                result,
-                responder_heads: _,
-                ..
-            }) => {
+            SyncMessage::BatchSyncResponse(BatchSyncResponse { id, result, .. }) => {
                 #[cfg(feature = "metrics")]
                 crate::metrics::batch_sync_response();
 
@@ -484,7 +461,7 @@ impl<
                     heads.heads.len()
                 );
                 if !heads.is_empty() {
-                    self.remote_heads_observer.on_remote_heads(id, from, heads);
+                    self.heads_notifier.notify(id, from, heads);
                 }
             }
         }
@@ -561,7 +538,7 @@ impl<
             let heads_msg = SyncMessage::HeadsUpdate {
                 id,
                 heads: RemoteHeads {
-                    counter: self.next_send_counter(*from).await,
+                    counter: self.send_counter.next(*from).await,
                     heads: heads.clone(),
                 },
             };
@@ -578,7 +555,7 @@ impl<
                     commit: signed_for_wire.clone(),
                     blob: blob.clone(),
                     sender_heads: RemoteHeads {
-                        counter: self.next_send_counter(peer_id).await,
+                        counter: self.send_counter.next(peer_id).await,
                         heads: heads.clone(),
                     },
                 };
@@ -657,7 +634,7 @@ impl<
             let heads_msg = SyncMessage::HeadsUpdate {
                 id,
                 heads: RemoteHeads {
-                    counter: self.next_send_counter(*from).await,
+                    counter: self.send_counter.next(*from).await,
                     heads: heads.clone(),
                 },
             };
@@ -674,7 +651,7 @@ impl<
                     fragment: signed_for_wire.clone(),
                     blob: blob.clone(),
                     sender_heads: RemoteHeads {
-                        counter: self.next_send_counter(peer_id).await,
+                        counter: self.send_counter.next(peer_id).await,
                         heads: heads.clone(),
                     },
                 };
@@ -796,7 +773,7 @@ impl<
         };
 
         let responder_heads = RemoteHeads {
-            counter: self.next_send_counter(conn.peer_id()).await,
+            counter: self.send_counter.next(conn.peer_id()).await,
             heads: raw_heads,
         };
 
@@ -911,13 +888,6 @@ impl<
 
     async fn minimize_tree(&self, id: SedimentreeId) {
         ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
-    }
-
-    async fn next_send_counter(&self, peer: PeerId) -> u64 {
-        let mut counters = self.send_counter.lock().await;
-        let counter = counters.entry(peer).or_insert(0);
-        *counter += 1;
-        *counter
     }
 
     /// Compute the current heads for a sedimentree (without a counter).

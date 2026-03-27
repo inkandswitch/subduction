@@ -81,7 +81,7 @@ use crate::{
     handshake::audience::DiscoveryId,
     multiplexer::Multiplexer,
     nonce_cache::NonceCache,
-    peer::id::PeerId,
+    peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     sharded_map::ShardedMap,
@@ -189,10 +189,10 @@ pub struct Subduction<
 
     /// Shared monotonic counter for outgoing messages, per peer.
     ///
-    /// Shared with [`SyncHandler`] so all outgoing heads (from both
-    /// `Subduction` methods and the handler's dispatch) use the same
-    /// counter sequence.
-    send_counter: Arc<Mutex<Map<PeerId, u64>>>,
+    /// Shared with all handlers so that every message to a given peer
+    /// draws from the same monotonic sequence regardless of which handler
+    /// produced it.
+    send_counter: PeerCounter,
 
     manager_channel: Sender<Command<Authenticated<C, F>>>,
     msg_queue: async_channel::Receiver<(Authenticated<C, F>, H::Message)>,
@@ -287,7 +287,7 @@ where
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<S, P>,
         pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
-        send_counter: Arc<Mutex<Map<PeerId, u64>>>,
+        send_counter: PeerCounter,
         nonce_cache: NonceCache,
         timer: O,
         default_call_timeout: Duration,
@@ -956,7 +956,7 @@ where
                         id,
                         result,
                         req_id: resp_batch_id,
-                        responder_heads: _,
+                        ..
                     } = ManagedCall::<F, H::Message>::call(
                         &managed,
                         BatchSyncRequest {
@@ -1060,14 +1060,6 @@ where
         Ok(())
     }
 
-    /// Get the next send counter value for a given peer, incrementing it atomically.
-    async fn next_send_counter(&self, peer: PeerId) -> u64 {
-        let mut counters = self.send_counter.lock().await;
-        let counter = counters.entry(peer).or_insert(0);
-        *counter += 1;
-        *counter
-    }
-
     /***********************
      * INCREMENTAL CHANGES *
      ***********************/
@@ -1145,7 +1137,7 @@ where
                     commit: signed_for_wire.clone(),
                     blob: blob.clone(),
                     sender_heads: RemoteHeads {
-                        counter: self.next_send_counter(peer_id).await,
+                        counter: self.send_counter.next(peer_id).await,
                         heads: heads.clone(),
                     },
                 }
@@ -1255,7 +1247,7 @@ where
                 fragment: signed_for_wire.clone(),
                 blob: blob.clone(),
                 sender_heads: RemoteHeads {
-                    counter: self.next_send_counter(peer_id).await,
+                    counter: self.send_counter.next(peer_id).await,
                     heads: heads.clone(),
                 },
             }
@@ -2263,12 +2255,9 @@ where
         };
 
         // Resolve requested fingerprints → digests via reverse-lookup tables
-        let (requested_commit_digests, requested_fragment_digests, sender_heads) = {
+        let (requested_commit_digests, requested_fragment_digests, heads) = {
             let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
-            let sender_heads = RemoteHeads {
-                counter: self.next_send_counter(conn.peer_id()).await,
-                heads: sedimentree.heads(&self.depth_metric),
-            };
+            let heads = sedimentree.heads(&self.depth_metric);
 
             let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = sedimentree
                 .commit_entries()
@@ -2304,7 +2293,7 @@ where
                 })
                 .collect();
 
-            (commit_digests, fragment_digests, sender_heads)
+            (commit_digests, fragment_digests, heads)
         };
 
         // Load commits and fragments from storage (compound with blobs), build wire messages
@@ -2336,35 +2325,39 @@ where
                         .collect()
                 };
 
-            let commit_msgs: Vec<(bool, H::Message)> = requested_commit_digests
-                .iter()
-                .filter_map(|commit_digest| {
-                    let verified = commit_by_digest.get(commit_digest)?;
+            let mut commit_msgs = Vec::new();
+            for commit_digest in &requested_commit_digests {
+                if let Some(verified) = commit_by_digest.get(commit_digest) {
                     let msg: H::Message = SyncMessage::LooseCommit {
                         id,
                         commit: verified.signed().clone(),
                         blob: verified.blob().clone(),
-                        sender_heads: sender_heads.clone(),
+                        sender_heads: RemoteHeads {
+                            counter: self.send_counter.next(conn.peer_id()).await,
+                            heads: heads.clone(),
+                        },
                     }
                     .into();
-                    Some((true, msg))
-                })
-                .collect();
+                    commit_msgs.push((true, msg));
+                }
+            }
 
-            let fragment_msgs: Vec<(bool, H::Message)> = requested_fragment_digests
-                .iter()
-                .filter_map(|fragment_digest| {
-                    let verified = fragment_by_digest.get(fragment_digest)?;
+            let mut fragment_msgs = Vec::new();
+            for fragment_digest in &requested_fragment_digests {
+                if let Some(verified) = fragment_by_digest.get(fragment_digest) {
                     let msg: H::Message = SyncMessage::Fragment {
                         id,
                         fragment: verified.signed().clone(),
                         blob: verified.blob().clone(),
-                        sender_heads: sender_heads.clone(),
+                        sender_heads: RemoteHeads {
+                            counter: self.send_counter.next(conn.peer_id()).await,
+                            heads: heads.clone(),
+                        },
                     }
                     .into();
-                    Some((false, msg))
-                })
-                .collect();
+                    fragment_msgs.push((false, msg));
+                }
+            }
 
             (commit_msgs, fragment_msgs)
         };
@@ -2850,7 +2843,7 @@ mod tests {
                 subscriptions,
                 storage,
                 pending,
-                Arc::new(Mutex::new(Map::new())),
+                PeerCounter::default(),
                 NonceCache::default(),
                 InstantTimeout,
                 Duration::from_secs(30),
@@ -2919,7 +2912,7 @@ mod tests {
                 subscriptions,
                 storage,
                 pending,
-                Arc::new(Mutex::new(Map::new())),
+                PeerCounter::default(),
                 NonceCache::default(),
                 InstantTimeout,
                 Duration::from_secs(30),

@@ -450,13 +450,13 @@ impl SyncMessage {
             }
             SyncMessage::RemoveSubscriptions(unsub) => 2 + (unsub.ids.len() * 32),
             SyncMessage::DataRequestRejected(_) => 32,
-            SyncMessage::HeadsUpdate { id: _, heads } => 32 + remote_heads_size(heads),
+            SyncMessage::HeadsUpdate { heads, .. } => 32 + remote_heads_size(heads),
         }
     }
 }
 
 /// Size of a [`RemoteHeads`] on the wire: u64 counter + u32 count + 32 bytes per digest.
-fn remote_heads_size(heads: &RemoteHeads) -> usize {
+const fn remote_heads_size(heads: &RemoteHeads) -> usize {
     8 + 4 + heads.heads.len() * 32
 }
 

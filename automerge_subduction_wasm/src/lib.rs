@@ -44,14 +44,11 @@ extern crate alloc;
 
 use alloc::string::String;
 
-mod js_logger;
+pub mod js_logger;
 
 // Re-export everything from subduction_wasm and automerge_sedimentree_wasm
 pub use automerge_sedimentree_wasm::*;
 pub use subduction_wasm::*;
-
-// Re-export the JavaScript logger functions
-pub use js_logger::{clear_subduction_logger, set_subduction_logger};
 
 use wasm_bindgen::prelude::*;
 
@@ -289,12 +286,16 @@ pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
-    // Always initialize tracing, even without wasm-tracing feature
-    let initial_level = read_log_level_from_env()
-        .and_then(|s| parse_level_filter(&s))
-        .unwrap_or(tracing_subscriber::filter::LevelFilter::WARN);
+    // Only initialize tracing if a global subscriber has not already been set.
+    // This makes set_panic_hook() safe to call multiple times and safe when
+    // the embedding application has already configured tracing.
+    if !tracing::dispatcher::has_been_set() {
+        let initial_level = read_log_level_from_env()
+            .and_then(|s| parse_level_filter(&s))
+            .unwrap_or(tracing_subscriber::filter::LevelFilter::WARN);
 
-    tracing_setup::init(initial_level);
+        tracing_setup::init(initial_level);
+    }
 }
 
 /// Entry point called when the Wasm module is instantiated.
