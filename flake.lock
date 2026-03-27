@@ -105,7 +105,8 @@
         "flake-utils": "flake-utils_2",
         "nixos-unstable": "nixos-unstable",
         "nixpkgs": "nixpkgs_2",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "wasm-bodge-src": "wasm-bodge-src"
       }
     },
     "rust-overlay": {
@@ -155,6 +156,23 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
+        "type": "github"
+      }
+    },
+    "wasm-bodge-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1774631482,
+        "narHash": "sha256-HAWtOyeguTiOzcj2K6YUTKtzmYFJ0Z085fAMm1iYaCo=",
+        "owner": "alexjg",
+        "repo": "wasm-bodge",
+        "rev": "95090dc7952afc65960b408336dbcd8ba89417fc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "alexjg",
+        "ref": "v0.2.2",
+        "repo": "wasm-bodge",
         "type": "github"
       }
     }

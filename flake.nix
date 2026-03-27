@@ -12,6 +12,11 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    wasm-bodge-src = {
+      url = "github:alexjg/wasm-bodge/v0.2.2";
+      flake = false;
+    };
   };
 
   outputs = {
@@ -20,7 +25,8 @@
     nixos-unstable,
     nixpkgs,
     rust-overlay,
-    command-utils
+    command-utils,
+    wasm-bodge-src
   } @ inputs:
     {
       nixosModules.default = import ./nix/nixos-module.nix {inherit self;};
@@ -90,15 +96,10 @@
           rustc = rust-toolchain;
         };
 
-        wasm-bodge = wasm-bodge-rustPlatform.buildRustPackage rec {
+        wasm-bodge = wasm-bodge-rustPlatform.buildRustPackage {
           pname = "wasm-bodge";
-          version = "0.2.2";
-          src = pkgs.fetchFromGitHub {
-            owner = "alexjg";
-            repo = "wasm-bodge";
-            tag = "v${version}";
-            hash = "sha256-HAWtOyeguTiOzcj2K6YUTKtzmYFJ0Z085fAMm1iYaCo=";
-          };
+          version = wasm-bodge-src.shortRev;
+          src = wasm-bodge-src;
           cargoHash = "sha256-FUbDbXmcT3Kbrm42jOEqbqbhiGb7/4+Xbo+eWFEMy2I=";
           nativeBuildInputs = [ unstable.cargo-auditable ];
           doCheck = false; # tests require npm/puppeteer infrastructure
