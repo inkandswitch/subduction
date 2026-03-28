@@ -38,10 +38,6 @@ const fn peer(n: u8) -> PeerId {
     PeerId::new([n; 32])
 }
 
-const fn topic(n: u8) -> Topic {
-    Topic::new([n; 32])
-}
-
 type OpenHandler = Arc<EphemeralHandler<Sendable, EphConn, OpenEphemeralPolicy, FakeClock>>;
 
 fn make_open_handler(
@@ -121,7 +117,7 @@ async fn subscribe_adds_peer() -> TestResult {
         .handle(
             &auth,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::new(topic(0xAA)),
+                topics: NonEmpty::new(Topic::new([0xAA; 32])),
             },
         )
         .await?;
@@ -135,7 +131,7 @@ async fn subscribe_adds_peer() -> TestResult {
     // Verify subscription by publishing from another peer.
     let (auth_b, _handle_b) = register_peer(&connections, peer(2)).await;
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0xAA), vec![42]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0xAA; 32]), vec![42]).await;
     handler.handle(&auth_b, msg).await?;
 
     let forwarded =
@@ -143,7 +139,7 @@ async fn subscribe_adds_peer() -> TestResult {
     let EphemeralMessage::Ephemeral { id, payload, .. } = forwarded else {
         panic!("expected Ephemeral, got {forwarded:?}");
     };
-    assert_eq!(id, topic(0xAA));
+    assert_eq!(id, Topic::new([0xAA; 32]));
     assert_eq!(payload, vec![42]);
 
     Ok(())
@@ -160,7 +156,7 @@ async fn unsubscribe_removes_peer() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::new(topic(0xBB)),
+                topics: NonEmpty::new(Topic::new([0xBB; 32])),
             },
         )
         .await?;
@@ -168,13 +164,13 @@ async fn unsubscribe_removes_peer() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Unsubscribe {
-                topics: NonEmpty::new(topic(0xBB)),
+                topics: NonEmpty::new(Topic::new([0xBB; 32])),
             },
         )
         .await?;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0xBB), vec![99]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0xBB; 32]), vec![99]).await;
     handler.handle(&auth_b, msg).await?;
 
     let result = tokio::time::timeout(Duration::from_millis(50), handle_a.outbound_rx.recv()).await;
@@ -194,13 +190,14 @@ async fn subscribe_multiple_topics() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::from_vec(vec![topic(1), topic(2)]).expect("non-empty"),
+                topics: NonEmpty::from_vec(vec![Topic::new([1; 32]), Topic::new([2; 32])])
+                    .expect("non-empty"),
             },
         )
         .await?;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(2), vec![77]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([2; 32]), vec![77]).await;
     handler.handle(&auth_b, msg).await?;
 
     let forwarded =
@@ -208,7 +205,7 @@ async fn subscribe_multiple_topics() -> TestResult {
     let EphemeralMessage::Ephemeral { id, payload, .. } = forwarded else {
         panic!("expected Ephemeral, got {forwarded:?}");
     };
-    assert_eq!(id, topic(2));
+    assert_eq!(id, Topic::new([2; 32]));
     assert_eq!(payload, vec![77]);
 
     Ok(())
@@ -226,13 +223,13 @@ async fn fan_out_excludes_sender() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::new(topic(0xCC)),
+                topics: NonEmpty::new(Topic::new([0xCC; 32])),
             },
         )
         .await?;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0xCC), vec![1, 2, 3]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0xCC; 32]), vec![1, 2, 3]).await;
     handler.handle(&auth_a, msg).await?;
 
     let result = tokio::time::timeout(Duration::from_millis(50), handle_a.outbound_rx.recv()).await;
@@ -255,14 +252,14 @@ async fn fan_out_to_multiple_subscribers() -> TestResult {
             .handle(
                 auth,
                 EphemeralMessage::Subscribe {
-                    topics: NonEmpty::new(topic(0xDD)),
+                    topics: NonEmpty::new(Topic::new([0xDD; 32])),
                 },
             )
             .await?;
     }
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0xDD), vec![10, 20]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0xDD; 32]), vec![10, 20]).await;
     handler.handle(&auth_c, msg).await?;
 
     let msg_a =
@@ -287,9 +284,9 @@ async fn fan_out_to_multiple_subscribers() -> TestResult {
         panic!("expected Ephemeral, got {msg_b:?}");
     };
 
-    assert_eq!(id_a, topic(0xDD));
+    assert_eq!(id_a, Topic::new([0xDD; 32]));
     assert_eq!(payload_a, vec![10, 20]);
-    assert_eq!(id_b, topic(0xDD));
+    assert_eq!(id_b, Topic::new([0xDD; 32]));
     assert_eq!(payload_b, vec![10, 20]);
 
     Ok(())
@@ -304,11 +301,11 @@ async fn callback_channel_receives_event() -> TestResult {
     let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0xEE), vec![5, 6, 7]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0xEE; 32]), vec![5, 6, 7]).await;
     handler.handle(&auth_a, msg).await?;
 
     let event = tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await??;
-    assert_eq!(event.id, topic(0xEE));
+    assert_eq!(event.id, Topic::new([0xEE; 32]));
     assert_eq!(
         event.sender,
         PeerId::from(Signer::<Sendable>::verifying_key(&signer))
@@ -327,7 +324,7 @@ async fn inbound_payload_too_large_dropped() -> TestResult {
     let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0xFF), vec![0u8; 20]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0xFF; 32]), vec![0u8; 20]).await;
     handler.handle(&auth_a, msg).await?;
 
     let result = tokio::time::timeout(Duration::from_millis(50), event_rx.recv()).await;
@@ -347,13 +344,13 @@ async fn publish_api_payload_too_large_dropped() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::new(topic(0x11)),
+                topics: NonEmpty::new(Topic::new([0x11; 32])),
             },
         )
         .await?;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0x11), vec![0u8; 20]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0x11; 32]), vec![0u8; 20]).await;
     handler.publish(msg).await;
 
     let result = tokio::time::timeout(Duration::from_millis(50), handle_a.outbound_rx.recv()).await;
@@ -375,7 +372,8 @@ async fn disconnect_cleans_all_subscriptions() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::from_vec(vec![topic(1), topic(2)]).expect("non-empty"),
+                topics: NonEmpty::from_vec(vec![Topic::new([1; 32]), Topic::new([2; 32])])
+                    .expect("non-empty"),
             },
         )
         .await?;
@@ -383,7 +381,7 @@ async fn disconnect_cleans_all_subscriptions() -> TestResult {
     Handler::<Sendable, EphConn>::on_peer_disconnect(&*handler, peer(1)).await;
 
     let signer = make_signer();
-    for t in [topic(1), topic(2)] {
+    for t in [Topic::new([1; 32]), Topic::new([2; 32])] {
         let msg = make_signed_ephemeral(&signer, t, vec![0]).await;
         handler.handle(&auth_b, msg).await?;
     }
@@ -409,13 +407,13 @@ async fn publish_api_sends_to_subscribers() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::new(topic(0x22)),
+                topics: NonEmpty::new(Topic::new([0x22; 32])),
             },
         )
         .await?;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0x22), vec![88, 99]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0x22; 32]), vec![88, 99]).await;
     handler.publish(msg).await;
 
     let received =
@@ -423,7 +421,7 @@ async fn publish_api_sends_to_subscribers() -> TestResult {
     let EphemeralMessage::Ephemeral { id, payload, .. } = received else {
         panic!("expected Ephemeral, got {received:?}");
     };
-    assert_eq!(id, topic(0x22));
+    assert_eq!(id, Topic::new([0x22; 32]));
     assert_eq!(payload, vec![88, 99]);
 
     Ok(())
@@ -498,7 +496,8 @@ async fn subscribe_rejected_by_policy() -> TestResult {
         .handle(
             &auth,
             EphemeralMessage::Subscribe {
-                topics: NonEmpty::from_vec(vec![topic(0xAA), topic(0xBB)]).expect("non-empty"),
+                topics: NonEmpty::from_vec(vec![Topic::new([0xAA; 32]), Topic::new([0xBB; 32])])
+                    .expect("non-empty"),
             },
         )
         .await?;
@@ -508,8 +507,8 @@ async fn subscribe_rejected_by_policy() -> TestResult {
     match rejected {
         EphemeralMessage::SubscribeRejected { topics } => {
             assert_eq!(topics.len(), 2);
-            assert!(topics.contains(&topic(0xAA)));
-            assert!(topics.contains(&topic(0xBB)));
+            assert!(topics.contains(&Topic::new([0xAA; 32])));
+            assert!(topics.contains(&Topic::new([0xBB; 32])));
         }
         other @ (EphemeralMessage::Ephemeral { .. }
         | EphemeralMessage::Subscribe { .. }
@@ -534,7 +533,7 @@ async fn publish_rejected_by_policy_no_callback() -> TestResult {
     let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;
 
     let signer = make_signer();
-    let msg = make_signed_ephemeral(&signer, topic(0xCC), vec![1, 2, 3]).await;
+    let msg = make_signed_ephemeral(&signer, Topic::new([0xCC; 32]), vec![1, 2, 3]).await;
     handler.handle(&auth_a, msg).await?;
 
     let result = tokio::time::timeout(Duration::from_millis(50), event_rx.recv()).await;
@@ -558,7 +557,7 @@ async fn subscribe_rejected_message_is_noop() -> TestResult {
         .handle(
             &auth,
             EphemeralMessage::SubscribeRejected {
-                topics: NonEmpty::new(topic(0xFF)),
+                topics: NonEmpty::new(Topic::new([0xFF; 32])),
             },
         )
         .await?;

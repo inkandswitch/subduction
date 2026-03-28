@@ -42,10 +42,6 @@ fn test_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
 }
 
-const fn topic(n: u8) -> Topic {
-    Topic::new([n; 32])
-}
-
 type ServerConn = MessageTransport<UnifiedWebSocket>;
 
 /// Verify that an `EphemeralMessage` can be sent over a real WebSocket
@@ -101,7 +97,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
     // Send an ephemeral message using the generic Connection impl.
     let msg = EphemeralMessage::Ephemeral {
         sender: PeerId::new([0x01; 32]),
-        id: topic(0xAA),
+        id: Topic::new([0xAA; 32]),
         nonce: 42,
         timestamp: TimestampSeconds::new(1_700_000_000),
         payload: vec![10, 20, 30, 40, 50],
@@ -111,7 +107,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     // Send a Subscribe message.
     let sub = EphemeralMessage::Subscribe {
-        topics: nonempty::nonempty![topic(0xBB), topic(0xCC)],
+        topics: nonempty::nonempty![Topic::new([0xBB; 32]), Topic::new([0xCC; 32])],
     };
     Connection::<Sendable, EphemeralMessage>::send(&client, &sub).await?;
 
@@ -183,7 +179,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
     // Send an ephemeral message.
     let eph = EphemeralMessage::Ephemeral {
         sender: PeerId::new([0x01; 32]),
-        id: topic(0x11),
+        id: Topic::new([0x11; 32]),
         nonce: 43,
         timestamp: TimestampSeconds::new(1_700_000_000),
         payload: vec![42],
@@ -194,7 +190,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
     // Send a sync message (RemoveSubscriptions — small, no blobs).
     let sync_msg = subduction_core::connection::message::SyncMessage::RemoveSubscriptions(
         subduction_core::connection::message::RemoveSubscriptions {
-            ids: vec![topic(0x22).into()],
+            ids: vec![Topic::new([0x22; 32]).into()],
         },
     );
     Connection::<Sendable, subduction_core::connection::message::SyncMessage>::send(

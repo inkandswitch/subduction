@@ -1,15 +1,14 @@
 //! Wasm ephemeral message observer that forwards events to a JS callback.
 
-use sedimentree_core::id::SedimentreeId;
-use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 use subduction_core::peer::id::PeerId;
+use subduction_ephemeral::topic::Topic;
 use wasm_bindgen::JsValue;
 
-use crate::peer_id::WasmPeerId;
+use crate::{peer_id::WasmPeerId, topic::WasmTopic};
 
 /// Forwards inbound [`EphemeralEvent`]s to a JavaScript callback.
 ///
-/// The JS callback is invoked with `(sedimentreeId, senderId, payload)` where
+/// The JS callback is invoked with `(topic, senderId, payload)` where
 /// `payload` is a `Uint8Array`.
 ///
 /// [`EphemeralEvent`]: subduction_ephemeral::config::EphemeralEvent
@@ -26,14 +25,14 @@ impl JsEphemeralObserver {
     }
 
     /// Forward an ephemeral event to the JS callback.
-    pub fn on_event(&self, id: SedimentreeId, sender: PeerId, payload: &[u8]) {
-        let js_id = WasmSedimentreeId::from(id);
+    pub fn on_event(&self, topic: Topic, sender: PeerId, payload: &[u8]) {
+        let js_topic = WasmTopic::from(topic);
         let js_sender = WasmPeerId::from(sender);
         let js_payload = js_sys::Uint8Array::from(payload);
 
         if let Err(e) = self.callback.call3(
             &JsValue::NULL,
-            &JsValue::from(js_id),
+            &JsValue::from(js_topic),
             &JsValue::from(js_sender),
             &js_payload,
         ) {
