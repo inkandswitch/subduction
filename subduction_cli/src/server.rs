@@ -35,6 +35,11 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
+use subduction_ephemeral::{
+    clock::std_clock::StdClock, config::EphemeralConfig, handler::EphemeralHandler,
+    policy::OpenEphemeralPolicy,
+};
+
 use crate::{
     handler::{CliConn, CliHandler},
     key, metrics,
@@ -239,8 +244,31 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
     let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) =
         builder.build_composed(|sync_handler| {
+            let connections = sync_handler.connections();
+
+            let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
+                connections,
+                OpenEphemeralPolicy,
+                EphemeralConfig::default(),
+                StdClock,
+            );
+
+            // Drain ephemeral events — the server is a relay, not a consumer.
+            tokio::spawn(async move {
+                while let Ok(event) = ephemeral_rx.recv().await {
+                    tracing::debug!(
+                        sender = %event.sender,
+                        topic = %event.id,
+                        nonce = event.nonce,
+                        payload_size = event.payload.len(),
+                        "ephemeral event relayed"
+                    );
+                }
+            });
+
             Arc::new(CliHandler {
                 sync: sync_handler,
+                ephemeral: ephemeral_handler,
                 keyhive: keyhive_handle,
             })
         });

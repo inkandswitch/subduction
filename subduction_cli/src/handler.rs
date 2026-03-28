@@ -2,11 +2,11 @@
 //!
 //! Dispatches [`CliWireMessage`] variants to the appropriate sub-handler:
 //!
-//! | Variant      | Handler                   |
-//! |--------------|---------------------------|
-//! | `Sync`       | [`SyncHandler`]           |
-//! | `Ephemeral`  | Logged and dropped        |
-//! | `Keyhive`    | [`KeyhiveProtocolHandle`] |
+//! | Variant      | Handler                     |
+//! |--------------|-----------------------------|
+//! | `Sync`       | [`SyncHandler`]             |
+//! | `Ephemeral`  | [`EphemeralHandler`]        |
+//! | `Keyhive`    | [`KeyhiveProtocolHandle`]   |
 
 use std::sync::Arc;
 
@@ -24,12 +24,19 @@ use subduction_core::{
     subduction::error::{IoError, ListenError},
     transport::message::MessageTransport,
 };
+use subduction_ephemeral::{
+    clock::std_clock::StdClock, handler::EphemeralHandler, policy::OpenEphemeralPolicy,
+};
 use subduction_keyhive_policy::handler::KeyhiveProtocolHandle;
 
 use crate::{transport::UnifiedTransport, wire::CliWireMessage};
 
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
+
+/// The concrete ephemeral handler type for the CLI server.
+pub(crate) type CliEphemeralHandler =
+    EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock>;
 
 /// Concrete `ListenError` for the CLI handler.
 type CliListenError = ListenError<Sendable, MetricsStorage<FsStorage>, CliConn, CliWireMessage>;
@@ -45,6 +52,7 @@ pub(crate) struct CliHandler {
             CountLeadingZeroBytes,
         >,
     >,
+    pub(crate) ephemeral: CliEphemeralHandler,
     pub(crate) keyhive: KeyhiveProtocolHandle,
 }
 
@@ -103,10 +111,12 @@ impl Handler<Sendable, CliConn> for CliHandler {
                         .map_err(convert_sync_listen_error)
                 }
 
-                CliWireMessage::Ephemeral(_) => {
-                    tracing::debug!(
-                        "received ephemeral message but ephemeral handler not configured"
-                    );
+                CliWireMessage::Ephemeral(eph_msg) => {
+                    if let Err(e) =
+                        Handler::<Sendable, CliConn>::handle(&self.ephemeral, conn, eph_msg).await
+                    {
+                        tracing::error!(error = %e, "ephemeral handler error (non-fatal)");
+                    }
                     Ok(())
                 }
 
@@ -125,6 +135,7 @@ impl Handler<Sendable, CliConn> for CliHandler {
     fn on_peer_disconnect(&self, peer: PeerId) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             Handler::<Sendable, CliConn>::on_peer_disconnect(self.sync.as_ref(), peer).await;
+            Handler::<Sendable, CliConn>::on_peer_disconnect(&self.ephemeral, peer).await;
             Handler::<Sendable, CliConn>::on_peer_disconnect(&self.keyhive, peer).await;
         })
     }
