@@ -1,6 +1,9 @@
 //! Wasm wrapper for [`Topic`].
 
-use alloc::{string::String, vec::Vec};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 
 use subduction_ephemeral::topic::Topic;
 use thiserror::Error;
