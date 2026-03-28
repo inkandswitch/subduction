@@ -12,9 +12,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
-use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
-use subduction_keyhive::{KeyhiveMessage, KEYHIVE_SCHEMA};
+use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
+use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
+use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 /// Composed wire message for the CLI server.
 ///
@@ -112,6 +112,7 @@ mod tests {
         connection::message::{BatchSyncResponse, RemoveSubscriptions, RequestId, SyncResult},
         peer::id::PeerId,
         remote_heads::RemoteHeads,
+        timestamp::TimestampSeconds,
     };
     use subduction_ephemeral::topic::Topic;
     use testresult::TestResult;
@@ -153,7 +154,7 @@ mod tests {
                 sender: PeerId::new([0xAA; 32]),
                 id: Topic::new([0xAA; 32]),
                 nonce: 42,
-                timestamp_ms: 1_700_000_000_000,
+                timestamp: TimestampSeconds::new(1_700_000_000),
                 payload: vec![10, 20, 30],
                 signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
             });

@@ -36,6 +36,7 @@ tungstenite = { workspace = true }
 arbitrary = { workspace = true }
 async-lock = { workspace = true }
 criterion = { workspace = true }
+ed25519-dalek = { workspace = true }
 criterion_pprof = { workspace = true }
 eyre = { workspace = true }
 nonempty = { workspace = true, features = ["std"] }

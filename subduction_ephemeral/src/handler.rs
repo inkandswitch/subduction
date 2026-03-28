@@ -55,7 +55,7 @@ pub struct EphemeralHandler<F: FutureForm, C: Clone + 'static, E: EphemeralPolic
     policy: E,
     callback_tx: Sender<EphemeralEvent>,
     max_payload_size: usize,
-    max_message_age_ms: u64,
+    max_message_age: core::time::Duration,
     clock: Clk,
     nonce_cache: Arc<Mutex<NonceCache>>,
 }
@@ -71,7 +71,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone, Clk: Cloc
             policy: self.policy.clone(),
             callback_tx: self.callback_tx.clone(),
             max_payload_size: self.max_payload_size,
-            max_message_age_ms: self.max_message_age_ms,
+            max_message_age: self.max_message_age,
             clock: self.clock.clone(),
             nonce_cache: self.nonce_cache.clone(),
         }
@@ -109,9 +109,9 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
             policy,
             callback_tx: tx,
             max_payload_size: config.max_payload_size,
-            max_message_age_ms: config.max_message_age_ms,
+            max_message_age: config.max_message_age,
             clock,
-            nonce_cache: Arc::new(Mutex::new(NonceCache::new(config.nonce_window_duration_ms))),
+            nonce_cache: Arc::new(Mutex::new(NonceCache::new(config.nonce_window_duration))),
         };
 
         (handler, rx)
@@ -407,7 +407,7 @@ impl<
             sender,
             id,
             nonce,
-            timestamp_ms,
+            timestamp,
             ref payload,
             ..
         } = message
@@ -443,18 +443,18 @@ impl<
         }
 
         // 3. Check message age — reject stale or future-dated messages.
+        let now = self.clock.now();
         {
-            let now = self.clock.now_utc_ms();
-            let age = now.abs_diff(timestamp_ms);
-            if age > self.max_message_age_ms {
+            let age = now.abs_diff(timestamp);
+            if age > self.max_message_age {
                 debug!(
                     originator = %sender,
                     relay = %relay,
                     id = %id,
-                    timestamp_ms = timestamp_ms,
-                    now_ms = now,
-                    age_ms = age,
-                    max_age_ms = self.max_message_age_ms,
+                    timestamp_secs = timestamp.as_secs(),
+                    now_secs = now.as_secs(),
+                    age_secs = age.as_secs(),
+                    max_age_secs = self.max_message_age.as_secs(),
                     "ephemeral message too old or too far in the future, dropping"
                 );
                 return;
@@ -463,9 +463,8 @@ impl<
 
         // 4. Check nonce (dedup).
         {
-            let now_ms = self.clock.now_utc_ms();
             let mut cache = self.nonce_cache.lock().await;
-            if !cache.check_and_insert(sender, id, nonce, now_ms) {
+            if !cache.check_and_insert(sender, id, nonce, now) {
                 debug!(
                     originator = %sender,
                     relay = %relay,
@@ -500,11 +499,19 @@ impl<
             warn!("ephemeral callback channel full, dropping event");
         }
 
-        // 7. Fan out to other subscribers (excluding the relay that sent it to us).
+        // 7. Fan out to other subscribers, excluding:
+        //    - the relay that forwarded the message to us
+        //    - the originator (they already have it — they wrote it)
         let subscriber_peers: Vec<PeerId> = {
             let subs = self.ephemeral_subscriptions.lock().await;
             subs.get(&id)
-                .map(|peers| peers.iter().copied().filter(|p| *p != relay).collect())
+                .map(|peers| {
+                    peers
+                        .iter()
+                        .copied()
+                        .filter(|p| *p != relay && *p != sender)
+                        .collect()
+                })
                 .unwrap_or_default()
         };
 

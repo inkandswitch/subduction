@@ -13,7 +13,7 @@ use nonempty::NonEmpty;
 use sedimentree_core::collections::Map;
 use subduction_core::{
     authenticated::Authenticated, connection::test_utils::ChannelMockConnection, handler::Handler,
-    peer::id::PeerId,
+    peer::id::PeerId, timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::{Signer, memory::MemorySigner};
 use subduction_ephemeral::{
@@ -51,7 +51,7 @@ fn make_open_handler(
         connections,
         OpenEphemeralPolicy,
         EphemeralConfig::default(),
-        FakeClock::new(1_000_000),
+        FakeClock::new(TimestampSeconds::new(1_000)),
     );
     (Arc::new(handler), rx)
 }
@@ -68,7 +68,7 @@ fn make_small_payload_handler(
         connections,
         OpenEphemeralPolicy,
         config,
-        FakeClock::new(1_000_000),
+        FakeClock::new(TimestampSeconds::new(1_000)),
     );
     (Arc::new(handler), rx)
 }
@@ -84,18 +84,18 @@ async fn register_peer(connections: &Connections, peer_id: PeerId) -> (EphAuth, 
 }
 
 /// Timestamp used by the `FakeClock` in test handlers.
-const TEST_CLOCK_MS: u64 = 1_000_000;
+const TEST_CLOCK_SECS: TimestampSeconds = TimestampSeconds::new(1_000);
 
 /// Create a signed ephemeral message using a deterministic signer.
 ///
-/// Uses [`TEST_CLOCK_MS`] as the timestamp so the handler's age check
+/// Uses [`TEST_CLOCK_SECS`] as the timestamp so the handler's age check
 /// passes (the `FakeClock` is initialized to the same value).
 async fn make_signed_ephemeral(
     signer: &MemorySigner,
     id: Topic,
     payload: Vec<u8>,
 ) -> EphemeralMessage {
-    EphemeralMessage::new_signed::<Sendable, _>(signer, id, rand_nonce(), TEST_CLOCK_MS, payload)
+    EphemeralMessage::new_signed::<Sendable, _>(signer, id, rand_nonce(), TEST_CLOCK_SECS, payload)
         .await
 }
 
@@ -489,7 +489,7 @@ async fn subscribe_rejected_by_policy() -> TestResult {
         connections.clone(),
         deny_policy::DenyAll,
         EphemeralConfig::default(),
-        FakeClock::new(1_000_000),
+        FakeClock::new(TimestampSeconds::new(1_000)),
     );
     let handler = Arc::new(handler);
     let (auth, handle) = register_peer(&connections, peer(1)).await;
@@ -528,7 +528,7 @@ async fn publish_rejected_by_policy_no_callback() -> TestResult {
         connections.clone(),
         deny_policy::DenyAll,
         EphemeralConfig::default(),
-        FakeClock::new(1_000_000),
+        FakeClock::new(TimestampSeconds::new(1_000)),
     );
     let handler = Arc::new(handler);
     let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;

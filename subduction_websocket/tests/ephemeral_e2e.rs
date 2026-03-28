@@ -16,16 +16,17 @@ use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_core::{
     connection::Connection, handshake::audience::Audience, peer::id::PeerId,
     policy::open::OpenPolicy, storage::memory::MemoryStorage,
-    subduction::builder::SubductionBuilder, transport::message::MessageTransport,
+    subduction::builder::SubductionBuilder, timestamp::TimestampSeconds,
+    transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_ephemeral::{message::EphemeralMessage, topic::Topic};
 use subduction_websocket::{
-    tokio::{
-        client::TokioWebSocketClient, server::TokioWebSocketServer, unified::UnifiedWebSocket,
-        TimeoutTokio, TokioSpawn,
-    },
     DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{
+        TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+        unified::UnifiedWebSocket,
+    },
 };
 use testresult::TestResult;
 
@@ -102,7 +103,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
         sender: PeerId::new([0x01; 32]),
         id: topic(0xAA),
         nonce: 42,
-        timestamp_ms: 1_700_000_000_000,
+        timestamp: TimestampSeconds::new(1_700_000_000),
         payload: vec![10, 20, 30, 40, 50],
         signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
     };
@@ -184,7 +185,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
         sender: PeerId::new([0x01; 32]),
         id: topic(0x11),
         nonce: 43,
-        timestamp_ms: 1_700_000_000_000,
+        timestamp: TimestampSeconds::new(1_700_000_000),
         payload: vec![42],
         signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
     };

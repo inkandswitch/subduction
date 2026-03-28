@@ -40,6 +40,7 @@ use subduction_core::{
         error::HydrationError,
         pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
+    timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
 use subduction_ephemeral::{
@@ -1128,13 +1129,13 @@ impl WasmSubduction {
             getrandom::getrandom(&mut buf).expect("getrandom failed");
             u64::from_le_bytes(buf)
         };
-        // Date.now() returns f64 ms since epoch; truncation/sign-loss safe for ~584M years.
-        let timestamp_ms = js_sys::Date::now() as u64;
+        // Date.now() returns f64 ms since epoch; convert to seconds.
+        let timestamp = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
         let msg = EphemeralMessage::new_signed::<Local, _>(
             self.core.signer(),
             Topic::from(SedimentreeId::from(id.clone())),
             nonce,
-            timestamp_ms,
+            timestamp,
             payload.to_vec(),
         )
         .await;

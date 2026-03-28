@@ -163,6 +163,7 @@ mod tests {
         handler::Handler,
         peer::id::PeerId,
         remote_heads::RemoteHeads,
+        timestamp::TimestampSeconds,
     };
     use subduction_ephemeral::{message::EphemeralMessage, topic::Topic};
     use subduction_keyhive::KeyhiveMessage;
@@ -213,7 +214,7 @@ mod tests {
             sender: PeerId::new([0xCC; 32]),
             id: Topic::new([0xCC; 32]),
             nonce: 42,
-            timestamp_ms: 1_700_000_000_000,
+            timestamp: TimestampSeconds::new(1_700_000_000),
             payload: vec![1, 2, 3],
             signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
         });

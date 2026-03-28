@@ -38,8 +38,9 @@ use sedimentree_core::codec::{
     error::{Bijou64Error, DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
 };
 
+use subduction_core::{peer::id::PeerId, timestamp::TimestampSeconds};
+
 use crate::topic::Topic;
-use subduction_core::peer::id::PeerId;
 
 /// Schema header for [`EphemeralMessage`] envelope: **SU**bduction **E**phemeral v0.
 pub const EPHEMERAL_SCHEMA: [u8; 4] = *b"SUE\x00";
@@ -85,12 +86,12 @@ pub enum EphemeralMessage {
         id: Topic,
         /// Random nonce for deduplication.
         nonce: u64,
-        /// UTC milliseconds since epoch at message creation.
+        /// UTC time at message creation (seconds since epoch).
         ///
         /// Inside the signed region — the originator commits to when
         /// the message was created. Receivers reject messages whose
         /// timestamp is too far from their own wall clock.
-        timestamp_ms: u64,
+        timestamp: TimestampSeconds,
         /// Opaque application payload.
         payload: Vec<u8>,
         /// Ed25519 signature over
@@ -145,7 +146,7 @@ impl EphemeralMessage {
                 sender,
                 id,
                 nonce,
-                timestamp_ms,
+                timestamp,
                 payload,
                 ..
             } => {
@@ -155,7 +156,7 @@ impl EphemeralMessage {
                 buf.extend_from_slice(sender.as_bytes());
                 buf.extend_from_slice(id.as_bytes());
                 buf.extend_from_slice(&nonce.to_be_bytes());
-                buf.extend_from_slice(&timestamp_ms.to_be_bytes());
+                buf.extend_from_slice(&timestamp.as_secs().to_be_bytes());
                 #[allow(clippy::cast_possible_truncation)]
                 bijou64::encode(payload.len() as u64, &mut buf);
                 buf.extend_from_slice(payload);
@@ -204,7 +205,7 @@ impl EphemeralMessage {
         signer: &S,
         id: Topic,
         nonce: u64,
-        timestamp_ms: u64,
+        timestamp: TimestampSeconds,
         payload: Vec<u8>,
     ) -> Self {
         let sender = PeerId::from(signer.verifying_key());
@@ -216,7 +217,7 @@ impl EphemeralMessage {
         signed_buf.extend_from_slice(sender.as_bytes());
         signed_buf.extend_from_slice(id.as_bytes());
         signed_buf.extend_from_slice(&nonce.to_be_bytes());
-        signed_buf.extend_from_slice(&timestamp_ms.to_be_bytes());
+        signed_buf.extend_from_slice(&timestamp.as_secs().to_be_bytes());
         #[allow(clippy::cast_possible_truncation)]
         bijou64::encode(payload.len() as u64, &mut signed_buf);
         signed_buf.extend_from_slice(&payload);
@@ -227,7 +228,7 @@ impl EphemeralMessage {
             sender,
             id,
             nonce,
-            timestamp_ms,
+            timestamp,
             payload,
             signature,
         }
@@ -296,20 +297,12 @@ fn encode_message(msg: &EphemeralMessage) -> Vec<u8> {
             sender,
             id,
             nonce,
-            timestamp_ms,
+            timestamp,
             payload,
             signature,
         } => {
             buf.push(tags::EPHEMERAL);
-            encode_ephemeral(
-                &mut buf,
-                sender,
-                id,
-                *nonce,
-                *timestamp_ms,
-                payload,
-                signature,
-            );
+            encode_ephemeral(&mut buf, sender, id, *nonce, *timestamp, payload, signature);
         }
         EphemeralMessage::Subscribe { ids } => {
             buf.push(tags::SUBSCRIBE);
@@ -333,14 +326,14 @@ fn encode_ephemeral(
     sender: &PeerId,
     id: &Topic,
     nonce: u64,
-    timestamp_ms: u64,
+    timestamp: TimestampSeconds,
     payload: &[u8],
     signature: &Signature,
 ) {
     buf.extend_from_slice(sender.as_bytes());
     buf.extend_from_slice(id.as_bytes());
     buf.extend_from_slice(&nonce.to_be_bytes());
-    buf.extend_from_slice(&timestamp_ms.to_be_bytes());
+    buf.extend_from_slice(&timestamp.as_secs().to_be_bytes());
     #[allow(clippy::cast_possible_truncation)]
     bijou64::encode(payload.len() as u64, buf);
     buf.extend_from_slice(payload);
@@ -461,7 +454,8 @@ fn decode_ephemeral(payload: &[u8]) -> Result<EphemeralMessage, DecodeError> {
     let sender = PeerId::new(read_array::<32>(payload, &mut offset)?);
     let id = Topic::new(read_array::<32>(payload, &mut offset)?);
     let nonce = u64::from_be_bytes(read_array::<8>(payload, &mut offset)?);
-    let timestamp_ms = u64::from_be_bytes(read_array::<8>(payload, &mut offset)?);
+    let timestamp =
+        TimestampSeconds::new(u64::from_be_bytes(read_array::<8>(payload, &mut offset)?));
     let payload_len = read_bijou64_as_usize(payload, &mut offset)?;
 
     let data = payload
@@ -481,7 +475,7 @@ fn decode_ephemeral(payload: &[u8]) -> Result<EphemeralMessage, DecodeError> {
         sender,
         id,
         nonce,
-        timestamp_ms,
+        timestamp,
         payload: data,
         signature,
     })
@@ -555,7 +549,7 @@ mod tests {
             sender: PeerId::new([0xAA; 32]),
             id: Topic::new([0xBB; 32]),
             nonce: 0x1234_5678_9ABC_DEF0,
-            timestamp_ms: 1_700_000_000_000,
+            timestamp: TimestampSeconds::new(1_700_000_000),
             payload,
             signature: Signature::from_bytes(&[0xCC; 64]),
         }
@@ -667,7 +661,7 @@ mod tests {
         assert_eq!(&signed[0..32], &[0xAA; 32]); // sender
         assert_eq!(&signed[32..64], &[0xBB; 32]); // id
         assert_eq!(&signed[64..72], &0x1234_5678_9ABC_DEF0_u64.to_be_bytes()); // nonce
-        assert_eq!(&signed[72..80], &1_700_000_000_000_u64.to_be_bytes()); // timestamp_ms
+        assert_eq!(&signed[72..80], &1_700_000_000_u64.to_be_bytes()); // timestamp
     }
 
     #[test]
