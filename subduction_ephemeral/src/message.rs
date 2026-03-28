@@ -32,6 +32,7 @@
 use alloc::vec::Vec;
 
 use ed25519_dalek::{Signature, VerifyingKey};
+use nonempty::NonEmpty;
 use sedimentree_core::codec::{
     decode::Decode,
     encode::Encode,
@@ -99,44 +100,32 @@ pub enum EphemeralMessage {
         signature: Signature,
     },
 
-    /// Subscribe to ephemeral messages for the given sedimentree IDs.
+    /// Subscribe to ephemeral messages for the given topics.
     Subscribe {
-        /// The sedimentree IDs to subscribe to.
-        ids: Vec<Topic>,
+        /// The topics to subscribe to.
+        topics: NonEmpty<Topic>,
     },
 
-    /// Unsubscribe from ephemeral messages for the given sedimentree IDs.
+    /// Unsubscribe from ephemeral messages for the given topics.
     Unsubscribe {
-        /// The sedimentree IDs to unsubscribe from.
-        ids: Vec<Topic>,
+        /// The topics to unsubscribe from.
+        topics: NonEmpty<Topic>,
     },
 
     /// Notification that some subscribe requests were rejected.
     ///
-    /// Contains only the rejected IDs. Accepted IDs are implied by omission.
+    /// Contains only the rejected topics. Accepted topics are implied
+    /// by omission.
     SubscribeRejected {
-        /// The sedimentree IDs that were rejected.
-        ids: Vec<Topic>,
+        /// The topics that were rejected.
+        topics: NonEmpty<Topic>,
     },
 }
 
 impl EphemeralMessage {
-    /// Get the sedimentree ID associated with this message, if unique.
+    /// Build the byte sequence covered by the signature.
     ///
-    /// Returns `None` for multi-ID messages (subscribe/unsubscribe/rejected).
-    #[must_use]
-    pub const fn sedimentree_id(&self) -> Option<Topic> {
-        match self {
-            Self::Ephemeral { id, .. } => Some(*id),
-            Self::Subscribe { .. } | Self::Unsubscribe { .. } | Self::SubscribeRejected { .. } => {
-                None
-            }
-        }
-    }
-
-    /// Build the byte sequence that is signed/verified for `Ephemeral` messages.
-    ///
-    /// Layout: `sender(32) || id(32) || nonce(8) || timestamp_ms(8) || payload_len(bijou64) || payload`.
+    /// Layout: `sender(32) || id(32) || nonce(8) || timestamp(8) || payload_len(bijou64) || payload`.
     ///
     /// Returns `None` for non-`Ephemeral` variants.
     #[must_use]
@@ -246,9 +235,9 @@ impl EphemeralMessage {
                     + payload.len()
                     + Signature::BYTE_SIZE
             }
-            Self::Subscribe { ids }
-            | Self::Unsubscribe { ids }
-            | Self::SubscribeRejected { ids } => 2 + ids.len() * 32,
+            Self::Subscribe { topics }
+            | Self::Unsubscribe { topics }
+            | Self::SubscribeRejected { topics } => 2 + topics.len() * 32,
         }
     }
 }
@@ -304,17 +293,17 @@ fn encode_message(msg: &EphemeralMessage) -> Vec<u8> {
             buf.push(tags::EPHEMERAL);
             encode_ephemeral(&mut buf, sender, id, *nonce, *timestamp, payload, signature);
         }
-        EphemeralMessage::Subscribe { ids } => {
+        EphemeralMessage::Subscribe { topics } => {
             buf.push(tags::SUBSCRIBE);
-            encode_id_list(&mut buf, ids);
+            encode_topic_list(&mut buf, topics);
         }
-        EphemeralMessage::Unsubscribe { ids } => {
+        EphemeralMessage::Unsubscribe { topics } => {
             buf.push(tags::UNSUBSCRIBE);
-            encode_id_list(&mut buf, ids);
+            encode_topic_list(&mut buf, topics);
         }
-        EphemeralMessage::SubscribeRejected { ids } => {
+        EphemeralMessage::SubscribeRejected { topics } => {
             buf.push(tags::SUBSCRIBE_REJECTED);
-            encode_id_list(&mut buf, ids);
+            encode_topic_list(&mut buf, topics);
         }
     }
 
@@ -340,11 +329,11 @@ fn encode_ephemeral(
     buf.extend_from_slice(&signature.to_bytes());
 }
 
-fn encode_id_list(buf: &mut Vec<u8>, ids: &[Topic]) {
+fn encode_topic_list(buf: &mut Vec<u8>, topics: &NonEmpty<Topic>) {
     #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(ids.len() as u16).to_be_bytes());
-    for id in ids {
-        buf.extend_from_slice(id.as_bytes());
+    buf.extend_from_slice(&(topics.len() as u16).to_be_bytes());
+    for topic in topics {
+        buf.extend_from_slice(topic.as_bytes());
     }
 }
 
@@ -437,12 +426,14 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
 
     match tag {
         tags::EPHEMERAL => decode_ephemeral(payload),
-        tags::SUBSCRIBE => decode_id_list(payload).map(|ids| EphemeralMessage::Subscribe { ids }),
+        tags::SUBSCRIBE => {
+            decode_topic_list(payload).map(|topics| EphemeralMessage::Subscribe { topics })
+        }
         tags::UNSUBSCRIBE => {
-            decode_id_list(payload).map(|ids| EphemeralMessage::Unsubscribe { ids })
+            decode_topic_list(payload).map(|topics| EphemeralMessage::Unsubscribe { topics })
         }
         tags::SUBSCRIBE_REJECTED => {
-            decode_id_list(payload).map(|ids| EphemeralMessage::SubscribeRejected { ids })
+            decode_topic_list(payload).map(|topics| EphemeralMessage::SubscribeRejected { topics })
         }
         _ => unreachable!("tag validated above"),
     }
@@ -481,17 +472,28 @@ fn decode_ephemeral(payload: &[u8]) -> Result<EphemeralMessage, DecodeError> {
     })
 }
 
-fn decode_id_list(payload: &[u8]) -> Result<Vec<Topic>, DecodeError> {
+fn decode_topic_list(payload: &[u8]) -> Result<NonEmpty<Topic>, DecodeError> {
     let mut offset = 0;
 
     let count = read_u16(payload, &mut offset)? as usize;
-
-    let mut ids = Vec::with_capacity(count);
-    for _ in 0..count {
-        ids.push(Topic::new(read_array::<32>(payload, &mut offset)?));
+    if count == 0 {
+        return Err(DecodeError::MessageTooShort {
+            type_name: "EphemeralTopicList",
+            need: 1,
+            have: 0,
+        });
     }
 
-    Ok(ids)
+    let first = Topic::new(read_array::<32>(payload, &mut offset)?);
+    let mut rest = Vec::with_capacity(count - 1);
+    for _ in 1..count {
+        rest.push(Topic::new(read_array::<32>(payload, &mut offset)?));
+    }
+
+    Ok(NonEmpty {
+        head: first,
+        tail: rest,
+    })
 }
 
 // ── Decode helpers ──────────────────────────────────────────────────────
