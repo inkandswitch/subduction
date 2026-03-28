@@ -604,4 +604,111 @@ test.describe("Ephemeral Messaging", () => {
     // Each publish produces a distinct nonce, so both should arrive
     expect(result.count).toBe(2);
   });
+
+  test("transitive gossip: Alice publishes, Bob and Carol both receive", async ({
+    page,
+  }) => {
+    const result = await page.evaluate(async (wsUrl) => {
+      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
+        window.subduction;
+
+      try {
+        const topic = Topic.fromBytes(new Uint8Array(32).fill(0x77));
+
+        const aliceReceived: Array<number[]> = [];
+        const bobReceived: Array<number[]> = [];
+        const carolReceived: Array<number[]> = [];
+
+        const signerAlice = await WebCryptoSigner.setup();
+        const signerBob = await WebCryptoSigner.setup();
+        const signerCarol = await WebCryptoSigner.setup();
+
+        const alice = new Subduction(
+          signerAlice,
+          new MemoryStorage(),
+          null,
+          null,
+          null,
+          null,
+          null,
+          (_topic: any, _sender: any, payload: Uint8Array) => {
+            aliceReceived.push(Array.from(payload));
+          }
+        );
+
+        const bob = new Subduction(
+          signerBob,
+          new MemoryStorage(),
+          null,
+          null,
+          null,
+          null,
+          null,
+          (_topic: any, _sender: any, payload: Uint8Array) => {
+            bobReceived.push(Array.from(payload));
+          }
+        );
+
+        const carol = new Subduction(
+          signerCarol,
+          new MemoryStorage(),
+          null,
+          null,
+          null,
+          null,
+          null,
+          (_topic: any, _sender: any, payload: Uint8Array) => {
+            carolReceived.push(Array.from(payload));
+          }
+        );
+
+        const url = new URL(wsUrl);
+        const serviceName = wsUrl.replace("ws://", "");
+
+        // All three connect to the same server
+        await alice.connectDiscover(url, serviceName);
+        await bob.connectDiscover(url, serviceName);
+        await carol.connectDiscover(url, serviceName);
+
+        // Bob and Carol subscribe; Alice does not
+        await bob.subscribeEphemeral([topic]);
+        await carol.subscribeEphemeral([topic]);
+        await new Promise((r) => setTimeout(r, 200));
+
+        // Alice publishes
+        await alice.publishEphemeral(
+          topic,
+          new Uint8Array([0xca, 0xfe])
+        );
+        await new Promise((r) => setTimeout(r, 500));
+
+        return {
+          aliceCount: aliceReceived.length,
+          bobCount: bobReceived.length,
+          carolCount: carolReceived.length,
+          bobPayload: bobReceived.length > 0 ? bobReceived[0] : null,
+          carolPayload: carolReceived.length > 0 ? carolReceived[0] : null,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          aliceCount: 0,
+          bobCount: 0,
+          carolCount: 0,
+          bobPayload: null,
+          carolPayload: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }, currentWsUrl);
+
+    expect(result.error).toBeNull();
+    // Alice (originator) should NOT receive her own message
+    expect(result.aliceCount).toBe(0);
+    // Bob and Carol should both receive the message
+    expect(result.bobCount).toBeGreaterThanOrEqual(1);
+    expect(result.carolCount).toBeGreaterThanOrEqual(1);
+    expect(result.bobPayload).toEqual([0xca, 0xfe]);
+    expect(result.carolPayload).toEqual([0xca, 0xfe]);
+  });
 });
