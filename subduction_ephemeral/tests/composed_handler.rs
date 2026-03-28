@@ -6,6 +6,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use future_form::Sendable;
+use nonempty::NonEmpty;
 use sedimentree_core::{
     codec::{
         decode::Decode,
@@ -350,7 +351,7 @@ fn as_batch_sync_response_returns_none_for_other_sync() {
 #[test]
 fn as_batch_sync_response_returns_none_for_ephemeral() {
     let wire = TestWireMessage::Ephemeral(EphemeralMessage::Subscribe {
-        topics: nonempty::NonEmpty::new(Topic::new([0xDD; 32])),
+        topics: NonEmpty::new(Topic::new([0xDD; 32])),
     });
 
     let extracted =

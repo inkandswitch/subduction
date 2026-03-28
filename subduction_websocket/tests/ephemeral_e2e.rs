@@ -12,6 +12,7 @@ use std::{
 };
 
 use future_form::Sendable;
+use nonempty::nonempty;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_core::{
     connection::Connection, handshake::audience::Audience, peer::id::PeerId,
@@ -107,7 +108,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     // Send a Subscribe message.
     let sub = EphemeralMessage::Subscribe {
-        topics: nonempty::nonempty![Topic::new([0xBB; 32]), Topic::new([0xCC; 32])],
+        topics: nonempty![Topic::new([0xBB; 32]), Topic::new([0xCC; 32])],
     };
     Connection::<Sendable, EphemeralMessage>::send(&client, &sub).await?;
 

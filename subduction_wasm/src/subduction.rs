@@ -18,6 +18,7 @@ use futures::{
     stream::Aborted,
 };
 use js_sys::Uint8Array;
+use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
@@ -1148,7 +1149,7 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = subscribeEphemeral)]
     pub async fn subscribe_ephemeral(&self, topics: Vec<WasmTopic>) {
         let topics: Vec<Topic> = topics.into_iter().map(Topic::from).collect();
-        if let Some(topics) = nonempty::NonEmpty::from_vec(topics) {
+        if let Some(topics) = NonEmpty::from_vec(topics) {
             self.ephemeral_handler.subscribe(topics).await;
         }
     }
@@ -1158,7 +1159,7 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = unsubscribeEphemeral)]
     pub async fn unsubscribe_ephemeral(&self, topics: Vec<WasmTopic>) {
         let topics: Vec<Topic> = topics.into_iter().map(Topic::from).collect();
-        if let Some(topics) = nonempty::NonEmpty::from_vec(topics) {
+        if let Some(topics) = NonEmpty::from_vec(topics) {
             self.ephemeral_handler.unsubscribe(topics).await;
         }
     }

@@ -32,7 +32,7 @@ use crate::{
     clock::Clock,
     config::{EphemeralConfig, EphemeralEvent},
     message::EphemeralMessage,
-    nonce_cache::NonceCache,
+    nonce_cache::EphemeralNonceCache,
     policy::EphemeralPolicy,
     topic::Topic,
 };
@@ -57,7 +57,7 @@ pub struct EphemeralHandler<F: FutureForm, C: Clone + 'static, E: EphemeralPolic
     max_payload_size: usize,
     max_message_age: core::time::Duration,
     clock: Clk,
-    nonce_cache: Arc<Mutex<NonceCache>>,
+    nonce_cache: Arc<Mutex<EphemeralNonceCache>>,
 }
 
 impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone, Clk: Clock> Clone
@@ -111,7 +111,9 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
             max_payload_size: config.max_payload_size,
             max_message_age: config.max_message_age,
             clock,
-            nonce_cache: Arc::new(Mutex::new(NonceCache::new(config.nonce_window_duration))),
+            nonce_cache: Arc::new(Mutex::new(EphemeralNonceCache::new(
+                config.nonce_window_duration,
+            ))),
         };
 
         (handler, rx)
