@@ -6,23 +6,25 @@
 //! that an attacker cannot flush nonces by volume — eviction is
 //! solely time-driven.
 
+use core::time::Duration;
+
 use sedimentree_core::collections::{Map, Set};
+use subduction_core::{peer::id::PeerId, timestamp::TimestampSeconds};
 
 use crate::topic::Topic;
-use subduction_core::peer::id::PeerId;
 
 /// A single time-bucketed set of nonces.
 #[derive(Debug, Clone)]
 struct NonceBucket {
     nonces: Set<u64>,
-    rotated_at_ms: u64,
+    rotated_at: TimestampSeconds,
 }
 
 impl NonceBucket {
-    fn new(now_ms: u64) -> Self {
+    fn new(now: TimestampSeconds) -> Self {
         Self {
             nonces: Set::new(),
-            rotated_at_ms: now_ms,
+            rotated_at: now,
         }
     }
 }
@@ -30,7 +32,7 @@ impl NonceBucket {
 /// Time-bucketed nonce deduplication cache.
 ///
 /// Maintains two buckets per `(sender, topic)` pair. On each check,
-/// if the current bucket is older than `window_duration_ms`, the
+/// if the current bucket is older than `window_duration`, the
 /// previous bucket is discarded, current becomes previous, and a
 /// fresh current is created.
 ///
@@ -39,16 +41,16 @@ impl NonceBucket {
 #[derive(Debug, Clone)]
 pub struct NonceCache {
     windows: Map<(PeerId, Topic), [NonceBucket; 2]>,
-    window_duration_ms: u64,
+    window_duration: Duration,
 }
 
 impl NonceCache {
     /// Create a new nonce cache with the given window duration.
     #[must_use]
-    pub fn new(window_duration_ms: u64) -> Self {
+    pub fn new(window_duration: Duration) -> Self {
         Self {
             windows: Map::new(),
-            window_duration_ms,
+            window_duration,
         }
     }
 
@@ -64,17 +66,17 @@ impl NonceCache {
         sender: PeerId,
         topic: Topic,
         nonce: u64,
-        now_ms: u64,
+        now: TimestampSeconds,
     ) -> bool {
         let key = (sender, topic);
         let [current, previous] = self
             .windows
             .entry(key)
-            .or_insert_with(|| [NonceBucket::new(now_ms), NonceBucket::new(now_ms)]);
+            .or_insert_with(|| [NonceBucket::new(now), NonceBucket::new(now)]);
 
         // Rotate if the current bucket has expired.
-        if now_ms.saturating_sub(current.rotated_at_ms) > self.window_duration_ms {
-            *previous = core::mem::replace(current, NonceBucket::new(now_ms));
+        if current.rotated_at.abs_diff(now) > self.window_duration {
+            *previous = core::mem::replace(current, NonceBucket::new(now));
         }
 
         // Check for duplicate in both buckets.
@@ -104,81 +106,85 @@ mod tests {
         Topic::new([n; 32])
     }
 
+    fn ts(secs: u64) -> TimestampSeconds {
+        TimestampSeconds::new(secs)
+    }
+
     #[test]
     fn new_nonce_accepted() {
-        let mut cache = NonceCache::new(30_000);
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 1000));
+        let mut cache = NonceCache::new(Duration::from_secs(30));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
     }
 
     #[test]
     fn duplicate_nonce_rejected() {
-        let mut cache = NonceCache::new(30_000);
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 1000));
-        assert!(!cache.check_and_insert(peer(1), topic(1), 42, 1000));
+        let mut cache = NonceCache::new(Duration::from_secs(30));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+        assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
     }
 
     #[test]
     fn same_nonce_different_sender_accepted() {
-        let mut cache = NonceCache::new(30_000);
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 1000));
-        assert!(cache.check_and_insert(peer(2), topic(1), 42, 1000));
+        let mut cache = NonceCache::new(Duration::from_secs(30));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+        assert!(cache.check_and_insert(peer(2), topic(1), 42, ts(1000)));
     }
 
     #[test]
     fn same_nonce_different_topic_accepted() {
-        let mut cache = NonceCache::new(30_000);
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 1000));
-        assert!(cache.check_and_insert(peer(1), topic(2), 42, 1000));
+        let mut cache = NonceCache::new(Duration::from_secs(30));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+        assert!(cache.check_and_insert(peer(1), topic(2), 42, ts(1000)));
     }
 
     #[test]
     fn nonce_survives_in_previous_bucket() {
-        let mut cache = NonceCache::new(1000);
+        let mut cache = NonceCache::new(Duration::from_secs(10));
         // Insert at t=100
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 100));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
         // Advance past one window — nonce rotates to previous bucket
-        assert!(!cache.check_and_insert(peer(1), topic(1), 42, 1200));
+        assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(112)));
     }
 
     #[test]
     fn nonce_evicted_after_two_windows() {
-        let mut cache = NonceCache::new(1000);
+        let mut cache = NonceCache::new(Duration::from_secs(10));
         // Insert at t=100
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 100));
-        // First rotation at t=1200 — nonce moves to previous
-        assert!(cache.check_and_insert(peer(1), topic(1), 99, 1200));
-        // Second rotation at t=2300 — previous (with nonce 42) is discarded
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 2300));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
+        // First rotation at t=112 — nonce moves to previous
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(112)));
+        // Second rotation at t=123 — previous (with nonce 42) is discarded
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(123)));
     }
 
     #[test]
     fn remove_peer_clears_entries() {
-        let mut cache = NonceCache::new(30_000);
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 1000));
-        assert!(cache.check_and_insert(peer(1), topic(2), 43, 1000));
-        assert!(cache.check_and_insert(peer(2), topic(1), 44, 1000));
+        let mut cache = NonceCache::new(Duration::from_secs(30));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+        assert!(cache.check_and_insert(peer(1), topic(2), 43, ts(1000)));
+        assert!(cache.check_and_insert(peer(2), topic(1), 44, ts(1000)));
 
         cache.remove_peer(peer(1));
 
         // Peer 1 nonces are gone — re-insert succeeds
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, 1000));
-        assert!(cache.check_and_insert(peer(1), topic(2), 43, 1000));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+        assert!(cache.check_and_insert(peer(1), topic(2), 43, ts(1000)));
         // Peer 2 unaffected — duplicate still rejected
-        assert!(!cache.check_and_insert(peer(2), topic(1), 44, 1000));
+        assert!(!cache.check_and_insert(peer(2), topic(1), 44, ts(1000)));
     }
 
     #[test]
     fn volume_cannot_flush_cache() {
-        let mut cache = NonceCache::new(30_000);
+        let mut cache = NonceCache::new(Duration::from_secs(30));
         // Insert the target nonce
-        assert!(cache.check_and_insert(peer(1), topic(1), 1, 1000));
+        assert!(cache.check_and_insert(peer(1), topic(1), 1, ts(1000)));
 
         // Send 10,000 unique nonces — all at the same time (no rotation)
         for nonce in 2..10_002 {
-            assert!(cache.check_and_insert(peer(1), topic(1), nonce, 1000));
+            assert!(cache.check_and_insert(peer(1), topic(1), nonce, ts(1000)));
         }
 
         // Target nonce is still tracked
-        assert!(!cache.check_and_insert(peer(1), topic(1), 1, 1000));
+        assert!(!cache.check_and_insert(peer(1), topic(1), 1, ts(1000)));
     }
 }

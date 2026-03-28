@@ -12,9 +12,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
-use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
-use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
+use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
+use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
+use subduction_keyhive::{KeyhiveMessage, KEYHIVE_SCHEMA};
 
 /// Composed wire message for the CLI server.
 ///
@@ -155,7 +155,7 @@ mod tests {
                 nonce: 42,
                 timestamp_ms: 1_700_000_000_000,
                 payload: vec![10, 20, 30],
-                signature: [0; 64],
+                signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
             });
 
             let encoded = msg.encode();

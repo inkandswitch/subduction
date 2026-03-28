@@ -294,7 +294,7 @@ async fn dispatch_ephemeral_message_to_ephemeral_handler() -> TestResult {
         nonce: 42,
         timestamp_ms: 1_700_000_000_000,
         payload: vec![1, 2, 3],
-        signature: [0; 64],
+        signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
     };
     let wire: TestWireMessage = eph_msg.clone().into();
 

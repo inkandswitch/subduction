@@ -3,6 +3,8 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use subduction_core::timestamp::TimestampSeconds;
+
 use super::Clock;
 
 /// A test [`Clock`] with manually-controlled time.
@@ -10,42 +12,43 @@ use super::Clock;
 /// # Example
 ///
 /// ```
+/// use subduction_core::timestamp::TimestampSeconds;
 /// use subduction_ephemeral::clock::Clock;
 /// use subduction_ephemeral::clock::fake::FakeClock;
 ///
-/// let clock = FakeClock::new(1_000);
-/// assert_eq!(clock.now_utc_ms(), 1_000);
+/// let clock = FakeClock::new(TimestampSeconds::new(1_000));
+/// assert_eq!(clock.now().as_secs(), 1_000);
 ///
-/// clock.advance_ms(500);
-/// assert_eq!(clock.now_utc_ms(), 1_500);
+/// clock.advance_secs(500);
+/// assert_eq!(clock.now().as_secs(), 1_500);
 /// ```
 #[derive(Debug, Clone)]
 pub struct FakeClock {
-    ms: Arc<AtomicU64>,
+    secs: Arc<AtomicU64>,
 }
 
 impl FakeClock {
-    /// Create a new [`FakeClock`] at the given UTC milliseconds.
+    /// Create a new [`FakeClock`] at the given time.
     #[must_use]
-    pub fn new(initial_ms: u64) -> Self {
+    pub fn new(initial: TimestampSeconds) -> Self {
         Self {
-            ms: Arc::new(AtomicU64::new(initial_ms)),
+            secs: Arc::new(AtomicU64::new(initial.as_secs())),
         }
     }
 
-    /// Advance the clock by `delta` milliseconds.
-    pub fn advance_ms(&self, delta: u64) {
-        self.ms.fetch_add(delta, Ordering::Relaxed);
+    /// Advance the clock by `delta` seconds.
+    pub fn advance_secs(&self, delta: u64) {
+        self.secs.fetch_add(delta, Ordering::Relaxed);
     }
 
-    /// Set the clock to an exact UTC millisecond value.
-    pub fn set_ms(&self, ms: u64) {
-        self.ms.store(ms, Ordering::Relaxed);
+    /// Set the clock to an exact value.
+    pub fn set(&self, ts: TimestampSeconds) {
+        self.secs.store(ts.as_secs(), Ordering::Relaxed);
     }
 }
 
 impl Clock for FakeClock {
-    fn now_utc_ms(&self) -> u64 {
-        self.ms.load(Ordering::Relaxed)
+    fn now(&self) -> TimestampSeconds {
+        TimestampSeconds::new(self.secs.load(Ordering::Relaxed))
     }
 }

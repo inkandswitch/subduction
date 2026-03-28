@@ -21,11 +21,11 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_ephemeral::{message::EphemeralMessage, topic::Topic};
 use subduction_websocket::{
-    DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
-        TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
-        unified::UnifiedWebSocket,
+        client::TokioWebSocketClient, server::TokioWebSocketServer, unified::UnifiedWebSocket,
+        TimeoutTokio, TokioSpawn,
     },
+    DEFAULT_MAX_MESSAGE_SIZE,
 };
 use testresult::TestResult;
 
@@ -104,7 +104,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
         nonce: 42,
         timestamp_ms: 1_700_000_000_000,
         payload: vec![10, 20, 30, 40, 50],
-        signature: [0; 64],
+        signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
     };
     Connection::<Sendable, EphemeralMessage>::send(&client, &msg).await?;
 
@@ -186,7 +186,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
         nonce: 43,
         timestamp_ms: 1_700_000_000_000,
         payload: vec![42],
-        signature: [0; 64],
+        signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
     };
     Connection::<Sendable, EphemeralMessage>::send(&client, &eph).await?;
 

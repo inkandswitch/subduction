@@ -688,7 +688,9 @@ mod tests {
             ref mut signature, ..
         } = msg
         {
-            signature[0] ^= 0xFF;
+            let mut bytes = signature.to_bytes();
+            bytes[0] ^= 0xFF;
+            *signature = Signature::from_bytes(&bytes);
         }
         assert!(msg.verify_signature().is_err());
     }
