@@ -47,9 +47,6 @@ pub const EPHEMERAL_SCHEMA: [u8; 4] = *b"SUE\x00";
 /// Minimum envelope size: `schema(4) + total_size(4) + tag(1)`.
 const ENVELOPE_HEADER_SIZE: usize = 4 + 4 + 1;
 
-/// Size of the Ed25519 signature appended to `Ephemeral` messages.
-const SIGNATURE_SIZE: usize = 64;
-
 mod tags {
     pub(super) const EPHEMERAL: u8 = 0x00;
     pub(super) const SUBSCRIBE: u8 = 0x01;
@@ -58,10 +55,8 @@ mod tags {
 }
 
 mod min_sizes {
-    use super::SIGNATURE_SIZE;
-
-    // sender(32) + sed_id(32) + nonce(8) + timestamp_ms(8) + payload_len(bijou64 min=1) + signature(64)
-    pub(super) const EPHEMERAL: usize = 32 + 32 + 8 + 8 + 1 + SIGNATURE_SIZE;
+    // sender(32) + topic(32) + nonce(8) + timestamp_ms(8) + payload_len(bijou64 min=1) + signature(64)
+    pub(super) const EPHEMERAL: usize = 32 + 32 + 8 + 8 + 1 + 64;
     // count(2)
     pub(super) const SUBSCRIBE: usize = 2;
     // count(2)
@@ -100,7 +95,7 @@ pub enum EphemeralMessage {
         payload: Vec<u8>,
         /// Ed25519 signature over
         /// `sender || id || nonce || timestamp_ms || payload_len || payload`.
-        signature: [u8; SIGNATURE_SIZE],
+        signature: Signature,
     },
 
     /// Subscribe to ephemeral messages for the given sedimentree IDs.
@@ -196,10 +191,8 @@ impl EphemeralMessage {
         let verifying_key = VerifyingKey::from_bytes(sender.as_bytes())
             .map_err(|_| SignatureError::InvalidSenderKey)?;
 
-        let sig = Signature::from_bytes(signature);
-
         verifying_key
-            .verify_strict(&signed_bytes, &sig)
+            .verify_strict(&signed_bytes, signature)
             .map_err(|_| SignatureError::InvalidSignature)
     }
 
@@ -228,7 +221,7 @@ impl EphemeralMessage {
         bijou64::encode(payload.len() as u64, &mut signed_buf);
         signed_buf.extend_from_slice(&payload);
 
-        let sig = signer.sign(&signed_buf).await;
+        let signature = signer.sign(&signed_buf).await;
 
         Self::Ephemeral {
             sender,
@@ -236,7 +229,7 @@ impl EphemeralMessage {
             nonce,
             timestamp_ms,
             payload,
-            signature: sig.to_bytes(),
+            signature,
         }
     }
 
@@ -250,7 +243,7 @@ impl EphemeralMessage {
                     + 8
                     + bijou64::encoded_len(payload.len() as u64)
                     + payload.len()
-                    + SIGNATURE_SIZE
+                    + Signature::BYTE_SIZE
             }
             Self::Subscribe { ids }
             | Self::Unsubscribe { ids }
@@ -342,7 +335,7 @@ fn encode_ephemeral(
     nonce: u64,
     timestamp_ms: u64,
     payload: &[u8],
-    signature: &[u8; SIGNATURE_SIZE],
+    signature: &Signature,
 ) {
     buf.extend_from_slice(sender.as_bytes());
     buf.extend_from_slice(id.as_bytes());
@@ -351,7 +344,7 @@ fn encode_ephemeral(
     #[allow(clippy::cast_possible_truncation)]
     bijou64::encode(payload.len() as u64, buf);
     buf.extend_from_slice(payload);
-    buf.extend_from_slice(signature);
+    buf.extend_from_slice(&signature.to_bytes());
 }
 
 fn encode_id_list(buf: &mut Vec<u8>, ids: &[Topic]) {
