@@ -21,11 +21,11 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_ephemeral::{message::EphemeralMessage, topic::Topic};
 use subduction_websocket::{
-    tokio::{
-        client::TokioWebSocketClient, server::TokioWebSocketServer, unified::UnifiedWebSocket,
-        TimeoutTokio, TokioSpawn,
-    },
     DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{
+        TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+        unified::UnifiedWebSocket,
+    },
 };
 use testresult::TestResult;
 

@@ -15,7 +15,7 @@ use subduction_core::{
     authenticated::Authenticated, connection::test_utils::ChannelMockConnection, handler::Handler,
     peer::id::PeerId,
 };
-use subduction_crypto::signer::{memory::MemorySigner, Signer};
+use subduction_crypto::signer::{Signer, memory::MemorySigner};
 use subduction_ephemeral::{
     clock::fake::FakeClock,
     config::{EphemeralConfig, EphemeralEvent},
