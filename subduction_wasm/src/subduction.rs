@@ -1112,9 +1112,12 @@ impl WasmSubduction {
     ///
     /// The payload is opaque bytes — encoding is the caller's responsibility.
     /// Messages are fire-and-forget; delivery is best-effort.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform's random number generator fails.
     #[wasm_bindgen(js_name = publishEphemeral)]
     #[allow(
-        clippy::missing_panics_doc,
         clippy::expect_used,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
@@ -1125,6 +1128,7 @@ impl WasmSubduction {
             getrandom::getrandom(&mut buf).expect("getrandom failed");
             u64::from_le_bytes(buf)
         };
+        // Date.now() returns f64 ms since epoch; truncation/sign-loss safe for ~584M years.
         let timestamp_ms = js_sys::Date::now() as u64;
         let msg = EphemeralMessage::new_signed::<Local, _>(
             self.core.signer(),

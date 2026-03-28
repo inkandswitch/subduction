@@ -474,7 +474,8 @@ fn decode_ephemeral(payload: &[u8]) -> Result<EphemeralMessage, DecodeError> {
         .to_vec();
     offset += payload_len;
 
-    let signature: [u8; SIGNATURE_SIZE] = read_array::<SIGNATURE_SIZE>(payload, &mut offset)?;
+    let signature_bytes: [u8; 64] = read_array::<64>(payload, &mut offset)?;
+    let signature = Signature::from_bytes(&signature_bytes);
 
     Ok(EphemeralMessage::Ephemeral {
         sender,
@@ -556,7 +557,7 @@ mod tests {
             nonce: 0x1234_5678_9ABC_DEF0,
             timestamp_ms: 1_700_000_000_000,
             payload,
-            signature: [0xCC; 64],
+            signature: Signature::from_bytes(&[0xCC; 64]),
         }
     }
 
