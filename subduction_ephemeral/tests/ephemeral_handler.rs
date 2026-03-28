@@ -17,7 +17,7 @@ use subduction_core::{
 };
 use subduction_crypto::signer::{memory::MemorySigner, Signer};
 use subduction_ephemeral::{
-    clock::FakeClock,
+    clock::fake::FakeClock,
     config::{EphemeralConfig, EphemeralEvent},
     handler::EphemeralHandler,
     message::EphemeralMessage,
@@ -83,20 +83,20 @@ async fn register_peer(connections: &Connections, peer_id: PeerId) -> (EphAuth, 
     (auth, handle)
 }
 
+/// Timestamp used by the `FakeClock` in test handlers.
+const TEST_CLOCK_MS: u64 = 1_000_000;
+
 /// Create a signed ephemeral message using a deterministic signer.
+///
+/// Uses [`TEST_CLOCK_MS`] as the timestamp so the handler's age check
+/// passes (the `FakeClock` is initialized to the same value).
 async fn make_signed_ephemeral(
     signer: &MemorySigner,
     id: Topic,
     payload: Vec<u8>,
 ) -> EphemeralMessage {
-    EphemeralMessage::new_signed::<Sendable, _>(
-        signer,
-        id,
-        rand_nonce(),
-        1_700_000_000_000,
-        payload,
-    )
-    .await
+    EphemeralMessage::new_signed::<Sendable, _>(signer, id, rand_nonce(), TEST_CLOCK_MS, payload)
+        .await
 }
 
 fn rand_nonce() -> u64 {

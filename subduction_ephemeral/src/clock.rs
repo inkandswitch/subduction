@@ -1,12 +1,10 @@
 //! Wall-clock time source for time-bucketed nonce eviction.
 
-#[cfg(feature = "std")]
-mod fake;
-#[cfg(feature = "std")]
-mod std_clock;
+#[cfg(feature = "test_utils")]
+pub mod fake;
 
 #[cfg(feature = "std")]
-pub use self::{fake::FakeClock, std_clock::StdClock};
+pub mod std_clock;
 
 /// Wall-clock time source for time-bucketed nonce eviction.
 ///

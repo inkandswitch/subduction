@@ -1,7 +1,7 @@
 //! Test [`Clock`] with manually-controlled time.
 
 use alloc::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::Clock;
 
@@ -10,7 +10,8 @@ use super::Clock;
 /// # Example
 ///
 /// ```
-/// use subduction_ephemeral::clock::{Clock, FakeClock};
+/// use subduction_ephemeral::clock::Clock;
+/// use subduction_ephemeral::clock::fake::FakeClock;
 ///
 /// let clock = FakeClock::new(1_000);
 /// assert_eq!(clock.now_utc_ms(), 1_000);
