@@ -1150,7 +1150,9 @@ impl WasmSubduction {
             .into_iter()
             .map(|id| Topic::from(SedimentreeId::from(id)))
             .collect();
-        self.ephemeral_handler.subscribe(topics).await;
+        if let Some(topics) = nonempty::NonEmpty::from_vec(topics) {
+            self.ephemeral_handler.subscribe(topics).await;
+        }
     }
 
     /// Unsubscribe from ephemeral messages for the given sedimentree IDs
@@ -1161,7 +1163,9 @@ impl WasmSubduction {
             .into_iter()
             .map(|id| Topic::from(SedimentreeId::from(id)))
             .collect();
-        self.ephemeral_handler.unsubscribe(topics).await;
+        if let Some(topics) = nonempty::NonEmpty::from_vec(topics) {
+            self.ephemeral_handler.unsubscribe(topics).await;
+        }
     }
 
     // ── Queries ──────────────────────────────────────────────────────────

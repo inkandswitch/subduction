@@ -205,70 +205,63 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
         }
     }
 
-    /// Subscribe to ephemeral messages for the given sedimentree IDs.
+    /// Subscribe to ephemeral messages for the given topics.
     ///
-    /// Sends `Subscribe` to all connected peers and tracks the IDs so
+    /// Sends `Subscribe` to all connected peers and tracks the topics so
     /// that newly connected peers (via [`subscribe_peer`](Self::subscribe_peer))
     /// also receive the subscription request.
-    pub async fn subscribe(&self, ids: Vec<Topic>)
+    pub async fn subscribe(&self, topics: NonEmpty<Topic>)
     where
         C: Connection<F, EphemeralMessage>,
     {
-        if ids.is_empty() {
-            return;
-        }
-
         {
             let mut outgoing = self.outgoing_subscriptions.lock().await;
-            for id in &ids {
-                outgoing.insert(*id);
+            for topic in &topics {
+                outgoing.insert(*topic);
             }
         }
 
-        let msg = EphemeralMessage::Subscribe { ids };
+        let msg = EphemeralMessage::Subscribe { topics };
         self.send_to_all_peers(&msg).await;
     }
 
-    /// Unsubscribe from ephemeral messages for the given sedimentree IDs.
+    /// Unsubscribe from ephemeral messages for the given topics.
     ///
-    /// Sends `Unsubscribe` to all connected peers and removes the IDs
+    /// Sends `Unsubscribe` to all connected peers and removes the topics
     /// from outgoing subscription tracking.
-    pub async fn unsubscribe(&self, ids: Vec<Topic>)
+    pub async fn unsubscribe(&self, topics: NonEmpty<Topic>)
     where
         C: Connection<F, EphemeralMessage>,
     {
-        if ids.is_empty() {
-            return;
-        }
-
         {
             let mut outgoing = self.outgoing_subscriptions.lock().await;
-            for id in &ids {
-                outgoing.remove(id);
+            for topic in &topics {
+                outgoing.remove(topic);
             }
         }
 
-        let msg = EphemeralMessage::Unsubscribe { ids };
+        let msg = EphemeralMessage::Unsubscribe { topics };
         self.send_to_all_peers(&msg).await;
     }
 
     /// Send current outgoing ephemeral subscriptions to a specific peer.
     ///
     /// Call this after a new peer connects so they know to send us
-    /// ephemeral messages for our subscribed sedimentree IDs.
+    /// ephemeral messages for our subscribed topics.
     pub async fn subscribe_peer(&self, peer_id: PeerId)
     where
         C: Connection<F, EphemeralMessage>,
     {
-        let ids: Vec<Topic> = {
+        let topics: NonEmpty<Topic> = {
             let outgoing = self.outgoing_subscriptions.lock().await;
-            if outgoing.is_empty() {
+            let topics: Vec<Topic> = outgoing.iter().copied().collect();
+            let Some(topics) = NonEmpty::from_vec(topics) else {
                 return;
-            }
-            outgoing.iter().copied().collect()
+            };
+            topics
         };
 
-        let msg = EphemeralMessage::Subscribe { ids };
+        let msg = EphemeralMessage::Subscribe { topics };
 
         let targets: Vec<Authenticated<C, F>> = {
             let conns = self.connections.lock().await;
@@ -382,11 +375,11 @@ impl<
             EphemeralMessage::Ephemeral { .. } => {
                 self.recv_ephemeral(conn, message).await;
             }
-            EphemeralMessage::Subscribe { ids } => {
-                self.recv_subscribe(conn, ids).await;
+            EphemeralMessage::Subscribe { topics } => {
+                self.recv_subscribe(conn, topics).await;
             }
-            EphemeralMessage::Unsubscribe { ids } => {
-                self.recv_unsubscribe(conn, ids).await;
+            EphemeralMessage::Unsubscribe { topics } => {
+                self.recv_unsubscribe(conn, topics).await;
             }
             EphemeralMessage::SubscribeRejected { .. } => {
                 // Informational — nothing to do on the handler side.
@@ -552,27 +545,27 @@ impl<
     }
 
     /// Handle a subscribe request from a peer.
-    async fn recv_subscribe(&self, conn: &Authenticated<C, F>, ids: Vec<Topic>) {
+    async fn recv_subscribe(&self, conn: &Authenticated<C, F>, topics: NonEmpty<Topic>) {
         let peer = conn.peer_id();
         let mut rejected = Vec::new();
 
-        for id in &ids {
-            if let Err(e) = self.policy.authorize_subscribe(peer, *id).await {
+        for topic in &topics {
+            if let Err(e) = self.policy.authorize_subscribe(peer, *topic).await {
                 debug!(
                     peer = %peer,
-                    id = %id,
+                    topic = %topic,
                     error = %e,
                     "ephemeral subscribe rejected"
                 );
-                rejected.push(*id);
+                rejected.push(*topic);
             } else {
                 let mut subs = self.ephemeral_subscriptions.lock().await;
-                subs.entry(*id).or_default().insert(peer);
+                subs.entry(*topic).or_default().insert(peer);
             }
         }
 
-        if !rejected.is_empty() {
-            let msg = EphemeralMessage::SubscribeRejected { ids: rejected };
+        if let Some(rejected) = NonEmpty::from_vec(rejected) {
+            let msg = EphemeralMessage::SubscribeRejected { topics: rejected };
             if let Err(e) = conn.send(&msg).await {
                 debug!(
                     peer = %peer,
@@ -584,15 +577,15 @@ impl<
     }
 
     /// Handle an unsubscribe request from a peer.
-    async fn recv_unsubscribe(&self, conn: &Authenticated<C, F>, ids: Vec<Topic>) {
+    async fn recv_unsubscribe(&self, conn: &Authenticated<C, F>, topics: NonEmpty<Topic>) {
         let peer = conn.peer_id();
         let mut subs = self.ephemeral_subscriptions.lock().await;
 
-        for id in &ids {
-            if let Some(peers) = subs.get_mut(id) {
+        for topic in &topics {
+            if let Some(peers) = subs.get_mut(topic) {
                 peers.remove(&peer);
                 if peers.is_empty() {
-                    subs.remove(id);
+                    subs.remove(topic);
                 }
             }
         }

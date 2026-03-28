@@ -111,7 +111,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     // Send a Subscribe message.
     let sub = EphemeralMessage::Subscribe {
-        ids: vec![topic(0xBB), topic(0xCC)],
+        topics: nonempty::nonempty![topic(0xBB), topic(0xCC)],
     };
     Connection::<Sendable, EphemeralMessage>::send(&client, &sub).await?;
 

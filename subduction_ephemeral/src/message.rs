@@ -224,7 +224,7 @@ impl EphemeralMessage {
     }
 
     /// Payload byte count (after the tag byte, before the envelope header).
-    const fn payload_size(&self) -> usize {
+    fn payload_size(&self) -> usize {
         match self {
             Self::Ephemeral { payload, .. } => {
                 // sender(32) + id(32) + nonce(8) + timestamp_ms(8) + payload_len(bijou64) + payload + signature(64)
@@ -579,8 +579,9 @@ mod tests {
 
     #[test]
     fn subscribe_roundtrip() {
-        let ids = vec![Topic::new([0x01; 32]), Topic::new([0x02; 32])];
-        let msg = EphemeralMessage::Subscribe { ids: ids.clone() };
+        let mut topics = NonEmpty::new(Topic::new([0x01; 32]));
+        topics.push(Topic::new([0x02; 32]));
+        let msg = EphemeralMessage::Subscribe { topics };
 
         let encoded = msg.encode();
         let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
@@ -590,8 +591,8 @@ mod tests {
 
     #[test]
     fn unsubscribe_roundtrip() {
-        let ids = vec![Topic::new([0xFF; 32])];
-        let msg = EphemeralMessage::Unsubscribe { ids };
+        let topics = NonEmpty::new(Topic::new([0xFF; 32]));
+        let msg = EphemeralMessage::Unsubscribe { topics };
 
         let encoded = msg.encode();
         let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
@@ -601,8 +602,8 @@ mod tests {
 
     #[test]
     fn subscribe_rejected_roundtrip() {
-        let ids = vec![Topic::new([0x42; 32])];
-        let msg = EphemeralMessage::SubscribeRejected { ids };
+        let topics = NonEmpty::new(Topic::new([0x42; 32]));
+        let msg = EphemeralMessage::SubscribeRejected { topics };
 
         let encoded = msg.encode();
         let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
@@ -611,18 +612,26 @@ mod tests {
     }
 
     #[test]
-    fn empty_subscribe_roundtrip() {
-        let msg = EphemeralMessage::Subscribe { ids: vec![] };
+    fn empty_topic_list_rejected() {
+        // Manually craft a Subscribe with count=0 on the wire.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&EPHEMERAL_SCHEMA);
+        let total_size: u32 = (4 + 4 + 1 + 2) as u32; // schema + size + tag + count(0)
+        buf.extend_from_slice(&total_size.to_be_bytes());
+        buf.push(tags::SUBSCRIBE);
+        buf.extend_from_slice(&0_u16.to_be_bytes()); // count = 0
 
-        let encoded = msg.encode();
-        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
-
-        assert_eq!(decoded, msg);
+        let err = EphemeralMessage::try_decode(&buf).unwrap_err();
+        assert!(
+            matches!(err, DecodeError::MessageTooShort { .. }),
+            "expected MessageTooShort for empty topic list, got {err:?}"
+        );
     }
 
     #[test]
     fn wrong_schema_rejected() {
-        let msg = EphemeralMessage::Subscribe { ids: vec![] };
+        let topics = NonEmpty::new(Topic::new([0x01; 32]));
+        let msg = EphemeralMessage::Subscribe { topics };
         let mut encoded = msg.encode();
         // Tamper the schema: SUE -> SUM
         encoded[2] = b'M';
@@ -636,7 +645,8 @@ mod tests {
 
     #[test]
     fn invalid_tag_rejected() {
-        let msg = EphemeralMessage::Subscribe { ids: vec![] };
+        let topics = NonEmpty::new(Topic::new([0x01; 32]));
+        let msg = EphemeralMessage::Subscribe { topics };
         let mut encoded = msg.encode();
         // Tamper the tag byte (offset 8)
         encoded[8] = 0xFF;
@@ -668,7 +678,8 @@ mod tests {
 
     #[test]
     fn non_ephemeral_has_no_signed_bytes() {
-        let msg = EphemeralMessage::Subscribe { ids: vec![] };
+        let topics = NonEmpty::new(Topic::new([0x01; 32]));
+        let msg = EphemeralMessage::Subscribe { topics };
         assert!(msg.signed_bytes().is_none());
     }
 

@@ -121,7 +121,7 @@ async fn subscribe_adds_peer() -> TestResult {
         .handle(
             &auth,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(0xAA)],
+                topics: NonEmpty::new(topic(0xAA)),
             },
         )
         .await?;
@@ -160,7 +160,7 @@ async fn unsubscribe_removes_peer() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(0xBB)],
+                topics: NonEmpty::new(topic(0xBB)),
             },
         )
         .await?;
@@ -168,7 +168,7 @@ async fn unsubscribe_removes_peer() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Unsubscribe {
-                ids: vec![topic(0xBB)],
+                topics: NonEmpty::new(topic(0xBB)),
             },
         )
         .await?;
@@ -194,7 +194,7 @@ async fn subscribe_multiple_topics() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(1), topic(2)],
+                topics: NonEmpty::from_vec(vec![topic(1), topic(2)]).expect("non-empty"),
             },
         )
         .await?;
@@ -226,7 +226,7 @@ async fn fan_out_excludes_sender() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(0xCC)],
+                topics: NonEmpty::new(topic(0xCC)),
             },
         )
         .await?;
@@ -255,7 +255,7 @@ async fn fan_out_to_multiple_subscribers() -> TestResult {
             .handle(
                 auth,
                 EphemeralMessage::Subscribe {
-                    ids: vec![topic(0xDD)],
+                    topics: NonEmpty::new(topic(0xDD)),
                 },
             )
             .await?;
@@ -347,7 +347,7 @@ async fn publish_api_payload_too_large_dropped() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(0x11)],
+                topics: NonEmpty::new(topic(0x11)),
             },
         )
         .await?;
@@ -375,7 +375,7 @@ async fn disconnect_cleans_all_subscriptions() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(1), topic(2)],
+                topics: NonEmpty::from_vec(vec![topic(1), topic(2)]).expect("non-empty"),
             },
         )
         .await?;
@@ -409,7 +409,7 @@ async fn publish_api_sends_to_subscribers() -> TestResult {
         .handle(
             &auth_a,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(0x22)],
+                topics: NonEmpty::new(topic(0x22)),
             },
         )
         .await?;
@@ -498,7 +498,7 @@ async fn subscribe_rejected_by_policy() -> TestResult {
         .handle(
             &auth,
             EphemeralMessage::Subscribe {
-                ids: vec![topic(0xAA), topic(0xBB)],
+                topics: NonEmpty::from_vec(vec![topic(0xAA), topic(0xBB)]).expect("non-empty"),
             },
         )
         .await?;
@@ -506,10 +506,10 @@ async fn subscribe_rejected_by_policy() -> TestResult {
     let rejected =
         tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv()).await??;
     match rejected {
-        EphemeralMessage::SubscribeRejected { ids } => {
-            assert_eq!(ids.len(), 2);
-            assert!(ids.contains(&topic(0xAA)));
-            assert!(ids.contains(&topic(0xBB)));
+        EphemeralMessage::SubscribeRejected { topics } => {
+            assert_eq!(topics.len(), 2);
+            assert!(topics.contains(&topic(0xAA)));
+            assert!(topics.contains(&topic(0xBB)));
         }
         other @ (EphemeralMessage::Ephemeral { .. }
         | EphemeralMessage::Subscribe { .. }
@@ -558,7 +558,7 @@ async fn subscribe_rejected_message_is_noop() -> TestResult {
         .handle(
             &auth,
             EphemeralMessage::SubscribeRejected {
-                ids: vec![topic(0xFF)],
+                topics: NonEmpty::new(topic(0xFF)),
             },
         )
         .await?;

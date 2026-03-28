@@ -350,7 +350,7 @@ fn as_batch_sync_response_returns_none_for_other_sync() {
 #[test]
 fn as_batch_sync_response_returns_none_for_ephemeral() {
     let wire = TestWireMessage::Ephemeral(EphemeralMessage::Subscribe {
-        ids: vec![Topic::new([0xDD; 32])],
+        topics: nonempty::NonEmpty::new(Topic::new([0xDD; 32])),
     });
 
     let extracted =
