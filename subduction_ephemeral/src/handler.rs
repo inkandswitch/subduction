@@ -21,10 +21,7 @@ use async_channel::Sender;
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use nonempty::NonEmpty;
-use sedimentree_core::{
-    collections::{Map, Set},
-    id::SedimentreeId,
-};
+use sedimentree_core::collections::{Map, Set};
 use subduction_core::{
     authenticated::Authenticated, connection::Connection, handler::Handler, peer::id::PeerId,
 };
@@ -32,32 +29,39 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::{
+    clock::Clock,
     config::{EphemeralConfig, EphemeralEvent},
     message::EphemeralMessage,
+    nonce_cache::NonceCache,
     policy::EphemeralPolicy,
+    topic::Topic,
 };
 
 /// Handler for ephemeral (non-persisted) messages.
 ///
 /// Manages ephemeral subscriptions, performs authorization via
-/// [`EphemeralPolicy`], and fans out payloads to subscribers.
+/// [`EphemeralPolicy`], verifies signatures on inbound messages,
+/// deduplicates by nonce, and fans out payloads to subscribers.
 ///
 /// Construct via [`new()`](Self::new), which returns both the handler
 /// and a receiver for inbound [`EphemeralEvent`]s.
 #[allow(clippy::type_complexity)]
-pub struct EphemeralHandler<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> {
+pub struct EphemeralHandler<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock> {
     /// Inbound subscriptions: which peers are subscribed to receive ephemeral messages from us.
-    ephemeral_subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+    ephemeral_subscriptions: Arc<Mutex<Map<Topic, Set<PeerId>>>>,
     /// Outbound subscriptions: sedimentree IDs we want to receive ephemeral messages for.
-    outgoing_subscriptions: Arc<Mutex<Set<SedimentreeId>>>,
+    outgoing_subscriptions: Arc<Mutex<Set<Topic>>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
     policy: E,
     callback_tx: Sender<EphemeralEvent>,
     max_payload_size: usize,
+    max_message_age_ms: u64,
+    clock: Clk,
+    nonce_cache: Arc<Mutex<NonceCache>>,
 }
 
-impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone> Clone
-    for EphemeralHandler<F, C, E>
+impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone, Clk: Clock> Clone
+    for EphemeralHandler<F, C, E, Clk>
 {
     fn clone(&self) -> Self {
         Self {
@@ -67,19 +71,24 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone> Clone
             policy: self.policy.clone(),
             callback_tx: self.callback_tx.clone(),
             max_payload_size: self.max_payload_size,
+            max_message_age_ms: self.max_message_age_ms,
+            clock: self.clock.clone(),
+            nonce_cache: self.nonce_cache.clone(),
         }
     }
 }
 
-impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> core::fmt::Debug
-    for EphemeralHandler<F, C, E>
+impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock> core::fmt::Debug
+    for EphemeralHandler<F, C, E, Clk>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("EphemeralHandler").finish_non_exhaustive()
     }
 }
 
-impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<F, C, E> {
+impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
+    EphemeralHandler<F, C, E, Clk>
+{
     /// Create a new ephemeral handler.
     ///
     /// Returns the handler and a receiver for inbound [`EphemeralEvent`]s.
@@ -89,6 +98,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
         policy: E,
         config: EphemeralConfig,
+        clock: Clk,
     ) -> (Self, async_channel::Receiver<EphemeralEvent>) {
         let (tx, rx) = async_channel::bounded(config.channel_capacity);
 
@@ -99,24 +109,39 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
             policy,
             callback_tx: tx,
             max_payload_size: config.max_payload_size,
+            max_message_age_ms: config.max_message_age_ms,
+            clock,
+            nonce_cache: Arc::new(Mutex::new(NonceCache::new(config.nonce_window_duration_ms))),
         };
 
         (handler, rx)
     }
 
-    /// Publish an ephemeral message to all subscribers of `id`.
+    /// Publish a pre-signed ephemeral message to all subscribers.
     ///
-    /// The message is sent to all authorized subscribers (excluding
-    /// the local node). Errors on individual sends are logged but
-    /// not propagated — fire-and-forget semantics.
-    pub async fn publish(&self, id: SedimentreeId, payload: Vec<u8>)
+    /// The caller is responsible for constructing a signed message via
+    /// [`EphemeralMessage::new_signed`]. This method checks the payload
+    /// size limit, gathers subscribers, filters by policy, and fans out.
+    ///
+    /// Errors on individual sends are logged but not propagated —
+    /// fire-and-forget semantics.
+    pub async fn publish(&self, msg: EphemeralMessage)
     where
         C: Connection<F, EphemeralMessage>,
     {
-        if payload.len() > self.max_payload_size {
+        let EphemeralMessage::Ephemeral {
+            id, ref payload, ..
+        } = msg
+        else {
+            warn!("publish called with non-Ephemeral message, ignoring");
+            return;
+        };
+        let payload_len = payload.len();
+
+        if payload_len > self.max_payload_size {
             warn!(
                 id = %id,
-                size = payload.len(),
+                size = payload_len,
                 max = self.max_payload_size,
                 "ephemeral publish payload too large, dropping"
             );
@@ -154,8 +179,6 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
             return;
         }
 
-        let msg = EphemeralMessage::Ephemeral { id, payload };
-
         // Collect target connections while holding the lock, then drop it
         // before awaiting sends to avoid holding the mutex across .await.
         let targets: Vec<Authenticated<C, F>> = {
@@ -187,7 +210,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
     /// Sends `Subscribe` to all connected peers and tracks the IDs so
     /// that newly connected peers (via [`subscribe_peer`](Self::subscribe_peer))
     /// also receive the subscription request.
-    pub async fn subscribe(&self, ids: Vec<SedimentreeId>)
+    pub async fn subscribe(&self, ids: Vec<Topic>)
     where
         C: Connection<F, EphemeralMessage>,
     {
@@ -210,7 +233,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
     ///
     /// Sends `Unsubscribe` to all connected peers and removes the IDs
     /// from outgoing subscription tracking.
-    pub async fn unsubscribe(&self, ids: Vec<SedimentreeId>)
+    pub async fn unsubscribe(&self, ids: Vec<Topic>)
     where
         C: Connection<F, EphemeralMessage>,
     {
@@ -237,7 +260,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
     where
         C: Connection<F, EphemeralMessage>,
     {
-        let ids: Vec<SedimentreeId> = {
+        let ids: Vec<Topic> = {
             let outgoing = self.outgoing_subscriptions.lock().await;
             if outgoing.is_empty() {
                 return;
@@ -309,12 +332,14 @@ pub enum EphemeralHandlerError<SendErr: core::error::Error> {
         E::SubscribeDisallowed: Send + 'static,
         E::PublishDisallowed: Send + 'static,
         C::SendError: Send + 'static,
+        Clk: Clock + Send + Sync,
     Local where
         C: Connection<Local, EphemeralMessage>
             + Clone + 'static,
-        E: EphemeralPolicy<Local>
+        E: EphemeralPolicy<Local>,
+        Clk: Clock
 )]
-impl<K: FutureForm, C, E> Handler<K, C> for EphemeralHandler<K, C, E> {
+impl<K: FutureForm, C, E, Clk> Handler<K, C> for EphemeralHandler<K, C, E, Clk> {
     type Message = EphemeralMessage;
     type HandlerError = EphemeralHandlerError<C::SendError>;
 
@@ -333,13 +358,20 @@ impl<K: FutureForm, C, E> Handler<K, C> for EphemeralHandler<K, C, E> {
                 peers.remove(&peer);
                 !peers.is_empty()
             });
-            debug!(peer = %peer, "cleaned ephemeral subscriptions on disconnect");
+
+            self.nonce_cache.lock().await.remove_peer(peer);
+
+            debug!(peer = %peer, "cleaned ephemeral subscriptions and nonce cache on disconnect");
         })
     }
 }
 
-impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: EphemeralPolicy<F>>
-    EphemeralHandler<F, C, E>
+impl<
+    F: FutureForm,
+    C: Connection<F, EphemeralMessage> + Clone + 'static,
+    E: EphemeralPolicy<F>,
+    Clk: Clock,
+> EphemeralHandler<F, C, E, Clk>
 {
     async fn dispatch(
         &self,
@@ -347,8 +379,8 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
         message: EphemeralMessage,
     ) -> Result<(), EphemeralHandlerError<C::SendError>> {
         match message {
-            EphemeralMessage::Ephemeral { id, payload } => {
-                self.recv_ephemeral(conn, id, payload).await;
+            EphemeralMessage::Ephemeral { .. } => {
+                self.recv_ephemeral(conn, message).await;
             }
             EphemeralMessage::Subscribe { ids } => {
                 self.recv_subscribe(conn, ids).await;
@@ -364,18 +396,32 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
         Ok(())
     }
 
-    /// Handle an inbound ephemeral payload from a peer.
-    async fn recv_ephemeral(
-        &self,
-        conn: &Authenticated<C, F>,
-        id: SedimentreeId,
-        payload: Vec<u8>,
-    ) {
-        let sender = conn.peer_id();
+    /// Handle an inbound signed ephemeral message from a peer.
+    ///
+    /// Verifies the signature, checks the timestamp age, checks the
+    /// nonce cache for duplicates, authorizes the originator via policy,
+    /// delivers to the callback channel, and fans out to other subscribers.
+    #[allow(clippy::too_many_lines)]
+    async fn recv_ephemeral(&self, conn: &Authenticated<C, F>, message: EphemeralMessage) {
+        let EphemeralMessage::Ephemeral {
+            sender,
+            id,
+            nonce,
+            timestamp_ms,
+            ref payload,
+            ..
+        } = message
+        else {
+            return;
+        };
 
+        let relay = conn.peer_id();
+
+        // 1. Check payload size.
         if payload.len() > self.max_payload_size {
             warn!(
-                peer = %sender,
+                originator = %sender,
+                relay = %relay,
                 id = %id,
                 size = payload.len(),
                 max = self.max_payload_size,
@@ -384,10 +430,58 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
             return;
         }
 
-        // Check publish authorization.
+        // 2. Verify signature.
+        if let Err(e) = message.verify_signature() {
+            warn!(
+                originator = %sender,
+                relay = %relay,
+                id = %id,
+                error = %e,
+                "ephemeral signature verification failed, dropping"
+            );
+            return;
+        }
+
+        // 3. Check message age — reject stale or future-dated messages.
+        {
+            let now = self.clock.now_utc_ms();
+            let age = now.abs_diff(timestamp_ms);
+            if age > self.max_message_age_ms {
+                debug!(
+                    originator = %sender,
+                    relay = %relay,
+                    id = %id,
+                    timestamp_ms = timestamp_ms,
+                    now_ms = now,
+                    age_ms = age,
+                    max_age_ms = self.max_message_age_ms,
+                    "ephemeral message too old or too far in the future, dropping"
+                );
+                return;
+            }
+        }
+
+        // 4. Check nonce (dedup).
+        {
+            let now_ms = self.clock.now_utc_ms();
+            let mut cache = self.nonce_cache.lock().await;
+            if !cache.check_and_insert(sender, id, nonce, now_ms) {
+                debug!(
+                    originator = %sender,
+                    relay = %relay,
+                    id = %id,
+                    nonce = nonce,
+                    "duplicate ephemeral nonce, dropping"
+                );
+                return;
+            }
+        }
+
+        // 5. Check publish authorization (using originator, not relay).
         if let Err(e) = self.policy.authorize_publish(sender, id).await {
             debug!(
-                peer = %sender,
+                originator = %sender,
+                relay = %relay,
                 id = %id,
                 error = %e,
                 "ephemeral publish unauthorized"
@@ -395,21 +489,22 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
             return;
         }
 
-        // Deliver to local callback channel.
+        // 6. Deliver to local callback channel.
         let event = EphemeralEvent {
             id,
             sender,
+            nonce,
             payload: payload.clone(),
         };
         if self.callback_tx.try_send(event).is_err() {
             warn!("ephemeral callback channel full, dropping event");
         }
 
-        // Fan-out to other subscribers.
+        // 7. Fan out to other subscribers (excluding the relay that sent it to us).
         let subscriber_peers: Vec<PeerId> = {
             let subs = self.ephemeral_subscriptions.lock().await;
             subs.get(&id)
-                .map(|peers| peers.iter().copied().filter(|p| *p != sender).collect())
+                .map(|peers| peers.iter().copied().filter(|p| *p != relay).collect())
                 .unwrap_or_default()
         };
 
@@ -421,8 +516,6 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
             .policy
             .filter_authorized_subscribers(id, subscriber_peers)
             .await;
-
-        let msg = EphemeralMessage::Ephemeral { id, payload };
 
         // Collect target connections while holding the lock, then drop it
         // before awaiting sends to avoid holding the mutex across .await.
@@ -439,10 +532,11 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
                 .collect()
         };
 
-        for conn in &targets {
-            if let Err(e) = conn.send(&msg).await {
+        // Forward the original signed message as-is (preserving sender + signature).
+        for target_conn in &targets {
+            if let Err(e) = target_conn.send(&message).await {
                 debug!(
-                    peer = %conn.peer_id(),
+                    peer = %target_conn.peer_id(),
                     error = %e,
                     "ephemeral fan-out send failed"
                 );
@@ -451,7 +545,7 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
     }
 
     /// Handle a subscribe request from a peer.
-    async fn recv_subscribe(&self, conn: &Authenticated<C, F>, ids: Vec<SedimentreeId>) {
+    async fn recv_subscribe(&self, conn: &Authenticated<C, F>, ids: Vec<Topic>) {
         let peer = conn.peer_id();
         let mut rejected = Vec::new();
 
@@ -483,7 +577,7 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
     }
 
     /// Handle an unsubscribe request from a peer.
-    async fn recv_unsubscribe(&self, conn: &Authenticated<C, F>, ids: Vec<SedimentreeId>) {
+    async fn recv_unsubscribe(&self, conn: &Authenticated<C, F>, ids: Vec<Topic>) {
         let peer = conn.peer_id();
         let mut subs = self.ephemeral_subscriptions.lock().await;
 

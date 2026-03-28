@@ -12,23 +12,20 @@ use std::{
 };
 
 use future_form::Sendable;
-use sedimentree_core::{
-    codec::{decode::Decode, encode::Encode},
-    id::SedimentreeId,
-};
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_core::{
     connection::Connection, handshake::audience::Audience, peer::id::PeerId,
     policy::open::OpenPolicy, storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder, transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_ephemeral::message::EphemeralMessage;
+use subduction_ephemeral::{message::EphemeralMessage, topic::Topic};
 use subduction_websocket::{
-    DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
-        TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
-        unified::UnifiedWebSocket,
+        client::TokioWebSocketClient, server::TokioWebSocketServer, unified::UnifiedWebSocket,
+        TimeoutTokio, TokioSpawn,
     },
+    DEFAULT_MAX_MESSAGE_SIZE,
 };
 use testresult::TestResult;
 
@@ -44,8 +41,8 @@ fn test_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
 }
 
-const fn topic(n: u8) -> SedimentreeId {
-    SedimentreeId::new([n; 32])
+const fn topic(n: u8) -> Topic {
+    Topic::new([n; 32])
 }
 
 type ServerConn = MessageTransport<UnifiedWebSocket>;
@@ -102,8 +99,12 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     // Send an ephemeral message using the generic Connection impl.
     let msg = EphemeralMessage::Ephemeral {
+        sender: PeerId::new([0x01; 32]),
         id: topic(0xAA),
+        nonce: 42,
+        timestamp_ms: 1_700_000_000_000,
         payload: vec![10, 20, 30, 40, 50],
+        signature: [0; 64],
     };
     Connection::<Sendable, EphemeralMessage>::send(&client, &msg).await?;
 
@@ -180,15 +181,19 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
 
     // Send an ephemeral message.
     let eph = EphemeralMessage::Ephemeral {
+        sender: PeerId::new([0x01; 32]),
         id: topic(0x11),
+        nonce: 43,
+        timestamp_ms: 1_700_000_000_000,
         payload: vec![42],
+        signature: [0; 64],
     };
     Connection::<Sendable, EphemeralMessage>::send(&client, &eph).await?;
 
     // Send a sync message (RemoveSubscriptions — small, no blobs).
     let sync_msg = subduction_core::connection::message::SyncMessage::RemoveSubscriptions(
         subduction_core::connection::message::RemoveSubscriptions {
-            ids: vec![topic(0x22)],
+            ids: vec![topic(0x22).into()],
         },
     );
     Connection::<Sendable, subduction_core::connection::message::SyncMessage>::send(

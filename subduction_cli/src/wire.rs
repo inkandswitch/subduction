@@ -12,9 +12,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
-use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
-use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
+use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
+use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
+use subduction_keyhive::{KeyhiveMessage, KEYHIVE_SCHEMA};
 
 /// Composed wire message for the CLI server.
 ///
@@ -110,8 +110,10 @@ mod tests {
     use sedimentree_core::{codec::encode::Encode, id::SedimentreeId};
     use subduction_core::{
         connection::message::{BatchSyncResponse, RemoveSubscriptions, RequestId, SyncResult},
+        peer::id::PeerId,
         remote_heads::RemoteHeads,
     };
+    use subduction_ephemeral::topic::Topic;
     use testresult::TestResult;
 
     fn test_peer_id() -> subduction_core::peer::id::PeerId {
@@ -148,8 +150,12 @@ mod tests {
         #[test]
         fn ephemeral() -> TestResult {
             let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
-                id: SedimentreeId::new([0xAA; 32]),
+                sender: PeerId::new([0xAA; 32]),
+                id: Topic::new([0xAA; 32]),
+                nonce: 42,
+                timestamp_ms: 1_700_000_000_000,
                 payload: vec![10, 20, 30],
+                signature: [0; 64],
             });
 
             let encoded = msg.encode();

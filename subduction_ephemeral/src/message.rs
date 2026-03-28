@@ -15,23 +15,40 @@
 //!
 //! Tags are local to the `SUE` schema — no coordination with `SUM`'s
 //! tag space is needed.
+//!
+//! ## `Ephemeral` variant (tag `0x00`)
+//!
+//! Signed by the originator. Relays forward the message as-is,
+//! preserving the original sender and signature.
+//!
+//! ```text
+//! ╔════════╦════════╦═══════╦════════════╦═════════╦═══════════╗
+//! ║ Sender ║   ID   ║ Nonce ║ PayloadLen ║ Payload ║ Signature ║
+//! ║  32B   ║  32B   ║  8B   ║  bijou64   ║  var    ║   64B     ║
+//! ╚════════╩════════╩═══════╩════════════╩═════════╩═══════════╝
+//!  ↑────────── signed region ──────────────────────↑
+//! ```
 
 use alloc::vec::Vec;
 
-use sedimentree_core::{
-    codec::{
-        decode::Decode,
-        encode::Encode,
-        error::{Bijou64Error, DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
-    },
-    id::SedimentreeId,
+use ed25519_dalek::{Signature, VerifyingKey};
+use sedimentree_core::codec::{
+    decode::Decode,
+    encode::Encode,
+    error::{Bijou64Error, DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
 };
+
+use crate::topic::Topic;
+use subduction_core::peer::id::PeerId;
 
 /// Schema header for [`EphemeralMessage`] envelope: **SU**bduction **E**phemeral v0.
 pub const EPHEMERAL_SCHEMA: [u8; 4] = *b"SUE\x00";
 
 /// Minimum envelope size: `schema(4) + total_size(4) + tag(1)`.
 const ENVELOPE_HEADER_SIZE: usize = 4 + 4 + 1;
+
+/// Size of the Ed25519 signature appended to `Ephemeral` messages.
+const SIGNATURE_SIZE: usize = 64;
 
 mod tags {
     pub(super) const EPHEMERAL: u8 = 0x00;
@@ -41,8 +58,10 @@ mod tags {
 }
 
 mod min_sizes {
-    // sed_id(32) + payload_len(bijou64 min=1)
-    pub(super) const EPHEMERAL: usize = 32 + 1;
+    use super::SIGNATURE_SIZE;
+
+    // sender(32) + sed_id(32) + nonce(8) + timestamp_ms(8) + payload_len(bijou64 min=1) + signature(64)
+    pub(super) const EPHEMERAL: usize = 32 + 32 + 8 + 8 + 1 + SIGNATURE_SIZE;
     // count(2)
     pub(super) const SUBSCRIBE: usize = 2;
     // count(2)
@@ -60,26 +79,40 @@ mod min_sizes {
 /// [`SyncMessage`]: subduction_core::connection::message::SyncMessage
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EphemeralMessage {
-    /// An ephemeral payload for a specific sedimentree topic.
+    /// A signed ephemeral payload for a specific sedimentree topic.
     ///
     /// Fire-and-forget delivery to all subscribers of `id` (minus sender).
+    /// The originator signs the message; relays forward it as-is.
     Ephemeral {
+        /// The originator's peer identity (verifying key bytes).
+        sender: PeerId,
         /// The sedimentree topic.
-        id: SedimentreeId,
+        id: Topic,
+        /// Random nonce for deduplication.
+        nonce: u64,
+        /// UTC milliseconds since epoch at message creation.
+        ///
+        /// Inside the signed region — the originator commits to when
+        /// the message was created. Receivers reject messages whose
+        /// timestamp is too far from their own wall clock.
+        timestamp_ms: u64,
         /// Opaque application payload.
         payload: Vec<u8>,
+        /// Ed25519 signature over
+        /// `sender || id || nonce || timestamp_ms || payload_len || payload`.
+        signature: [u8; SIGNATURE_SIZE],
     },
 
     /// Subscribe to ephemeral messages for the given sedimentree IDs.
     Subscribe {
         /// The sedimentree IDs to subscribe to.
-        ids: Vec<SedimentreeId>,
+        ids: Vec<Topic>,
     },
 
     /// Unsubscribe from ephemeral messages for the given sedimentree IDs.
     Unsubscribe {
         /// The sedimentree IDs to unsubscribe from.
-        ids: Vec<SedimentreeId>,
+        ids: Vec<Topic>,
     },
 
     /// Notification that some subscribe requests were rejected.
@@ -87,7 +120,7 @@ pub enum EphemeralMessage {
     /// Contains only the rejected IDs. Accepted IDs are implied by omission.
     SubscribeRejected {
         /// The sedimentree IDs that were rejected.
-        ids: Vec<SedimentreeId>,
+        ids: Vec<Topic>,
     },
 }
 
@@ -96,7 +129,7 @@ impl EphemeralMessage {
     ///
     /// Returns `None` for multi-ID messages (subscribe/unsubscribe/rejected).
     #[must_use]
-    pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
+    pub const fn sedimentree_id(&self) -> Option<Topic> {
         match self {
             Self::Ephemeral { id, .. } => Some(*id),
             Self::Subscribe { .. } | Self::Unsubscribe { .. } | Self::SubscribeRejected { .. } => {
@@ -105,17 +138,141 @@ impl EphemeralMessage {
         }
     }
 
+    /// Build the byte sequence that is signed/verified for `Ephemeral` messages.
+    ///
+    /// Layout: `sender(32) || id(32) || nonce(8) || timestamp_ms(8) || payload_len(bijou64) || payload`.
+    ///
+    /// Returns `None` for non-`Ephemeral` variants.
+    #[must_use]
+    pub fn signed_bytes(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::Ephemeral {
+                sender,
+                id,
+                nonce,
+                timestamp_ms,
+                payload,
+                ..
+            } => {
+                let mut buf = Vec::with_capacity(
+                    32 + 32 + 8 + 8 + bijou64::encoded_len(payload.len() as u64) + payload.len(),
+                );
+                buf.extend_from_slice(sender.as_bytes());
+                buf.extend_from_slice(id.as_bytes());
+                buf.extend_from_slice(&nonce.to_be_bytes());
+                buf.extend_from_slice(&timestamp_ms.to_be_bytes());
+                #[allow(clippy::cast_possible_truncation)]
+                bijou64::encode(payload.len() as u64, &mut buf);
+                buf.extend_from_slice(payload);
+                Some(buf)
+            }
+            Self::Subscribe { .. } | Self::Unsubscribe { .. } | Self::SubscribeRejected { .. } => {
+                None
+            }
+        }
+    }
+
+    /// Verify the signature on an `Ephemeral` message.
+    ///
+    /// Uses `ed25519-dalek` strict verification (rejects small-order points).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignatureError`] if the variant is not `Ephemeral`,
+    /// the sender bytes are not a valid verifying key, or the
+    /// signature does not match the signed region.
+    pub fn verify_signature(&self) -> Result<(), SignatureError> {
+        let Self::Ephemeral {
+            sender, signature, ..
+        } = self
+        else {
+            return Err(SignatureError::NotEphemeral);
+        };
+
+        let Some(signed_bytes) = self.signed_bytes() else {
+            return Err(SignatureError::NotEphemeral);
+        };
+
+        let verifying_key = VerifyingKey::from_bytes(sender.as_bytes())
+            .map_err(|_| SignatureError::InvalidSenderKey)?;
+
+        let sig = Signature::from_bytes(signature);
+
+        verifying_key
+            .verify_strict(&signed_bytes, &sig)
+            .map_err(|_| SignatureError::InvalidSignature)
+    }
+
+    /// Construct a signed `Ephemeral` message.
+    ///
+    /// The caller provides the nonce and the claimed epoch timestamp.
+    /// The signer produces the Ed25519 signature over the signed region.
+    pub async fn new_signed<K: future_form::FutureForm, S: subduction_crypto::signer::Signer<K>>(
+        signer: &S,
+        id: Topic,
+        nonce: u64,
+        timestamp_ms: u64,
+        payload: Vec<u8>,
+    ) -> Self {
+        let sender = PeerId::from(signer.verifying_key());
+
+        // Build the signed region.
+        let mut signed_buf = Vec::with_capacity(
+            32 + 32 + 8 + 8 + bijou64::encoded_len(payload.len() as u64) + payload.len(),
+        );
+        signed_buf.extend_from_slice(sender.as_bytes());
+        signed_buf.extend_from_slice(id.as_bytes());
+        signed_buf.extend_from_slice(&nonce.to_be_bytes());
+        signed_buf.extend_from_slice(&timestamp_ms.to_be_bytes());
+        #[allow(clippy::cast_possible_truncation)]
+        bijou64::encode(payload.len() as u64, &mut signed_buf);
+        signed_buf.extend_from_slice(&payload);
+
+        let sig = signer.sign(&signed_buf).await;
+
+        Self::Ephemeral {
+            sender,
+            id,
+            nonce,
+            timestamp_ms,
+            payload,
+            signature: sig.to_bytes(),
+        }
+    }
+
     /// Payload byte count (after the tag byte, before the envelope header).
     const fn payload_size(&self) -> usize {
         match self {
             Self::Ephemeral { payload, .. } => {
-                32 + bijou64::encoded_len(payload.len() as u64) + payload.len()
+                // sender(32) + id(32) + nonce(8) + timestamp_ms(8) + payload_len(bijou64) + payload + signature(64)
+                32 + 32
+                    + 8
+                    + 8
+                    + bijou64::encoded_len(payload.len() as u64)
+                    + payload.len()
+                    + SIGNATURE_SIZE
             }
             Self::Subscribe { ids }
             | Self::Unsubscribe { ids }
             | Self::SubscribeRejected { ids } => 2 + ids.len() * 32,
         }
     }
+}
+
+/// Errors from ephemeral signature verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SignatureError {
+    /// Attempted to verify a non-`Ephemeral` variant.
+    #[error("not an Ephemeral message")]
+    NotEphemeral,
+
+    /// The `sender` bytes are not a valid Ed25519 verifying key.
+    #[error("invalid sender verifying key")]
+    InvalidSenderKey,
+
+    /// The signature does not match the signed region.
+    #[error("invalid signature")]
+    InvalidSignature,
 }
 
 // ── Encode ──────────────────────────────────────────────────────────────
@@ -142,9 +299,24 @@ fn encode_message(msg: &EphemeralMessage) -> Vec<u8> {
     buf.extend_from_slice(&(total_size as u32).to_be_bytes());
 
     match msg {
-        EphemeralMessage::Ephemeral { id, payload } => {
+        EphemeralMessage::Ephemeral {
+            sender,
+            id,
+            nonce,
+            timestamp_ms,
+            payload,
+            signature,
+        } => {
             buf.push(tags::EPHEMERAL);
-            encode_ephemeral(&mut buf, id, payload);
+            encode_ephemeral(
+                &mut buf,
+                sender,
+                id,
+                *nonce,
+                *timestamp_ms,
+                payload,
+                signature,
+            );
         }
         EphemeralMessage::Subscribe { ids } => {
             buf.push(tags::SUBSCRIBE);
@@ -163,14 +335,26 @@ fn encode_message(msg: &EphemeralMessage) -> Vec<u8> {
     buf
 }
 
-fn encode_ephemeral(buf: &mut Vec<u8>, id: &SedimentreeId, payload: &[u8]) {
+fn encode_ephemeral(
+    buf: &mut Vec<u8>,
+    sender: &PeerId,
+    id: &Topic,
+    nonce: u64,
+    timestamp_ms: u64,
+    payload: &[u8],
+    signature: &[u8; SIGNATURE_SIZE],
+) {
+    buf.extend_from_slice(sender.as_bytes());
     buf.extend_from_slice(id.as_bytes());
+    buf.extend_from_slice(&nonce.to_be_bytes());
+    buf.extend_from_slice(&timestamp_ms.to_be_bytes());
     #[allow(clippy::cast_possible_truncation)]
     bijou64::encode(payload.len() as u64, buf);
     buf.extend_from_slice(payload);
+    buf.extend_from_slice(signature);
 }
 
-fn encode_id_list(buf: &mut Vec<u8>, ids: &[SedimentreeId]) {
+fn encode_id_list(buf: &mut Vec<u8>, ids: &[Topic]) {
     #[allow(clippy::cast_possible_truncation)]
     buf.extend_from_slice(&(ids.len() as u16).to_be_bytes());
     for id in ids {
@@ -281,7 +465,10 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
 fn decode_ephemeral(payload: &[u8]) -> Result<EphemeralMessage, DecodeError> {
     let mut offset = 0;
 
-    let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
+    let sender = PeerId::new(read_array::<32>(payload, &mut offset)?);
+    let id = Topic::new(read_array::<32>(payload, &mut offset)?);
+    let nonce = u64::from_be_bytes(read_array::<8>(payload, &mut offset)?);
+    let timestamp_ms = u64::from_be_bytes(read_array::<8>(payload, &mut offset)?);
     let payload_len = read_bijou64_as_usize(payload, &mut offset)?;
 
     let data = payload
@@ -292,18 +479,28 @@ fn decode_ephemeral(payload: &[u8]) -> Result<EphemeralMessage, DecodeError> {
             have: payload.len(),
         })?
         .to_vec();
+    offset += payload_len;
 
-    Ok(EphemeralMessage::Ephemeral { id, payload: data })
+    let signature: [u8; SIGNATURE_SIZE] = read_array::<SIGNATURE_SIZE>(payload, &mut offset)?;
+
+    Ok(EphemeralMessage::Ephemeral {
+        sender,
+        id,
+        nonce,
+        timestamp_ms,
+        payload: data,
+        signature,
+    })
 }
 
-fn decode_id_list(payload: &[u8]) -> Result<Vec<SedimentreeId>, DecodeError> {
+fn decode_id_list(payload: &[u8]) -> Result<Vec<Topic>, DecodeError> {
     let mut offset = 0;
 
     let count = read_u16(payload, &mut offset)? as usize;
 
     let mut ids = Vec::with_capacity(count);
     for _ in 0..count {
-        ids.push(SedimentreeId::new(read_array::<32>(payload, &mut offset)?));
+        ids.push(Topic::new(read_array::<32>(payload, &mut offset)?));
     }
 
     Ok(ids)
@@ -357,14 +554,32 @@ fn read_bijou64_as_usize(buf: &[u8], offset: &mut usize) -> Result<usize, Decode
 mod tests {
     use super::*;
 
+    /// Helper: create a dummy signed ephemeral for wire roundtrip tests.
+    /// Uses a fixed "signature" (not cryptographically valid).
+    fn dummy_ephemeral(payload: Vec<u8>) -> EphemeralMessage {
+        EphemeralMessage::Ephemeral {
+            sender: PeerId::new([0xAA; 32]),
+            id: Topic::new([0xBB; 32]),
+            nonce: 0x1234_5678_9ABC_DEF0,
+            timestamp_ms: 1_700_000_000_000,
+            payload,
+            signature: [0xCC; 64],
+        }
+    }
+
     #[test]
     fn ephemeral_roundtrip() {
-        let id = SedimentreeId::new([0xAB; 32]);
-        let payload = vec![1, 2, 3, 4, 5];
-        let msg = EphemeralMessage::Ephemeral {
-            id,
-            payload: payload.clone(),
-        };
+        let msg = dummy_ephemeral(vec![1, 2, 3, 4, 5]);
+
+        let encoded = msg.encode();
+        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
+
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn empty_payload_roundtrip() {
+        let msg = dummy_ephemeral(vec![]);
 
         let encoded = msg.encode();
         let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
@@ -374,10 +589,7 @@ mod tests {
 
     #[test]
     fn subscribe_roundtrip() {
-        let ids = vec![
-            SedimentreeId::new([0x01; 32]),
-            SedimentreeId::new([0x02; 32]),
-        ];
+        let ids = vec![Topic::new([0x01; 32]), Topic::new([0x02; 32])];
         let msg = EphemeralMessage::Subscribe { ids: ids.clone() };
 
         let encoded = msg.encode();
@@ -388,7 +600,7 @@ mod tests {
 
     #[test]
     fn unsubscribe_roundtrip() {
-        let ids = vec![SedimentreeId::new([0xFF; 32])];
+        let ids = vec![Topic::new([0xFF; 32])];
         let msg = EphemeralMessage::Unsubscribe { ids };
 
         let encoded = msg.encode();
@@ -399,21 +611,8 @@ mod tests {
 
     #[test]
     fn subscribe_rejected_roundtrip() {
-        let ids = vec![SedimentreeId::new([0x42; 32])];
+        let ids = vec![Topic::new([0x42; 32])];
         let msg = EphemeralMessage::SubscribeRejected { ids };
-
-        let encoded = msg.encode();
-        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
-
-        assert_eq!(decoded, msg);
-    }
-
-    #[test]
-    fn empty_payload_roundtrip() {
-        let msg = EphemeralMessage::Ephemeral {
-            id: SedimentreeId::new([0x00; 32]),
-            payload: vec![],
-        };
 
         let encoded = msg.encode();
         let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
@@ -462,5 +661,41 @@ mod tests {
     #[test]
     fn schema_bytes_are_correct() {
         assert_eq!(&EPHEMERAL_SCHEMA, b"SUE\x00");
+    }
+
+    #[test]
+    fn signed_bytes_contains_all_fields() {
+        let msg = dummy_ephemeral(vec![0xDE, 0xAD]);
+        let signed = msg.signed_bytes().expect("Ephemeral has signed_bytes");
+
+        // sender(32) + id(32) + nonce(8) + timestamp_ms(8) + payload_len(1 for len=2) + payload(2)
+        assert_eq!(signed.len(), 32 + 32 + 8 + 8 + 1 + 2);
+        assert_eq!(&signed[0..32], &[0xAA; 32]); // sender
+        assert_eq!(&signed[32..64], &[0xBB; 32]); // id
+        assert_eq!(&signed[64..72], &0x1234_5678_9ABC_DEF0_u64.to_be_bytes()); // nonce
+        assert_eq!(&signed[72..80], &1_700_000_000_000_u64.to_be_bytes()); // timestamp_ms
+    }
+
+    #[test]
+    fn non_ephemeral_has_no_signed_bytes() {
+        let msg = EphemeralMessage::Subscribe { ids: vec![] };
+        assert!(msg.signed_bytes().is_none());
+    }
+
+    #[test]
+    fn tampered_signature_fails_verify() {
+        let mut msg = dummy_ephemeral(vec![1, 2, 3]);
+        // The dummy has a fake signature — verification should fail
+        // because [0xCC; 64] is not a valid Ed25519 signature for any message.
+        assert!(msg.verify_signature().is_err());
+
+        // Even if we tamper further, it should still fail
+        if let EphemeralMessage::Ephemeral {
+            ref mut signature, ..
+        } = msg
+        {
+            signature[0] ^= 0xFF;
+        }
+        assert!(msg.verify_signature().is_err());
     }
 }

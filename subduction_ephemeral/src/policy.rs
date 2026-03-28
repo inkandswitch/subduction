@@ -32,8 +32,9 @@ use alloc::vec::Vec;
 use core::convert::Infallible;
 
 use future_form::{FutureForm, Local, Sendable, future_form};
-use sedimentree_core::id::SedimentreeId;
 use subduction_core::peer::id::PeerId;
+
+use crate::topic::Topic;
 
 /// Policy for ephemeral message authorization.
 ///
@@ -53,14 +54,14 @@ pub trait EphemeralPolicy<K: FutureForm + ?Sized> {
     fn authorize_subscribe(
         &self,
         peer: PeerId,
-        id: SedimentreeId,
+        id: Topic,
     ) -> K::Future<'_, Result<(), Self::SubscribeDisallowed>>;
 
     /// Check whether `peer` may publish ephemeral messages to `id`.
     fn authorize_publish(
         &self,
         peer: PeerId,
-        id: SedimentreeId,
+        id: Topic,
     ) -> K::Future<'_, Result<(), Self::PublishDisallowed>>;
 
     /// Batch-filter subscribers to only those currently authorized.
@@ -68,7 +69,7 @@ pub trait EphemeralPolicy<K: FutureForm + ?Sized> {
     /// Called before fan-out to re-check authorization (handles revocation).
     fn filter_authorized_subscribers(
         &self,
-        id: SedimentreeId,
+        id: Topic,
         peers: Vec<PeerId>,
     ) -> K::Future<'_, Vec<PeerId>>;
 }
@@ -88,7 +89,7 @@ impl<K: FutureForm> EphemeralPolicy<K> for OpenEphemeralPolicy {
     fn authorize_subscribe(
         &self,
         _peer: PeerId,
-        _id: SedimentreeId,
+        _id: Topic,
     ) -> K::Future<'_, Result<(), Self::SubscribeDisallowed>> {
         K::from_future(async { Ok(()) })
     }
@@ -96,14 +97,14 @@ impl<K: FutureForm> EphemeralPolicy<K> for OpenEphemeralPolicy {
     fn authorize_publish(
         &self,
         _peer: PeerId,
-        _id: SedimentreeId,
+        _id: Topic,
     ) -> K::Future<'_, Result<(), Self::PublishDisallowed>> {
         K::from_future(async { Ok(()) })
     }
 
     fn filter_authorized_subscribers(
         &self,
-        _id: SedimentreeId,
+        _id: Topic,
         peers: Vec<PeerId>,
     ) -> K::Future<'_, Vec<PeerId>> {
         K::from_future(async { peers })

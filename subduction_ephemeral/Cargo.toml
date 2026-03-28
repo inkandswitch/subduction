@@ -16,17 +16,21 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 bijou64 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
+ed25519-dalek = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 async-lock = { workspace = true }
+getrandom = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
+subduction_crypto = { workspace = true, features = ["std"] }
 subduction_ephemeral = { path = ".", features = ["std"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
@@ -37,10 +41,12 @@ bolero = ["dep:bolero", "sedimentree_core/bolero", "std"]
 std = [
   "async-channel/std",
   "async-lock/std",
+  "ed25519-dalek/std",
   "futures/std",
   "nonempty/std",
   "sedimentree_core/std",
   "subduction_core/std",
+  "subduction_crypto/std",
   "thiserror/std",
 ]
 

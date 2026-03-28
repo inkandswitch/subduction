@@ -164,7 +164,7 @@ mod tests {
         peer::id::PeerId,
         remote_heads::RemoteHeads,
     };
-    use subduction_ephemeral::message::EphemeralMessage;
+    use subduction_ephemeral::{message::EphemeralMessage, topic::Topic};
     use subduction_keyhive::KeyhiveMessage;
 
     use super::{CliConn, CliHandler};
@@ -210,8 +210,12 @@ mod tests {
     #[test]
     fn as_batch_sync_response_none_for_ephemeral() {
         let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
-            id: SedimentreeId::new([0xCC; 32]),
+            sender: PeerId::new([0xCC; 32]),
+            id: Topic::new([0xCC; 32]),
+            nonce: 42,
+            timestamp_ms: 1_700_000_000_000,
             payload: vec![1, 2, 3],
+            signature: [0; 64],
         });
 
         let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);

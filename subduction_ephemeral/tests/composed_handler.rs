@@ -27,6 +27,7 @@ use subduction_core::{
 use subduction_ephemeral::{
     composed::{ComposedHandler, Dispatched, WireEnvelope},
     message::EphemeralMessage,
+    topic::Topic,
 };
 use testresult::TestResult;
 
@@ -288,8 +289,12 @@ async fn dispatch_ephemeral_message_to_ephemeral_handler() -> TestResult {
     let auth = make_auth_conn(peer(1));
 
     let eph_msg = EphemeralMessage::Ephemeral {
-        id: SedimentreeId::new([0xBB; 32]),
+        sender: PeerId::new([0xAA; 32]),
+        id: Topic::new([0xBB; 32]),
+        nonce: 42,
+        timestamp_ms: 1_700_000_000_000,
         payload: vec![1, 2, 3],
+        signature: [0; 64],
     };
     let wire: TestWireMessage = eph_msg.clone().into();
 
@@ -344,7 +349,7 @@ fn as_batch_sync_response_returns_none_for_other_sync() {
 #[test]
 fn as_batch_sync_response_returns_none_for_ephemeral() {
     let wire = TestWireMessage::Ephemeral(EphemeralMessage::Subscribe {
-        ids: vec![SedimentreeId::new([0xDD; 32])],
+        ids: vec![Topic::new([0xDD; 32])],
     });
 
     let extracted =

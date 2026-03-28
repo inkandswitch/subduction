@@ -10,9 +10,8 @@ use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 use future_form::Local;
 use futures::FutureExt;
 use js_sys::{Array, Promise, Uint8Array};
-use sedimentree_core::id::SedimentreeId;
 use subduction_core::peer::id::PeerId;
-use subduction_ephemeral::policy::EphemeralPolicy;
+use subduction_ephemeral::{policy::EphemeralPolicy, topic::Topic};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
@@ -97,7 +96,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
     fn authorize_subscribe(
         &self,
         peer: PeerId,
-        id: SedimentreeId,
+        id: Topic,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::SubscribeDisallowed>> {
         let inner = self.inner.clone();
         async move {
@@ -116,7 +115,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
     fn authorize_publish(
         &self,
         peer: PeerId,
-        id: SedimentreeId,
+        id: Topic,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::PublishDisallowed>> {
         let inner = self.inner.clone();
         async move {
@@ -134,7 +133,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
 
     fn filter_authorized_subscribers(
         &self,
-        id: SedimentreeId,
+        id: Topic,
         peers: Vec<PeerId>,
     ) -> <Local as future_form::FutureForm>::Future<'_, Vec<PeerId>> {
         let inner = self.inner.clone();

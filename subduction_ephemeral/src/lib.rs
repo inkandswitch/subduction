@@ -1,7 +1,7 @@
 //! Ephemeral (non-persisted) messaging for Subduction.
 //!
 //! Provides authenticated, fire-and-forget messaging scoped to
-//! [`SedimentreeId`] topics. Primary use cases: cursor positions,
+//! [`Topic`] identifiers. Primary use cases: cursor positions,
 //! selections, presence-in-document, typing indicators, and other
 //! transient application-level signals.
 //!
@@ -25,15 +25,18 @@
 //! into a single envelope type) is the application's responsibility.
 //! See `subduction_wasm` for an example `WireMessage` enum.
 //!
-//! [`SedimentreeId`]: sedimentree_core::id::SedimentreeId
+//! [`Topic`]: topic::Topic
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
 
+pub mod clock;
 pub mod composed;
 pub mod config;
 pub mod handler;
 pub mod message;
+pub mod nonce_cache;
 pub mod policy;
+pub mod topic;
