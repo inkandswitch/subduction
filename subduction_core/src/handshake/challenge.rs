@@ -86,16 +86,22 @@ impl Challenge {
     }
 }
 
-/// Size of Challenge fields (after schema + issuer, before signature).
+/// Size of Challenge fields (after schema + discriminant + issuer, before signature).
 pub(crate) const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
 
-/// Minimum size of a signed Challenge message.
-pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 157 bytes
+/// Minimum size of a signed Challenge message (schema + discriminant + issuer + fields + signature).
+pub const CHALLENGE_MIN_SIZE: usize = 4 + 1 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 158 bytes
+
+impl Challenge {
+    /// Variant tag within the `SUH\x00` handshake protocol.
+    pub const TAG: u8 = 0x00;
+}
 
 impl Schema for Challenge {
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
-    const TYPE_BYTE: u8 = b'H'; // Handshake
+    const TYPE_BYTE: u8 = b'H';
     const VERSION: u8 = 0;
+    const DISCRIMINANT: Option<u8> = Some(Challenge::TAG);
 }
 
 impl EncodeFields for Challenge {

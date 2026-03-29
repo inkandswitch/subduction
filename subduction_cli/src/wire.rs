@@ -107,11 +107,15 @@ impl Decode for CliWireMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use future_form::Sendable;
     use sedimentree_core::{codec::encode::Encode, id::SedimentreeId};
     use subduction_core::{
         connection::message::{BatchSyncResponse, RemoveSubscriptions, RequestId, SyncResult},
         remote_heads::RemoteHeads,
+        timestamp::TimestampSeconds,
     };
+    use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+    use subduction_ephemeral::{message::EphemeralPayload, topic::Topic};
     use testresult::TestResult;
 
     fn test_peer_id() -> subduction_core::peer::id::PeerId {
@@ -145,12 +149,19 @@ mod tests {
             Ok(())
         }
 
-        #[test]
-        fn ephemeral() -> TestResult {
-            let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
-                id: SedimentreeId::new([0xAA; 32]),
+        #[tokio::test]
+        async fn ephemeral() -> TestResult {
+            let signer = MemorySigner::generate();
+            let ep = EphemeralPayload {
+                id: Topic::new([0xAA; 32]),
+                nonce: 42,
+                timestamp: TimestampSeconds::new(1_700_000_000),
                 payload: vec![10, 20, 30],
-            });
+            };
+            let verified = Signed::seal::<Sendable, _>(&signer, ep).await;
+            let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral(Box::new(
+                verified.into_signed(),
+            )));
 
             let encoded = msg.encode();
             let decoded = CliWireMessage::try_decode(&encoded)?;

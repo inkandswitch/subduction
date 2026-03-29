@@ -75,7 +75,7 @@ use crate::{
 };
 use sedimentree_core::codec::{
     error::{DecodeError, InvalidEnumTag, InvalidSchema},
-    schema::{self, Schema},
+    schema::Schema,
 };
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
@@ -159,22 +159,19 @@ pub trait Handshake<K: FutureForm> {
 
 /// Wire format for handshake messages.
 ///
-/// All handshake messages share a common `SUH\0` schema envelope, followed
-/// by a 1-byte variant tag:
+/// All handshake types share the `SUH\x00` schema. Byte 4 (the
+/// [`DISCRIMINANT`](Schema::DISCRIMINANT) for signed variants, or a
+/// tag byte for unsigned control messages) distinguishes them:
 ///
-/// ```text
-/// ┌──────────┬─────┬───────────────────────────────────┐
-/// │ Schema   │ Tag │ Payload                           │
-/// │ SUH\0    │ 1B  │ (variant-specific)                │
-/// │ (4B)     │     │                                   │
-/// └──────────┴─────┴───────────────────────────────────┘
-/// ```
+/// | Byte 4 | Variant              | Wire layout                                              |
+/// |--------|----------------------|----------------------------------------------------------|
+/// | `0x00` | `Signed<Challenge>`  | `SUH\x00` + `0x00` + issuer(32) + fields(57) + sig(64)  |
+/// | `0x01` | `Signed<Response>`   | `SUH\x00` + `0x01` + issuer(32) + fields(40) + sig(64)  |
+/// | `0x02` | `Rejection`          | `SUH\x00` + `0x02` + reason(1) + timestamp(8)           |
 ///
-/// | Tag  | Variant              | Payload                           |
-/// |------|----------------------|-----------------------------------|
-/// | 0x00 | `Signed<Challenge>`  | Full signed challenge (157 bytes) |
-/// | 0x01 | `Signed<Response>`   | Full signed response (140 bytes)  |
-/// | 0x02 | `Rejection`          | reason (1B) + timestamp (8B)      |
+/// For signed variants, the full bytes are `Signed<T>::as_bytes()`
+/// — no outer envelope, no stripping. The discriminant at byte 4 is
+/// part of the signed region.
 #[derive(Debug)]
 pub enum HandshakeMessage {
     /// A signed challenge from the initiator.
@@ -187,16 +184,16 @@ pub enum HandshakeMessage {
     Rejection(Rejection),
 }
 
-impl Schema for HandshakeMessage {
-    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
-    const TYPE_BYTE: u8 = b'H'; // Handshake
-    const VERSION: u8 = 0;
-}
+/// The shared handshake schema — `Challenge` and `Response` both use
+/// this with their respective [`DISCRIMINANT`](Schema::DISCRIMINANT).
+pub(crate) const HANDSHAKE_SCHEMA: [u8; 4] = Challenge::SCHEMA;
 
-/// Variant tag bytes within the `SUH\0` handshake envelope.
+/// Variant tag bytes within the `SUH\0` handshake protocol.
 mod handshake_tags {
-    pub(super) const CHALLENGE: u8 = 0x00;
-    pub(super) const RESPONSE: u8 = 0x01;
+    use super::{Challenge, Response};
+
+    pub(super) const CHALLENGE: u8 = Challenge::TAG;
+    pub(super) const RESPONSE: u8 = Response::TAG;
     pub(super) const REJECTION: u8 = 0x02;
 }
 
@@ -206,30 +203,21 @@ impl HandshakeMessage {
 
     /// Encode the handshake message to wire bytes.
     ///
-    /// Emits `SUH\0` + variant tag + payload.
+    /// For signed variants (`Challenge`, `Response`), the `Signed<T>`
+    /// bytes _are_ the wire message — the schema + discriminant + issuer
+    /// + fields + signature. No outer envelope wrapping needed.
+    ///
+    /// For `Rejection` (unsigned), a manual `SUH\0 + tag + payload`
+    /// envelope is constructed.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         match self {
-            HandshakeMessage::SignedChallenge(signed) => {
-                let payload = signed.as_bytes();
-                let mut buf = Vec::with_capacity(4 + 1 + payload.len());
-                buf.extend_from_slice(&Self::SCHEMA);
-                buf.push(handshake_tags::CHALLENGE);
-                buf.extend_from_slice(payload);
-                buf
-            }
-            HandshakeMessage::SignedResponse(signed) => {
-                let payload = signed.as_bytes();
-                let mut buf = Vec::with_capacity(4 + 1 + payload.len());
-                buf.extend_from_slice(&Self::SCHEMA);
-                buf.push(handshake_tags::RESPONSE);
-                buf.extend_from_slice(payload);
-                buf
-            }
+            HandshakeMessage::SignedChallenge(signed) => signed.as_bytes().to_vec(),
+            HandshakeMessage::SignedResponse(signed) => signed.as_bytes().to_vec(),
             HandshakeMessage::Rejection(rejection) => {
                 let payload = rejection.encode_payload();
                 let mut buf = Vec::with_capacity(4 + 1 + payload.len());
-                buf.extend_from_slice(&Self::SCHEMA);
+                buf.extend_from_slice(&HANDSHAKE_SCHEMA);
                 buf.push(handshake_tags::REJECTION);
                 buf.extend_from_slice(&payload);
                 buf
@@ -239,10 +227,14 @@ impl HandshakeMessage {
 
     /// Decode a handshake message from wire bytes.
     ///
-    /// Expects `SUH\0` schema prefix followed by a variant tag byte:
-    /// - `0x00` → [`Signed<Challenge>`]
-    /// - `0x01` → [`Signed<Response>`]
-    /// - `0x02` → [`Rejection`]
+    /// All handshake messages start with `SUH\x00`. The byte at position 4
+    /// is the variant discriminant/tag:
+    /// - `0x00` → `Signed<Challenge>` (full `Signed<T>` bytes)
+    /// - `0x01` → `Signed<Response>` (full `Signed<T>` bytes)
+    /// - `0x02` → `Rejection` (unsigned, manual envelope)
+    ///
+    /// For signed variants, the entire byte slice is the `Signed<T>` — the
+    /// discriminant at byte 4 is validated by [`Signed::try_decode`].
     ///
     /// # Errors
     ///
@@ -267,9 +259,9 @@ impl HandshakeMessage {
                     have: bytes.len(),
                 })?;
 
-        if got_schema != Self::SCHEMA {
+        if got_schema != HANDSHAKE_SCHEMA {
             return Err(InvalidSchema {
-                expected: Self::SCHEMA,
+                expected: HANDSHAKE_SCHEMA,
                 got: got_schema,
             }
             .into());
@@ -281,22 +273,22 @@ impl HandshakeMessage {
             have: bytes.len(),
         })?;
 
-        let payload = bytes.get(5..).ok_or(DecodeError::MessageTooShort {
-            type_name: "HandshakeMessage",
-            need: Self::MIN_SIZE + 1,
-            have: bytes.len(),
-        })?;
-
         match tag {
             handshake_tags::CHALLENGE => {
-                let signed = Signed::<Challenge>::try_decode(payload.to_vec())?;
+                // Full bytes are Signed<Challenge> — discriminant validated by try_decode.
+                let signed = Signed::<Challenge>::try_decode(bytes.to_vec())?;
                 Ok(HandshakeMessage::SignedChallenge(signed))
             }
             handshake_tags::RESPONSE => {
-                let signed = Signed::<Response>::try_decode(payload.to_vec())?;
+                let signed = Signed::<Response>::try_decode(bytes.to_vec())?;
                 Ok(HandshakeMessage::SignedResponse(signed))
             }
             handshake_tags::REJECTION => {
+                let payload = bytes.get(5..).ok_or(DecodeError::MessageTooShort {
+                    type_name: "HandshakeMessage::Rejection",
+                    need: Self::MIN_SIZE + 1,
+                    have: bytes.len(),
+                })?;
                 let rejection = Rejection::try_decode_payload(payload)?;
                 Ok(HandshakeMessage::Rejection(rejection))
             }
@@ -1394,7 +1386,7 @@ mod tests {
             let msg = HandshakeMessage::Rejection(rejection);
             let bytes = msg.encode();
             // SUH\0 envelope
-            assert_eq!(bytes.get(..4), Some(HandshakeMessage::SCHEMA.as_slice()));
+            assert_eq!(bytes.get(..4), Some(HANDSHAKE_SCHEMA.as_slice()));
             assert_eq!(bytes.get(..4), Some(b"SUH\x00".as_slice()));
             // Rejection variant tag
             assert_eq!(bytes.get(4).copied(), Some(0x02));

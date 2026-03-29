@@ -26,8 +26,8 @@ pub trait Encode {
 pub trait EncodeFields: Schema {
     /// Encode type-specific fields to the buffer.
     ///
-    /// This is called after the schema and issuer have been written.
-    /// The implementation should append its fields to `buf`.
+    /// This is called after the schema, discriminant, and issuer have
+    /// been written. The implementation should append its fields to `buf`.
     fn encode_fields(&self, buf: &mut Vec<u8>);
 
     /// Size of the encoded fields (for buffer pre-allocation).
@@ -35,9 +35,9 @@ pub trait EncodeFields: Schema {
 
     /// Total size of the signed message.
     ///
-    /// This is `4 (schema) + 32 (issuer) + fields_size + 64 (signature)`.
+    /// Layout: `schema(4) + discriminant(0|1) + issuer(32) + fields + signature(64)`.
     fn signed_size(&self) -> usize {
-        4 + 32 + self.fields_size() + 64
+        4 + usize::from(Self::DISCRIMINANT.is_some()) + 32 + self.fields_size() + 64
     }
 }
 

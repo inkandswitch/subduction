@@ -1,6 +1,7 @@
 //! Subduction node.
 
 use alloc::{
+    boxed::Box,
     collections::BTreeSet,
     string::{String, ToString},
     sync::Arc,
@@ -18,6 +19,7 @@ use futures::{
     stream::Aborted,
 };
 use js_sys::Uint8Array;
+use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
@@ -40,11 +42,17 @@ use subduction_core::{
         error::HydrationError,
         pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
+    timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
+use subduction_crypto::signed::Signed;
 use subduction_ephemeral::{
-    composed::ComposedHandler, config::EphemeralConfig, handler::EphemeralHandler,
+    composed::ComposedHandler,
+    config::EphemeralConfig,
+    handler::EphemeralHandler,
+    message::{EphemeralMessage, EphemeralPayload},
     policy::OpenEphemeralPolicy,
+    topic::Topic,
 };
 use wasm_bindgen::prelude::*;
 
@@ -59,6 +67,7 @@ use crate::{
     peer_id::WasmPeerId,
     signer::JsSigner,
     sync_stats::WasmSyncStats,
+    topic::WasmTopic,
     transport::{
         DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
@@ -97,7 +106,10 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
-use crate::policy::{JsPolicy, make_open_policy};
+use crate::{
+    clock::JsClock,
+    policy::{JsPolicy, make_open_policy},
+};
 
 type WasmConn = MessageTransport<JsTransport>;
 
@@ -111,11 +123,11 @@ type WasmHandler = ComposedHandler<
         WASM_SHARD_COUNT,
         crate::remote_heads::JsRemoteHeadsObserver,
     >,
-    EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy>,
+    EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy, JsClock>,
     crate::wire::WireMessage,
 >;
 
-type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy>;
+type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy, JsClock>;
 
 type WasmSubductionCore = Subduction<
     'static,
@@ -217,6 +229,7 @@ impl WasmSubduction {
             connections.clone(),
             OpenEphemeralPolicy,
             EphemeralConfig::default(),
+            JsClock,
         );
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
@@ -381,6 +394,7 @@ impl WasmSubduction {
             connections.clone(),
             OpenEphemeralPolicy,
             EphemeralConfig::default(),
+            JsClock,
         );
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
@@ -1103,31 +1117,57 @@ impl WasmSubduction {
 
     // ── Ephemeral messaging ────────────────────────────────────────────
 
-    /// Publish an ephemeral message to all subscribers of a sedimentree.
+    /// Publish an ephemeral message to all subscribers of a topic.
     ///
     /// The payload is opaque bytes — encoding is the caller's responsibility.
     /// Messages are fire-and-forget; delivery is best-effort.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform's random number generator fails.
     #[wasm_bindgen(js_name = publishEphemeral)]
-    pub async fn publish_ephemeral(&self, id: &WasmSedimentreeId, payload: &[u8]) {
-        self.ephemeral_handler
-            .publish(id.clone().into(), payload.to_vec())
-            .await;
+    #[allow(
+        clippy::expect_used,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    pub async fn publish_ephemeral(&self, topic: &WasmTopic, payload: &[u8]) {
+        let nonce: u64 = {
+            let mut buf = [0u8; 8];
+            getrandom::getrandom(&mut buf).expect("getrandom failed");
+            u64::from_le_bytes(buf)
+        };
+        // Date.now() returns f64 ms since epoch; convert to seconds.
+        let timestamp = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
+        let ep = EphemeralPayload {
+            id: Topic::from(topic.clone()),
+            nonce,
+            timestamp,
+            payload: payload.to_vec(),
+        };
+        let verified = Signed::seal::<Local, _>(self.core.signer(), ep).await;
+        let msg = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
+        self.ephemeral_handler.publish(msg).await;
     }
 
-    /// Subscribe to ephemeral messages for the given sedimentree IDs
+    /// Subscribe to ephemeral messages for the given topics
     /// from all connected peers.
     #[wasm_bindgen(js_name = subscribeEphemeral)]
-    pub async fn subscribe_ephemeral(&self, ids: Vec<WasmSedimentreeId>) {
-        let sed_ids: Vec<SedimentreeId> = ids.into_iter().map(SedimentreeId::from).collect();
-        self.ephemeral_handler.subscribe(sed_ids).await;
+    pub async fn subscribe_ephemeral(&self, topics: Vec<WasmTopic>) {
+        let topics: Vec<Topic> = topics.into_iter().map(Topic::from).collect();
+        if let Some(topics) = NonEmpty::from_vec(topics) {
+            self.ephemeral_handler.subscribe(topics).await;
+        }
     }
 
-    /// Unsubscribe from ephemeral messages for the given sedimentree IDs
+    /// Unsubscribe from ephemeral messages for the given topics
     /// from all connected peers.
     #[wasm_bindgen(js_name = unsubscribeEphemeral)]
-    pub async fn unsubscribe_ephemeral(&self, ids: Vec<WasmSedimentreeId>) {
-        let sed_ids: Vec<SedimentreeId> = ids.into_iter().map(SedimentreeId::from).collect();
-        self.ephemeral_handler.unsubscribe(sed_ids).await;
+    pub async fn unsubscribe_ephemeral(&self, topics: Vec<WasmTopic>) {
+        let topics: Vec<Topic> = topics.into_iter().map(Topic::from).collect();
+        if let Some(topics) = NonEmpty::from_vec(topics) {
+            self.ephemeral_handler.unsubscribe(topics).await;
+        }
     }
 
     // ── Queries ──────────────────────────────────────────────────────────

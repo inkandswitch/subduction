@@ -21,19 +21,23 @@ futures = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 async-lock = { workspace = true }
+getrandom = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
-subduction_ephemeral = { path = ".", features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_ephemeral = { path = ".", features = ["std", "test_utils"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [features]
 default = []
 bolero = ["dep:bolero", "sedimentree_core/bolero", "std"]
+test_utils = []
 std = [
   "async-channel/std",
   "async-lock/std",
@@ -41,6 +45,7 @@ std = [
   "nonempty/std",
   "sedimentree_core/std",
   "subduction_core/std",
+  "subduction_crypto/std",
   "thiserror/std",
 ]
 

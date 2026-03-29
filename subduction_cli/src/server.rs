@@ -35,8 +35,13 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
+use subduction_ephemeral::{
+    clock::std_clock::StdClock, config::EphemeralConfig, handler::EphemeralHandler,
+    policy::OpenEphemeralPolicy,
+};
+
 use crate::{
-    handler::{CliConn, CliHandler},
+    handler::{CliConn, CliEphemeralHandler, CliHandler},
     key, metrics,
     transport::UnifiedTransport,
 };
@@ -237,12 +242,37 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         builder
     };
 
-    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) =
-        builder.build_composed(|sync_handler| {
-            Arc::new(CliHandler {
+    let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction, _, _, _) = builder
+        .build_composed(|sync_handler| {
+            let connections = sync_handler.connections();
+
+            let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
+                connections,
+                OpenEphemeralPolicy,
+                EphemeralConfig::default(),
+                StdClock,
+            );
+
+            // Drain ephemeral events — the server is a relay, not a consumer.
+            tokio::spawn(async move {
+                while let Ok(event) = ephemeral_rx.recv().await {
+                    tracing::debug!(
+                        sender = %event.sender,
+                        topic = %event.id,
+                        nonce = event.nonce,
+                        payload_size = event.payload.len(),
+                        "ephemeral event relayed"
+                    );
+                }
+            });
+
+            let handler = Arc::new(CliHandler {
                 sync: sync_handler,
+                ephemeral: ephemeral_handler.clone(),
                 keyhive: keyhive_handle,
-            })
+            });
+
+            (handler, ephemeral_handler)
         });
 
     let server_peer_id = subduction.peer_id();
@@ -305,6 +335,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     // Spawn the accept loop
     let accept_cancel = token.child_token();
     let accept_subduction = subduction.clone();
+    let accept_ephemeral = ephemeral.clone();
     let accept_handler = lp_handler;
     let max_message_size = args.max_message_size;
 
@@ -312,6 +343,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         accept_loop(
             tcp_listener,
             accept_subduction,
+            accept_ephemeral,
             accept_handler,
             accept_cancel,
             handshake_max_drift,
@@ -358,6 +390,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let iroh_nonce_cache = NonceCache::default();
         let iroh_ep = iroh_endpoint.clone();
         let iroh_cancel = token.child_token();
+        let iroh_ephemeral = ephemeral.clone();
 
         let task = tokio::spawn({
             let cancel = iroh_cancel.clone();
@@ -385,6 +418,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     let auth = accepted.authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
                                     match iroh_subduction.add_connection(auth).await {
                                         Ok(_) => {
+                                            iroh_ephemeral.subscribe_peer(remote).await;
                                             iroh_subduction.full_sync_with_peer(&remote, true, None).await;
                                             tracing::info!("iroh: added peer {remote}");
                                         }
@@ -419,6 +453,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             }
             let peer_ep = iroh_endpoint.clone();
             let peer_subduction = subduction.clone();
+            let peer_ephemeral = ephemeral.clone();
             let peer_signer = signer.clone();
             let peer_cancel = token.clone();
             let peer_service_name = service_name.clone();
@@ -428,6 +463,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     &peer_ep,
                     peer_addr,
                     &peer_subduction,
+                    &peer_ephemeral,
                     &peer_signer,
                     &peer_service_name,
                     peer_cancel,
@@ -492,6 +528,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         };
 
         let peer_subduction = subduction.clone();
+        let peer_ephemeral = ephemeral.clone();
         let peer_signer = signer.clone();
         let peer_service_name = service_name.clone();
         let peer_cancel = token.clone();
@@ -500,6 +537,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             match try_connect_ws(
                 uri.clone(),
                 &peer_subduction,
+                &peer_ephemeral,
                 &peer_signer,
                 &peer_service_name,
                 peer_cancel,
@@ -553,6 +591,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 async fn accept_loop(
     tcp_listener: TcpListener,
     subduction: CliSubduction,
+    ephemeral: CliEphemeralHandler,
     lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
     cancel: CancellationToken,
     handshake_max_drift: Duration,
@@ -576,6 +615,7 @@ async fn accept_loop(
                         tracing::info!("new TCP connection from {addr}");
 
                         let task_subduction = subduction.clone();
+                        let task_ephemeral = ephemeral.clone();
                         let task_handler = lp_handler.clone();
                         let task_discovery = discovery_audience;
 
@@ -601,6 +641,7 @@ async fn accept_loop(
                                     tcp,
                                     addr,
                                     task_subduction,
+                                    task_ephemeral.clone(),
                                     handshake_max_drift,
                                     max_message_size,
                                     server_peer_id,
@@ -612,6 +653,7 @@ async fn accept_loop(
                                     tcp,
                                     addr,
                                     task_subduction,
+                                    task_ephemeral,
                                     task_handler,
                                 )
                                 .await;
@@ -642,6 +684,7 @@ async fn handle_websocket(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
     subduction: CliSubduction,
+    ephemeral: CliEphemeralHandler,
     handshake_max_drift: Duration,
     max_message_size: usize,
     server_peer_id: PeerId,
@@ -714,8 +757,11 @@ async fn handle_websocket(
         }
     };
 
+    let peer_id = authenticated.peer_id();
     if let Err(e) = subduction.add_connection(authenticated).await {
         tracing::error!("Failed to add WebSocket connection: {e}");
+    } else {
+        ephemeral.subscribe_peer(peer_id).await;
     }
 }
 
@@ -724,6 +770,7 @@ async fn handle_http_longpoll(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
     subduction: CliSubduction,
+    ephemeral: CliEphemeralHandler,
     handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
 ) {
     use http_body_util::Full;
@@ -741,6 +788,7 @@ async fn handle_http_longpoll(
     let service = hyper::service::service_fn(move |req| {
         let handler = handler.clone();
         let subduction = subduction.clone();
+        let ephemeral = ephemeral.clone();
         async move {
             // Handle CORS preflight
             if req.method() == hyper::Method::OPTIONS {
@@ -782,10 +830,13 @@ async fn handle_http_longpoll(
                 && let Some(sid) = subduction_http_longpoll::session::SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
             {
+                let peer_id = auth.peer_id();
                 let unified_auth =
                     auth.map(|lp| MessageTransport::new(UnifiedTransport::HttpLongPoll(lp)));
                 if let Err(e) = subduction.add_connection(unified_auth).await {
                     tracing::error!("Failed to add HTTP long-poll connection: {e}");
+                } else {
+                    ephemeral.subscribe_peer(peer_id).await;
                 }
             }
 
@@ -826,6 +877,7 @@ async fn handle_http_longpoll(
 async fn try_connect_ws(
     uri: Uri,
     subduction: &CliSubduction,
+    ephemeral: &CliEphemeralHandler,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -897,6 +949,7 @@ async fn try_connect_ws(
     tracing::info!("Handshake complete: connected to {remote_id}");
 
     subduction.add_connection(authenticated).await?;
+    ephemeral.subscribe_peer(remote_id).await;
     tracing::info!("Connected to peer at {uri_str}");
 
     Ok(remote_id)
@@ -908,6 +961,7 @@ async fn try_connect_iroh(
     endpoint: &iroh::Endpoint,
     addr: EndpointAddr,
     subduction: &CliSubduction,
+    ephemeral: &CliEphemeralHandler,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -955,6 +1009,7 @@ async fn try_connect_iroh(
     let remote_id = authenticated.peer_id();
     let auth = authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
     subduction.add_connection(auth).await?;
+    ephemeral.subscribe_peer(remote_id).await;
     subduction.full_sync_with_peer(&remote_id, true, None).await;
 
     tracing::info!("iroh: added peer {node_id} (subduction ID: {remote_id})");

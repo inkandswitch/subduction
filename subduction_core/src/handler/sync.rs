@@ -204,6 +204,17 @@ impl<
         }
     }
 
+    /// Returns the shared connections map.
+    ///
+    /// Use this to share the connection map with other handlers (e.g.,
+    /// [`EphemeralHandler`]) that need to send messages to connected peers.
+    ///
+    /// [`EphemeralHandler`]: subduction_ephemeral::handler::EphemeralHandler
+    #[allow(clippy::type_complexity)]
+    pub fn connections(&self) -> Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>> {
+        self.connections.clone()
+    }
+
     /// Returns a shared reference to the per-peer send counter.
     ///
     /// Pass a clone to [`Subduction`] so that outgoing messages stamped

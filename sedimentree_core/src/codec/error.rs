@@ -125,6 +125,16 @@ pub struct DuplicateElement {
     pub field: &'static str,
 }
 
+/// Schema discriminant doesn't match expected value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("invalid discriminant: expected {expected:#04x}, got {got:#04x}")]
+pub struct InvalidDiscriminant {
+    /// Expected discriminant byte.
+    pub expected: u8,
+    /// Actual discriminant byte found.
+    pub got: u8,
+}
+
 /// Failed to decode a bijou64-encoded value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("bijou64 decode error at offset {offset}: {kind}")]
@@ -176,6 +186,10 @@ pub enum DecodeError {
     /// Enum discriminant/tag is not recognized.
     #[error(transparent)]
     InvalidEnumTag(#[from] InvalidEnumTag),
+
+    /// Schema discriminant doesn't match expected value.
+    #[error(transparent)]
+    InvalidDiscriminant(#[from] InvalidDiscriminant),
 
     /// Declared size doesn't match actual data.
     #[error(transparent)]
