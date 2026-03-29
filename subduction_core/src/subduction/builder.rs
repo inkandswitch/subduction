@@ -542,25 +542,31 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     /// the `compose` closure. This lets you wrap the `SyncHandler` in a
     /// composed handler that also handles other message types.
     ///
+    /// The closure returns `(Arc<H>, X)` where `X` is any extra data
+    /// the caller wants to extract from the composition step (e.g.,
+    /// an [`EphemeralHandler`] that shares the same `connections` map).
+    ///
     /// # Example
     ///
     /// ```ignore
-    /// let (sd, listener, manager) = SubductionBuilder::new()
+    /// let (sd, listener, manager, ephemeral) = SubductionBuilder::new()
     ///     .signer(signer)
     ///     .storage(my_storage, Arc::new(policy))
     ///     .spawner(TokioSpawn)
-    ///     .build_composed::<Sendable, MyConn, _>(|sync_handler| {
-    ///         Arc::new(MyComposedHandler { sync: sync_handler, /* ... */ })
+    ///     .build_composed::<Sendable, MyConn, _, _>(|sync_handler| {
+    ///         let eph = EphemeralHandler::new(sync_handler.connections(), ...);
+    ///         (Arc::new(MyComposedHandler { sync: sync_handler, ... }), eph)
     ///     });
     /// ```
     #[allow(clippy::type_complexity)]
-    pub fn build_composed<'a, F, C, H>(
+    pub fn build_composed<'a, F, C, H, X>(
         self,
-        compose: impl FnOnce(Arc<SyncHandler<F, S, C, P, M, N>>) -> Arc<H>,
+        compose: impl FnOnce(Arc<SyncHandler<F, S, C, P, M, N>>) -> (Arc<H>, X),
     ) -> (
         Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
         ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
         crate::connection::manager::ManagerFuture<F>,
+        X,
     )
     where
         F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
@@ -609,9 +615,9 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
         ));
 
         let send_counter = sync_handler.send_counter().clone();
-        let handler = compose(sync_handler);
+        let (handler, extra) = compose(sync_handler);
 
-        Subduction::new(
+        let (subduction, listener, manager) = Subduction::new(
             handler,
             self.discovery_id,
             self.signer,
@@ -626,6 +632,8 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
-        )
+        );
+
+        (subduction, listener, manager, extra)
     }
 }
