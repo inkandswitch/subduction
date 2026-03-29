@@ -68,13 +68,19 @@ impl Response {
 /// Size of Response fields (after schema + issuer, before signature).
 pub(crate) const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
 
-/// Minimum size of a signed Response message.
-pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 bytes
+/// Minimum size of a signed Response message (schema + discriminant + issuer + fields + signature).
+pub const RESPONSE_MIN_SIZE: usize = 4 + 1 + 32 + RESPONSE_FIELDS_SIZE + 64; // 141 bytes
+
+impl Response {
+    /// Variant tag within the `SUH\x00` handshake protocol.
+    pub const TAG: u8 = 0x01;
+}
 
 impl Schema for Response {
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
-    const TYPE_BYTE: u8 = b'R'; // Response
+    const TYPE_BYTE: u8 = b'H'; // Handshake (shared with Challenge)
     const VERSION: u8 = 0;
+    const DISCRIMINANT: Option<u8> = Some(Response::TAG);
 }
 
 impl EncodeFields for Response {

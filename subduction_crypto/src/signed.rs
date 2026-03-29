@@ -8,16 +8,19 @@
 //! All signed payloads use a canonical binary format:
 //!
 //! ```text
-//! ┌─────────────────────────── Payload ────────────────────────────┬─ Seal ─┐
-//! ╔════════╦══════════╦═══════════════════════════════════════════╦════════╗
-//! ║ Schema ║ IssuerVK ║           Type-Specific Fields            ║  Sig   ║
-//! ║   4B   ║   32B    ║              (variable)                   ║  64B   ║
-//! ╚════════╩══════════╩═══════════════════════════════════════════╩════════╝
+//! ┌──────────────────────────── Payload ────────────────────────────────┬─ Seal ─┐
+//! ╔════════╦═══════╦══════════╦═══════════════════════════════════════╦════════╗
+//! ║ Schema ║ Disc? ║ IssuerVK ║          Type-Specific Fields         ║  Sig   ║
+//! ║   4B   ║ 0|1B  ║   32B    ║             (variable)                ║  64B   ║
+//! ╚════════╩═══════╩══════════╩═══════════════════════════════════════╩════════╝
 //! ```
 //!
 //! - **Schema**: 4-byte header identifying type and version
+//! - **Disc?**: Optional 1-byte discriminant (from [`Schema::DISCRIMINANT`])
+//!   distinguishing types that share a schema (e.g., `Challenge` and `Response`
+//!   under `SUH\x00`). Present only when `T::DISCRIMINANT.is_some()`.
 //! - **`IssuerVK`**: `Ed25519` verifying key of the signer (32 bytes)
-//! - **Fields**: Type-specific data encoded by the [`Encode`] implementation
+//! - **Fields**: Type-specific data encoded by the [`EncodeFields`] implementation
 //! - **Signature**: `Ed25519` signature over bytes `[0..len-64]`
 
 use alloc::vec::Vec;
@@ -27,7 +30,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use sedimentree_core::codec::{
     decode::DecodeFields,
     encode::EncodeFields,
-    error::{DecodeError, InvalidSchema},
+    error::{DecodeError, InvalidDiscriminant, InvalidSchema},
     schema::Schema,
 };
 use thiserror::Error;
@@ -109,7 +112,8 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
 
     /// Get the full wire bytes.
     ///
-    /// This includes the schema, issuer, fields, and signature.
+    /// This includes the schema, optional discriminant, issuer, fields,
+    /// and signature.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -117,21 +121,20 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
 
     /// Get the payload bytes (everything before the signature).
     ///
-    /// This is the data that was signed: schema + issuer + fields.
+    /// This is the data that was signed:
+    /// `schema + discriminant? + issuer + fields`.
     #[must_use]
     pub fn payload_bytes(&self) -> &[u8] {
-        // SAFETY: Signed<T> is only constructed after validating MIN_SIZE >= SIGNATURE_SIZE
         self.bytes
             .get(..self.bytes.len().saturating_sub(SIGNATURE_SIZE))
             .unwrap_or(&[])
     }
 
-    /// Get the fields bytes (after schema + issuer, before signature).
+    /// Get the fields bytes (after schema + discriminant + issuer, before signature).
     #[must_use]
     pub fn fields_bytes(&self) -> &[u8] {
-        let start = SCHEMA_SIZE + VERIFYING_KEY_SIZE;
+        let start = SCHEMA_SIZE + usize::from(T::DISCRIMINANT.is_some()) + VERIFYING_KEY_SIZE;
         let end = self.bytes.len().saturating_sub(SIGNATURE_SIZE);
-        // SAFETY: Signed<T> is only constructed after validating MIN_SIZE
         self.bytes.get(start..end).unwrap_or(&[])
     }
 
@@ -193,7 +196,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
             });
         }
 
-        // Validate schema - safe because MIN_SIZE >= SCHEMA_SIZE
+        // Validate schema
         let schema: [u8; SCHEMA_SIZE] = bytes
             .get(0..SCHEMA_SIZE)
             .and_then(|s| s.try_into().ok())
@@ -210,25 +213,41 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
             .into());
         }
 
-        // Extract issuer - safe because MIN_SIZE >= SCHEMA_SIZE + VERIFYING_KEY_SIZE
+        let disc_size = usize::from(T::DISCRIMINANT.is_some());
+
+        // Validate discriminant (if present)
+        if let Some(expected_disc) = T::DISCRIMINANT {
+            let got_disc = *bytes.get(SCHEMA_SIZE).ok_or(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
+                need: SCHEMA_SIZE + 1,
+                have: bytes.len(),
+            })?;
+            if got_disc != expected_disc {
+                return Err(InvalidDiscriminant {
+                    expected: expected_disc,
+                    got: got_disc,
+                }
+                .into());
+            }
+        }
+
+        // Extract issuer
+        let issuer_start = SCHEMA_SIZE + disc_size;
         let issuer_bytes: [u8; VERIFYING_KEY_SIZE] = bytes
-            .get(SCHEMA_SIZE..SCHEMA_SIZE + VERIFYING_KEY_SIZE)
+            .get(issuer_start..issuer_start + VERIFYING_KEY_SIZE)
             .and_then(|s| s.try_into().ok())
             .ok_or(DecodeError::MessageTooShort {
                 type_name: core::any::type_name::<T>(),
-                need: SCHEMA_SIZE + VERIFYING_KEY_SIZE,
+                need: issuer_start + VERIFYING_KEY_SIZE,
                 have: bytes.len(),
             })?;
         let issuer = VerifyingKey::from_bytes(&issuer_bytes)
             .map_err(|_| DecodeError::InvalidVerifyingKey)?;
 
         // Decode the payload to determine the actual message size.
-        // The fields start after schema + issuer, and we need to parse them
-        // to know where they end (since they have variable-length arrays).
-        // The consumed byte count from try_decode_fields is the authoritative
-        // encoded fields size — derived from the wire bytes, not from the
-        // reconstructed struct (which could disagree, e.g., after BTreeSet dedup).
-        let fields_start = SCHEMA_SIZE + VERIFYING_KEY_SIZE;
+        // The fields start after schema + discriminant + issuer, and we need
+        // to parse them to know where they end (variable-length arrays).
+        let fields_start = issuer_start + VERIFYING_KEY_SIZE;
         let fields_bytes = bytes
             .get(fields_start..)
             .ok_or(DecodeError::MessageTooShort {
@@ -239,7 +258,8 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
         let (_payload, fields_size) = T::try_decode_fields(fields_bytes)?;
 
         // Calculate the actual message size and validate we have enough bytes
-        let actual_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        let actual_size =
+            SCHEMA_SIZE + disc_size + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
         if bytes.len() < actual_size {
             return Err(DecodeError::MessageTooShort {
                 type_name: core::any::type_name::<T>(),
@@ -299,6 +319,11 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
 
         // Write schema
         bytes.extend_from_slice(&T::SCHEMA);
+
+        // Write discriminant (if present)
+        if let Some(disc) = T::DISCRIMINANT {
+            bytes.push(disc);
+        }
 
         // Write issuer
         bytes.extend_from_slice(issuer.as_bytes());
@@ -409,10 +434,15 @@ impl<'a, T: Schema + EncodeFields + DecodeFields + arbitrary::Arbitrary<'a>>
 
         // Encode the payload
         let fields_size = payload.fields_size();
-        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        let disc_size = usize::from(T::DISCRIMINANT.is_some());
+        let total_size =
+            SCHEMA_SIZE + disc_size + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
         let mut bytes = Vec::with_capacity(total_size);
 
         bytes.extend_from_slice(&T::SCHEMA);
+        if let Some(disc) = T::DISCRIMINANT {
+            bytes.push(disc);
+        }
         bytes.extend_from_slice(issuer.as_bytes());
         payload.encode_fields(&mut bytes);
 

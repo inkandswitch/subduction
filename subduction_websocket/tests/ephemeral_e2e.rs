@@ -26,11 +26,11 @@ use subduction_ephemeral::{
     topic::Topic,
 };
 use subduction_websocket::{
-    tokio::{
-        client::TokioWebSocketClient, server::TokioWebSocketServer, unified::UnifiedWebSocket,
-        TimeoutTokio, TokioSpawn,
-    },
     DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{
+        TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+        unified::UnifiedWebSocket,
+    },
 };
 use testresult::TestResult;
 
@@ -107,7 +107,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
         payload: vec![10, 20, 30, 40, 50],
     };
     let verified = Signed::seal::<Sendable, _>(&client_signer, ep).await;
-    let msg = EphemeralMessage::Ephemeral(verified.into_signed());
+    let msg = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
     Connection::<Sendable, EphemeralMessage>::send(&client, &msg).await?;
 
     // Send a Subscribe message.
@@ -190,7 +190,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
         payload: vec![42],
     };
     let verified = Signed::seal::<Sendable, _>(&client_signer, ep).await;
-    let eph = EphemeralMessage::Ephemeral(verified.into_signed());
+    let eph = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
     Connection::<Sendable, EphemeralMessage>::send(&client, &eph).await?;
 
     // Send a sync message (RemoveSubscriptions — small, no blobs).

@@ -13,9 +13,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use nonempty::NonEmpty;
@@ -37,9 +37,9 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
-        error::HydrationError,
-        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
+        error::HydrationError,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
@@ -68,9 +68,9 @@ use crate::{
     sync_stats::WasmSyncStats,
     topic::WasmTopic,
     transport::{
+        DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         websocket::WasmWebSocket,
-        JsTransport, WasmAuthenticatedTransport, DEFAULT_LOCAL_SERVICE_NAME,
     },
 };
 use sedimentree_wasm::{
@@ -107,7 +107,7 @@ impl Spawn<Local> for WasmSpawn {
 
 use crate::{
     clock::JsClock,
-    policy::{make_open_policy, JsPolicy},
+    policy::{JsPolicy, make_open_policy},
 };
 
 type WasmConn = MessageTransport<JsTransport>;
@@ -1145,7 +1145,7 @@ impl WasmSubduction {
             payload: payload.to_vec(),
         };
         let verified = Signed::seal::<Local, _>(self.core.signer(), ep).await;
-        let msg = EphemeralMessage::Ephemeral(verified.into_signed());
+        let msg = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
         self.ephemeral_handler.publish(msg).await;
     }
 

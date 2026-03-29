@@ -12,9 +12,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
-use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
-use subduction_keyhive::{KeyhiveMessage, KEYHIVE_SCHEMA};
+use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
+use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
+use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 /// Composed wire message for the CLI server.
 ///
@@ -159,8 +159,9 @@ mod tests {
                 payload: vec![10, 20, 30],
             };
             let verified = Signed::seal::<Sendable, _>(&signer, ep).await;
-            let msg =
-                CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral(verified.into_signed()));
+            let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral(Box::new(
+                verified.into_signed(),
+            )));
 
             let encoded = msg.encode();
             let decoded = CliWireMessage::try_decode(&encoded)?;

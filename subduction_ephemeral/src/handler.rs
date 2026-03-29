@@ -364,11 +364,11 @@ impl<K: FutureForm, C, E, Clk> Handler<K, C> for EphemeralHandler<K, C, E, Clk> 
 }
 
 impl<
-        F: FutureForm,
-        C: Connection<F, EphemeralMessage> + Clone + 'static,
-        E: EphemeralPolicy<F>,
-        Clk: Clock,
-    > EphemeralHandler<F, C, E, Clk>
+    F: FutureForm,
+    C: Connection<F, EphemeralMessage> + Clone + 'static,
+    E: EphemeralPolicy<F>,
+    Clk: Clock,
+> EphemeralHandler<F, C, E, Clk>
 {
     async fn dispatch(
         &self,

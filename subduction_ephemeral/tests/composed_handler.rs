@@ -299,7 +299,7 @@ async fn dispatch_ephemeral_message_to_ephemeral_handler() -> TestResult {
         payload: vec![1, 2, 3],
     };
     let verified = Signed::seal::<Sendable, _>(&signer, ep).await;
-    let eph_msg = EphemeralMessage::Ephemeral(verified.into_signed());
+    let eph_msg = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
     let wire: TestWireMessage = eph_msg.clone().into();
 
     Handler::<Sendable, TestConn>::handle(&composed, &auth, wire).await?;

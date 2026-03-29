@@ -50,26 +50,21 @@ use crate::topic::Topic;
 /// Schema header for [`EphemeralMessage`] envelope: **SU**bduction **E**phemeral v0.
 pub const EPHEMERAL_SCHEMA: [u8; 4] = *b"SUE\x00";
 
-/// Schema prefix size (elided from signed variant payloads on the wire).
-const SCHEMA_SIZE: usize = 4;
-
-/// Minimum envelope size: `schema(4) + tag(1)`.
-const ENVELOPE_HEADER_SIZE: usize = SCHEMA_SIZE + 1;
+/// Header size for unsigned control messages: `schema(4) + tag(1)`.
+const CONTROL_HEADER_SIZE: usize = 4 + 1;
 
 mod tags {
-    pub(super) const EPHEMERAL: u8 = 0x00;
+    use super::EphemeralPayload;
+
+    pub(super) const EPHEMERAL: u8 = EphemeralPayload::TAG;
     pub(super) const SUBSCRIBE: u8 = 0x01;
     pub(super) const UNSUBSCRIBE: u8 = 0x02;
     pub(super) const SUBSCRIBE_REJECTED: u8 = 0x03;
 }
 
-/// Minimum payload sizes _after_ the tag byte.
+/// Minimum payload sizes _after_ the tag byte (for control messages only).
+/// The `Ephemeral` variant validates size via [`Signed::try_decode`].
 mod min_sizes {
-    use super::{EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE, SCHEMA_SIZE};
-
-    // Signed<EphemeralPayload> with inner schema stripped:
-    // issuer(32) + fields_min(49) + signature(64) = MIN_SIGNED_SIZE - SCHEMA_SIZE
-    pub(super) const EPHEMERAL: usize = EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE - SCHEMA_SIZE;
     // count(2) + topic(32) — at least one topic required (NonEmpty)
     pub(super) const SUBSCRIBE: usize = 2 + 32;
     // count(2) + topic(32)
@@ -80,11 +75,13 @@ mod min_sizes {
 
 // ── EphemeralPayload ────────────────────────────────────────────────────
 
-/// Size of `EphemeralPayload` fields: id(32) + nonce(8) + timestamp(8) + payload_len(bijou64 min=1).
+/// Size of `EphemeralPayload` fields: `id(32) + nonce(8) + timestamp(8) + payload_len(bijou64 min=1)`.
 const EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE: usize = 32 + 8 + 8 + 1;
 
-/// Minimum size of a `Signed<EphemeralPayload>`: schema(4) + issuer(32) + fields + signature(64).
-const EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE: usize = 4 + 32 + EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE + 64;
+/// Minimum size of a `Signed<EphemeralPayload>`:
+/// schema(4) + discriminant(1) + issuer(32) + fields + signature(64).
+const EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE: usize =
+    4 + 1 + 32 + EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE + 64;
 
 /// The signable payload of an ephemeral message.
 ///
@@ -108,10 +105,16 @@ pub struct EphemeralPayload {
     pub payload: Vec<u8>,
 }
 
+impl EphemeralPayload {
+    /// Variant tag within the `SUE\x00` ephemeral protocol.
+    pub const TAG: u8 = 0x00;
+}
+
 impl Schema for EphemeralPayload {
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
     const TYPE_BYTE: u8 = b'E';
     const VERSION: u8 = 0;
+    const DISCRIMINANT: Option<u8> = Some(EphemeralPayload::TAG);
     // SCHEMA = b"SUE\x00"
 }
 
@@ -204,7 +207,7 @@ pub enum EphemeralMessage {
     /// Fire-and-forget delivery to all subscribers of the topic
     /// (minus the sender). The originator signs the message; relays
     /// forward it as-is.
-    Ephemeral(Signed<EphemeralPayload>),
+    Ephemeral(Box<Signed<EphemeralPayload>>),
 
     /// Subscribe to ephemeral messages for the given topics.
     Subscribe {
@@ -228,58 +231,48 @@ pub enum EphemeralMessage {
     },
 }
 
-impl EphemeralMessage {
-    /// Payload byte count after the tag byte.
-    fn tag_payload_size(&self) -> usize {
-        match self {
-            // Inner schema is stripped; payload is issuer + fields + signature.
-            Self::Ephemeral(signed) => signed.as_bytes().len() - SCHEMA_SIZE,
-            Self::Subscribe { topics }
-            | Self::Unsubscribe { topics }
-            | Self::SubscribeRejected { topics } => 2 + topics.len() * 32,
-        }
-    }
-}
-
 // ── Encode ──────────────────────────────────────────────────────────────
 
 impl Encode for EphemeralMessage {
     fn encode(&self) -> Vec<u8> {
-        encode_message(self)
+        match self {
+            // The Signed<T> bytes ARE the wire message — schema + discriminant
+            // + issuer + fields + signature. No outer envelope needed.
+            Self::Ephemeral(signed) => signed.as_bytes().to_vec(),
+
+            // Control messages: manual SUE\x00 + tag + payload.
+            Self::Subscribe { topics } => {
+                let mut buf = Vec::with_capacity(CONTROL_HEADER_SIZE + 2 + topics.len() * 32);
+                buf.extend_from_slice(&EPHEMERAL_SCHEMA);
+                buf.push(tags::SUBSCRIBE);
+                encode_topic_list(&mut buf, topics);
+                buf
+            }
+            Self::Unsubscribe { topics } => {
+                let mut buf = Vec::with_capacity(CONTROL_HEADER_SIZE + 2 + topics.len() * 32);
+                buf.extend_from_slice(&EPHEMERAL_SCHEMA);
+                buf.push(tags::UNSUBSCRIBE);
+                encode_topic_list(&mut buf, topics);
+                buf
+            }
+            Self::SubscribeRejected { topics } => {
+                let mut buf = Vec::with_capacity(CONTROL_HEADER_SIZE + 2 + topics.len() * 32);
+                buf.extend_from_slice(&EPHEMERAL_SCHEMA);
+                buf.push(tags::SUBSCRIBE_REJECTED);
+                encode_topic_list(&mut buf, topics);
+                buf
+            }
+        }
     }
 
     fn encoded_size(&self) -> usize {
-        ENVELOPE_HEADER_SIZE + self.tag_payload_size()
-    }
-}
-
-fn encode_message(msg: &EphemeralMessage) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(msg.encoded_size());
-
-    buf.extend_from_slice(&EPHEMERAL_SCHEMA);
-
-    match msg {
-        EphemeralMessage::Ephemeral(signed) => {
-            buf.push(tags::EPHEMERAL);
-            // Strip the inner Signed<T> schema prefix — the envelope
-            // schema already identifies the protocol.
-            buf.extend_from_slice(&signed.as_bytes()[SCHEMA_SIZE..]);
-        }
-        EphemeralMessage::Subscribe { topics } => {
-            buf.push(tags::SUBSCRIBE);
-            encode_topic_list(&mut buf, topics);
-        }
-        EphemeralMessage::Unsubscribe { topics } => {
-            buf.push(tags::UNSUBSCRIBE);
-            encode_topic_list(&mut buf, topics);
-        }
-        EphemeralMessage::SubscribeRejected { topics } => {
-            buf.push(tags::SUBSCRIBE_REJECTED);
-            encode_topic_list(&mut buf, topics);
+        match self {
+            Self::Ephemeral(signed) => signed.as_bytes().len(),
+            Self::Subscribe { topics }
+            | Self::Unsubscribe { topics }
+            | Self::SubscribeRejected { topics } => CONTROL_HEADER_SIZE + 2 + topics.len() * 32,
         }
     }
-
-    buf
 }
 
 fn encode_topic_list(buf: &mut Vec<u8>, topics: &NonEmpty<Topic>) {
@@ -293,7 +286,7 @@ fn encode_topic_list(buf: &mut Vec<u8>, topics: &NonEmpty<Topic>) {
 // ── Decode ──────────────────────────────────────────────────────────────
 
 impl Decode for EphemeralMessage {
-    const MIN_SIZE: usize = ENVELOPE_HEADER_SIZE;
+    const MIN_SIZE: usize = CONTROL_HEADER_SIZE;
 
     fn try_decode(buf: &[u8]) -> Result<Self, DecodeError> {
         decode_message(buf)
@@ -301,10 +294,10 @@ impl Decode for EphemeralMessage {
 }
 
 fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
-    if bytes.len() < ENVELOPE_HEADER_SIZE {
+    if bytes.len() < CONTROL_HEADER_SIZE {
         return Err(DecodeError::MessageTooShort {
-            type_name: "EphemeralMessage envelope",
-            need: ENVELOPE_HEADER_SIZE,
+            type_name: "EphemeralMessage",
+            need: CONTROL_HEADER_SIZE,
             have: bytes.len(),
         });
     }
@@ -326,61 +319,61 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
         .into());
     }
 
+    // Byte 4 is either:
+    // - A discriminant (0x00) for Signed<EphemeralPayload>
+    // - A control message tag (0x01-0x03)
     let tag = *bytes.get(4).ok_or(DecodeError::MessageTooShort {
         type_name: "EphemeralMessage tag",
-        need: ENVELOPE_HEADER_SIZE,
+        need: CONTROL_HEADER_SIZE,
         have: bytes.len(),
     })?;
-    let payload = bytes
-        .get(ENVELOPE_HEADER_SIZE..)
-        .ok_or(DecodeError::MessageTooShort {
-            type_name: "EphemeralMessage payload",
-            need: ENVELOPE_HEADER_SIZE,
-            have: bytes.len(),
-        })?;
-
-    let (min_payload_size, type_name) = match tag {
-        tags::EPHEMERAL => (min_sizes::EPHEMERAL, "Ephemeral"),
-        tags::SUBSCRIBE => (min_sizes::SUBSCRIBE, "EphemeralSubscribe"),
-        tags::UNSUBSCRIBE => (min_sizes::UNSUBSCRIBE, "EphemeralUnsubscribe"),
-        tags::SUBSCRIBE_REJECTED => (min_sizes::SUBSCRIBE_REJECTED, "EphemeralSubscribeRejected"),
-        _ => {
-            return Err(InvalidEnumTag {
-                tag,
-                type_name: "EphemeralMessage",
-            }
-            .into());
-        }
-    };
-
-    if payload.len() < min_payload_size {
-        return Err(DecodeError::MessageTooShort {
-            type_name,
-            need: ENVELOPE_HEADER_SIZE + min_payload_size,
-            have: bytes.len(),
-        });
-    }
 
     match tag {
         tags::EPHEMERAL => {
-            // Reconstruct the Signed<EphemeralPayload> schema prefix that
-            // was elided on the wire (the envelope schema identifies the protocol).
-            let mut full = Vec::with_capacity(SCHEMA_SIZE + payload.len());
-            full.extend_from_slice(&EphemeralPayload::SCHEMA);
-            full.extend_from_slice(payload);
-            let signed = Signed::<EphemeralPayload>::try_decode(full)?;
-            Ok(EphemeralMessage::Ephemeral(signed))
+            // The full bytes are a Signed<EphemeralPayload>.
+            // The discriminant at byte 4 is validated by Signed::try_decode.
+            let signed = Signed::<EphemeralPayload>::try_decode(bytes.to_vec())?;
+            Ok(EphemeralMessage::Ephemeral(Box::new(signed)))
         }
-        tags::SUBSCRIBE => {
-            decode_topic_list(payload).map(|topics| EphemeralMessage::Subscribe { topics })
+        tags::SUBSCRIBE | tags::UNSUBSCRIBE | tags::SUBSCRIBE_REJECTED => {
+            let payload = bytes
+                .get(CONTROL_HEADER_SIZE..)
+                .ok_or(DecodeError::MessageTooShort {
+                    type_name: "EphemeralMessage control payload",
+                    need: CONTROL_HEADER_SIZE + 1,
+                    have: bytes.len(),
+                })?;
+
+            let (min_size, type_name) = match tag {
+                tags::SUBSCRIBE => (min_sizes::SUBSCRIBE, "EphemeralSubscribe"),
+                tags::UNSUBSCRIBE => (min_sizes::UNSUBSCRIBE, "EphemeralUnsubscribe"),
+                tags::SUBSCRIBE_REJECTED => {
+                    (min_sizes::SUBSCRIBE_REJECTED, "EphemeralSubscribeRejected")
+                }
+                _ => unreachable!(),
+            };
+
+            if payload.len() < min_size {
+                return Err(DecodeError::MessageTooShort {
+                    type_name,
+                    need: CONTROL_HEADER_SIZE + min_size,
+                    have: bytes.len(),
+                });
+            }
+
+            let topics = decode_topic_list(payload)?;
+            match tag {
+                tags::SUBSCRIBE => Ok(EphemeralMessage::Subscribe { topics }),
+                tags::UNSUBSCRIBE => Ok(EphemeralMessage::Unsubscribe { topics }),
+                tags::SUBSCRIBE_REJECTED => Ok(EphemeralMessage::SubscribeRejected { topics }),
+                _ => unreachable!(),
+            }
         }
-        tags::UNSUBSCRIBE => {
-            decode_topic_list(payload).map(|topics| EphemeralMessage::Unsubscribe { topics })
+        _ => Err(InvalidEnumTag {
+            tag,
+            type_name: "EphemeralMessage",
         }
-        tags::SUBSCRIBE_REJECTED => {
-            decode_topic_list(payload).map(|topics| EphemeralMessage::SubscribeRejected { topics })
-        }
-        _ => unreachable!("tag validated above"),
+        .into()),
     }
 }
 
@@ -437,7 +430,12 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 mod tests {
     use super::*;
     use subduction_core::peer::id::PeerId;
@@ -456,7 +454,7 @@ mod tests {
         };
 
         let verified = Signed::seal::<future_form::Sendable, _>(&signer, ep).await;
-        EphemeralMessage::Ephemeral(verified.into_signed())
+        EphemeralMessage::Ephemeral(Box::new(verified.into_signed()))
     }
 
     #[tokio::test]
@@ -548,7 +546,7 @@ mod tests {
         let topics = NonEmpty::new(Topic::new([0x01; 32]));
         let msg = EphemeralMessage::Subscribe { topics };
         let mut encoded = msg.encode();
-        encoded[8] = 0xFF;
+        encoded[4] = 0xFF; // tag byte is at position 4 (after schema)
 
         let err = EphemeralMessage::try_decode(&encoded).unwrap_err();
         assert!(
@@ -594,17 +592,13 @@ mod tests {
         bytes[sig_start] ^= 0xFF;
 
         let tampered = Signed::<EphemeralPayload>::try_decode(bytes);
-        match tampered {
-            Ok(s) => {
-                assert!(
-                    s.try_verify().is_err(),
-                    "tampered signature should fail verification"
-                );
-            }
-            Err(_) => {
-                // Decode failure is also acceptable — the bytes are corrupt.
-            }
+        if let Ok(s) = tampered {
+            assert!(
+                s.try_verify().is_err(),
+                "tampered signature should fail verification"
+            );
         }
+        // Decode failure is also acceptable — the bytes are corrupt.
     }
 
     #[tokio::test]
@@ -621,8 +615,8 @@ mod tests {
         };
 
         let verified = Signed::seal::<future_form::Sendable, _>(&signer, ep).await;
-        let signed = verified.into_signed();
+        let sealed = verified.into_signed();
 
-        assert_eq!(PeerId::from(signed.issuer()), expected_peer);
+        assert_eq!(PeerId::from(sealed.issuer()), expected_peer);
     }
 }

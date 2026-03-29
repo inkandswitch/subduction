@@ -233,7 +233,9 @@ mod tests {
             payload: vec![1, 2, 3],
         };
         let verified = Signed::seal::<Sendable, _>(&signer, ep).await;
-        let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral(verified.into_signed()));
+        let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral(Box::new(
+            verified.into_signed(),
+        )));
 
         let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
         assert_eq!(extracted, None);
