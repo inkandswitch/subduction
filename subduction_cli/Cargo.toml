@@ -55,7 +55,6 @@ tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
-ed25519-dalek = { workspace = true }
 future_form = { workspace = true }
 reqwest = { workspace = true, features = ["native-tls"] }
 sedimentree_core = { workspace = true, features = ["std"] }

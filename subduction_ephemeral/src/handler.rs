@@ -121,9 +121,14 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
 
     /// Publish a pre-signed ephemeral message to all subscribers.
     ///
-    /// The caller is responsible for constructing a signed message via
-    /// [`EphemeralMessage::new_signed`]. This method checks the payload
+    /// The caller is responsible for constructing a signed message,
+    /// typically by sealing an [`EphemeralPayload`] (e.g., with
+    /// [`Signed::seal`]) and wrapping it in
+    /// [`EphemeralMessage::Ephemeral`]. This method checks the payload
     /// size limit, gathers subscribers, filters by policy, and fans out.
+    ///
+    /// [`EphemeralPayload`]: crate::message::EphemeralPayload
+    /// [`Signed::seal`]: subduction_crypto::verified_signature::VerifiedSignature::seal
     ///
     /// Errors on individual sends are logged but not propagated —
     /// fire-and-forget semantics.

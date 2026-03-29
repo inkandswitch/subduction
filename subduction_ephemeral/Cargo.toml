@@ -16,7 +16,6 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 bijou64 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
-ed25519-dalek = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
@@ -42,7 +41,6 @@ test_utils = []
 std = [
   "async-channel/std",
   "async-lock/std",
-  "ed25519-dalek/std",
   "futures/std",
   "nonempty/std",
   "sedimentree_core/std",

@@ -39,7 +39,7 @@ use nonempty::NonEmpty;
 use sedimentree_core::codec::{
     decode::{self, Decode, DecodeFields},
     encode::{self, Encode, EncodeFields},
-    error::{DecodeError, InvalidEnumTag, InvalidSchema},
+    error::{DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
     schema::{self, Schema},
 };
 use subduction_core::timestamp::TimestampSeconds;
@@ -276,6 +276,11 @@ impl Encode for EphemeralMessage {
 }
 
 fn encode_topic_list(buf: &mut Vec<u8>, topics: &NonEmpty<Topic>) {
+    debug_assert!(
+        u16::try_from(topics.len()).is_ok(),
+        "topic list exceeds u16::MAX ({} topics)",
+        topics.len()
+    );
     #[allow(clippy::cast_possible_truncation)]
     buf.extend_from_slice(&(topics.len() as u16).to_be_bytes());
     for topic in topics {
@@ -384,8 +389,8 @@ fn decode_topic_list(payload: &[u8]) -> Result<NonEmpty<Topic>, DecodeError> {
     if count == 0 {
         return Err(DecodeError::MessageTooShort {
             type_name: "EphemeralTopicList",
-            need: 1,
-            have: 0,
+            need: 2 + 32, // count + at least one topic
+            have: payload.len(),
         });
     }
 
@@ -393,6 +398,15 @@ fn decode_topic_list(payload: &[u8]) -> Result<NonEmpty<Topic>, DecodeError> {
     let mut rest = Vec::with_capacity(count - 1);
     for _ in 1..count {
         rest.push(Topic::new(read_array::<32>(payload, &mut offset)?));
+    }
+
+    // Reject trailing bytes — the payload should be exactly count(2) + count * topic(32).
+    if offset != payload.len() {
+        return Err(SizeMismatch {
+            declared: offset,
+            actual: payload.len(),
+        }
+        .into());
     }
 
     Ok(NonEmpty {
