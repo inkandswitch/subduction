@@ -1287,7 +1287,9 @@ where
     /// # Errors
     ///
     /// * [`WriteError::Io`] if a storage error occurs.
-    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
     pub async fn add_commits_batch(
         &self,
         id: SedimentreeId,
@@ -1329,7 +1331,9 @@ where
     /// # Errors
     ///
     /// * [`WriteError::Io`] if a storage error occurs.
-    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
     pub async fn add_fragments_batch(
         &self,
         id: SedimentreeId,
@@ -1439,7 +1443,9 @@ where
     /// # Errors
     ///
     /// * [`WriteError::Io`] if a storage or network error occurs.
-    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
     pub async fn add_sedimentree(
         &self,
         id: SedimentreeId,

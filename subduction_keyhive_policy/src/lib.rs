@@ -68,10 +68,6 @@ pub enum FetchDisallowedError {
 /// Error returned when a put operation is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PutDisallowedError {
-    /// The author peer ID is not a valid Ed25519 public key.
-    #[error("author ID is not a valid Ed25519 public key")]
-    InvalidAuthorId,
-
     /// The sedimentree ID is not a valid Ed25519 public key (document ID).
     #[error("sedimentree ID is not a valid document ID")]
     InvalidSedimentreeId,
