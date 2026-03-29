@@ -1,6 +1,7 @@
 //! Subduction node.
 
 use alloc::{
+    boxed::Box,
     collections::BTreeSet,
     string::{String, ToString},
     sync::Arc,
