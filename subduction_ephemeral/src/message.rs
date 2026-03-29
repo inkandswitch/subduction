@@ -22,11 +22,11 @@
 //! preserving the original sender and signature.
 //!
 //! ```text
-//! ╔════════╦════════╦═══════╦════════════╦═════════╦═══════════╗
-//! ║ Sender ║   ID   ║ Nonce ║ PayloadLen ║ Payload ║ Signature ║
-//! ║  32B   ║  32B   ║  8B   ║  bijou64   ║  var    ║   64B     ║
-//! ╚════════╩════════╩═══════╩════════════╩═════════╩═══════════╝
-//!  ↑────────── signed region ──────────────────────↑
+//! ╔════════╦════════╦═══════╦═══════════╦════════════╦═════════╦═══════════╗
+//! ║ Sender ║   ID   ║ Nonce ║ Timestamp ║ PayloadLen ║ Payload ║ Signature ║
+//! ║  32B   ║  32B   ║  8B   ║    8B     ║  bijou64   ║  var    ║   64B     ║
+//! ╚════════╩════════╩═══════╩═══════════╩════════════╩═════════╩═══════════╝
+//!  ↑──────────────── signed region ───────────────────────────↑
 //! ```
 
 use alloc::vec::Vec;
@@ -57,14 +57,14 @@ mod tags {
 }
 
 mod min_sizes {
-    // sender(32) + topic(32) + nonce(8) + timestamp_ms(8) + payload_len(bijou64 min=1) + signature(64)
+    // sender(32) + topic(32) + nonce(8) + timestamp(8) + payload_len(bijou64 min=1) + signature(64)
     pub(super) const EPHEMERAL: usize = 32 + 32 + 8 + 8 + 1 + 64;
-    // count(2)
-    pub(super) const SUBSCRIBE: usize = 2;
-    // count(2)
-    pub(super) const UNSUBSCRIBE: usize = 2;
-    // count(2)
-    pub(super) const SUBSCRIBE_REJECTED: usize = 2;
+    // count(2) + topic(32) — at least one topic required (NonEmpty)
+    pub(super) const SUBSCRIBE: usize = 2 + 32;
+    // count(2) + topic(32)
+    pub(super) const UNSUBSCRIBE: usize = 2 + 32;
+    // count(2) + topic(32)
+    pub(super) const SUBSCRIBE_REJECTED: usize = 2 + 32;
 }
 
 /// Wire message types for the ephemeral protocol.
@@ -96,7 +96,7 @@ pub enum EphemeralMessage {
         /// Opaque application payload.
         payload: Vec<u8>,
         /// Ed25519 signature over
-        /// `sender || id || nonce || timestamp_ms || payload_len || payload`.
+        /// `sender || id || nonce || timestamp || payload_len || payload`.
         signature: Signature,
     },
 
@@ -125,7 +125,7 @@ pub enum EphemeralMessage {
 impl EphemeralMessage {
     /// Build the byte sequence covered by the signature.
     ///
-    /// Layout: `sender(32) || id(32) || nonce(8) || timestamp(8) || payload_len(bijou64) || payload`.
+    /// Layout: `sender(32) || id(32) || nonce(8) || timestamp(8B) || payload_len(bijou64) || payload`.
     ///
     /// Returns `None` for non-`Ephemeral` variants.
     #[must_use]
@@ -227,7 +227,7 @@ impl EphemeralMessage {
     fn payload_size(&self) -> usize {
         match self {
             Self::Ephemeral { payload, .. } => {
-                // sender(32) + id(32) + nonce(8) + timestamp_ms(8) + payload_len(bijou64) + payload + signature(64)
+                // sender(32) + id(32) + nonce(8) + timestamp(8) + payload_len(bijou64) + payload + signature(64)
                 32 + 32
                     + 8
                     + 8
@@ -668,7 +668,7 @@ mod tests {
         let msg = dummy_ephemeral(vec![0xDE, 0xAD]);
         let signed = msg.signed_bytes().expect("Ephemeral has signed_bytes");
 
-        // sender(32) + id(32) + nonce(8) + timestamp_ms(8) + payload_len(1 for len=2) + payload(2)
+        // sender(32) + id(32) + nonce(8) + timestamp(8) + payload_len(1 for len=2) + payload(2)
         assert_eq!(signed.len(), 32 + 32 + 8 + 8 + 1 + 2);
         assert_eq!(&signed[0..32], &[0xAA; 32]); // sender
         assert_eq!(&signed[32..64], &[0xBB; 32]); // id

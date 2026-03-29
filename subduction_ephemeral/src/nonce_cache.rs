@@ -75,7 +75,13 @@ impl EphemeralNonceCache {
             .or_insert_with(|| [NonceBucket::new(now), NonceBucket::new(now)]);
 
         // Rotate if the current bucket has expired.
-        if current.rotated_at.abs_diff(now) > self.window_duration {
+        let age = current.rotated_at.abs_diff(now);
+        if age > self.window_duration.saturating_mul(2) {
+            // Long idle: both buckets are stale — reset entirely.
+            *current = NonceBucket::new(now);
+            *previous = NonceBucket::new(now);
+        } else if age > self.window_duration {
+            // Normal rotation: current → previous, fresh current.
             *previous = core::mem::replace(current, NonceBucket::new(now));
         }
 
@@ -186,5 +192,17 @@ mod tests {
 
         // Target nonce is still tracked
         assert!(!cache.check_and_insert(peer(1), topic(1), 1, ts(1000)));
+    }
+
+    #[test]
+    fn long_idle_resets_both_buckets() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(10));
+        // Insert at t=100
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
+        // Still duplicate at t=100
+        assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
+        // Jump far ahead (> 2 * window_duration) — both buckets are stale
+        // and should be fully reset. Nonce 42 should be accepted again.
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(200)));
     }
 }
