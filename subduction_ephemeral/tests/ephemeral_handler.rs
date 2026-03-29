@@ -17,7 +17,7 @@ use subduction_core::{
 };
 use subduction_crypto::{
     signed::Signed,
-    signer::{Signer, memory::MemorySigner},
+    signer::{memory::MemorySigner, Signer},
 };
 use subduction_ephemeral::{
     clock::fake::FakeClock,
@@ -566,6 +566,160 @@ async fn subscribe_rejected_message_is_noop() -> TestResult {
             },
         )
         .await?;
+
+    Ok(())
+}
+
+// ── Signature Verification ──────────────────────────────────────────────
+
+/// A message with a tampered signature should be dropped by the handler.
+/// The callback channel should receive nothing, and no fan-out should occur.
+#[tokio::test]
+async fn invalid_signature_is_dropped() -> TestResult {
+    let connections: Connections = Arc::new(Mutex::new(Map::new()));
+    let (handler, event_rx) = make_open_handler(connections.clone());
+
+    // Peer A sends the message, Peer B is a subscriber.
+    let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;
+    let (auth_b, handle_b) = register_peer(&connections, peer(2)).await;
+
+    // B subscribes to the topic.
+    let topic = Topic::new([0xAA; 32]);
+    handler
+        .handle(
+            &auth_b,
+            EphemeralMessage::Subscribe {
+                topics: NonEmpty::new(topic),
+            },
+        )
+        .await?;
+
+    // Build a valid signed message, then tamper with the signature bytes.
+    let signer = make_signer();
+    let valid_msg = make_signed_ephemeral(&signer, topic, vec![1, 2, 3]).await;
+    let EphemeralMessage::Ephemeral(sealed) = valid_msg else {
+        panic!("expected Ephemeral variant");
+    };
+
+    // Tamper: flip a bit in the signature (last 64 bytes of the wire bytes).
+    let mut bytes = sealed.into_bytes();
+    let sig_start = bytes.len() - 64;
+    if let Some(byte) = bytes.get_mut(sig_start) {
+        *byte ^= 0xFF;
+    }
+
+    // Reconstruct a Signed<EphemeralPayload> from the tampered bytes.
+    // try_decode may succeed (the bytes are structurally valid, just the sig is wrong).
+    let tampered = Signed::<EphemeralPayload>::try_decode(bytes);
+    let tampered_msg = match tampered {
+        Ok(s) => EphemeralMessage::Ephemeral(Box::new(s)),
+        Err(_) => {
+            // If decode fails, the message can't even reach the handler.
+            // This is also a valid outcome — the tampered bytes are rejected.
+            return Ok(());
+        }
+    };
+
+    // Send the tampered message to the handler.
+    handler.handle(&auth_a, tampered_msg).await?;
+
+    // The callback channel should be empty — the invalid signature was dropped.
+    let result = tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await;
+    assert!(
+        result.is_err(),
+        "callback channel should be empty (invalid signature dropped)"
+    );
+
+    // Peer B should not have received any forwarded message.
+    let forwarded =
+        tokio::time::timeout(Duration::from_millis(100), handle_b.outbound_rx.recv()).await;
+    assert!(
+        forwarded.is_err(),
+        "peer B should not receive a forwarded message (invalid signature dropped)"
+    );
+
+    Ok(())
+}
+
+/// A message with a valid signature but a timestamp too far in the past
+/// should be dropped by the handler.
+#[tokio::test]
+async fn stale_timestamp_is_dropped() -> TestResult {
+    let connections: Connections = Arc::new(Mutex::new(Map::new()));
+    let (handler, event_rx) = make_open_handler(connections.clone());
+    let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;
+
+    let signer = make_signer();
+    let topic = Topic::new([0xBB; 32]);
+
+    // Create a message with a timestamp 60 seconds in the past.
+    // The default max_message_age is 30 seconds, so this should be rejected.
+    let stale_timestamp = TimestampSeconds::new(TEST_CLOCK_SECS.as_secs() - 60);
+    let ep = EphemeralPayload {
+        id: topic,
+        nonce: rand_nonce(),
+        timestamp: stale_timestamp,
+        payload: vec![1, 2, 3],
+    };
+    let verified = Signed::seal::<Sendable, _>(&signer, ep).await;
+    let msg = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
+
+    handler.handle(&auth_a, msg).await?;
+
+    // Should be dropped — callback channel empty.
+    let result = tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await;
+    assert!(
+        result.is_err(),
+        "stale message should be dropped (timestamp too old)"
+    );
+
+    Ok(())
+}
+
+/// A message with a duplicate nonce should be dropped on the second delivery.
+#[tokio::test]
+async fn duplicate_nonce_is_dropped() -> TestResult {
+    let connections: Connections = Arc::new(Mutex::new(Map::new()));
+    let (handler, event_rx) = make_open_handler(connections.clone());
+    let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;
+
+    let signer = make_signer();
+    let topic = Topic::new([0xCC; 32]);
+    let nonce = 42_u64;
+
+    // Create two messages with the same nonce.
+    let ep1 = EphemeralPayload {
+        id: topic,
+        nonce,
+        timestamp: TEST_CLOCK_SECS,
+        payload: vec![1],
+    };
+    let ep2 = EphemeralPayload {
+        id: topic,
+        nonce,
+        timestamp: TEST_CLOCK_SECS,
+        payload: vec![2],
+    };
+    let msg1 = EphemeralMessage::Ephemeral(Box::new(
+        Signed::seal::<Sendable, _>(&signer, ep1)
+            .await
+            .into_signed(),
+    ));
+    let msg2 = EphemeralMessage::Ephemeral(Box::new(
+        Signed::seal::<Sendable, _>(&signer, ep2)
+            .await
+            .into_signed(),
+    ));
+
+    // First message should be accepted.
+    handler.handle(&auth_a, msg1).await?;
+    let event = tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await??;
+    assert_eq!(event.payload, vec![1]);
+
+    // Second message (same nonce) should be dropped.
+    handler.handle(&auth_a, msg2).await?;
+    let result = tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await;
+    assert!(result.is_err(), "duplicate nonce should be dropped");
 
     Ok(())
 }

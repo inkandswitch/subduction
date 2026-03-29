@@ -312,8 +312,6 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     }
 }
 
-// ── Handler impl ────────────────────────────────────────────────────────
-
 /// Errors from the ephemeral handler.
 #[derive(Debug, Error)]
 pub enum EphemeralHandlerError<SendErr: core::error::Error> {
@@ -365,11 +363,11 @@ impl<K: FutureForm, C, E, Clk> Handler<K, C> for EphemeralHandler<K, C, E, Clk> 
 }
 
 impl<
-    F: FutureForm,
-    C: Connection<F, EphemeralMessage> + Clone + 'static,
-    E: EphemeralPolicy<F>,
-    Clk: Clock,
-> EphemeralHandler<F, C, E, Clk>
+        F: FutureForm,
+        C: Connection<F, EphemeralMessage> + Clone + 'static,
+        E: EphemeralPolicy<F>,
+        Clk: Clock,
+    > EphemeralHandler<F, C, E, Clk>
 {
     async fn dispatch(
         &self,
@@ -555,10 +553,15 @@ impl<
     }
 
     /// Handle a subscribe request from a peer.
+    ///
+    /// Policy checks are batched first (no lock held), then all
+    /// authorized topics are inserted under a single lock acquisition.
     async fn recv_subscribe(&self, conn: &Authenticated<C, F>, topics: NonEmpty<Topic>) {
         let peer = conn.peer_id();
+        let mut authorized = Vec::new();
         let mut rejected = Vec::new();
 
+        // 1. Batch policy checks (no subscription lock held).
         for topic in &topics {
             if let Err(e) = self.policy.authorize_subscribe(peer, *topic).await {
                 debug!(
@@ -569,7 +572,14 @@ impl<
                 );
                 rejected.push(*topic);
             } else {
-                let mut subs = self.ephemeral_subscriptions.lock().await;
+                authorized.push(*topic);
+            }
+        }
+
+        // 2. Insert authorized topics under a single lock acquisition.
+        if !authorized.is_empty() {
+            let mut subs = self.ephemeral_subscriptions.lock().await;
+            for topic in &authorized {
                 subs.entry(*topic).or_default().insert(peer);
             }
         }
