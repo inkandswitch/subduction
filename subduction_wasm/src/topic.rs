@@ -41,7 +41,7 @@ impl WasmTopic {
         self.0.as_bytes().to_vec()
     }
 
-    /// Returns the hex string representation.
+    /// Returns a shortened hex prefix representation (first 4 bytes + `…`).
     #[must_use]
     #[wasm_bindgen(js_name = toString)]
     pub fn js_to_string(&self) -> String {

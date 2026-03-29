@@ -128,7 +128,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// size limit, gathers subscribers, filters by policy, and fans out.
     ///
     /// [`EphemeralPayload`]: crate::message::EphemeralPayload
-    /// [`Signed::seal`]: subduction_crypto::verified_signature::VerifiedSignature::seal
+    /// [`Signed::seal`]: subduction_crypto::signed::Signed::seal
     ///
     /// Errors on individual sends are logged but not propagated —
     /// fire-and-forget semantics.

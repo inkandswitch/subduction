@@ -139,7 +139,6 @@ async function createPeerPage(
 
 /**
  * Connect a peer, optionally subscribe and set up a receive callback.
- * Returns the peer's ID hex string.
  */
 async function setupPeer(
   page: Page,
@@ -148,8 +147,8 @@ async function setupPeer(
     topicHex?: number;
     onReceive?: boolean;
   } = {}
-): Promise<string> {
-  return await page.evaluate(
+): Promise<void> {
+  await page.evaluate(
     async ({ wsUrl, topicHex, onReceive }) => {
       const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
         window.subduction;

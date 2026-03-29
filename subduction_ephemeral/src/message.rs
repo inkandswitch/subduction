@@ -2,8 +2,26 @@
 //!
 //! # Wire Layout
 //!
-//! Every ephemeral message on the wire begins with the `SUE\x00` schema
-//! header, followed by a 1-byte tag and the variant-specific payload:
+//! All ephemeral messages share the `SUE\x00` schema. Byte 4 (the
+//! [`DISCRIMINANT`] for `Ephemeral`, or a tag byte for unsigned control
+//! messages) distinguishes them:
+//!
+//! ## `Ephemeral` variant (discriminant `0x00`)
+//!
+//! The wire bytes _are_ the complete [`Signed<EphemeralPayload>`] —
+//! including schema, discriminant, issuer, fields, and signature.
+//! No stripping or reconstruction is performed; the bytes are passed
+//! verbatim to [`Signed::try_decode`].
+//!
+//! ```text
+//! ╔════════╦══════╦════════╦════════╦═══════╦═══════════╦════════════╦═════════╦═══════════╗
+//! ║ Schema ║ Disc ║ Issuer ║   ID   ║ Nonce ║ Timestamp ║ PayloadLen ║ Payload ║ Signature ║
+//! ║   4B   ║  1B  ║  32B   ║  32B   ║  8B   ║    8B     ║  bijou64   ║  var    ║   64B     ║
+//! ╚════════╩══════╩════════╩════════╩═══════╩═══════════╩════════════╩═════════╩═══════════╝
+//!  ↑──────────────────────── signed region ───────────────────────────────────↑
+//! ```
+//!
+//! ## Control messages (tags `0x01`–`0x03`)
 //!
 //! ```text
 //! ╔════════╦═════╦═════════════════════════════╗
@@ -12,24 +30,13 @@
 //! ╚════════╩═════╩═════════════════════════════╝
 //! ```
 //!
-//! ## `Ephemeral` variant (tag `0x00`)
+//! | Tag    | Variant              | Payload                          |
+//! |--------|----------------------|----------------------------------|
+//! | `0x01` | Subscribe            | count(2) + topics(32 each)       |
+//! | `0x02` | Unsubscribe          | count(2) + topics(32 each)       |
+//! | `0x03` | SubscribeRejected    | count(2) + topics(32 each)       |
 //!
-//! The tag payload is a schema-stripped [`Signed<EphemeralPayload>`].
-//! The inner `SUE\x00` schema prefix is elided on the wire (the envelope
-//! schema already identifies the protocol); it is reconstructed on decode
-//! before passing to [`Signed::try_decode`].
-//!
-//! ```text
-//! On the wire (schema elided):
-//! ╔════════╦════════╦════════╦═══════╦═══════════╦════════════╦═════════╦═══════════╗
-//! ║ Issuer ║   ID   ║ Nonce  ║  Time ║ PayloadLen║ Payload   ║ Signature           ║
-//! ║  32B   ║  32B   ║   8B   ║   8B  ║  bijou64  ║  var      ║   64B               ║
-//! ╚════════╩════════╩════════╩═══════╩═══════════╩═════════════╩═══════════════════╝
-//!
-//! Signed region (reconstructed for verification):
-//! SUE\x00 || issuer(32) || id(32) || nonce(8) || timestamp(8) || payload_len || payload
-//! ```
-//!
+//! [`DISCRIMINANT`]: sedimentree_core::codec::schema::Schema::DISCRIMINANT
 //! [`Signed<EphemeralPayload>`]: subduction_crypto::signed::Signed
 //! [`Signed::try_decode`]: subduction_crypto::signed::Signed::try_decode
 
