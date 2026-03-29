@@ -17,7 +17,7 @@ use subduction_core::{
 };
 use subduction_crypto::{
     signed::Signed,
-    signer::{memory::MemorySigner, Signer},
+    signer::{Signer, memory::MemorySigner},
 };
 use subduction_ephemeral::{
     clock::fake::FakeClock,
