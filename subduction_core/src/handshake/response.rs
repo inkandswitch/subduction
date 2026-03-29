@@ -65,7 +65,7 @@ impl Response {
     }
 }
 
-/// Size of Response fields (after schema + issuer, before signature).
+/// Size of Response fields (after schema + discriminant + issuer, before signature).
 pub(crate) const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
 
 /// Minimum size of a signed Response message (schema + discriminant + issuer + fields + signature).

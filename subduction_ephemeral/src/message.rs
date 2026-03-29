@@ -513,10 +513,9 @@ mod tests {
 
     #[test]
     fn empty_topic_list_rejected() {
+        // Manually construct: SUE\x00 || Subscribe tag || count=0
         let mut buf = Vec::new();
         buf.extend_from_slice(&EPHEMERAL_SCHEMA);
-        let total_size: u32 = (4 + 4 + 1 + 2) as u32;
-        buf.extend_from_slice(&total_size.to_be_bytes());
         buf.push(tags::SUBSCRIBE);
         buf.extend_from_slice(&0_u16.to_be_bytes());
 

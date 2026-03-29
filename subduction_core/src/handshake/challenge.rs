@@ -86,7 +86,7 @@ impl Challenge {
     }
 }
 
-/// Size of Challenge fields (after schema + issuer, before signature).
+/// Size of Challenge fields (after schema + discriminant + issuer, before signature).
 pub(crate) const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
 
 /// Minimum size of a signed Challenge message (schema + discriminant + issuer + fields + signature).

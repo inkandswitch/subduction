@@ -159,29 +159,19 @@ pub trait Handshake<K: FutureForm> {
 
 /// Wire format for handshake messages.
 ///
-/// All handshake messages share a common `SUH\0` schema envelope, followed
-/// by a 1-byte variant tag:
+/// All handshake types share the `SUH\x00` schema. Byte 4 (the
+/// [`DISCRIMINANT`](Schema::DISCRIMINANT) for signed variants, or a
+/// tag byte for unsigned control messages) distinguishes them:
 ///
-/// ```text
-/// ┌──────────┬─────┬───────────────────────────────────┐
-/// │ Schema   │ Tag │ Payload                           │
-/// │ SUH\0    │ 1B  │ (variant-specific)                │
-/// │ (4B)     │     │                                   │
-/// └──────────┴─────┴───────────────────────────────────┘
-/// ```
+/// | Byte 4 | Variant              | Wire layout                                              |
+/// |--------|----------------------|----------------------------------------------------------|
+/// | `0x00` | `Signed<Challenge>`  | `SUH\x00` + `0x00` + issuer(32) + fields(57) + sig(64)  |
+/// | `0x01` | `Signed<Response>`   | `SUH\x00` + `0x01` + issuer(32) + fields(40) + sig(64)  |
+/// | `0x02` | `Rejection`          | `SUH\x00` + `0x02` + reason(1) + timestamp(8)           |
 ///
-/// For signed variants, the inner `Signed<T>` schema prefix is elided
-/// on the wire (the envelope schema identifies the protocol, and the tag
-/// identifies the variant). The schema is reconstructed on decode before
-/// passing to [`Signed::try_decode`].
-///
-/// | Tag  | Variant              | Payload                                    |
-/// |------|----------------------|--------------------------------------------|
-/// | 0x00 | `Signed<Challenge>`  | issuer(32) + fields(57) + sig(64) = 153B   |
-/// | 0x01 | `Signed<Response>`   | issuer(32) + fields(40) + sig(64) = 136B   |
-/// | 0x02 | `Rejection`          | reason (1B) + timestamp (8B)               |
-///
-/// [`Signed::try_decode`]: subduction_crypto::signed::Signed::try_decode
+/// For signed variants, the full bytes are `Signed<T>::as_bytes()`
+/// — no outer envelope, no stripping. The discriminant at byte 4 is
+/// part of the signed region.
 #[derive(Debug)]
 pub enum HandshakeMessage {
     /// A signed challenge from the initiator.
