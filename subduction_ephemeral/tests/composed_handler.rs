@@ -26,9 +26,10 @@ use subduction_core::{
     remote_heads::RemoteHeads,
     timestamp::TimestampSeconds,
 };
+use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 use subduction_ephemeral::{
     composed::{ComposedHandler, Dispatched, WireEnvelope},
-    message::EphemeralMessage,
+    message::{EphemeralMessage, EphemeralPayload},
     topic::Topic,
 };
 use testresult::TestResult;
@@ -290,14 +291,15 @@ async fn dispatch_ephemeral_message_to_ephemeral_handler() -> TestResult {
     let (composed, sync_rx, eph_rx, _, _) = make_handler();
     let auth = make_auth_conn(peer(1));
 
-    let eph_msg = EphemeralMessage::Ephemeral {
-        sender: PeerId::new([0xAA; 32]),
+    let signer = MemorySigner::generate();
+    let ep = EphemeralPayload {
         id: Topic::new([0xBB; 32]),
         nonce: 42,
         timestamp: TimestampSeconds::new(1_700_000_000),
         payload: vec![1, 2, 3],
-        signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
     };
+    let verified = Signed::seal::<Sendable, _>(&signer, ep).await;
+    let eph_msg = EphemeralMessage::Ephemeral(verified.into_signed());
     let wire: TestWireMessage = eph_msg.clone().into();
 
     Handler::<Sendable, TestConn>::handle(&composed, &auth, wire).await?;

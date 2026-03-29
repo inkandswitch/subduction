@@ -176,7 +176,11 @@ mod tests {
         remote_heads::RemoteHeads,
         timestamp::TimestampSeconds,
     };
-    use subduction_ephemeral::{message::EphemeralMessage, topic::Topic};
+    use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+    use subduction_ephemeral::{
+        message::{EphemeralMessage, EphemeralPayload},
+        topic::Topic,
+    };
     use subduction_keyhive::KeyhiveMessage;
 
     use super::{CliConn, CliHandler};
@@ -219,16 +223,17 @@ mod tests {
         assert_eq!(extracted, None);
     }
 
-    #[test]
-    fn as_batch_sync_response_none_for_ephemeral() {
-        let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral {
-            sender: PeerId::new([0xCC; 32]),
+    #[tokio::test]
+    async fn as_batch_sync_response_none_for_ephemeral() {
+        let signer = MemorySigner::generate();
+        let ep = EphemeralPayload {
             id: Topic::new([0xCC; 32]),
             nonce: 42,
             timestamp: TimestampSeconds::new(1_700_000_000),
             payload: vec![1, 2, 3],
-            signature: ed25519_dalek::Signature::from_bytes(&[0; 64]),
-        });
+        };
+        let verified = Signed::seal::<Sendable, _>(&signer, ep).await;
+        let msg = CliWireMessage::Ephemeral(EphemeralMessage::Ephemeral(verified.into_signed()));
 
         let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
         assert_eq!(extracted, None);

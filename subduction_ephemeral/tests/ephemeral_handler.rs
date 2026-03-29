@@ -15,12 +15,15 @@ use subduction_core::{
     authenticated::Authenticated, connection::test_utils::ChannelMockConnection, handler::Handler,
     peer::id::PeerId, timestamp::TimestampSeconds,
 };
-use subduction_crypto::signer::{Signer, memory::MemorySigner};
+use subduction_crypto::{
+    signed::Signed,
+    signer::{memory::MemorySigner, Signer},
+};
 use subduction_ephemeral::{
     clock::fake::FakeClock,
     config::{EphemeralConfig, EphemeralEvent},
     handler::EphemeralHandler,
-    message::EphemeralMessage,
+    message::{EphemeralMessage, EphemeralPayload},
     policy::OpenEphemeralPolicy,
     topic::Topic,
 };
@@ -91,8 +94,14 @@ async fn make_signed_ephemeral(
     id: Topic,
     payload: Vec<u8>,
 ) -> EphemeralMessage {
-    EphemeralMessage::new_signed::<Sendable, _>(signer, id, rand_nonce(), TEST_CLOCK_SECS, payload)
-        .await
+    let ep = EphemeralPayload {
+        id,
+        nonce: rand_nonce(),
+        timestamp: TEST_CLOCK_SECS,
+        payload,
+    };
+    let verified = Signed::seal::<Sendable, _>(signer, ep).await;
+    EphemeralMessage::Ephemeral(verified.into_signed())
 }
 
 fn rand_nonce() -> u64 {
@@ -136,11 +145,12 @@ async fn subscribe_adds_peer() -> TestResult {
 
     let forwarded =
         tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv()).await??;
-    let EphemeralMessage::Ephemeral { id, payload, .. } = forwarded else {
+    let EphemeralMessage::Ephemeral(ref signed) = forwarded else {
         panic!("expected Ephemeral, got {forwarded:?}");
     };
-    assert_eq!(id, Topic::new([0xAA; 32]));
-    assert_eq!(payload, vec![42]);
+    let decoded = signed.try_decode_trusted_payload().expect("decode");
+    assert_eq!(decoded.id, Topic::new([0xAA; 32]));
+    assert_eq!(decoded.payload, vec![42]);
 
     Ok(())
 }
@@ -202,11 +212,12 @@ async fn subscribe_multiple_topics() -> TestResult {
 
     let forwarded =
         tokio::time::timeout(Duration::from_millis(100), handle_a.outbound_rx.recv()).await??;
-    let EphemeralMessage::Ephemeral { id, payload, .. } = forwarded else {
+    let EphemeralMessage::Ephemeral(ref signed) = forwarded else {
         panic!("expected Ephemeral, got {forwarded:?}");
     };
-    assert_eq!(id, Topic::new([2; 32]));
-    assert_eq!(payload, vec![77]);
+    let decoded = signed.try_decode_trusted_payload().expect("decode");
+    assert_eq!(decoded.id, Topic::new([2; 32]));
+    assert_eq!(decoded.payload, vec![77]);
 
     Ok(())
 }
@@ -267,27 +278,20 @@ async fn fan_out_to_multiple_subscribers() -> TestResult {
     let msg_b =
         tokio::time::timeout(Duration::from_millis(100), handle_b.outbound_rx.recv()).await??;
 
-    let EphemeralMessage::Ephemeral {
-        id: id_a,
-        payload: payload_a,
-        ..
-    } = msg_a
-    else {
+    let EphemeralMessage::Ephemeral(ref signed_a) = msg_a else {
         panic!("expected Ephemeral, got {msg_a:?}");
     };
-    let EphemeralMessage::Ephemeral {
-        id: id_b,
-        payload: payload_b,
-        ..
-    } = msg_b
-    else {
+    let EphemeralMessage::Ephemeral(ref signed_b) = msg_b else {
         panic!("expected Ephemeral, got {msg_b:?}");
     };
 
-    assert_eq!(id_a, Topic::new([0xDD; 32]));
-    assert_eq!(payload_a, vec![10, 20]);
-    assert_eq!(id_b, Topic::new([0xDD; 32]));
-    assert_eq!(payload_b, vec![10, 20]);
+    let decoded_a = signed_a.try_decode_trusted_payload().expect("decode a");
+    let decoded_b = signed_b.try_decode_trusted_payload().expect("decode b");
+
+    assert_eq!(decoded_a.id, Topic::new([0xDD; 32]));
+    assert_eq!(decoded_a.payload, vec![10, 20]);
+    assert_eq!(decoded_b.id, Topic::new([0xDD; 32]));
+    assert_eq!(decoded_b.payload, vec![10, 20]);
 
     Ok(())
 }
@@ -418,11 +422,12 @@ async fn publish_api_sends_to_subscribers() -> TestResult {
 
     let received =
         tokio::time::timeout(Duration::from_millis(100), handle_a.outbound_rx.recv()).await??;
-    let EphemeralMessage::Ephemeral { id, payload, .. } = received else {
+    let EphemeralMessage::Ephemeral(ref signed) = received else {
         panic!("expected Ephemeral, got {received:?}");
     };
-    assert_eq!(id, Topic::new([0x22; 32]));
-    assert_eq!(payload, vec![88, 99]);
+    let decoded = signed.try_decode_trusted_payload().expect("decode");
+    assert_eq!(decoded.id, Topic::new([0x22; 32]));
+    assert_eq!(decoded.payload, vec![88, 99]);
 
     Ok(())
 }
@@ -510,7 +515,7 @@ async fn subscribe_rejected_by_policy() -> TestResult {
             assert!(topics.contains(&Topic::new([0xAA; 32])));
             assert!(topics.contains(&Topic::new([0xBB; 32])));
         }
-        other @ (EphemeralMessage::Ephemeral { .. }
+        other @ (EphemeralMessage::Ephemeral(_)
         | EphemeralMessage::Subscribe { .. }
         | EphemeralMessage::Unsubscribe { .. }) => {
             panic!("expected SubscribeRejected, got {other:?}")

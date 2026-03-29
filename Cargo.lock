@@ -5415,7 +5415,6 @@ dependencies = [
  "async-tungstenite",
  "blake3",
  "criterion",
- "ed25519-dalek 2.2.0",
  "eyre",
  "future_form",
  "futures 0.3.32",

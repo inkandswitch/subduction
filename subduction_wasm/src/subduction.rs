@@ -13,9 +13,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use nonempty::NonEmpty;
@@ -37,16 +37,21 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
-        Subduction,
         error::HydrationError,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+        Subduction,
     },
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
+use subduction_crypto::signed::Signed;
 use subduction_ephemeral::{
-    composed::ComposedHandler, config::EphemeralConfig, handler::EphemeralHandler,
-    message::EphemeralMessage, policy::OpenEphemeralPolicy, topic::Topic,
+    composed::ComposedHandler,
+    config::EphemeralConfig,
+    handler::EphemeralHandler,
+    message::{EphemeralMessage, EphemeralPayload},
+    policy::OpenEphemeralPolicy,
+    topic::Topic,
 };
 use wasm_bindgen::prelude::*;
 
@@ -63,9 +68,9 @@ use crate::{
     sync_stats::WasmSyncStats,
     topic::WasmTopic,
     transport::{
-        DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         websocket::WasmWebSocket,
+        JsTransport, WasmAuthenticatedTransport, DEFAULT_LOCAL_SERVICE_NAME,
     },
 };
 use sedimentree_wasm::{
@@ -102,7 +107,7 @@ impl Spawn<Local> for WasmSpawn {
 
 use crate::{
     clock::JsClock,
-    policy::{JsPolicy, make_open_policy},
+    policy::{make_open_policy, JsPolicy},
 };
 
 type WasmConn = MessageTransport<JsTransport>;
@@ -1133,14 +1138,14 @@ impl WasmSubduction {
         };
         // Date.now() returns f64 ms since epoch; convert to seconds.
         let timestamp = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
-        let msg = EphemeralMessage::new_signed::<Local, _>(
-            self.core.signer(),
-            Topic::from(topic.clone()),
+        let ep = EphemeralPayload {
+            id: Topic::from(topic.clone()),
             nonce,
             timestamp,
-            payload.to_vec(),
-        )
-        .await;
+            payload: payload.to_vec(),
+        };
+        let verified = Signed::seal::<Local, _>(self.core.signer(), ep).await;
+        let msg = EphemeralMessage::Ephemeral(verified.into_signed());
         self.ephemeral_handler.publish(msg).await;
     }
 

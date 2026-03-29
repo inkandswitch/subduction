@@ -131,14 +131,16 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     where
         C: Connection<F, EphemeralMessage>,
     {
-        let EphemeralMessage::Ephemeral {
-            id, ref payload, ..
-        } = msg
-        else {
+        let EphemeralMessage::Ephemeral(ref signed) = msg else {
             warn!("publish called with non-Ephemeral message, ignoring");
             return;
         };
-        let payload_len = payload.len();
+        let Ok(payload) = signed.try_decode_trusted_payload() else {
+            warn!("publish called with undecodable Signed<EphemeralPayload>, ignoring");
+            return;
+        };
+        let id = payload.id;
+        let payload_len = payload.payload.len();
 
         if payload_len > self.max_payload_size {
             warn!(
@@ -362,11 +364,11 @@ impl<K: FutureForm, C, E, Clk> Handler<K, C> for EphemeralHandler<K, C, E, Clk> 
 }
 
 impl<
-    F: FutureForm,
-    C: Connection<F, EphemeralMessage> + Clone + 'static,
-    E: EphemeralPolicy<F>,
-    Clk: Clock,
-> EphemeralHandler<F, C, E, Clk>
+        F: FutureForm,
+        C: Connection<F, EphemeralMessage> + Clone + 'static,
+        E: EphemeralPolicy<F>,
+        Clk: Clock,
+    > EphemeralHandler<F, C, E, Clk>
 {
     async fn dispatch(
         &self,
@@ -393,46 +395,49 @@ impl<
 
     /// Handle an inbound signed ephemeral message from a peer.
     ///
-    /// Verifies the signature, checks the timestamp age, checks the
-    /// nonce cache for duplicates, authorizes the originator via policy,
-    /// delivers to the callback channel, and fans out to other subscribers.
+    /// Verifies the signature via [`Signed::try_verify`], checks the
+    /// timestamp age, checks the nonce cache for duplicates, authorizes
+    /// the originator via policy, delivers to the callback channel, and
+    /// fans out to other subscribers.
+    ///
+    /// [`Signed::try_verify`]: subduction_crypto::signed::Signed::try_verify
     #[allow(clippy::too_many_lines)]
     async fn recv_ephemeral(&self, conn: &Authenticated<C, F>, message: EphemeralMessage) {
-        let EphemeralMessage::Ephemeral {
-            sender,
-            id,
-            nonce,
-            timestamp,
-            ref payload,
-            ..
-        } = message
-        else {
+        let EphemeralMessage::Ephemeral(ref signed) = message else {
             return;
         };
 
         let relay = conn.peer_id();
+        let sender = PeerId::from(signed.issuer());
 
-        // 1. Check payload size.
-        if payload.len() > self.max_payload_size {
+        // 1. Verify signature and decode payload.
+        let verified = match signed.try_verify() {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    originator = %sender,
+                    relay = %relay,
+                    error = %e,
+                    "ephemeral signature verification failed, dropping"
+                );
+                return;
+            }
+        };
+
+        let ep = verified.payload();
+        let id = ep.id;
+        let nonce = ep.nonce;
+        let timestamp = ep.timestamp;
+
+        // 2. Check payload size.
+        if ep.payload.len() > self.max_payload_size {
             warn!(
                 originator = %sender,
                 relay = %relay,
                 id = %id,
-                size = payload.len(),
+                size = ep.payload.len(),
                 max = self.max_payload_size,
                 "ephemeral payload too large, dropping"
-            );
-            return;
-        }
-
-        // 2. Verify signature.
-        if let Err(e) = message.verify_signature() {
-            warn!(
-                originator = %sender,
-                relay = %relay,
-                id = %id,
-                error = %e,
-                "ephemeral signature verification failed, dropping"
             );
             return;
         }
@@ -488,7 +493,7 @@ impl<
             id,
             sender,
             nonce,
-            payload: payload.clone(),
+            payload: ep.payload.clone(),
         };
         if self.callback_tx.try_send(event).is_err() {
             warn!("ephemeral callback channel full, dropping event");

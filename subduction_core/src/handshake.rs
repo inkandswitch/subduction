@@ -170,11 +170,18 @@ pub trait Handshake<K: FutureForm> {
 /// └──────────┴─────┴───────────────────────────────────┘
 /// ```
 ///
-/// | Tag  | Variant              | Payload                           |
-/// |------|----------------------|-----------------------------------|
-/// | 0x00 | `Signed<Challenge>`  | Full signed challenge (157 bytes) |
-/// | 0x01 | `Signed<Response>`   | Full signed response (140 bytes)  |
-/// | 0x02 | `Rejection`          | reason (1B) + timestamp (8B)      |
+/// For signed variants, the inner `Signed<T>` schema prefix is elided
+/// on the wire (the envelope schema identifies the protocol, and the tag
+/// identifies the variant). The schema is reconstructed on decode before
+/// passing to [`Signed::try_decode`].
+///
+/// | Tag  | Variant              | Payload                                    |
+/// |------|----------------------|--------------------------------------------|
+/// | 0x00 | `Signed<Challenge>`  | issuer(32) + fields(57) + sig(64) = 153B   |
+/// | 0x01 | `Signed<Response>`   | issuer(32) + fields(40) + sig(64) = 136B   |
+/// | 0x02 | `Rejection`          | reason (1B) + timestamp (8B)               |
+///
+/// [`Signed::try_decode`]: subduction_crypto::signed::Signed::try_decode
 #[derive(Debug)]
 pub enum HandshakeMessage {
     /// A signed challenge from the initiator.
@@ -204,26 +211,33 @@ impl HandshakeMessage {
     /// Minimum size: schema (4) + tag (1).
     const MIN_SIZE: usize = 5;
 
+    /// Schema prefix size (elided from signed variant payloads on the wire).
+    const SCHEMA_SIZE: usize = 4;
+
     /// Encode the handshake message to wire bytes.
     ///
-    /// Emits `SUH\0` + variant tag + payload.
+    /// Emits `SUH\0` + variant tag + payload. For signed variants,
+    /// the inner `Signed<T>` schema prefix is elided (the envelope
+    /// schema already identifies the protocol).
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         match self {
             HandshakeMessage::SignedChallenge(signed) => {
-                let payload = signed.as_bytes();
-                let mut buf = Vec::with_capacity(4 + 1 + payload.len());
+                let inner = signed.as_bytes();
+                let stripped = &inner[Self::SCHEMA_SIZE..];
+                let mut buf = Vec::with_capacity(4 + 1 + stripped.len());
                 buf.extend_from_slice(&Self::SCHEMA);
                 buf.push(handshake_tags::CHALLENGE);
-                buf.extend_from_slice(payload);
+                buf.extend_from_slice(stripped);
                 buf
             }
             HandshakeMessage::SignedResponse(signed) => {
-                let payload = signed.as_bytes();
-                let mut buf = Vec::with_capacity(4 + 1 + payload.len());
+                let inner = signed.as_bytes();
+                let stripped = &inner[Self::SCHEMA_SIZE..];
+                let mut buf = Vec::with_capacity(4 + 1 + stripped.len());
                 buf.extend_from_slice(&Self::SCHEMA);
                 buf.push(handshake_tags::RESPONSE);
-                buf.extend_from_slice(payload);
+                buf.extend_from_slice(stripped);
                 buf
             }
             HandshakeMessage::Rejection(rejection) => {
@@ -289,11 +303,19 @@ impl HandshakeMessage {
 
         match tag {
             handshake_tags::CHALLENGE => {
-                let signed = Signed::<Challenge>::try_decode(payload.to_vec())?;
+                // Reconstruct the Signed<Challenge> schema prefix that was
+                // elided on the wire (the envelope schema identifies the protocol).
+                let mut full = Vec::with_capacity(4 + payload.len());
+                full.extend_from_slice(&Challenge::SCHEMA);
+                full.extend_from_slice(payload);
+                let signed = Signed::<Challenge>::try_decode(full)?;
                 Ok(HandshakeMessage::SignedChallenge(signed))
             }
             handshake_tags::RESPONSE => {
-                let signed = Signed::<Response>::try_decode(payload.to_vec())?;
+                let mut full = Vec::with_capacity(4 + payload.len());
+                full.extend_from_slice(&Response::SCHEMA);
+                full.extend_from_slice(payload);
+                let signed = Signed::<Response>::try_decode(full)?;
                 Ok(HandshakeMessage::SignedResponse(signed))
             }
             handshake_tags::REJECTION => {
