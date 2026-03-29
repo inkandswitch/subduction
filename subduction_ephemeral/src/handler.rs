@@ -142,11 +142,12 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
         let id = payload.id;
         let payload_len = payload.payload.len();
 
-        if payload_len > self.max_payload_size {
+        let max_payload = self.max_payload_size;
+        if payload_len > max_payload {
             warn!(
                 id = %id,
                 size = payload_len,
-                max = self.max_payload_size,
+                max = max_payload,
                 "ephemeral publish payload too large, dropping"
             );
             return;
@@ -430,13 +431,14 @@ impl<
         let timestamp = ep.timestamp;
 
         // 2. Check payload size.
-        if ep.payload.len() > self.max_payload_size {
+        let max_payload = self.max_payload_size;
+        if ep.payload.len() > max_payload {
             warn!(
                 originator = %sender,
                 relay = %relay,
                 id = %id,
                 size = ep.payload.len(),
-                max = self.max_payload_size,
+                max = max_payload,
                 "ephemeral payload too large, dropping"
             );
             return;
@@ -444,9 +446,10 @@ impl<
 
         // 3. Check message age — reject stale or future-dated messages.
         let now = self.clock.now();
+        let max_age = self.max_message_age;
         {
             let age = now.abs_diff(timestamp);
-            if age > self.max_message_age {
+            if age > max_age {
                 debug!(
                     originator = %sender,
                     relay = %relay,
@@ -454,7 +457,7 @@ impl<
                     timestamp_secs = timestamp.as_secs(),
                     now_secs = now.as_secs(),
                     age_secs = age.as_secs(),
-                    max_age_secs = self.max_message_age.as_secs(),
+                    max_age_secs = max_age.as_secs(),
                     "ephemeral message too old or too far in the future, dropping"
                 );
                 return;

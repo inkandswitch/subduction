@@ -33,7 +33,7 @@
 //! [`Signed<EphemeralPayload>`]: subduction_crypto::signed::Signed
 //! [`Signed::try_decode`]: subduction_crypto::signed::Signed::try_decode
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use nonempty::NonEmpty;
 use sedimentree_core::codec::{
