@@ -483,7 +483,7 @@ impl<
             }
         };
 
-        let author = PeerId::from(verified.issuer());
+        let author = verified.verified_author();
         tracing::debug!(
             "receiving commit {:?} for sedimentree {:?} from peer {:?} (author {:?})",
             Digest::hash(verified.payload()),
@@ -579,7 +579,7 @@ impl<
             }
         };
 
-        let author = PeerId::from(verified.issuer());
+        let author = verified.verified_author();
         tracing::debug!(
             "receiving fragment {:?} for sedimentree {:?} from peer {:?} (author {:?})",
             Digest::hash(verified.payload()),

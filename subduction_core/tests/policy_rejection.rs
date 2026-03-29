@@ -27,6 +27,7 @@ use subduction_core::{
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
 };
+use subduction_crypto::verified_author::VerifiedAuthor;
 use testresult::TestResult;
 
 /// A policy that rejects all puts but allows connections and fetches.
@@ -71,7 +72,7 @@ impl StoragePolicy<Sendable> for RejectPutsPolicy {
     fn authorize_put(
         &self,
         _requestor: PeerId,
-        _author: PeerId,
+        _author: VerifiedAuthor,
         _sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async { Err(PutRejected) }.boxed()
@@ -118,7 +119,7 @@ impl StoragePolicy<Sendable> for AllowSpecificIdPolicy {
     fn authorize_put(
         &self,
         _requestor: PeerId,
-        _author: PeerId,
+        _author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
         let allowed = self.allowed_id;
@@ -150,8 +151,12 @@ fn make_commit_parts(data: &[u8]) -> (BTreeSet<Digest<LooseCommit>>, Blob) {
     (BTreeSet::new(), blob)
 }
 
+/// Local operations (`add_sedimentree`, `add_commit`) bypass policy — the
+/// node trusts itself. Policy rejection only applies to remote data
+/// received via sync; see the
+/// `unauthorized_fetch_returns_unauthorized_result` test below.
 #[tokio::test]
-async fn add_sedimentree_rejected_by_policy() {
+async fn local_add_sedimentree_bypasses_put_policy() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
@@ -164,21 +169,16 @@ async fn add_sedimentree_rejected_by_policy() {
     let tree = Sedimentree::default();
     let blobs = Vec::new();
 
+    // Local operations succeed even with a rejecting put policy
     let result = subduction.add_sedimentree(id, tree, blobs).await;
+    assert!(result.is_ok(), "Local add_sedimentree should bypass policy");
 
-    // Should fail with PutDisallowed
-    assert!(result.is_err());
-    #[allow(clippy::unwrap_used)]
-    let err = result.unwrap_err();
-    let err_string = format!("{err}");
-    assert!(
-        err_string.contains("put disallowed"),
-        "Expected 'put disallowed' error, got: {err_string}"
-    );
+    let ids = subduction.sedimentree_ids().await;
+    assert!(ids.contains(&id), "Sedimentree should be stored");
 }
 
 #[tokio::test]
-async fn add_commit_rejected_by_policy() {
+async fn local_add_commit_bypasses_put_policy() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
@@ -190,23 +190,15 @@ async fn add_commit_rejected_by_policy() {
     let id = SedimentreeId::new([1u8; 32]);
     let (parents, blob) = make_commit_parts(b"test data");
 
+    // Local operations succeed even with a rejecting put policy
     let result = subduction.add_commit(id, parents, blob).await;
-
-    // Should fail with PutDisallowed
-    assert!(result.is_err());
-    #[allow(clippy::unwrap_used)]
-    let err = result.unwrap_err();
-    let err_string = format!("{err}");
-    assert!(
-        err_string.contains("put disallowed"),
-        "Expected 'put disallowed' error, got: {err_string}"
-    );
+    assert!(result.is_ok(), "Local add_commit should bypass policy");
 }
 
 #[tokio::test]
-async fn policy_allows_specific_sedimentree_id() -> TestResult {
+async fn local_adds_bypass_id_specific_policy() -> TestResult {
     let allowed_id = SedimentreeId::new([42u8; 32]);
-    let disallowed_id = SedimentreeId::new([99u8; 32]);
+    let other_id = SedimentreeId::new([99u8; 32]);
 
     let (subduction, _handler, _listener_fut, _actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
@@ -219,30 +211,29 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
-    // Adding to allowed ID should succeed
+    // Local operations succeed for both IDs — policy only applies to remote data
     let tree = Sedimentree::default();
     let result = subduction
         .add_sedimentree(allowed_id, tree.clone(), Vec::new())
         .await;
-    assert!(result.is_ok(), "Should allow adding to allowed ID");
+    assert!(result.is_ok(), "Local add to allowed ID should succeed");
 
-    // Adding to disallowed ID should fail
-    let result = subduction
-        .add_sedimentree(disallowed_id, tree, Vec::new())
-        .await;
-    assert!(result.is_err(), "Should reject adding to disallowed ID");
+    let result = subduction.add_sedimentree(other_id, tree, Vec::new()).await;
+    assert!(
+        result.is_ok(),
+        "Local add to other ID should also succeed (policy bypassed)"
+    );
 
-    // Verify only allowed ID is stored
     let ids = subduction.sedimentree_ids().await;
-    assert_eq!(ids.len(), 1);
+    assert_eq!(ids.len(), 2);
     assert!(ids.contains(&allowed_id));
-    assert!(!ids.contains(&disallowed_id));
+    assert!(ids.contains(&other_id));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn policy_rejection_does_not_store_data() {
+async fn local_add_stores_data_despite_rejecting_policy() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
@@ -254,18 +245,13 @@ async fn policy_rejection_does_not_store_data() {
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
 
-    // Attempt to add (should fail)
-    let _ = subduction.add_sedimentree(id, tree, Vec::new()).await;
+    // Local add succeeds (policy bypassed)
+    let result = subduction.add_sedimentree(id, tree, Vec::new()).await;
+    assert!(result.is_ok());
 
-    // Verify nothing was stored
+    // Data was stored
     let ids = subduction.sedimentree_ids().await;
-    assert!(ids.is_empty(), "No sedimentree IDs should be stored");
-
-    let commits = subduction.get_commits(id).await;
-    assert!(
-        commits.is_none(),
-        "No commits should exist for rejected sedimentree"
-    );
+    assert!(!ids.is_empty(), "Sedimentree ID should be stored");
 }
 
 /// A policy that rejects all fetches but allows connections and puts.
@@ -310,7 +296,7 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
     fn authorize_put(
         &self,
         _requestor: PeerId,
-        _author: PeerId,
+        _author: VerifiedAuthor,
         _sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async { Ok(()) }.boxed()
@@ -326,7 +312,7 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 }
 
 #[tokio::test]
-async fn multiple_rejections_all_fail_cleanly() {
+async fn multiple_local_adds_succeed_despite_rejecting_policy() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
@@ -335,17 +321,177 @@ async fn multiple_rejections_all_fail_cleanly() {
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
-    // Try multiple operations - all should fail
+    // All local operations succeed (policy bypassed)
     for i in 0..5u8 {
         let id = SedimentreeId::new([i; 32]);
         let tree = Sedimentree::default();
         let result = subduction.add_sedimentree(id, tree, Vec::new()).await;
-        assert!(result.is_err(), "Attempt {i} should be rejected");
+        assert!(result.is_ok(), "Local add {i} should succeed");
     }
 
-    // Verify nothing was stored
     let ids = subduction.sedimentree_ids().await;
-    assert!(ids.is_empty(), "No sedimentree IDs should be stored");
+    assert_eq!(ids.len(), 5, "All 5 sedimentrees should be stored");
+}
+
+/// A policy that allows puts only from a specific author (verifying key).
+#[derive(Clone)]
+struct AllowSpecificAuthorPolicy {
+    allowed_author: ed25519_dalek::VerifyingKey,
+}
+
+impl ConnectionPolicy<Sendable> for AllowSpecificAuthorPolicy {
+    type ConnectionDisallowed = Infallible;
+
+    fn authorize_connect(
+        &self,
+        _peer: PeerId,
+    ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+        async { Ok(()) }.boxed()
+    }
+}
+
+impl StoragePolicy<Sendable> for AllowSpecificAuthorPolicy {
+    type FetchDisallowed = Infallible;
+    type PutDisallowed = PutRejected;
+
+    fn authorize_fetch(
+        &self,
+        _peer: PeerId,
+        _sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn authorize_put(
+        &self,
+        _requestor: PeerId,
+        author: VerifiedAuthor,
+        _sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+        let allowed = self.allowed_author;
+        async move {
+            if *author.verifying_key() == allowed {
+                Ok(())
+            } else {
+                Err(PutRejected)
+            }
+        }
+        .boxed()
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        _peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        async move { ids }.boxed()
+    }
+}
+
+/// Remote commits signed by an unauthorized author are rejected by the
+/// policy, even though the relay peer is allowed to connect and fetch.
+/// This is the end-to-end test for the `VerifiedAuthor` security fix.
+#[tokio::test]
+async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
+    use subduction_core::{
+        connection::{
+            message::SyncMessage,
+            test_utils::{ChannelMockConnection, TokioSpawn},
+        },
+        remote_heads::RemoteHeads,
+    };
+    use subduction_crypto::signer::memory::MemorySigner;
+
+    // The "allowed" author — only commits signed by this key are accepted.
+    let allowed_signer = MemorySigner::from_bytes(&[0xAA; 32]);
+    let allowed_vk = allowed_signer.verifying_key();
+
+    // The "unauthorized" author — commits signed by this key should be rejected.
+    let unauthorized_signer = MemorySigner::from_bytes(&[0xBB; 32]);
+
+    let sedimentree_id = SedimentreeId::new([42u8; 32]);
+    let relay_peer_id = PeerId::new([1u8; 32]);
+
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(
+                MemoryStorage::new(),
+                Arc::new(AllowSpecificAuthorPolicy {
+                    allowed_author: allowed_vk,
+                }),
+            )
+            .spawner(TokioSpawn)
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+
+    let (conn, handle) = ChannelMockConnection::new_with_handle(relay_peer_id);
+    subduction.add_connection(conn.authenticated()).await?;
+
+    let actor_task = tokio::spawn(actor_fut);
+    let listener_task = tokio::spawn(listener_fut);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Create a commit signed by the UNAUTHORIZED author.
+    let blob = Blob::new(b"unauthorized data".to_vec());
+    let blob_meta = sedimentree_core::blob::BlobMeta::new(&blob);
+    let commit = LooseCommit::new(sedimentree_id, BTreeSet::new(), blob_meta);
+    let verified =
+        subduction_crypto::signed::Signed::seal::<Sendable, _>(&unauthorized_signer, commit).await;
+    let signed_commit = verified.into_signed();
+
+    // Send the commit via the relay peer.
+    handle
+        .inbound_tx
+        .send(SyncMessage::LooseCommit {
+            id: sedimentree_id,
+            commit: signed_commit,
+            blob,
+            sender_heads: RemoteHeads::default(),
+        })
+        .await?;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The commit should NOT have been stored — the policy rejects the author.
+    let commits = subduction.get_commits(sedimentree_id).await;
+    assert!(
+        commits.is_none() || commits.as_ref().is_some_and(Vec::is_empty),
+        "Commit from unauthorized author should be rejected by policy"
+    );
+
+    // Now send a commit signed by the ALLOWED author — should succeed.
+    let allowed_blob = Blob::new(b"authorized data".to_vec());
+    let allowed_blob_meta = sedimentree_core::blob::BlobMeta::new(&allowed_blob);
+    let allowed_commit = LooseCommit::new(sedimentree_id, BTreeSet::new(), allowed_blob_meta);
+    let allowed_verified =
+        subduction_crypto::signed::Signed::seal::<Sendable, _>(&allowed_signer, allowed_commit)
+            .await;
+    let allowed_commit_signed = allowed_verified.into_signed();
+
+    handle
+        .inbound_tx
+        .send(SyncMessage::LooseCommit {
+            id: sedimentree_id,
+            commit: allowed_commit_signed,
+            blob: allowed_blob,
+            sender_heads: RemoteHeads::default(),
+        })
+        .await?;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // This commit SHOULD be stored — the author is allowed.
+    let commits = subduction.get_commits(sedimentree_id).await;
+    assert_eq!(
+        commits.map(|c| c.len()),
+        Some(1),
+        "Commit from allowed author should be accepted"
+    );
+
+    actor_task.abort();
+    listener_task.abort();
+    Ok(())
 }
 
 /// When fetch policy rejects, `recv_batch_sync_request` should respond

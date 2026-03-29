@@ -6,6 +6,8 @@ use core::error::Error;
 use future_form::FutureForm;
 use sedimentree_core::id::SedimentreeId;
 
+use subduction_crypto::verified_author::VerifiedAuthor;
+
 use crate::peer::id::PeerId;
 
 /// A policy for allowing or disallowing storage operations.
@@ -31,11 +33,15 @@ pub trait StoragePolicy<K: FutureForm> {
 
     /// Authorize putting data for the given sedimentree.
     ///
+    /// The `author` is a [`VerifiedAuthor`] — the compiler guarantees
+    /// the author's signing key has been cryptographically verified
+    /// before this method is called.
+    ///
     /// Returns `Ok(())` if the put is allowed, or an error if disallowed.
     fn authorize_put(
         &self,
         requestor: PeerId,
-        author: PeerId,
+        author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::PutDisallowed>>;
 

@@ -33,5 +33,6 @@ extern crate alloc;
 pub mod nonce;
 pub mod signed;
 pub mod signer;
+pub mod verified_author;
 pub mod verified_meta;
 pub mod verified_signature;

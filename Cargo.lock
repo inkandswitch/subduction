@@ -5363,6 +5363,7 @@ dependencies = [
  "sedimentree_core",
  "serde",
  "subduction_core",
+ "subduction_crypto",
  "subduction_keyhive",
  "testresult",
  "thiserror 2.0.18",

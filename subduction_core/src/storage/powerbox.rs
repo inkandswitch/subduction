@@ -15,6 +15,7 @@ use super::{
     traits::Storage,
 };
 use crate::{peer::id::PeerId, policy::storage::StoragePolicy};
+use subduction_crypto::verified_author::VerifiedAuthor;
 
 /// A powerbox that wraps storage and policy, only allowing access through capabilities.
 ///
@@ -91,9 +92,14 @@ impl<S, P> StoragePowerbox<S, P> {
         Ok(Fetcher::new(self.storage.clone(), sedimentree_id))
     }
 
-    /// Create a put capability for a peer to write to a sedimentree.
+    /// Create a put capability for a remote peer's data.
     ///
-    /// Checks authorization via the policy before minting the capability.
+    /// Requires a [`VerifiedAuthor`] — the compiler enforces that the
+    /// author's signing key has been cryptographically verified before
+    /// authorization.
+    ///
+    /// For local operations (the node writing its own data), use
+    /// [`local_putter`](Self::local_putter) instead.
     ///
     /// # Errors
     ///
@@ -101,7 +107,7 @@ impl<S, P> StoragePowerbox<S, P> {
     pub async fn get_putter<K: FutureForm>(
         &self,
         requestor: PeerId,
-        author: PeerId,
+        author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> Result<Putter<K, S>, P::PutDisallowed>
     where
@@ -112,6 +118,24 @@ impl<S, P> StoragePowerbox<S, P> {
             .authorize_put(requestor, author, sedimentree_id)
             .await?;
         Ok(Putter::new(self.storage.clone(), sedimentree_id))
+    }
+
+    /// Create a put capability for local operations.
+    ///
+    /// The node trusts itself — no policy check is performed. Use this
+    /// for locally-authored data (e.g., [`add_commit`], [`add_fragment`]).
+    ///
+    /// For remote data, use [`get_putter`](Self::get_putter) which
+    /// requires a [`VerifiedAuthor`].
+    ///
+    /// [`add_commit`]: crate::subduction::Subduction::add_commit
+    /// [`add_fragment`]: crate::subduction::Subduction::add_fragment
+    #[must_use]
+    pub(crate) fn local_putter<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Putter<K, S>
+    where
+        S: Storage<K>,
+    {
+        Putter::new(self.storage.clone(), sedimentree_id)
     }
 
     /// Get direct storage access for hydration (startup data loading).

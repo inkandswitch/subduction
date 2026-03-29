@@ -56,13 +56,32 @@ pub(crate) async fn recv_batch_sync_response<
     let mut putter_cache: Map<PeerId, Putter<F, S>> = Map::new();
 
     for (signed_commit, blob) in diff.missing_commits {
-        let author = PeerId::from(signed_commit.issuer());
+        let verified = match signed_commit.try_verify() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("batch sync commit signature verification failed: {e}");
+                continue;
+            }
+        };
 
-        #[allow(clippy::map_entry)]
-        if !putter_cache.contains_key(&author) {
+        // Check blob integrity before policy (cheap check first, avoids
+        // wasting policy work on attacker-controlled blob mismatches).
+        let verified_meta = match VerifiedMeta::new(verified, blob) {
+            Ok(vm) => vm,
+            Err(e) => {
+                tracing::warn!("batch sync commit blob mismatch: {e}");
+                continue;
+            }
+        };
+
+        let author = verified_meta.verified_author();
+        let author_id = PeerId::from(*author.verifying_key());
+
+        #[allow(clippy::map_entry)] // async in insertion path
+        if !putter_cache.contains_key(&author_id) {
             match storage.get_putter::<F>(*from, author, id).await {
                 Ok(p) => {
-                    putter_cache.insert(author, p);
+                    putter_cache.insert(author_id, p);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -72,24 +91,8 @@ pub(crate) async fn recv_batch_sync_response<
                 }
             }
         }
-        let Some(putter) = putter_cache.get(&author) else {
+        let Some(putter) = putter_cache.get(&author_id) else {
             continue;
-        };
-
-        let verified = match signed_commit.try_verify() {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("batch sync commit signature verification failed: {e}");
-                continue;
-            }
-        };
-
-        let verified_meta = match VerifiedMeta::new(verified, blob) {
-            Ok(vm) => vm,
-            Err(e) => {
-                tracing::warn!("batch sync commit blob mismatch: {e}");
-                continue;
-            }
         };
 
         insert_commit_locally(sedimentrees, putter, verified_meta)
@@ -98,27 +101,6 @@ pub(crate) async fn recv_batch_sync_response<
     }
 
     for (signed_fragment, blob) in diff.missing_fragments {
-        let author = PeerId::from(signed_fragment.issuer());
-
-        #[allow(clippy::map_entry)] // async in insertion path
-        if !putter_cache.contains_key(&author) {
-            match storage.get_putter::<F>(*from, author, id).await {
-                Ok(p) => {
-                    putter_cache.insert(author, p);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "policy rejected fragment from {from:?} (author {author:?}) for {id:?}: {e}"
-                    );
-                    continue;
-                }
-            }
-        }
-
-        let Some(putter) = putter_cache.get(&author) else {
-            continue;
-        };
-
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -133,6 +115,28 @@ pub(crate) async fn recv_batch_sync_response<
                 tracing::warn!("batch sync fragment blob mismatch: {e}");
                 continue;
             }
+        };
+
+        let author = verified_meta.verified_author();
+        let author_id = PeerId::from(*author.verifying_key());
+
+        #[allow(clippy::map_entry)] // async in insertion path
+        if !putter_cache.contains_key(&author_id) {
+            match storage.get_putter::<F>(*from, author, id).await {
+                Ok(p) => {
+                    putter_cache.insert(author_id, p);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "policy rejected fragment from {from:?} (author {author:?}) for {id:?}: {e}"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        let Some(putter) = putter_cache.get(&author_id) else {
+            continue;
         };
 
         insert_fragment_locally(sedimentrees, putter, verified_meta)
