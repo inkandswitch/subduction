@@ -124,7 +124,9 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
     sedimentree::{FingerprintResolver, Sedimentree},
 };
-use subduction_crypto::{signed::Signed, signer::Signer, verified_meta::VerifiedMeta};
+use subduction_crypto::{
+    signed::Signed, signer::Signer, verified_author::VerifiedAuthor, verified_meta::VerifiedMeta,
+};
 
 use pending_blob_requests::PendingBlobRequests;
 
@@ -1090,11 +1092,7 @@ where
         blob: Blob,
     ) -> Result<Option<FragmentRequested>, WriteError<F, S, C, H::Message, P::PutDisallowed>> {
         let self_id = self.peer_id();
-        let putter = self
-            .storage
-            .get_putter::<F>(self_id, self_id, id)
-            .await
-            .map_err(WriteError::PutDisallowed)?;
+        let putter = self.storage.local_putter::<F>(id);
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
@@ -1192,11 +1190,7 @@ where
         let verified_blob = VerifiedBlobMeta::new(blob);
 
         let self_id = self.peer_id();
-        let putter = self
-            .storage
-            .get_putter::<F>(self_id, self_id, id)
-            .await
-            .map_err(WriteError::PutDisallowed)?;
+        let putter = self.storage.local_putter::<F>(id);
 
         let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<F, _>(
             &self.signer,
@@ -1301,12 +1295,7 @@ where
             return Ok(());
         }
 
-        let self_id = self.peer_id();
-        let putter = self
-            .storage
-            .get_putter::<F>(self_id, self_id, id)
-            .await
-            .map_err(WriteError::PutDisallowed)?;
+        let putter = self.storage.local_putter::<F>(id);
 
         let count = commits.len();
         tracing::info!("bulk-inserting {count} commits into sedimentree {id:?}");
@@ -1348,12 +1337,7 @@ where
             return Ok(());
         }
 
-        let self_id = self.peer_id();
-        let putter = self
-            .storage
-            .get_putter::<F>(self_id, self_id, id)
-            .await
-            .map_err(WriteError::PutDisallowed)?;
+        let putter = self.storage.local_putter::<F>(id);
 
         let count = fragments.len();
         tracing::info!("bulk-inserting {count} fragments into sedimentree {id:?}");
@@ -1462,12 +1446,7 @@ where
     ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
         use sedimentree_core::collections::Map;
 
-        let self_id = self.peer_id();
-        let putter = self
-            .storage
-            .get_putter::<F>(self_id, self_id, id)
-            .await
-            .map_err(WriteError::PutDisallowed)?;
+        let putter = self.storage.local_putter::<F>(id);
 
         // Index blobs by digest for matching with commits/fragments
         let blobs_by_digest: Map<Digest<Blob>, Blob> =
@@ -1630,18 +1609,6 @@ where
                         }
                     };
 
-                    let putter = match self.storage.get_putter::<F>(*to_ask, *to_ask, id).await {
-                        Ok(p) => p,
-                        Err(e) => {
-                            tracing::warn!(
-                                "policy rejected sync from peer {:?} for sedimentree {:?}: {e}",
-                                to_ask,
-                                id
-                            );
-                            continue;
-                        }
-                    };
-
                     // Track counts for stats
                     let commits_to_receive = missing_commits.len();
                     let fragments_to_receive = missing_fragments.len();
@@ -1651,6 +1618,19 @@ where
                             Ok(v) => v,
                             Err(e) => {
                                 tracing::warn!("sync commit signature verification failed: {e}");
+                                continue;
+                            }
+                        };
+                        let author = verified.verified_author();
+                        let putter = match self.storage.get_putter::<F>(*to_ask, author, id).await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "policy rejected sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
+                                    to_ask,
+                                    author,
+                                    id
+                                );
                                 continue;
                             }
                         };
@@ -1671,6 +1651,19 @@ where
                             Ok(v) => v,
                             Err(e) => {
                                 tracing::warn!("sync fragment signature verification failed: {e}");
+                                continue;
+                            }
+                        };
+                        let author = verified.verified_author();
+                        let putter = match self.storage.get_putter::<F>(*to_ask, author, id).await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "policy rejected sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
+                                    to_ask,
+                                    author,
+                                    id
+                                );
                                 continue;
                             }
                         };
@@ -1877,20 +1870,6 @@ where
                                     }
                                 };
 
-                                let putter =
-                                    match self.storage.get_putter::<F>(*peer_id, *peer_id, id).await
-                                    {
-                                        Ok(p) => p,
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "policy rejected sync from peer {:?} for sedimentree {:?}: {e}",
-                                                peer_id,
-                                                id
-                                            );
-                                            continue;
-                                        }
-                                    };
-
                                 // Track counts for stats
                                 let commits_to_receive = missing_commits.len();
                                 let fragments_to_receive = missing_fragments.len();
@@ -1914,6 +1893,19 @@ where
                                             continue;
                                         }
                                     };
+                                    let author = verified.verified_author();
+                                    let putter = match self.storage.get_putter::<F>(*peer_id, author, id).await {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "policy rejected full sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
+                                                peer_id,
+                                                author,
+                                                id
+                                            );
+                                            continue;
+                                        }
+                                    };
                                     let verified_meta = match VerifiedMeta::new(verified, blob) {
                                         Ok(vm) => vm,
                                         Err(e) => {
@@ -1932,6 +1924,19 @@ where
                                         Err(e) => {
                                             tracing::warn!(
                                                 "full sync fragment signature verification failed: {e}"
+                                            );
+                                            continue;
+                                        }
+                                    };
+                                    let author = verified.verified_author();
+                                    let putter = match self.storage.get_putter::<F>(*peer_id, author, id).await {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "policy rejected full sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
+                                                peer_id,
+                                                author,
+                                                id
                                             );
                                             continue;
                                         }
@@ -2519,7 +2524,7 @@ impl<
     fn authorize_put(
         &self,
         requestor: PeerId,
-        author: PeerId,
+        author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> F::Future<'_, Result<(), Self::PutDisallowed>> {
         self.storage

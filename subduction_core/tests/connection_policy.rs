@@ -18,6 +18,7 @@ use subduction_core::{
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
 };
+use subduction_crypto::verified_author::VerifiedAuthor;
 use testresult::TestResult;
 
 #[tokio::test]
@@ -71,7 +72,7 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
     fn authorize_put(
         &self,
         _requestor: PeerId,
-        _author: PeerId,
+        _author: VerifiedAuthor,
         _sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async { Ok(()) }.boxed()

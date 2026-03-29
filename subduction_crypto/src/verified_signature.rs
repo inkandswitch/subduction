@@ -6,7 +6,10 @@ use sedimentree_core::codec::{
     decode::DecodeFields, encode::EncodeFields, error::DecodeError, schema::Schema,
 };
 
-use crate::signed::{Signed, VerificationError};
+use crate::{
+    signed::{Signed, VerificationError},
+    verified_author::VerifiedAuthor,
+};
 
 /// A payload whose signature has been verified.
 ///
@@ -80,6 +83,15 @@ impl<T: Schema + EncodeFields + DecodeFields> VerifiedSignature<T> {
     #[must_use]
     pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
         self.signed.issuer()
+    }
+
+    /// Extract the author identity as a [`VerifiedAuthor`] witness.
+    ///
+    /// This is the primary way to obtain a [`VerifiedAuthor`] — it
+    /// proves the author's signing key has been cryptographically verified.
+    #[must_use]
+    pub const fn verified_author(&self) -> VerifiedAuthor {
+        VerifiedAuthor::new(self.signed.issuer())
     }
 
     /// Returns a reference to the verified payload.

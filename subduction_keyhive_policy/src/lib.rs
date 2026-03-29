@@ -31,6 +31,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
+use subduction_crypto::verified_author::VerifiedAuthor;
 
 /// Error returned when a connection is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -194,12 +195,11 @@ impl<
     fn authorize_put(
         &self,
         _requestor: PeerId,
-        author: PeerId,
+        author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async move {
-            let identifier =
-                try_peer_id_to_identifier(author).ok_or(PutDisallowedError::InvalidAuthorId)?;
+            let identifier = Identifier::from(*author.verifying_key());
 
             let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
                 .ok_or(PutDisallowedError::InvalidSedimentreeId)?;
@@ -372,12 +372,11 @@ impl<
     fn authorize_put(
         &self,
         _requestor: PeerId,
-        author: PeerId,
+        author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async move {
-            let identifier =
-                try_peer_id_to_identifier(author).ok_or(PutDisallowedError::InvalidAuthorId)?;
+            let identifier = Identifier::from(*author.verifying_key());
 
             let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
                 .ok_or(PutDisallowedError::InvalidSedimentreeId)?;

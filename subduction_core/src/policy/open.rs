@@ -8,6 +8,7 @@ use sedimentree_core::id::SedimentreeId;
 
 use super::{connection::ConnectionPolicy, storage::StoragePolicy};
 use crate::peer::id::PeerId;
+use subduction_crypto::verified_author::VerifiedAuthor;
 
 /// An open policy that allows all connections and storage operations.
 ///
@@ -43,7 +44,7 @@ impl<K: FutureForm> StoragePolicy<K> for OpenPolicy {
     fn authorize_put(
         &self,
         _requestor: PeerId,
-        _author: PeerId,
+        _author: VerifiedAuthor,
         _sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::PutDisallowed>> {
         K::from_future(async { Ok(()) })

@@ -9,7 +9,10 @@ use thiserror::Error;
 
 use sedimentree_core::codec::error::DecodeError;
 
-use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};
+use crate::{
+    signed::Signed, signer::Signer, verified_author::VerifiedAuthor,
+    verified_signature::VerifiedSignature,
+};
 
 /// A commit or fragment whose signature is valid AND whose blob matches the claimed metadata.
 ///
@@ -84,6 +87,14 @@ impl<T: HasBlobMeta + Schema + EncodeFields + DecodeFields> VerifiedMeta<T> {
     #[must_use]
     pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
         self.verified.issuer()
+    }
+
+    /// Extract the author identity as a [`VerifiedAuthor`] witness.
+    ///
+    /// Delegates to [`VerifiedSignature::verified_author`].
+    #[must_use]
+    pub const fn verified_author(&self) -> VerifiedAuthor {
+        self.verified.verified_author()
     }
 
     /// Returns a reference to the original signed value.

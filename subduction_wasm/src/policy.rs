@@ -36,6 +36,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
+use subduction_crypto::verified_author::VerifiedAuthor;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
@@ -169,12 +170,12 @@ impl StoragePolicy<Local> for JsPolicy {
     fn authorize_put(
         &self,
         requestor: PeerId,
-        author: PeerId,
+        author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::PutDisallowed>> {
         let result = self.js_authorize_put(
             peer_bytes(requestor),
-            peer_bytes(author),
+            peer_bytes(PeerId::from(*author.verifying_key())),
             sed_bytes(sedimentree_id),
         );
         async move { await_void_promise(result).await }.boxed_local()

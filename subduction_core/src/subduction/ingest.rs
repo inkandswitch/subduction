@@ -56,13 +56,22 @@ pub(crate) async fn recv_batch_sync_response<
     let mut putter_cache: Map<PeerId, Putter<F, S>> = Map::new();
 
     for (signed_commit, blob) in diff.missing_commits {
-        let author = PeerId::from(signed_commit.issuer());
+        let verified = match signed_commit.try_verify() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("batch sync commit signature verification failed: {e}");
+                continue;
+            }
+        };
+
+        let author = verified.verified_author();
+        let author_id = PeerId::from(*author.verifying_key());
 
         #[allow(clippy::map_entry)]
-        if !putter_cache.contains_key(&author) {
+        if !putter_cache.contains_key(&author_id) {
             match storage.get_putter::<F>(*from, author, id).await {
                 Ok(p) => {
-                    putter_cache.insert(author, p);
+                    putter_cache.insert(author_id, p);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -72,16 +81,8 @@ pub(crate) async fn recv_batch_sync_response<
                 }
             }
         }
-        let Some(putter) = putter_cache.get(&author) else {
+        let Some(putter) = putter_cache.get(&author_id) else {
             continue;
-        };
-
-        let verified = match signed_commit.try_verify() {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("batch sync commit signature verification failed: {e}");
-                continue;
-            }
         };
 
         let verified_meta = match VerifiedMeta::new(verified, blob) {
@@ -98,13 +99,22 @@ pub(crate) async fn recv_batch_sync_response<
     }
 
     for (signed_fragment, blob) in diff.missing_fragments {
-        let author = PeerId::from(signed_fragment.issuer());
+        let verified = match signed_fragment.try_verify() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("batch sync fragment signature verification failed: {e}");
+                continue;
+            }
+        };
+
+        let author = verified.verified_author();
+        let author_id = PeerId::from(*author.verifying_key());
 
         #[allow(clippy::map_entry)] // async in insertion path
-        if !putter_cache.contains_key(&author) {
+        if !putter_cache.contains_key(&author_id) {
             match storage.get_putter::<F>(*from, author, id).await {
                 Ok(p) => {
-                    putter_cache.insert(author, p);
+                    putter_cache.insert(author_id, p);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -115,16 +125,8 @@ pub(crate) async fn recv_batch_sync_response<
             }
         }
 
-        let Some(putter) = putter_cache.get(&author) else {
+        let Some(putter) = putter_cache.get(&author_id) else {
             continue;
-        };
-
-        let verified = match signed_fragment.try_verify() {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("batch sync fragment signature verification failed: {e}");
-                continue;
-            }
         };
 
         let verified_meta = match VerifiedMeta::new(verified, blob) {
