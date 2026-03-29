@@ -64,10 +64,20 @@ pub(crate) async fn recv_batch_sync_response<
             }
         };
 
-        let author = verified.verified_author();
+        // Check blob integrity before policy (cheap check first, avoids
+        // wasting policy work on attacker-controlled blob mismatches).
+        let verified_meta = match VerifiedMeta::new(verified, blob) {
+            Ok(vm) => vm,
+            Err(e) => {
+                tracing::warn!("batch sync commit blob mismatch: {e}");
+                continue;
+            }
+        };
+
+        let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
-        #[allow(clippy::map_entry)]
+        #[allow(clippy::map_entry)] // async in insertion path
         if !putter_cache.contains_key(&author_id) {
             match storage.get_putter::<F>(*from, author, id).await {
                 Ok(p) => {
@@ -85,14 +95,6 @@ pub(crate) async fn recv_batch_sync_response<
             continue;
         };
 
-        let verified_meta = match VerifiedMeta::new(verified, blob) {
-            Ok(vm) => vm,
-            Err(e) => {
-                tracing::warn!("batch sync commit blob mismatch: {e}");
-                continue;
-            }
-        };
-
         insert_commit_locally(sedimentrees, putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
@@ -107,7 +109,15 @@ pub(crate) async fn recv_batch_sync_response<
             }
         };
 
-        let author = verified.verified_author();
+        let verified_meta = match VerifiedMeta::new(verified, blob) {
+            Ok(vm) => vm,
+            Err(e) => {
+                tracing::warn!("batch sync fragment blob mismatch: {e}");
+                continue;
+            }
+        };
+
+        let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
         #[allow(clippy::map_entry)] // async in insertion path
@@ -127,14 +137,6 @@ pub(crate) async fn recv_batch_sync_response<
 
         let Some(putter) = putter_cache.get(&author_id) else {
             continue;
-        };
-
-        let verified_meta = match VerifiedMeta::new(verified, blob) {
-            Ok(vm) => vm,
-            Err(e) => {
-                tracing::warn!("batch sync fragment blob mismatch: {e}");
-                continue;
-            }
         };
 
         insert_fragment_locally(sedimentrees, putter, verified_meta)

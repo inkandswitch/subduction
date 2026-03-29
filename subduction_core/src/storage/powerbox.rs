@@ -131,7 +131,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// [`add_commit`]: crate::subduction::Subduction::add_commit
     /// [`add_fragment`]: crate::subduction::Subduction::add_fragment
     #[must_use]
-    pub fn local_putter<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Putter<K, S>
+    pub(crate) fn local_putter<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Putter<K, S>
     where
         S: Storage<K>,
     {

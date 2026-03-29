@@ -113,7 +113,7 @@ use sedimentree_core::{
     blob::{Blob, verified::VerifiedBlobMeta},
     codec::{decode::Decode, encode::Encode},
     collections::{
-        Map, Set,
+        Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     commit::CountLeadingZeroBytes,
@@ -1084,7 +1084,9 @@ where
     /// # Errors
     ///
     /// * [`WriteError::Io`] if a storage or network error occurs.
-    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
@@ -1613,24 +1615,14 @@ where
                     let commits_to_receive = missing_commits.len();
                     let fragments_to_receive = missing_fragments.len();
 
+                    // Cache putters by author to avoid redundant policy checks.
+                    let mut putter_cache: Map<PeerId, Putter<F, S>> = Map::new();
+
                     for (signed_commit, blob) in missing_commits {
                         let verified = match signed_commit.try_verify() {
                             Ok(v) => v,
                             Err(e) => {
                                 tracing::warn!("sync commit signature verification failed: {e}");
-                                continue;
-                            }
-                        };
-                        let author = verified.verified_author();
-                        let putter = match self.storage.get_putter::<F>(*to_ask, author, id).await {
-                            Ok(p) => p,
-                            Err(e) => {
-                                tracing::warn!(
-                                    "policy rejected sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                                    to_ask,
-                                    author,
-                                    id
-                                );
                                 continue;
                             }
                         };
@@ -1641,7 +1633,26 @@ where
                                 continue;
                             }
                         };
-                        self.insert_commit_locally(&putter, verified_meta)
+                        let author = verified_meta.verified_author();
+                        let author_id = PeerId::from(*author.verifying_key());
+                        let putter = match putter_cache.entry(author_id) {
+                            Entry::Occupied(e) => e.into_mut(),
+                            Entry::Vacant(e) => {
+                                match self.storage.get_putter::<F>(*to_ask, author, id).await {
+                                    Ok(p) => e.insert(p),
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "policy rejected sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
+                                            to_ask,
+                                            author,
+                                            id
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        self.insert_commit_locally(putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
                     }
@@ -1654,19 +1665,6 @@ where
                                 continue;
                             }
                         };
-                        let author = verified.verified_author();
-                        let putter = match self.storage.get_putter::<F>(*to_ask, author, id).await {
-                            Ok(p) => p,
-                            Err(e) => {
-                                tracing::warn!(
-                                    "policy rejected sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                                    to_ask,
-                                    author,
-                                    id
-                                );
-                                continue;
-                            }
-                        };
                         let verified_meta = match VerifiedMeta::new(verified, blob) {
                             Ok(vm) => vm,
                             Err(e) => {
@@ -1674,7 +1672,26 @@ where
                                 continue;
                             }
                         };
-                        self.insert_fragment_locally(&putter, verified_meta)
+                        let author = verified_meta.verified_author();
+                        let author_id = PeerId::from(*author.verifying_key());
+                        let putter = match putter_cache.entry(author_id) {
+                            Entry::Occupied(e) => e.into_mut(),
+                            Entry::Vacant(e) => {
+                                match self.storage.get_putter::<F>(*to_ask, author, id).await {
+                                    Ok(p) => e.insert(p),
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "policy rejected sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
+                                            to_ask,
+                                            author,
+                                            id
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        self.insert_fragment_locally(putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
                     }
@@ -1883,25 +1900,15 @@ where
                                     "sync_with_all_peers: response received"
                                 );
 
+                                // Cache putters by author to avoid redundant policy checks.
+                                let mut putter_cache: Map<PeerId, Putter<F, S>> = Map::new();
+
                                 for (signed_commit, blob) in missing_commits {
                                     let verified = match signed_commit.try_verify() {
                                         Ok(v) => v,
                                         Err(e) => {
                                             tracing::warn!(
                                                 "full sync commit signature verification failed: {e}"
-                                            );
-                                            continue;
-                                        }
-                                    };
-                                    let author = verified.verified_author();
-                                    let putter = match self.storage.get_putter::<F>(*peer_id, author, id).await {
-                                        Ok(p) => p,
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "policy rejected full sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                                                peer_id,
-                                                author,
-                                                id
                                             );
                                             continue;
                                         }
@@ -1913,7 +1920,24 @@ where
                                             continue;
                                         }
                                     };
-                                    self.insert_commit_locally(&putter, verified_meta)
+                                    let author = verified_meta.verified_author();
+                                    let author_id = PeerId::from(*author.verifying_key());
+                                    let putter = match putter_cache.entry(author_id) {
+                                        Entry::Occupied(e) => e.into_mut(),
+                                        Entry::Vacant(e) => {
+                                            match self.storage.get_putter::<F>(*peer_id, author, id).await {
+                                                Ok(p) => e.insert(p),
+                                                Err(err) => {
+                                                    tracing::warn!(
+                                                        "policy rejected full sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
+                                                        peer_id, author, id
+                                                    );
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    };
+                                    self.insert_commit_locally(putter, verified_meta)
                                         .await
                                         .map_err(IoError::Storage)?;
                                 }
@@ -1928,19 +1952,6 @@ where
                                             continue;
                                         }
                                     };
-                                    let author = verified.verified_author();
-                                    let putter = match self.storage.get_putter::<F>(*peer_id, author, id).await {
-                                        Ok(p) => p,
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "policy rejected full sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                                                peer_id,
-                                                author,
-                                                id
-                                            );
-                                            continue;
-                                        }
-                                    };
                                     let verified_meta = match VerifiedMeta::new(verified, blob) {
                                         Ok(vm) => vm,
                                         Err(e) => {
@@ -1948,7 +1959,24 @@ where
                                             continue;
                                         }
                                     };
-                                    self.insert_fragment_locally(&putter, verified_meta)
+                                    let author = verified_meta.verified_author();
+                                    let author_id = PeerId::from(*author.verifying_key());
+                                    let putter = match putter_cache.entry(author_id) {
+                                        Entry::Occupied(e) => e.into_mut(),
+                                        Entry::Vacant(e) => {
+                                            match self.storage.get_putter::<F>(*peer_id, author, id).await {
+                                                Ok(p) => e.insert(p),
+                                                Err(err) => {
+                                                    tracing::warn!(
+                                                        "policy rejected full sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
+                                                        peer_id, author, id
+                                                    );
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    };
+                                    self.insert_fragment_locally(putter, verified_meta)
                                         .await
                                         .map_err(IoError::Storage)?;
                                 }

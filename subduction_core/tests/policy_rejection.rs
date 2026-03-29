@@ -151,10 +151,10 @@ fn make_commit_parts(data: &[u8]) -> (BTreeSet<Digest<LooseCommit>>, Blob) {
     (BTreeSet::new(), blob)
 }
 
-/// Local operations (add_sedimentree, add_commit) bypass policy — the
+/// Local operations (`add_sedimentree`, `add_commit`) bypass policy — the
 /// node trusts itself. Policy rejection only applies to remote data
-/// received via sync (tested in the handler/sync tests and the
-/// `unauthorized_fetch_returns_unauthorized_result` test below).
+/// received via sync; see the
+/// `unauthorized_fetch_returns_unauthorized_result` test below.
 #[tokio::test]
 async fn local_add_sedimentree_bypasses_put_policy() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
