@@ -145,22 +145,22 @@ mod tests {
 
     #[test]
     fn nonce_survives_in_previous_bucket() {
-        let mut cache = EphemeralNonceCache::new(Duration::from_secs(10));
-        // Insert at t=100
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
-        // Advance past one window — nonce rotates to previous bucket
-        assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(112)));
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        // Insert at t=0
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // Advance past one window (>2s) — nonce rotates to previous but still seen
+        assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(3)));
     }
 
     #[test]
     fn nonce_evicted_after_two_windows() {
-        let mut cache = EphemeralNonceCache::new(Duration::from_secs(10));
-        // Insert at t=100
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
-        // First rotation at t=112 — nonce moves to previous
-        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(112)));
-        // Second rotation at t=123 — previous (with nonce 42) is discarded
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(123)));
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        // Insert at t=0
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // First rotation at t=3 — nonce 42 moves to previous
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(3)));
+        // Second rotation at t=6 — previous (with nonce 42) is discarded
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(6)));
     }
 
     #[test]
@@ -196,13 +196,12 @@ mod tests {
 
     #[test]
     fn long_idle_resets_both_buckets() {
-        let mut cache = EphemeralNonceCache::new(Duration::from_secs(10));
-        // Insert at t=100
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
-        // Still duplicate at t=100
-        assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(100)));
-        // Jump far ahead (> 2 * window_duration) — both buckets are stale
-        // and should be fully reset. Nonce 42 should be accepted again.
-        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(200)));
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        // Insert at t=0
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // Still duplicate at t=0
+        assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // Jump past 2 * window (>4s) — both buckets stale, nonce accepted again
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(5)));
     }
 }
