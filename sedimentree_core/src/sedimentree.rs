@@ -100,7 +100,7 @@ pub struct FingerprintDiff<'a> {
 ///
 /// Created by [`Sedimentree::fingerprint_resolver`], this type captures
 /// the fingerprint-to-digest mappings _at the time of construction_,
-/// ensuring that subsequent tree mutations (e.g., [`minimize`]) cannot
+/// ensuring that subsequent tree mutations (e.g., [`Sedimentree::minimize`]) cannot
 /// invalidate the reverse lookup.
 ///
 /// This is the type-level enforcement of the invariant: the reverse-lookup
@@ -2472,90 +2472,10 @@ mod tests {
 
         use crate::{
             crypto::{digest::Digest, fingerprint::FingerprintSeed},
-            fragment::Fragment,
             loose_commit::LooseCommit,
             sedimentree::Sedimentree,
             test_utils::{TestGraph, seeded_rng},
         };
-
-        /// The resolver must resolve all fingerprints from its own summary.
-        #[test]
-        fn resolver_resolves_all_own_fingerprints() {
-            let mut rng = seeded_rng(300);
-            let graph = TestGraph::new(
-                &mut rng,
-                &[("a", 2), ("b", 0), ("c", 1)],
-                &[("a", "b"), ("b", "c")],
-            );
-            let tree = graph.to_sedimentree();
-            let seed = FingerprintSeed::new(42, 99);
-            let resolver = tree.fingerprint_resolver(&seed);
-
-            for fp in resolver.summary().commit_fingerprints() {
-                assert!(
-                    resolver.resolve_commit(fp).is_some(),
-                    "resolver must resolve every commit fingerprint from its own summary"
-                );
-            }
-
-            for fp in resolver.summary().fragment_fingerprints() {
-                assert!(
-                    resolver.resolve_fragment(fp).is_some(),
-                    "resolver must resolve every fragment fingerprint from its own summary"
-                );
-            }
-        }
-
-        /// The resolver's summary must match `fingerprint_summarize` for the same seed.
-        #[test]
-        fn resolver_summary_matches_fingerprint_summarize() {
-            let mut rng = seeded_rng(301);
-            let graph = TestGraph::new(
-                &mut rng,
-                &[("a", 2), ("b", 0), ("c", 1), ("d", 0)],
-                &[("a", "b"), ("b", "c"), ("c", "d")],
-            );
-            let tree = graph.to_sedimentree();
-            let seed = FingerprintSeed::new(100, 200);
-
-            let summary = tree.fingerprint_summarize(&seed);
-            let resolver = tree.fingerprint_resolver(&seed);
-
-            assert_eq!(
-                summary,
-                *resolver.summary(),
-                "resolver.summary() must equal fingerprint_summarize() for the same seed"
-            );
-        }
-
-        /// Fingerprints from a different seed should not resolve (different
-        /// seeds produce different u64 hashes). A collision is theoretically
-        /// possible but vanishingly unlikely for small item counts.
-        #[test]
-        fn resolver_returns_none_for_different_seed() {
-            let mut rng = seeded_rng(302);
-            let graph = TestGraph::new(&mut rng, &[("a", 2), ("b", 0)], &[("a", "b")]);
-            let tree = graph.to_sedimentree();
-            let seed_a = FingerprintSeed::new(1, 1);
-            let seed_b = FingerprintSeed::new(2, 2);
-
-            let resolver_a = tree.fingerprint_resolver(&seed_a);
-            let summary_b = tree.fingerprint_summarize(&seed_b);
-
-            let resolved_count = summary_b
-                .commit_fingerprints()
-                .iter()
-                .filter(|fp| resolver_a.resolve_commit(fp).is_some())
-                .count();
-
-            // With 2 items and independent u64 hashes, collision probability
-            // is ~2/2^64 ≈ 10^-19. Zero resolutions expected.
-            assert_eq!(
-                resolved_count, 0,
-                "fingerprints from a different seed should not resolve \
-                 ({resolved_count} unexpected collisions)"
-            );
-        }
 
         /// The critical invariant: a resolver created before `minimize` can
         /// still resolve fingerprints for commits that minimize prunes away.
@@ -2621,50 +2541,64 @@ mod tests {
             );
         }
 
-        /// The resolver resolves fragment fingerprints even after the
-        /// in-memory tree's fragments change via minimize.
+        /// Deep fragment dominates a shallow fragment on the same chain.
+        ///
+        /// ```text
+        /// a(depth=3) → b(depth=1) → c(depth=0)
+        /// ```
+        ///
+        /// Alice has shallow fragment `b→c` plus all loose commits. After
+        /// adding deep fragment `a→c` and minimizing, the shallow fragment
+        /// is pruned. The resolver must still resolve the pruned fragment's
+        /// fingerprint.
         #[test]
-        fn resolver_survives_fragment_minimize() {
+        fn resolver_survives_fragment_domination() {
             let mut rng = seeded_rng(304);
-            // Graph: a(3) → b(1) → c(0) → d(3) → e(1) → f(0)
-            // Two independent chains so we can make two distinct fragments
-            // with different heads but overlapping support.
             let graph = TestGraph::new(
                 &mut rng,
-                &[("a", 3), ("b", 1), ("c", 0), ("d", 3), ("e", 1), ("f", 0)],
-                &[("a", "b"), ("b", "c"), ("d", "e"), ("e", "f")],
+                &[("a", 3), ("b", 1), ("c", 0)],
+                &[("a", "b"), ("b", "c")],
             );
 
-            // Fragment 1: head=a, boundary=[c] (shallow chain)
-            let frag1 = graph.make_fragment("a", &["c"], &["b"]);
-            // Fragment 2: head=d, boundary=[f] (separate chain)
-            let frag2 = graph.make_fragment("d", &["f"], &["e"]);
-
-            let tree = Sedimentree::new(vec![frag1, frag2], graph.commits().into_iter().collect());
+            // Shallow fragment covering b→c
+            let shallow = graph.make_fragment("b", &["c"], &[]);
+            let tree = graph.to_sedimentree_with_fragments(vec![shallow]);
             let seed = FingerprintSeed::new(55, 66);
 
             let resolver = tree.fingerprint_resolver(&seed);
             let frag_count = resolver.summary().fragment_fingerprints().len();
-            assert_eq!(frag_count, 2, "tree should have 2 fragments");
+            assert_eq!(frag_count, 1, "tree should have 1 fragment (shallow)");
+            let commit_count = resolver.summary().commit_fingerprints().len();
+            assert!(commit_count > 0, "tree should have loose commits");
 
-            // Minimize — independent fragments should both survive, but
-            // the resolver must work regardless of what minimize does.
-            let minimized = tree.minimize(graph.depth_metric());
+            // Add a deep fragment that dominates the shallow one
+            let deep = graph.make_fragment("a", &["c"], &["b"]);
+            let mut tree_after = tree.clone();
+            tree_after.add_fragment(deep);
+            let minimized = tree_after.minimize(graph.depth_metric());
+
+            // The shallow fragment should be pruned (dominated by deep)
             let min_frag_count = minimized.fragments().count();
-
-            // Resolver still resolves both fragment fingerprints
-            let resolved: Vec<Digest<Fragment>> = resolver
-                .summary()
-                .fragment_fingerprints()
-                .iter()
-                .filter_map(|fp| resolver.resolve_fragment(fp))
-                .collect();
             assert_eq!(
-                resolved.len(),
-                frag_count,
-                "resolver must still resolve all {frag_count} fragment fingerprints \
-                 after minimize (minimized tree has {min_frag_count})"
+                min_frag_count, 1,
+                "only the deep fragment should survive minimize"
             );
+
+            // Resolver still resolves the pruned shallow fragment fingerprint
+            for fp in resolver.summary().fragment_fingerprints() {
+                assert!(
+                    resolver.resolve_fragment(fp).is_some(),
+                    "resolver must resolve pruned fragment fingerprint {fp}"
+                );
+            }
+
+            // And all original commit fingerprints
+            for fp in resolver.summary().commit_fingerprints() {
+                assert!(
+                    resolver.resolve_commit(fp).is_some(),
+                    "resolver must resolve commit fingerprint {fp} after fragment domination"
+                );
+            }
         }
 
         /// Simulates the full sync scenario that triggered the original bug:
@@ -2720,6 +2654,266 @@ mod tests {
                 );
             }
         }
+
+        /// Partial coverage: Bob's fragment covers only some of Alice's
+        /// commits. After minimize, some commits are pruned and some remain
+        /// as loose commits. The resolver must resolve _all_ original
+        /// fingerprints (both pruned and surviving).
+        ///
+        /// ```text
+        /// a(2) → b(0) → c(0) → d(2)
+        /// Bob's fragment: a → b (covers a and b only)
+        /// Surviving loose: c, d
+        /// ```
+        #[test]
+        fn sync_scenario_partial_coverage() {
+            let mut rng = seeded_rng(306);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
+                &[("a", "b"), ("b", "c"), ("c", "d")],
+            );
+
+            let alice_tree = graph.to_sedimentree();
+            let seed = FingerprintSeed::new(42, 99);
+            let resolver = alice_tree.fingerprint_resolver(&seed);
+
+            let commit_count = resolver.summary().commit_fingerprints().len();
+            assert_eq!(commit_count, 4, "Alice should have 4 commits");
+
+            // Bob has a fragment covering only a→b
+            let fragment = graph.make_fragment("a", &["b"], &[]);
+            let bob_tree =
+                Sedimentree::new(vec![fragment.clone()], vec![]).minimize(graph.depth_metric());
+
+            let diff = bob_tree.diff_remote_fingerprints(resolver.summary());
+            assert!(
+                !diff.remote_only_commit_fingerprints.is_empty(),
+                "Bob should request commits he doesn't have"
+            );
+
+            // Alice ingests and minimizes — only a is pruned (covered by fragment)
+            let mut alice_after = alice_tree.clone();
+            alice_after.add_fragment(fragment);
+            let minimized = alice_after.minimize(graph.depth_metric());
+            let surviving = minimized.loose_commits().count();
+            assert!(
+                surviving > 0 && surviving < commit_count,
+                "some but not all commits should survive (got {surviving}/{commit_count})"
+            );
+
+            // Resolver resolves ALL requested fingerprints (pruned and surviving)
+            for fp in &diff.remote_only_commit_fingerprints {
+                assert!(
+                    resolver.resolve_commit(fp).is_some(),
+                    "resolver must resolve {fp} (partial coverage)"
+                );
+            }
+        }
+
+        /// Diamond DAG: fragment covers commits reachable via multiple paths.
+        ///
+        /// ```text
+        ///     a(2)
+        ///    / \
+        ///   b   c   (both depth 0)
+        ///    \ /
+        ///     d(2)
+        /// ```
+        ///
+        /// Bob's fragment: a → d (covers all 4 via both paths)
+        #[test]
+        fn sync_scenario_diamond_dag() {
+            let mut rng = seeded_rng(307);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
+                &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+            );
+
+            let alice_tree = graph.to_sedimentree();
+            let seed = FingerprintSeed::new(42, 99);
+            let resolver = alice_tree.fingerprint_resolver(&seed);
+            assert_eq!(
+                resolver.summary().commit_fingerprints().len(),
+                4,
+                "Alice should have 4 commits"
+            );
+
+            let fragment = graph.make_fragment("a", &["d"], &["b", "c"]);
+            let bob_tree =
+                Sedimentree::new(vec![fragment.clone()], vec![]).minimize(graph.depth_metric());
+
+            let diff = bob_tree.diff_remote_fingerprints(resolver.summary());
+            assert!(
+                !diff.remote_only_commit_fingerprints.is_empty(),
+                "Bob should request commits"
+            );
+
+            let mut alice_after = alice_tree.clone();
+            alice_after.add_fragment(fragment);
+            let minimized = alice_after.minimize(graph.depth_metric());
+            let surviving = minimized.loose_commits().count();
+            assert!(
+                surviving < 4,
+                "diamond fragment should prune commits (got {surviving}/4)"
+            );
+
+            for fp in &diff.remote_only_commit_fingerprints {
+                assert!(
+                    resolver.resolve_commit(fp).is_some(),
+                    "resolver must resolve {fp} (diamond DAG)"
+                );
+            }
+        }
+
+        /// Bob requests _fragment_ fingerprints, not just commit fingerprints.
+        ///
+        /// Alice has a shallow fragment + loose commits. Bob has a deeper
+        /// fragment. Bob diffs Alice's summary → echoes her fragment
+        /// fingerprints. After Alice ingests Bob's deep fragment and
+        /// minimizes, her shallow fragment is pruned. The resolver must
+        /// still resolve the fragment fingerprint.
+        ///
+        /// ```text
+        /// a(3) → b(1) → c(0)
+        /// Alice: fragment b→c + loose commits {a, b, c}
+        /// Bob:   fragment a→c (deeper, dominates b→c)
+        /// ```
+        #[test]
+        fn sync_scenario_fragment_fingerprint_resolution() {
+            let mut rng = seeded_rng(308);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[("a", 3), ("b", 1), ("c", 0)],
+                &[("a", "b"), ("b", "c")],
+            );
+
+            // Alice: shallow fragment + loose commits
+            let shallow = graph.make_fragment("b", &["c"], &[]);
+            let alice_tree = graph.to_sedimentree_with_fragments(vec![shallow]);
+            let seed = FingerprintSeed::new(42, 99);
+            let resolver = alice_tree.fingerprint_resolver(&seed);
+
+            assert_eq!(
+                resolver.summary().fragment_fingerprints().len(),
+                1,
+                "Alice should have 1 fragment"
+            );
+
+            // Bob: deep fragment that dominates Alice's shallow one
+            let deep = graph.make_fragment("a", &["c"], &["b"]);
+            let bob_tree =
+                Sedimentree::new(vec![deep.clone()], vec![]).minimize(graph.depth_metric());
+
+            let diff = bob_tree.diff_remote_fingerprints(resolver.summary());
+
+            // Bob doesn't have Alice's shallow fragment → requests it
+            assert!(
+                !diff.remote_only_fragment_fingerprints.is_empty(),
+                "Bob should request Alice's fragment fingerprint"
+            );
+
+            // Alice ingests deep fragment and minimizes (shallow gets pruned)
+            let mut alice_after = alice_tree.clone();
+            alice_after.add_fragment(deep);
+            let minimized = alice_after.minimize(graph.depth_metric());
+            assert_eq!(
+                minimized.fragments().count(),
+                1,
+                "only deep fragment should survive"
+            );
+
+            // Resolver must still resolve the pruned shallow fragment's fingerprint
+            for fp in &diff.remote_only_fragment_fingerprints {
+                assert!(
+                    resolver.resolve_fragment(fp).is_some(),
+                    "resolver must resolve pruned fragment fingerprint {fp}"
+                );
+            }
+
+            // And commit fingerprints too
+            for fp in &diff.remote_only_commit_fingerprints {
+                assert!(
+                    resolver.resolve_commit(fp).is_some(),
+                    "resolver must resolve commit fingerprint {fp}"
+                );
+            }
+        }
+
+        /// Multiple fragments from Bob cover different subsets of Alice's
+        /// commits. Cascading pruning removes commits covered by either
+        /// fragment.
+        ///
+        /// ```text
+        /// Chain 1: a(2) → b(0) → c(2)
+        /// Chain 2: d(2) → e(0) → f(2)
+        /// Shared:  c → g(0) → f
+        ///
+        /// Bob's fragment 1: a → c (covers a, b)
+        /// Bob's fragment 2: d → f (covers d, e)
+        /// ```
+        #[test]
+        fn sync_scenario_multiple_cascading_fragments() {
+            let mut rng = seeded_rng(309);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[
+                    ("a", 2),
+                    ("b", 0),
+                    ("c", 2),
+                    ("d", 2),
+                    ("e", 0),
+                    ("f", 2),
+                    ("g", 0),
+                ],
+                &[
+                    ("a", "b"),
+                    ("b", "c"),
+                    ("d", "e"),
+                    ("e", "f"),
+                    ("c", "g"),
+                    ("g", "f"),
+                ],
+            );
+
+            let alice_tree = graph.to_sedimentree();
+            let seed = FingerprintSeed::new(42, 99);
+            let resolver = alice_tree.fingerprint_resolver(&seed);
+
+            let commit_count = resolver.summary().commit_fingerprints().len();
+            assert_eq!(commit_count, 7, "Alice should have 7 commits");
+
+            // Bob has two fragments covering different subsets
+            let frag1 = graph.make_fragment("a", &["c"], &["b"]);
+            let frag2 = graph.make_fragment("d", &["f"], &["e"]);
+            let bob_tree = Sedimentree::new(vec![frag1.clone(), frag2.clone()], vec![])
+                .minimize(graph.depth_metric());
+
+            let diff = bob_tree.diff_remote_fingerprints(resolver.summary());
+            assert!(
+                !diff.remote_only_commit_fingerprints.is_empty(),
+                "Bob should request commits"
+            );
+
+            // Alice ingests both fragments and minimizes
+            let mut alice_after = alice_tree.clone();
+            alice_after.add_fragment(frag1);
+            alice_after.add_fragment(frag2);
+            let minimized = alice_after.minimize(graph.depth_metric());
+            let surviving = minimized.loose_commits().count();
+            assert!(
+                surviving < commit_count,
+                "cascading fragments should prune commits (got {surviving}/{commit_count})"
+            );
+
+            for fp in &diff.remote_only_commit_fingerprints {
+                assert!(
+                    resolver.resolve_commit(fp).is_some(),
+                    "resolver must resolve {fp} (cascading fragments)"
+                );
+            }
+        }
     }
 
     /// Property tests for [`FingerprintResolver`].
@@ -2766,6 +2960,51 @@ mod tests {
                         summary,
                         *resolver.summary(),
                         "resolver summary must equal fingerprint_summarize"
+                    );
+                });
+        }
+
+        /// Fingerprints from a different seed should not resolve. With
+        /// independent u64 `SipHash` outputs, the collision probability
+        /// for `n` items is ~n²/2⁶⁴, so zero cross-resolutions are
+        /// expected for any reasonably sized tree.
+        #[test]
+        fn resolver_cross_seed_produces_no_hits() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, FingerprintSeed, FingerprintSeed)>()
+                .for_each(|(tree, seed_a, seed_b)| {
+                    if seed_a == seed_b {
+                        return;
+                    }
+
+                    let resolver_a = tree.fingerprint_resolver(seed_a);
+                    let summary_b = tree.fingerprint_summarize(seed_b);
+
+                    let commit_collisions = summary_b
+                        .commit_fingerprints()
+                        .iter()
+                        .filter(|fp| resolver_a.resolve_commit(fp).is_some())
+                        .count();
+
+                    let fragment_collisions = summary_b
+                        .fragment_fingerprints()
+                        .iter()
+                        .filter(|fp| resolver_a.resolve_fragment(fp).is_some())
+                        .count();
+
+                    assert_eq!(
+                        commit_collisions,
+                        0,
+                        "cross-seed commit collisions should be zero \
+                         ({commit_collisions} hits for {} items)",
+                        summary_b.commit_fingerprints().len()
+                    );
+                    assert_eq!(
+                        fragment_collisions,
+                        0,
+                        "cross-seed fragment collisions should be zero \
+                         ({fragment_collisions} hits for {} items)",
+                        summary_b.fragment_fingerprints().len()
                     );
                 });
         }

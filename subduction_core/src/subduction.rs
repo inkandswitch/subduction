@@ -2226,12 +2226,12 @@ where
 
     /// Send requested data back to a peer (fire-and-forget for bidirectional sync).
     ///
-    /// Uses the pre-captured [`FingerprintResolver`] to reverse-lookup echoed
+    /// Uses the pre-captured `FingerprintResolver` to reverse-lookup echoed
     /// fingerprints to content-addressed digests. The resolver must have been
     /// created from the same tree state that generated the original
-    /// [`FingerprintSummary`] — this is enforced at the type level since
-    /// [`FingerprintResolver`] can only be constructed via
-    /// [`Sedimentree::fingerprint_resolver`].
+    /// `FingerprintSummary` — this is enforced at the type level since
+    /// `FingerprintResolver` can only be constructed via
+    /// `Sedimentree::fingerprint_resolver`.
     ///
     /// # Errors
     ///

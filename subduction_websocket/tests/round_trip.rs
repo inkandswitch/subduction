@@ -204,13 +204,9 @@ async fn batch_sync() -> TestResult {
 
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
-    tokio::spawn({
-        let inner_client = client.clone();
-        async move {
-            inner_client.listen().await?;
-            Ok::<(), eyre::Report>(())
-        }
-    });
+    // NOTE: listener_fut (spawned above) already runs Subduction::listen().
+    // Do NOT spawn a second client.listen() — two listeners on the same
+    // msg_queue would race and cause flaky behavior.
 
     ///////////
     // SYNC //
@@ -261,11 +257,12 @@ async fn batch_sync() -> TestResult {
 /// should transfer zero items. This is a black-box test — it only observes
 /// the public sync stats, not internal resolver or fingerprint state.
 ///
-/// This verifies that `FingerprintResolver` correctly captures the tree
-/// state at fingerprint time, so `send_requested_data` succeeds even
-/// after `minimize_tree` prunes commits covered by newly-ingested fragments.
-/// If the resolver were stale, the first round would silently drop items,
-/// and the second round would still show non-zero diffs.
+/// This serves as a regression test that a full initial sync does not
+/// silently drop items that would later need to be re-sent: if that
+/// happened, the second round would still show non-zero diffs.
+/// Internal mechanisms such as `FingerprintResolver` snapshots and
+/// `minimize_tree` pruning are not asserted here directly; they are only
+/// indirectly exercised through the end-to-end sync behavior.
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn second_sync_round_is_empty() -> TestResult {
@@ -343,13 +340,9 @@ async fn second_sync_round_is_empty() -> TestResult {
         .add_commit(sed_id, BTreeSet::new(), Blob::new(blob_bytes[3].to_vec()))
         .await?;
 
-    tokio::spawn({
-        let inner = client.clone();
-        async move {
-            inner.listen().await?;
-            Ok::<(), eyre::Report>(())
-        }
-    });
+    // NOTE: listener_fut (spawned above) already runs Subduction::listen().
+    // Do NOT spawn a second client.listen() — two listeners on the same
+    // msg_queue would race and cause flaky behavior.
 
     // --- Round 1: exchange data ---
 
