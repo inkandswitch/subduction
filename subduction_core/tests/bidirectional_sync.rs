@@ -512,6 +512,321 @@ async fn test_responder_requests_fragments() -> TestResult {
     Ok(())
 }
 
+/// After Alice receives data from Bob (via `LooseCommit` messages) and
+/// her tree is updated, a subsequent `BatchSyncRequest` from Bob with
+/// the same data should produce an empty diff — proving protocol-level
+/// convergence. This is the integration-level counterpart to the E2E
+/// `second_sync_round_is_empty` test.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn test_second_sync_round_has_empty_diff() -> TestResult {
+    let (alice, alice_listener, alice_actor) = make_subduction();
+
+    let sedimentree_id = SedimentreeId::new([42u8; 32]);
+    let peer_id = PeerId::new([1u8; 32]);
+
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    alice.add_connection(conn.authenticated()).await?;
+
+    let alice_actor_task = tokio::spawn(alice_actor);
+    let alice_listener_task = tokio::spawn(alice_listener);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Alice gets commit A locally
+    let (commit_a, blob_a, raw_a) = make_test_commit(&sedimentree_id, b"commit A").await;
+    handle
+        .inbound_tx
+        .send(SyncMessage::LooseCommit {
+            id: sedimentree_id,
+            commit: commit_a.clone(),
+            blob: blob_a.clone(),
+            sender_heads: RemoteHeads::default(),
+        })
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Bob also has commit B; Alice gets it via a second message
+    let (commit_b, blob_b, raw_b) = make_test_commit(&sedimentree_id, b"commit B").await;
+    handle
+        .inbound_tx
+        .send(SyncMessage::LooseCommit {
+            id: sedimentree_id,
+            commit: commit_b.clone(),
+            blob: blob_b.clone(),
+            sender_heads: RemoteHeads::default(),
+        })
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Verify Alice has both commits
+    assert_eq!(
+        alice.get_commits(sedimentree_id).await.map(|c| c.len()),
+        Some(2),
+        "Alice should have both commits"
+    );
+
+    // Round 1: Bob sends BatchSyncRequest claiming both commits.
+    // Alice has both → diff should be empty (no missing, no requesting).
+    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_a.commit_id());
+    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_b.commit_id());
+
+    let request = BatchSyncRequest {
+        id: sedimentree_id,
+        req_id: RequestId {
+            requestor: peer_id,
+            nonce: 1,
+        },
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([fp_a, fp_b]),
+            BTreeSet::new(),
+        ),
+        subscribe: false,
+    };
+
+    handle
+        .inbound_tx
+        .send(SyncMessage::BatchSyncRequest(request))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let response = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
+        .expect("should receive response");
+
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+        panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected SyncResult::Ok, got {result:?}");
+    };
+
+    assert!(
+        diff.missing_commits.is_empty(),
+        "no missing commits when fully synced"
+    );
+    assert!(
+        diff.missing_fragments.is_empty(),
+        "no missing fragments when fully synced"
+    );
+    assert!(
+        diff.requesting.is_empty(),
+        "no requesting when fully synced"
+    );
+
+    // Round 2: identical request — should still be empty (idempotent).
+    let request2 = BatchSyncRequest {
+        id: sedimentree_id,
+        req_id: RequestId {
+            requestor: peer_id,
+            nonce: 2,
+        },
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([fp_a, fp_b]),
+            BTreeSet::new(),
+        ),
+        subscribe: false,
+    };
+
+    handle
+        .inbound_tx
+        .send(SyncMessage::BatchSyncRequest(request2))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let response2 = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
+        .expect("should receive second response");
+
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse {
+        result: result2, ..
+    }) = response2
+    else {
+        panic!("Expected BatchSyncResponse, got {response2:?}");
+    };
+    let SyncResult::Ok(diff2) = result2 else {
+        panic!("Expected SyncResult::Ok, got {result2:?}");
+    };
+
+    assert!(
+        diff2.missing_commits.is_empty(),
+        "second round: no missing commits"
+    );
+    assert!(
+        diff2.missing_fragments.is_empty(),
+        "second round: no missing fragments"
+    );
+    assert!(
+        diff2.requesting.is_empty(),
+        "second round: no requesting (convergence verified)"
+    );
+
+    alice_actor_task.abort();
+    alice_listener_task.abort();
+    Ok(())
+}
+
+/// After Alice has data and Bob sends a request with some overlap and some
+/// novel items, the response correctly identifies the delta. A second
+/// request with the full combined set yields an empty diff.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn test_incremental_sync_then_convergence() -> TestResult {
+    let (alice, alice_listener, alice_actor) = make_subduction();
+
+    let sedimentree_id = SedimentreeId::new([42u8; 32]);
+    let peer_id = PeerId::new([1u8; 32]);
+
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    alice.add_connection(conn.authenticated()).await?;
+
+    let alice_actor_task = tokio::spawn(alice_actor);
+    let alice_listener_task = tokio::spawn(alice_listener);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Alice has commits A and B
+    let (commit_a, blob_a, raw_a) = make_test_commit(&sedimentree_id, b"alice commit A").await;
+    let (commit_b, blob_b, raw_b) = make_test_commit(&sedimentree_id, b"alice commit B").await;
+
+    for (commit, blob) in [(&commit_a, &blob_a), (&commit_b, &blob_b)] {
+        handle
+            .inbound_tx
+            .send(SyncMessage::LooseCommit {
+                id: sedimentree_id,
+                commit: commit.clone(),
+                blob: blob.clone(),
+                sender_heads: RemoteHeads::default(),
+            })
+            .await?;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(
+        alice.get_commits(sedimentree_id).await.map(|c| c.len()),
+        Some(2),
+    );
+
+    // Bob has commit B (overlap) + commit C (novel). Bob sends request.
+    let (_commit_c, _blob_c, raw_c) = make_test_commit(&sedimentree_id, b"bob commit C").await;
+    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_b.commit_id());
+    let fp_c: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_c.commit_id());
+
+    let request = BatchSyncRequest {
+        id: sedimentree_id,
+        req_id: RequestId {
+            requestor: peer_id,
+            nonce: 1,
+        },
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([fp_b, fp_c]),
+            BTreeSet::new(),
+        ),
+        subscribe: false,
+    };
+
+    handle
+        .inbound_tx
+        .send(SyncMessage::BatchSyncRequest(request))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let response = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
+        .expect("should receive response");
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+        panic!("Expected BatchSyncResponse");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected Ok");
+    };
+
+    // Alice should send commit A (Bob doesn't have it)
+    assert_eq!(
+        diff.missing_commits.len(),
+        1,
+        "Alice should send 1 commit Bob is missing"
+    );
+
+    // Alice should request commit C (she doesn't have it)
+    assert_eq!(
+        diff.requesting.commit_fingerprints.len(),
+        1,
+        "Alice should request 1 commit she's missing"
+    );
+    assert!(
+        diff.requesting.commit_fingerprints.contains(&fp_c),
+        "Alice should request commit C"
+    );
+
+    // Simulate Bob sending commit C to Alice
+    let (commit_c, blob_c, _) = make_test_commit(&sedimentree_id, b"bob commit C").await;
+    handle
+        .inbound_tx
+        .send(SyncMessage::LooseCommit {
+            id: sedimentree_id,
+            commit: commit_c,
+            blob: blob_c,
+            sender_heads: RemoteHeads::default(),
+        })
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Alice should now have 3 commits
+    assert_eq!(
+        alice.get_commits(sedimentree_id).await.map(|c| c.len()),
+        Some(3),
+        "Alice should have all 3 commits"
+    );
+
+    // Second round: Bob claims A, B, C. Alice has A, B, C. Diff should be empty.
+    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_a.commit_id());
+
+    let request2 = BatchSyncRequest {
+        id: sedimentree_id,
+        req_id: RequestId {
+            requestor: peer_id,
+            nonce: 2,
+        },
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([fp_a, fp_b, fp_c]),
+            BTreeSet::new(),
+        ),
+        subscribe: false,
+    };
+
+    handle
+        .inbound_tx
+        .send(SyncMessage::BatchSyncRequest(request2))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let response2 = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
+        .expect("should receive second response");
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse {
+        result: result2, ..
+    }) = response2
+    else {
+        panic!("Expected BatchSyncResponse");
+    };
+    let SyncResult::Ok(diff2) = result2 else {
+        panic!("Expected Ok");
+    };
+
+    assert!(diff2.missing_commits.is_empty(), "second round: no missing");
+    assert!(
+        diff2.requesting.is_empty(),
+        "second round: no requesting (converged)"
+    );
+
+    alice_actor_task.abort();
+    alice_listener_task.abort();
+    Ok(())
+}
+
 /// Test that empty requesting field when both sides are in sync.
 #[tokio::test]
 async fn test_no_requesting_when_in_sync() -> TestResult {

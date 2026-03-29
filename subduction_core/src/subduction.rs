@@ -117,15 +117,12 @@ use sedimentree_core::{
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     commit::CountLeadingZeroBytes,
-    crypto::{
-        digest::Digest,
-        fingerprint::{Fingerprint, FingerprintSeed},
-    },
+    crypto::{digest::Digest, fingerprint::FingerprintSeed},
     depth::{Depth, DepthMetric},
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::{FingerprintSummary, Sedimentree},
+    loose_commit::LooseCommit,
+    sedimentree::{FingerprintResolver, Sedimentree},
 };
 use subduction_crypto::{signed::Signed, signer::Signer, verified_meta::VerifiedMeta};
 
@@ -945,7 +942,7 @@ where
                 for conn in conns {
                     let peer_id = conn.peer_id();
                     let seed = FingerprintSeed::random();
-                    let summary = tree.fingerprint_summarize(&seed);
+                    let resolver = tree.fingerprint_resolver(&seed);
 
                     #[allow(clippy::expect_used)]
                     // Invariant: add_connection creates a Multiplexer for every peer
@@ -969,7 +966,7 @@ where
                         BatchSyncRequest {
                             id,
                             req_id,
-                            fingerprint_summary: summary,
+                            fingerprint_summary: resolver.summary().clone(),
                             subscribe: false,
                         },
                         timeout,
@@ -1000,7 +997,7 @@ where
                     // Send back data the responder requested (bidirectional sync)
                     if !diff.requesting.is_empty()
                         && let Err(e) = self
-                            .send_requested_data(&conn, id, &seed, &diff.requesting)
+                            .send_requested_data(&conn, id, &resolver, &diff.requesting)
                             .await
                     {
                         if matches!(e, SendRequestedDataError::Unauthorized(_)) {
@@ -1568,16 +1565,16 @@ where
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = FingerprintSeed::random();
-            let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
-                || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
-                |t| t.fingerprint_summarize(&seed),
+            let resolver = self.sedimentrees.get_cloned(&id).await.map_or_else(
+                || Sedimentree::default().fingerprint_resolver(&seed),
+                |t| t.fingerprint_resolver(&seed),
             );
 
             tracing::debug!(
                 "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
                 id,
-                fp_summary.commit_fingerprints().len(),
-                fp_summary.fragment_fingerprints().len()
+                resolver.summary().commit_fingerprints().len(),
+                resolver.summary().fragment_fingerprints().len()
             );
 
             #[allow(clippy::expect_used)]
@@ -1598,7 +1595,7 @@ where
                 BatchSyncRequest {
                     id,
                     req_id,
-                    fingerprint_summary: fp_summary,
+                    fingerprint_summary: resolver.summary().clone(),
                     subscribe,
                 },
                 timeout,
@@ -1707,7 +1704,7 @@ where
                     if !requesting.is_empty() {
                         tracing::debug!("Calling send_requested_data for {:?}", id);
                         match self
-                            .send_requested_data(&conn, id, &seed, &requesting)
+                            .send_requested_data(&conn, id, &resolver, &requesting)
                             .await
                         {
                             Ok(sent) => {
@@ -1815,13 +1812,13 @@ where
                     for conn in peer_conns {
                         tracing::debug!("Using connection to peer {}", conn.peer_id());
                         let seed = FingerprintSeed::random();
-                        let fp_summary = self
+                        let resolver = self
                             .sedimentrees
                             .get_cloned(&id)
                             .await
                             .map_or_else(
-                                || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
-                                |t| t.fingerprint_summarize(&seed),
+                                || Sedimentree::default().fingerprint_resolver(&seed),
+                                |t| t.fingerprint_resolver(&seed),
                             );
 
                         #[allow(clippy::expect_used)] // Invariant: add_connection creates a Multiplexer for every peer
@@ -1840,7 +1837,7 @@ where
                                 BatchSyncRequest {
                                     id,
                                     req_id,
-                                    fingerprint_summary: fp_summary,
+                                    fingerprint_summary: resolver.summary().clone(),
                                     subscribe,
                                 },
                                 timeout,
@@ -1959,7 +1956,7 @@ where
 
                                 // Send back data the responder requested (bidirectional sync)
                                 if !requesting.is_empty() {
-                                    match self.send_requested_data(conn, id, &seed, &requesting).await {
+                                    match self.send_requested_data(conn, id, &resolver, &requesting).await {
                                         Ok(sent) => {
                                             stats.commits_sent += sent.commits;
                                             stats.fragments_sent += sent.fragments;
@@ -2229,10 +2226,12 @@ where
 
     /// Send requested data back to a peer (fire-and-forget for bidirectional sync).
     ///
-    /// Loads the requested commits and fragments from storage and sends them
-    /// as individual messages. Returns the count of successfully sent items.
-    /// Errors in sending individual items are logged but don't prevent sending
-    /// other items.
+    /// Uses the pre-captured `FingerprintResolver` to reverse-lookup echoed
+    /// fingerprints to content-addressed digests. The resolver must have been
+    /// created from the same tree state that generated the original
+    /// `FingerprintSummary` — this is enforced at the type level since
+    /// `FingerprintResolver` can only be constructed via
+    /// `Sedimentree::fingerprint_resolver`.
     ///
     /// # Errors
     ///
@@ -2243,7 +2242,7 @@ where
         &self,
         conn: &Authenticated<C, F>,
         id: SedimentreeId,
-        seed: &FingerprintSeed,
+        resolver: &FingerprintResolver,
         requesting: &RequestedData,
     ) -> Result<SendCount, SendRequestedDataError<F, S, C, H::Message>> {
         if requesting.is_empty() {
@@ -2274,47 +2273,39 @@ where
             }
         };
 
-        // Resolve requested fingerprints → digests via reverse-lookup tables
-        let (requested_commit_digests, requested_fragment_digests, heads) = {
-            let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
-            let heads = sedimentree.heads(&self.depth_metric);
+        // Resolve requested fingerprints → digests via the pre-captured resolver.
+        // The resolver was built from the tree state at fingerprint time,
+        // so minimize cannot invalidate these lookups.
+        let heads = self
+            .sedimentrees
+            .get_cloned(&id)
+            .await
+            .unwrap_or_default()
+            .heads(&self.depth_metric);
 
-            let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = sedimentree
-                .commit_entries()
-                .map(|(digest, c)| (Fingerprint::new(seed, &c.commit_id()), *digest))
-                .collect();
+        let requested_commit_digests: Vec<Digest<LooseCommit>> = requesting
+            .commit_fingerprints
+            .iter()
+            .filter_map(|fp| {
+                let digest = resolver.resolve_commit(fp);
+                if digest.is_none() {
+                    tracing::warn!("requested commit fingerprint {fp} not found in resolver");
+                }
+                digest
+            })
+            .collect();
 
-            let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>> = sedimentree
-                .fragment_entries()
-                .map(|(digest, f)| (Fingerprint::new(seed, &f.fragment_id()), *digest))
-                .collect();
-
-            let commit_digests: Vec<Digest<LooseCommit>> = requesting
-                .commit_fingerprints
-                .iter()
-                .filter_map(|fp| {
-                    let resolved = commit_fp_to_digest.get(fp).copied();
-                    if resolved.is_none() {
-                        tracing::warn!("requested commit fingerprint {fp} not found locally");
-                    }
-                    resolved
-                })
-                .collect();
-
-            let fragment_digests: Vec<Digest<Fragment>> = requesting
-                .fragment_fingerprints
-                .iter()
-                .filter_map(|fp| {
-                    let resolved = fragment_fp_to_digest.get(fp).copied();
-                    if resolved.is_none() {
-                        tracing::warn!("requested fragment fingerprint {fp} not found locally");
-                    }
-                    resolved
-                })
-                .collect();
-
-            (commit_digests, fragment_digests, heads)
-        };
+        let requested_fragment_digests: Vec<Digest<Fragment>> = requesting
+            .fragment_fingerprints
+            .iter()
+            .filter_map(|fp| {
+                let digest = resolver.resolve_fragment(fp);
+                if digest.is_none() {
+                    tracing::warn!("requested fragment fingerprint {fp} not found in resolver");
+                }
+                digest
+            })
+            .collect();
 
         // Load commits and fragments from storage (compound with blobs), build wire messages
         let (commit_messages, fragment_messages) = {
