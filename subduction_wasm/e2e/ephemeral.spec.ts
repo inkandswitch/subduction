@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { URL } from "./config";
 import { spawn, ChildProcess } from "child_process";
 import { promisify } from "util";
@@ -59,11 +59,6 @@ const WS_PORTS: Record<string, number> = {
   firefox: 9899,
   webkit: 9900,
 };
-const CONSOLE_PORTS: Record<string, number> = {
-  chromium: 6675,
-  firefox: 6676,
-  webkit: 6677,
-};
 
 let subductionServer: ChildProcess | null = null;
 let currentPort: number;
@@ -86,17 +81,16 @@ test.beforeAll(async ({ browserName }) => {
       env: {
         ...process.env,
         RUST_LOG: "info",
-        TOKIO_CONSOLE_BIND: `${WS_HOST}:${CONSOLE_PORTS[browserName]}`,
       },
     }
   );
 
   if (process.env.CI || process.env.DEBUG) {
-    subductionServer.stdout?.on("data", (data) => {
-      console.log(`[${browserName} stdout]:`, data.toString().trim());
+    subductionServer.stdout?.on("data", (data: Buffer) => {
+      console.log(`[server stdout]:`, data.toString().trim());
     });
-    subductionServer.stderr?.on("data", (data) => {
-      console.error(`[${browserName} stderr]:`, data.toString().trim());
+    subductionServer.stderr?.on("data", (data: Buffer) => {
+      console.error(`[server stderr]:`, data.toString().trim());
     });
   }
 
@@ -123,18 +117,126 @@ test.afterAll(async () => {
   }
 });
 
-test.beforeEach(async ({ page }) => {
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Create a new browser context with an isolated page, Wasm loaded and ready.
+ * Each context has its own IndexedDB, so WebCryptoSigner.setup() produces
+ * a unique key per context.
+ */
+async function createPeerPage(
+  browser: any
+): Promise<{ ctx: BrowserContext; page: Page }> {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
   await page.goto(URL);
   const wasmTimeout = process.env.CI ? 30000 : 10000;
   await page.waitForFunction(() => window.subductionReady === true, {
     timeout: wasmTimeout,
   });
-});
+  return { ctx, page };
+}
+
+/**
+ * Connect a peer, optionally subscribe and set up a receive callback.
+ * Returns the peer's ID hex string.
+ */
+async function setupPeer(
+  page: Page,
+  wsUrl: string,
+  opts: {
+    topicHex?: number;
+    onReceive?: boolean;
+  } = {}
+): Promise<string> {
+  return await page.evaluate(
+    async ({ wsUrl, topicHex, onReceive }) => {
+      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
+        window.subduction;
+
+      const signer = await WebCryptoSigner.setup();
+      window.ephReceived = [];
+
+      const callback = onReceive
+        ? (_topic: any, _sender: any, payload: Uint8Array) => {
+            window.ephReceived.push(Array.from(payload));
+          }
+        : null;
+
+      window.syncer = new Subduction(
+        signer,
+        new MemoryStorage(),
+        null,
+        null,
+        null,
+        null,
+        null,
+        callback
+      );
+
+      const url = new URL(wsUrl);
+      const serviceName = wsUrl.replace("ws://", "");
+      await window.syncer.connectDiscover(url, serviceName);
+
+      if (topicHex !== undefined) {
+        const topicBytes = new Uint8Array(32).fill(topicHex);
+        await window.syncer.subscribeEphemeral([
+          Topic.fromBytes(topicBytes),
+        ]);
+      }
+
+      return "ok";
+    },
+    { wsUrl, topicHex: opts.topicHex, onReceive: opts.onReceive ?? false }
+  );
+}
+
+/** Publish an ephemeral message from a peer's page. */
+async function publishEphemeral(
+  page: Page,
+  topicHex: number,
+  payload: number[]
+): Promise<void> {
+  await page.evaluate(
+    async ({ topicHex, payload }) => {
+      const { Topic } = window.subduction;
+      const topicBytes = new Uint8Array(32).fill(topicHex);
+      await window.syncer.publishEphemeral(
+        Topic.fromBytes(topicBytes),
+        new Uint8Array(payload)
+      );
+    },
+    { topicHex, payload }
+  );
+}
+
+/** Get the received ephemeral messages from a peer's page. */
+async function getReceived(page: Page): Promise<number[][]> {
+  return await page.evaluate(() => window.ephReceived);
+}
+
+/** Unsubscribe from a topic. */
+async function unsubscribeEphemeral(
+  page: Page,
+  topicHex: number
+): Promise<void> {
+  await page.evaluate(async (topicHex) => {
+    const { Topic } = window.subduction;
+    const topicBytes = new Uint8Array(32).fill(topicHex);
+    await window.syncer.unsubscribeEphemeral([
+      Topic.fromBytes(topicBytes),
+    ]);
+  }, topicHex);
+}
 
 // ── Topic API ───────────────────────────────────────────────────────────
 
 test.describe("Topic API", () => {
-  test("Topic.fromBytes creates a valid 32-byte topic", async ({ page }) => {
+  test("Topic.fromBytes creates a valid 32-byte topic", async ({
+    browser,
+  }) => {
+    const { ctx, page } = await createPeerPage(browser);
+
     const result = await page.evaluate(() => {
       const { Topic } = window.subduction;
 
@@ -146,28 +248,29 @@ test.describe("Topic API", () => {
       return {
         bytesMatch: roundtripped.length === 32 && roundtripped[0] === 0x42,
         hasString: str.length > 0,
-        error: null,
       };
     });
 
-    expect(result.error).toBeNull();
     expect(result.bytesMatch).toBe(true);
     expect(result.hasString).toBe(true);
+    await ctx.close();
   });
 
-  test("Topic.fromBytes rejects non-32-byte input", async ({ page }) => {
-    const result = await page.evaluate(() => {
-      const { Topic } = window.subduction;
+  test("Topic.fromBytes rejects non-32-byte input", async ({ browser }) => {
+    const { ctx, page } = await createPeerPage(browser);
 
+    const threw = await page.evaluate(() => {
+      const { Topic } = window.subduction;
       try {
         Topic.fromBytes(new Uint8Array(16));
-        return { threw: false };
+        return false;
       } catch {
-        return { threw: true };
+        return true;
       }
     });
 
-    expect(result.threw).toBe(true);
+    expect(threw).toBe(true);
+    await ctx.close();
   });
 });
 
@@ -175,540 +278,236 @@ test.describe("Topic API", () => {
 
 test.describe("Ephemeral Messaging", () => {
   test("two peers exchange ephemeral messages through the server", async ({
-    page,
+    browser,
   }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
-        window.subduction;
+    const { ctx: ctxA, page: pageA } = await createPeerPage(browser);
+    const { ctx: ctxB, page: pageB } = await createPeerPage(browser);
 
-      try {
-        const topic = Topic.fromBytes(new Uint8Array(32).fill(0xaa));
+    // B subscribes and listens
+    await setupPeer(pageB, currentWsUrl, {
+      topicHex: 0xaa,
+      onReceive: true,
+    });
 
-        // Track received messages for each peer
-        const peerAReceived: Array<{
-          payload: number[];
-          senderBytes: number[];
-        }> = [];
-        const peerBReceived: Array<{
-          payload: number[];
-          senderBytes: number[];
-        }> = [];
+    // A connects and subscribes (so publish sends to server)
+    await setupPeer(pageA, currentWsUrl, { topicHex: 0xaa });
 
-        const signerA = await WebCryptoSigner.setup();
-        const signerB = await WebCryptoSigner.setup();
+    // Give subscriptions time to propagate
+    await sleep(300);
 
-        const syncerA = new Subduction(
-          signerA,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (topic: any, sender: any, payload: Uint8Array) => {
-            peerAReceived.push({
-              payload: Array.from(payload),
-              senderBytes: Array.from(sender.toBytes()),
-            });
-          }
-        );
+    // A publishes
+    await publishEphemeral(pageA, 0xaa, [1, 2, 3, 4, 5]);
 
-        const syncerB = new Subduction(
-          signerB,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (topic: any, sender: any, payload: Uint8Array) => {
-            peerBReceived.push({
-              payload: Array.from(payload),
-              senderBytes: Array.from(sender.toBytes()),
-            });
-          }
-        );
+    // Wait for delivery
+    await pageB.waitForFunction(() => window.ephReceived.length > 0, {
+      timeout: 5000,
+    });
+    const received = await getReceived(pageB);
 
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
+    expect(received.length).toBeGreaterThanOrEqual(1);
+    expect(received[0]).toEqual([1, 2, 3, 4, 5]);
 
-        // Connect both peers to the server
-        await syncerA.connectDiscover(url, serviceName);
-        await syncerB.connectDiscover(url, serviceName);
+    // A should NOT have received its own message
+    const aReceived = await getReceived(pageA);
+    expect(aReceived.length).toBe(0);
 
-        // Both subscribe to the same topic
-        await syncerA.subscribeEphemeral([topic]);
-        await syncerB.subscribeEphemeral([topic]);
-
-        // Give subscriptions time to propagate
-        await new Promise((r) => setTimeout(r, 200));
-
-        // Peer A publishes a message
-        const payload = new Uint8Array([1, 2, 3, 4, 5]);
-        await syncerA.publishEphemeral(topic, payload);
-
-        // Wait for delivery
-        await new Promise((r) => setTimeout(r, 500));
-
-        return {
-          peerBReceivedCount: peerBReceived.length,
-          peerBPayload:
-            peerBReceived.length > 0 ? peerBReceived[0].payload : null,
-          peerAReceivedCount: peerAReceived.length,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          peerBReceivedCount: 0,
-          peerBPayload: null,
-          peerAReceivedCount: 0,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    // Peer B should have received the message from Peer A
-    expect(result.peerBReceivedCount).toBeGreaterThanOrEqual(1);
-    expect(result.peerBPayload).toEqual([1, 2, 3, 4, 5]);
-    // Peer A should NOT receive its own message back
-    expect(result.peerAReceivedCount).toBe(0);
+    await ctxA.close();
+    await ctxB.close();
   });
 
-  test("unsubscribe stops receiving ephemeral messages", async ({ page }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
-        window.subduction;
-
-      try {
-        const topic = Topic.fromBytes(new Uint8Array(32).fill(0xbb));
-
-        const received: Array<number[]> = [];
-
-        const signerA = await WebCryptoSigner.setup();
-        const signerB = await WebCryptoSigner.setup();
-
-        const syncerA = new Subduction(
-          signerA,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          null
-        );
-
-        const syncerB = new Subduction(
-          signerB,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (topic: any, sender: any, payload: Uint8Array) => {
-            received.push(Array.from(payload));
-          }
-        );
-
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
-
-        await syncerA.connectDiscover(url, serviceName);
-        await syncerB.connectDiscover(url, serviceName);
-
-        // Subscribe, wait, publish — should receive
-        await syncerB.subscribeEphemeral([topic]);
-        await new Promise((r) => setTimeout(r, 200));
-
-        await syncerA.publishEphemeral(topic, new Uint8Array([10]));
-        await new Promise((r) => setTimeout(r, 500));
-
-        const countBeforeUnsub = received.length;
-
-        // Unsubscribe
-        await syncerB.unsubscribeEphemeral([topic]);
-        await new Promise((r) => setTimeout(r, 200));
-
-        // Publish again — should NOT be received
-        await syncerA.publishEphemeral(topic, new Uint8Array([20]));
-        await new Promise((r) => setTimeout(r, 500));
-
-        const countAfterUnsub = received.length;
-
-        return {
-          countBeforeUnsub,
-          countAfterUnsub,
-          firstPayload: received.length > 0 ? received[0] : null,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          countBeforeUnsub: 0,
-          countAfterUnsub: 0,
-          firstPayload: null,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    expect(result.countBeforeUnsub).toBeGreaterThanOrEqual(1);
-    expect(result.firstPayload).toEqual([10]);
-    // After unsubscribe, no new messages
-    expect(result.countAfterUnsub).toBe(result.countBeforeUnsub);
-  });
-
-  test("messages are scoped to their topic", async ({ page }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
-        window.subduction;
-
-      try {
-        const topicA = Topic.fromBytes(new Uint8Array(32).fill(0xcc));
-        const topicB = Topic.fromBytes(new Uint8Array(32).fill(0xdd));
-
-        const receivedOnA: Array<number[]> = [];
-        const receivedOnB: Array<number[]> = [];
-
-        const signerSender = await WebCryptoSigner.setup();
-        const signerListenerA = await WebCryptoSigner.setup();
-        const signerListenerB = await WebCryptoSigner.setup();
-
-        const sender = new Subduction(
-          signerSender,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          null
-        );
-
-        // Listener A subscribes to topicA only
-        const listenerA = new Subduction(
-          signerListenerA,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (topic: any, _sender: any, payload: Uint8Array) => {
-            receivedOnA.push(Array.from(payload));
-          }
-        );
-
-        // Listener B subscribes to topicB only
-        const listenerB = new Subduction(
-          signerListenerB,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (topic: any, _sender: any, payload: Uint8Array) => {
-            receivedOnB.push(Array.from(payload));
-          }
-        );
-
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
-
-        await sender.connectDiscover(url, serviceName);
-        await listenerA.connectDiscover(url, serviceName);
-        await listenerB.connectDiscover(url, serviceName);
-
-        await listenerA.subscribeEphemeral([topicA]);
-        await listenerB.subscribeEphemeral([topicB]);
-        await new Promise((r) => setTimeout(r, 200));
-
-        // Publish to topicA only
-        await sender.publishEphemeral(topicA, new Uint8Array([0xaa]));
-        await new Promise((r) => setTimeout(r, 500));
-
-        return {
-          listenerACount: receivedOnA.length,
-          listenerBCount: receivedOnB.length,
-          listenerAPayload: receivedOnA.length > 0 ? receivedOnA[0] : null,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          listenerACount: 0,
-          listenerBCount: 0,
-          listenerAPayload: null,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    // Listener A (subscribed to topicA) should receive the message
-    expect(result.listenerACount).toBeGreaterThanOrEqual(1);
-    expect(result.listenerAPayload).toEqual([0xaa]);
-    // Listener B (subscribed to topicB) should NOT receive it
-    expect(result.listenerBCount).toBe(0);
-  });
-
-  test("multiple messages arrive in order", async ({ page }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
-        window.subduction;
-
-      try {
-        const topic = Topic.fromBytes(new Uint8Array(32).fill(0xee));
-
-        const received: Array<number[]> = [];
-
-        const signerA = await WebCryptoSigner.setup();
-        const signerB = await WebCryptoSigner.setup();
-
-        const syncerA = new Subduction(
-          signerA,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          null
-        );
-
-        const syncerB = new Subduction(
-          signerB,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (topic: any, sender: any, payload: Uint8Array) => {
-            received.push(Array.from(payload));
-          }
-        );
-
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
-
-        await syncerA.connectDiscover(url, serviceName);
-        await syncerB.connectDiscover(url, serviceName);
-
-        await syncerB.subscribeEphemeral([topic]);
-        await new Promise((r) => setTimeout(r, 200));
-
-        // Send three messages in sequence
-        await syncerA.publishEphemeral(topic, new Uint8Array([1]));
-        await syncerA.publishEphemeral(topic, new Uint8Array([2]));
-        await syncerA.publishEphemeral(topic, new Uint8Array([3]));
-
-        // Wait for all to arrive
-        await new Promise((r) => setTimeout(r, 1000));
-
-        return {
-          count: received.length,
-          payloads: received,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          count: 0,
-          payloads: [],
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    expect(result.count).toBe(3);
-    expect(result.payloads).toEqual([[1], [2], [3]]);
-  });
-
-  test("duplicate messages are suppressed by nonce dedup", async ({
-    page,
+  test("unsubscribe stops receiving ephemeral messages", async ({
+    browser,
   }) => {
-    // This test verifies that the nonce cache prevents duplicate delivery.
-    // We can't easily replay the exact signed bytes from JS, but we can
-    // verify that publishing the same logical content twice produces two
-    // distinct nonces (and thus two deliveries — not deduped at the
-    // application level, since each publish generates a fresh nonce).
-    // The real nonce dedup is tested at the Rust level.
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
-        window.subduction;
+    const { ctx: ctxA, page: pageA } = await createPeerPage(browser);
+    const { ctx: ctxB, page: pageB } = await createPeerPage(browser);
 
-      try {
-        const topic = Topic.fromBytes(new Uint8Array(32).fill(0xff));
+    await setupPeer(pageB, currentWsUrl, {
+      topicHex: 0xbb,
+      onReceive: true,
+    });
+    await setupPeer(pageA, currentWsUrl, { topicHex: 0xbb });
+    await sleep(300);
 
-        const received: Array<number[]> = [];
+    // Publish — should be received
+    await publishEphemeral(pageA, 0xbb, [10]);
+    await pageB.waitForFunction(() => window.ephReceived.length > 0, {
+      timeout: 5000,
+    });
+    const countBefore = (await getReceived(pageB)).length;
+    expect(countBefore).toBeGreaterThanOrEqual(1);
 
-        const signerA = await WebCryptoSigner.setup();
-        const signerB = await WebCryptoSigner.setup();
+    // Unsubscribe
+    await unsubscribeEphemeral(pageB, 0xbb);
+    await sleep(300);
 
-        const syncerA = new Subduction(
-          signerA,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          null
-        );
+    // Publish again — should NOT be received
+    await publishEphemeral(pageA, 0xbb, [20]);
+    await sleep(1000);
 
-        const syncerB = new Subduction(
-          signerB,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (topic: any, sender: any, payload: Uint8Array) => {
-            received.push(Array.from(payload));
-          }
-        );
+    const countAfter = (await getReceived(pageB)).length;
+    expect(countAfter).toBe(countBefore);
 
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
+    await ctxA.close();
+    await ctxB.close();
+  });
 
-        await syncerA.connectDiscover(url, serviceName);
-        await syncerB.connectDiscover(url, serviceName);
+  test("messages are scoped to their topic", async ({ browser }) => {
+    const { ctx: ctxSender, page: pageSender } = await createPeerPage(
+      browser
+    );
+    const { ctx: ctxListenerA, page: pageListenerA } = await createPeerPage(
+      browser
+    );
+    const { ctx: ctxListenerB, page: pageListenerB } = await createPeerPage(
+      browser
+    );
 
-        await syncerB.subscribeEphemeral([topic]);
-        await new Promise((r) => setTimeout(r, 200));
+    // Listener A subscribes to topic 0xcc
+    await setupPeer(pageListenerA, currentWsUrl, {
+      topicHex: 0xcc,
+      onReceive: true,
+    });
+    await sleep(100);
 
-        // Publish the "same" payload twice — each gets a fresh nonce,
-        // so both should be delivered (they're distinct messages).
-        const payload = new Uint8Array([42]);
-        await syncerA.publishEphemeral(topic, payload);
-        await syncerA.publishEphemeral(topic, payload);
-        await new Promise((r) => setTimeout(r, 500));
+    // Listener B subscribes to topic 0xdd (different)
+    await setupPeer(pageListenerB, currentWsUrl, {
+      topicHex: 0xdd,
+      onReceive: true,
+    });
+    await sleep(100);
 
-        return {
-          count: received.length,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          count: 0,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
+    // Sender connects (subscribes to 0xcc so publish sends to server)
+    await setupPeer(pageSender, currentWsUrl, { topicHex: 0xcc });
+    await sleep(300);
 
-    expect(result.error).toBeNull();
-    // Each publish produces a distinct nonce, so both should arrive
-    expect(result.count).toBe(2);
+    // Publish to topic 0xcc only
+    await publishEphemeral(pageSender, 0xcc, [0xaa]);
+
+    // Listener A should receive
+    await pageListenerA.waitForFunction(
+      () => window.ephReceived.length > 0,
+      { timeout: 5000 }
+    );
+    const listenerAReceived = await getReceived(pageListenerA);
+    expect(listenerAReceived.length).toBeGreaterThanOrEqual(1);
+    expect(listenerAReceived[0]).toEqual([0xaa]);
+
+    // Listener B should NOT receive (different topic)
+    await sleep(500);
+    const listenerBReceived = await getReceived(pageListenerB);
+    expect(listenerBReceived.length).toBe(0);
+
+    await ctxSender.close();
+    await ctxListenerA.close();
+    await ctxListenerB.close();
+  });
+
+  test("multiple messages arrive in order", async ({ browser }) => {
+    const { ctx: ctxA, page: pageA } = await createPeerPage(browser);
+    const { ctx: ctxB, page: pageB } = await createPeerPage(browser);
+
+    await setupPeer(pageB, currentWsUrl, {
+      topicHex: 0xee,
+      onReceive: true,
+    });
+    await sleep(100);
+    await setupPeer(pageA, currentWsUrl, { topicHex: 0xee });
+    await sleep(300);
+
+    // Send three messages
+    await publishEphemeral(pageA, 0xee, [1]);
+    await publishEphemeral(pageA, 0xee, [2]);
+    await publishEphemeral(pageA, 0xee, [3]);
+
+    // Wait for all three
+    await pageB.waitForFunction(() => window.ephReceived.length >= 3, {
+      timeout: 5000,
+    });
+    const received = await getReceived(pageB);
+
+    expect(received.length).toBe(3);
+    expect(received).toEqual([[1], [2], [3]]);
+
+    await ctxA.close();
+    await ctxB.close();
+  });
+
+  test("each publish generates a distinct nonce (both delivered)", async ({
+    browser,
+  }) => {
+    const { ctx: ctxA, page: pageA } = await createPeerPage(browser);
+    const { ctx: ctxB, page: pageB } = await createPeerPage(browser);
+
+    await setupPeer(pageB, currentWsUrl, {
+      topicHex: 0xff,
+      onReceive: true,
+    });
+    await setupPeer(pageA, currentWsUrl, { topicHex: 0xff });
+    await sleep(300);
+
+    // Same payload, two publishes — each gets a fresh nonce
+    await publishEphemeral(pageA, 0xff, [42]);
+    await publishEphemeral(pageA, 0xff, [42]);
+
+    await pageB.waitForFunction(() => window.ephReceived.length >= 2, {
+      timeout: 5000,
+    });
+    const received = await getReceived(pageB);
+
+    expect(received.length).toBe(2);
+
+    await ctxA.close();
+    await ctxB.close();
   });
 
   test("transitive gossip: Alice publishes, Bob and Carol both receive", async ({
-    page,
+    browser,
   }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, Topic } =
-        window.subduction;
+    const { ctx: ctxAlice, page: pageAlice } = await createPeerPage(browser);
+    const { ctx: ctxBob, page: pageBob } = await createPeerPage(browser);
+    const { ctx: ctxCarol, page: pageCarol } = await createPeerPage(browser);
 
-      try {
-        const topic = Topic.fromBytes(new Uint8Array(32).fill(0x77));
+    // Bob and Carol subscribe and listen
+    await setupPeer(pageBob, currentWsUrl, {
+      topicHex: 0x77,
+      onReceive: true,
+    });
+    await sleep(100);
+    await setupPeer(pageCarol, currentWsUrl, {
+      topicHex: 0x77,
+      onReceive: true,
+    });
+    await sleep(100);
 
-        const aliceReceived: Array<number[]> = [];
-        const bobReceived: Array<number[]> = [];
-        const carolReceived: Array<number[]> = [];
+    // Alice connects (subscribes so publish routes to server)
+    await setupPeer(pageAlice, currentWsUrl, { topicHex: 0x77 });
+    await sleep(300);
 
-        const signerAlice = await WebCryptoSigner.setup();
-        const signerBob = await WebCryptoSigner.setup();
-        const signerCarol = await WebCryptoSigner.setup();
+    // Alice publishes
+    await publishEphemeral(pageAlice, 0x77, [0xca, 0xfe]);
 
-        const alice = new Subduction(
-          signerAlice,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (_topic: any, _sender: any, payload: Uint8Array) => {
-            aliceReceived.push(Array.from(payload));
-          }
-        );
+    // Both Bob and Carol should receive
+    await pageBob.waitForFunction(() => window.ephReceived.length > 0, {
+      timeout: 5000,
+    });
+    await pageCarol.waitForFunction(() => window.ephReceived.length > 0, {
+      timeout: 5000,
+    });
 
-        const bob = new Subduction(
-          signerBob,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (_topic: any, _sender: any, payload: Uint8Array) => {
-            bobReceived.push(Array.from(payload));
-          }
-        );
+    const bobReceived = await getReceived(pageBob);
+    const carolReceived = await getReceived(pageCarol);
 
-        const carol = new Subduction(
-          signerCarol,
-          new MemoryStorage(),
-          null,
-          null,
-          null,
-          null,
-          null,
-          (_topic: any, _sender: any, payload: Uint8Array) => {
-            carolReceived.push(Array.from(payload));
-          }
-        );
+    expect(bobReceived.length).toBeGreaterThanOrEqual(1);
+    expect(carolReceived.length).toBeGreaterThanOrEqual(1);
+    expect(bobReceived[0]).toEqual([0xca, 0xfe]);
+    expect(carolReceived[0]).toEqual([0xca, 0xfe]);
 
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
+    // Alice should NOT receive her own message
+    const aliceReceived = await getReceived(pageAlice);
+    expect(aliceReceived.length).toBe(0);
 
-        // All three connect to the same server
-        await alice.connectDiscover(url, serviceName);
-        await bob.connectDiscover(url, serviceName);
-        await carol.connectDiscover(url, serviceName);
-
-        // Bob and Carol subscribe; Alice does not
-        await bob.subscribeEphemeral([topic]);
-        await carol.subscribeEphemeral([topic]);
-        await new Promise((r) => setTimeout(r, 200));
-
-        // Alice publishes
-        await alice.publishEphemeral(
-          topic,
-          new Uint8Array([0xca, 0xfe])
-        );
-        await new Promise((r) => setTimeout(r, 500));
-
-        return {
-          aliceCount: aliceReceived.length,
-          bobCount: bobReceived.length,
-          carolCount: carolReceived.length,
-          bobPayload: bobReceived.length > 0 ? bobReceived[0] : null,
-          carolPayload: carolReceived.length > 0 ? carolReceived[0] : null,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          aliceCount: 0,
-          bobCount: 0,
-          carolCount: 0,
-          bobPayload: null,
-          carolPayload: null,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    // Alice (originator) should NOT receive her own message
-    expect(result.aliceCount).toBe(0);
-    // Bob and Carol should both receive the message
-    expect(result.bobCount).toBeGreaterThanOrEqual(1);
-    expect(result.carolCount).toBeGreaterThanOrEqual(1);
-    expect(result.bobPayload).toEqual([0xca, 0xfe]);
-    expect(result.carolPayload).toEqual([0xca, 0xfe]);
+    await ctxAlice.close();
+    await ctxBob.close();
+    await ctxCarol.close();
   });
 });
