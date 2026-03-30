@@ -1,6 +1,6 @@
 [package]
 name = "subduction_ephemeral"
-version = "0.2.0"
+version = "0.3.0"
 description = "Ephemeral (non-persisted) messaging for Subduction"
 
 categories = ["web-programming"]
