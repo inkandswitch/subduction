@@ -1,6 +1,6 @@
 [package]
 name = "automerge_subduction_wasm"
-version = "0.6.1"
+version = "0.6.2"
 description = "Wasm bindings for syncing Automerge documents via Subduction"
 categories = ["web-programming"]
 keywords = ["automerge", "sedimentree", "wasm"]
@@ -33,8 +33,10 @@ wasm_refgen = { workspace = true }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [features]
-default = ["console_error_panic_hook", "standalone", "std", "wasm-tracing"]
+default = ["console_error_panic_hook", "idb", "standalone", "std", "wasm-tracing"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
+# IndexedDB storage backend (browser-only).
+idb = ["subduction_wasm/idb"]
 # Enable the #[wasm_bindgen(start)] entry point. Disable when using
 # this crate as a dependency of another cdylib crate that defines
 # its own start function (wasm-bindgen allows only one per module).
