@@ -385,8 +385,8 @@ mod tests {
     use future_form::Local;
 
     #[tokio::test(flavor = "current_thread")]
-    async fn save_and_load_archive_roundtrip() {
-        let keyhive = make_keyhive().await;
+    async fn save_and_load_archive_roundtrip() -> testresult::TestResult {
+        let keyhive = make_keyhive().await?;
         let storage = MemoryKeyhiveStorage::new();
         let storage_id = StorageHash::new([1u8; 32]);
 
@@ -398,13 +398,16 @@ mod tests {
         let loaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, storage_id);
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn compact_consolidates_archives_and_deletes_processed_events() {
+    async fn compact_consolidates_archives_and_deletes_processed_events() -> testresult::TestResult
+    {
         // Create two keyhives and exchange contact cards to generate real events
-        let alice = make_keyhive().await;
-        let bob = make_keyhive().await;
+        let alice = make_keyhive().await?;
+        let bob = make_keyhive().await?;
 
         let alice_cc = alice.contact_card().await.unwrap();
         let bob_cc = bob.contact_card().await.unwrap();
@@ -482,5 +485,7 @@ mod tests {
         // The consolidated archive should be loadable and deserializable
         let reloaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
         assert_eq!(reloaded.len(), 1);
+
+        Ok(())
     }
 }

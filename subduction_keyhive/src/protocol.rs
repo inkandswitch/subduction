@@ -751,24 +751,24 @@ mod tests {
     use nonempty::nonempty;
 
     /// Helper to create a test protocol instance.
-    async fn make_protocol() -> (TestProtocol, SimpleKeyhive) {
-        let keyhive = make_keyhive().await;
+    async fn make_protocol() -> Result<(TestProtocol, SimpleKeyhive), Box<dyn core::error::Error>> {
+        let keyhive = make_keyhive().await?;
         let peer_id = keyhive_peer_id(&keyhive);
         let cc = keyhive.contact_card().await.unwrap();
-        let cc_bytes = serialize_contact_card(&cc);
+        let cc_bytes = serialize_contact_card(&cc)?;
         let storage = MemoryKeyhiveStorage::new();
         let shared = Arc::new(Mutex::new(keyhive.clone()));
         let protocol = TestProtocol::new(shared, storage, peer_id, cc_bytes);
-        (protocol, keyhive)
+        Ok((protocol, keyhive))
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sign_and_verify_roundtrip() {
-        let (protocol, _keyhive) = make_protocol().await;
+    async fn sign_and_verify_roundtrip() -> testresult::TestResult {
+        let (protocol, _keyhive) = make_protocol().await?;
         let peer_id = protocol.peer_id.clone();
 
         // Create a peer so we can send to them
-        let other = make_keyhive().await;
+        let other = make_keyhive().await?;
         let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
@@ -798,14 +798,16 @@ mod tests {
 
         // Contact card should be present since we set include_contact_card=true
         assert!(verified.contact_card.is_some());
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn verify_rejects_wrong_sender() {
-        let (protocol, _keyhive) = make_protocol().await;
+    async fn verify_rejects_wrong_sender() -> testresult::TestResult {
+        let (protocol, _keyhive) = make_protocol().await?;
         let peer_id = protocol.peer_id.clone();
 
-        let other = make_keyhive().await;
+        let other = make_keyhive().await?;
         let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
@@ -823,7 +825,7 @@ mod tests {
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
 
         // Try to verify as if it came from the wrong sender
-        let wrong_sender = keyhive_peer_id(&make_keyhive().await);
+        let wrong_sender = keyhive_peer_id(&make_keyhive().await?);
         let result = signed_msg.verify(&wrong_sender);
 
         assert!(result.is_err());
@@ -832,14 +834,16 @@ mod tests {
             matches!(err, crate::error::VerificationError::SenderMismatch { .. }),
             "expected SenderMismatch, got: {err:?}"
         );
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn verify_rejects_tampered_message() {
-        let (protocol, _keyhive) = make_protocol().await;
+    async fn verify_rejects_tampered_message() -> testresult::TestResult {
+        let (protocol, _keyhive) = make_protocol().await?;
         let peer_id = protocol.peer_id.clone();
 
-        let other = make_keyhive().await;
+        let other = make_keyhive().await?;
         let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
@@ -863,15 +867,17 @@ mod tests {
 
         let result = signed_msg.verify(&peer_id);
         assert!(result.is_err(), "tampered message should fail verification");
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn peer_management() {
-        let (protocol, _keyhive) = make_protocol().await;
+    async fn peer_management() -> testresult::TestResult {
+        let (protocol, _keyhive) = make_protocol().await?;
         let peer_id = protocol.peer_id.clone();
 
-        let peer1 = keyhive_peer_id(&make_keyhive().await);
-        let peer2 = keyhive_peer_id(&make_keyhive().await);
+        let peer1 = keyhive_peer_id(&make_keyhive().await?);
+        let peer2 = keyhive_peer_id(&make_keyhive().await?);
 
         let (conn1, _) = create_channel_pair(peer_id.clone(), &peer1);
         let (conn2, _) = create_channel_pair(peer_id.clone(), &peer2);
@@ -886,15 +892,17 @@ mod tests {
         let remaining = protocol.peer_ids().await;
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0], peer2);
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_requests_contact_card_for_unknown_peer() {
-        let (protocol, _keyhive) = make_protocol().await;
+    async fn sync_requests_contact_card_for_unknown_peer() -> testresult::TestResult {
+        let (protocol, _keyhive) = make_protocol().await?;
         let peer_id = protocol.peer_id.clone();
 
         // Create a peer that our keyhive doesn't know about
-        let other = make_keyhive().await;
+        let other = make_keyhive().await?;
         let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
@@ -911,15 +919,17 @@ mod tests {
         assert!(matches!(decoded, Message::RequestContactCard { .. }));
         // Should include our contact card so the peer can learn about us
         assert!(verified.contact_card.is_some());
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn contact_card_exchange_flow() {
+    async fn contact_card_exchange_flow() -> testresult::TestResult {
         // Alice doesn't know Bob, and vice versa
-        let (alice_proto, _alice_kh) = make_protocol().await;
+        let (alice_proto, _alice_kh) = make_protocol().await?;
         let alice_id = alice_proto.peer_id.clone();
 
-        let (bob_proto, _bob_kh) = make_protocol().await;
+        let (bob_proto, _bob_kh) = make_protocol().await?;
         let bob_id = bob_proto.peer_id.clone();
 
         // Set up channels
@@ -981,15 +991,17 @@ mod tests {
             matches!(decoded3, Message::SyncRequest { .. }),
             "alice should now be able to send a sync request, got: {decoded3:?}"
         );
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_request_response_flow_with_known_peers() {
+    async fn sync_request_response_flow_with_known_peers() -> testresult::TestResult {
         // Set up Alice and Bob who know each other
-        let (alice_proto, alice_kh) = make_protocol().await;
+        let (alice_proto, alice_kh) = make_protocol().await?;
         let alice_id = alice_proto.peer_id.clone();
 
-        let (bob_proto, bob_kh) = make_protocol().await;
+        let (bob_proto, bob_kh) = make_protocol().await?;
         let bob_id = bob_proto.peer_id.clone();
 
         // Exchange contact cards at the keyhive level
@@ -1042,13 +1054,15 @@ mod tests {
 
         // Depending on set differences, Alice might send SyncOps or nothing
         // At minimum, the protocol should complete without errors
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn full_bidirectional_sync() {
+    async fn full_bidirectional_sync() -> testresult::TestResult {
         // Create Alice and Bob, exchange contact cards, then sync both ways
-        let alice_kh = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
+        let alice_kh = make_keyhive().await?;
+        let bob_kh = make_keyhive().await?;
 
         let alice_id = keyhive_peer_id(&alice_kh);
         let bob_id = keyhive_peer_id(&bob_kh);
@@ -1059,8 +1073,8 @@ mod tests {
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
-        let alice_cc_bytes = serialize_contact_card(&alice_cc);
-        let bob_cc_bytes = serialize_contact_card(&bob_cc);
+        let alice_cc_bytes = serialize_contact_card(&alice_cc)?;
+        let bob_cc_bytes = serialize_contact_card(&bob_cc)?;
 
         let alice_storage = MemoryKeyhiveStorage::new();
         let bob_storage = MemoryKeyhiveStorage::new();
@@ -1150,11 +1164,13 @@ mod tests {
             alice_pending, bob_pending,
             "after bidirectional sync, pending hashes should match"
         );
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_skips_self_peer() {
-        let (protocol, _keyhive) = make_protocol().await;
+    async fn sync_skips_self_peer() -> testresult::TestResult {
+        let (protocol, _keyhive) = make_protocol().await?;
         let peer_id = protocol.peer_id.clone();
 
         // Add ourselves as a peer (edge case)
@@ -1166,24 +1182,28 @@ mod tests {
 
         // No messages should have been sent (we skipped ourselves)
         // The protocol should complete without error
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn handle_message_rejects_unsigned_junk() {
-        let (protocol, _keyhive) = make_protocol().await;
+    async fn handle_message_rejects_unsigned_junk() -> testresult::TestResult {
+        let (protocol, _keyhive) = make_protocol().await?;
 
-        let fake_sender = keyhive_peer_id(&make_keyhive().await);
+        let fake_sender = keyhive_peer_id(&make_keyhive().await?);
 
         // Create a SignedMessage with junk data
         let junk = SignedMessage::new(vec![0xFF, 0xFE, 0xFD]);
 
         let result = protocol.handle_message(&fake_sender, junk).await;
         assert!(result.is_err(), "junk data should fail verification");
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn compact_via_protocol() {
-        let (protocol, keyhive) = make_protocol().await;
+    async fn compact_via_protocol() -> testresult::TestResult {
+        let (protocol, keyhive) = make_protocol().await?;
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
 
         // Save an archive to storage via storage_ops
@@ -1199,14 +1219,16 @@ mod tests {
         // Compact via protocol should work
         let result = protocol.compact(storage_id).await;
         assert!(result.is_ok());
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn ingest_from_storage_via_protocol() {
-        let keyhive = make_keyhive().await;
+    async fn ingest_from_storage_via_protocol() -> testresult::TestResult {
+        let keyhive = make_keyhive().await?;
         let peer_id = keyhive_peer_id(&keyhive);
         let cc = keyhive.contact_card().await.unwrap();
-        let cc_bytes = serialize_contact_card(&cc);
+        let cc_bytes = serialize_contact_card(&cc)?;
 
         let storage = MemoryKeyhiveStorage::new();
 
@@ -1223,6 +1245,8 @@ mod tests {
         // Ingest from storage should work
         let result = protocol.ingest_from_storage().await;
         assert!(result.is_ok());
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1230,7 +1254,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_group_membership_converges() {
+    async fn sync_group_membership_converges() -> testresult::TestResult {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -1240,7 +1264,7 @@ mod tests {
             bob_id,
             alice_conn,
             bob_conn,
-        } = exchange_contact_cards_and_setup().await;
+        } = exchange_contact_cards_and_setup().await?;
 
         // Alice creates a group and adds Bob as a Read member
         let (group_id, bob_individual_id) = {
@@ -1283,7 +1307,7 @@ mod tests {
             &alice_conn,
             &bob_conn,
         )
-        .await;
+        .await?;
 
         // After sync: Bob should have the group and his membership
         {
@@ -1300,10 +1324,12 @@ mod tests {
                 "Bob should be a member of the group"
             );
         }
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_document_access_converges() {
+    async fn sync_document_access_converges() -> testresult::TestResult {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -1313,7 +1339,7 @@ mod tests {
             bob_id,
             alice_conn,
             bob_conn,
-        } = exchange_contact_cards_and_setup().await;
+        } = exchange_contact_cards_and_setup().await?;
 
         // Alice creates group, adds Bob, creates doc owned by group
         let doc_id = {
@@ -1361,7 +1387,7 @@ mod tests {
             &alice_conn,
             &bob_conn,
         )
-        .await;
+        .await?;
 
         // After sync: Bob should have the document and it should be reachable
         {
@@ -1375,10 +1401,12 @@ mod tests {
                 "Bob's reachable docs should include the synced document"
             );
         }
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn bidirectional_sync_with_divergent_ops_converges() {
+    async fn bidirectional_sync_with_divergent_ops_converges() -> testresult::TestResult {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -1388,18 +1416,18 @@ mod tests {
             bob_id,
             alice_conn,
             bob_conn,
-        } = exchange_contact_cards_and_setup().await;
+        } = exchange_contact_cards_and_setup().await?;
 
         // Alice creates her group and adds Bob
         let alice_group_id = {
             let kh = alice_kh.lock().await;
-            create_group_with_read_members(&kh, &[&bob_id]).await
+            create_group_with_read_members(&kh, &[&bob_id]).await?
         };
 
         // Bob creates his group and adds Alice
         let bob_group_id = {
             let kh = bob_kh.lock().await;
-            create_group_with_read_members(&kh, &[&alice_id]).await
+            create_group_with_read_members(&kh, &[&alice_id]).await?
         };
 
         // Before sync: each peer only has their own group
@@ -1429,7 +1457,7 @@ mod tests {
             &alice_conn,
             &bob_conn,
         )
-        .await;
+        .await?;
         run_sync_round(
             &bob_proto,
             &alice_proto,
@@ -1438,7 +1466,7 @@ mod tests {
             &bob_conn,
             &alice_conn,
         )
-        .await;
+        .await?;
 
         // Verify both keyhives have both groups
         {
@@ -1482,10 +1510,12 @@ mod tests {
             assert!(alice.pending_event_hashes().await.is_empty());
             assert!(bob.pending_event_hashes().await.is_empty());
         }
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_revocation_propagates() {
+    async fn sync_revocation_propagates() -> testresult::TestResult {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -1495,7 +1525,7 @@ mod tests {
             bob_id,
             alice_conn,
             bob_conn,
-        } = exchange_contact_cards_and_setup().await;
+        } = exchange_contact_cards_and_setup().await?;
 
         // Alice creates group and adds Bob
         let group_id = {
@@ -1536,7 +1566,7 @@ mod tests {
             &alice_conn,
             &bob_conn,
         )
-        .await;
+        .await?;
 
         // Bob should now have the group, but no revocations yet
         {
@@ -1578,7 +1608,7 @@ mod tests {
             &alice_conn,
             &bob_conn,
         )
-        .await;
+        .await?;
 
         // Verify Bob's keyhive has the revocation
         {
@@ -1596,23 +1626,25 @@ mod tests {
                 "Bob should have received the revocation"
             );
         }
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn three_peer_transitive_sync() {
-        let alice_keyhive = make_keyhive().await;
-        let bob_keyhive = make_keyhive().await;
-        let carol_keyhive = make_keyhive().await;
+    async fn three_peer_transitive_sync() -> testresult::TestResult {
+        let alice_keyhive = make_keyhive().await?;
+        let bob_keyhive = make_keyhive().await?;
+        let carol_keyhive = make_keyhive().await?;
 
-        exchange_all_contact_cards(&[&alice_keyhive, &bob_keyhive, &carol_keyhive]).await;
+        exchange_all_contact_cards(&[&alice_keyhive, &bob_keyhive, &carol_keyhive]).await?;
 
         let alice_id = keyhive_peer_id(&alice_keyhive);
         let bob_id = keyhive_peer_id(&bob_keyhive);
         let carol_id = keyhive_peer_id(&carol_keyhive);
 
-        let (alice_proto, alice_kh, _) = make_protocol_with_shared_keyhive(alice_keyhive).await;
-        let (bob_proto, bob_kh, _) = make_protocol_with_shared_keyhive(bob_keyhive).await;
-        let (carol_proto, carol_kh, _) = make_protocol_with_shared_keyhive(carol_keyhive).await;
+        let (alice_proto, alice_kh, _) = make_protocol_with_shared_keyhive(alice_keyhive).await?;
+        let (bob_proto, bob_kh, _) = make_protocol_with_shared_keyhive(bob_keyhive).await?;
+        let (carol_proto, carol_kh, _) = make_protocol_with_shared_keyhive(carol_keyhive).await?;
 
         let (ab_conn_a, ab_conn_b) = create_channel_pair(alice_id.clone(), &bob_id);
         let (bc_conn_b, bc_conn_c) = create_channel_pair(bob_id.clone(), &carol_id);
@@ -1633,7 +1665,7 @@ mod tests {
         // Alice creates a group and adds Bob and Carol
         let group_id = {
             let kh = alice_kh.lock().await;
-            create_group_with_read_members(&kh, &[&bob_id, &carol_id]).await
+            create_group_with_read_members(&kh, &[&bob_id, &carol_id]).await?
         };
 
         // Before any sync: neither Bob nor Carol has the group
@@ -1661,7 +1693,7 @@ mod tests {
             &ab_conn_a,
             &ab_conn_b,
         )
-        .await;
+        .await?;
 
         {
             let kh = bob_kh.lock().await;
@@ -1688,7 +1720,7 @@ mod tests {
             &bc_conn_b,
             &bc_conn_c,
         )
-        .await;
+        .await?;
 
         // Verify Carol got the group and her membership
         {
@@ -1708,5 +1740,7 @@ mod tests {
                 "Carol should be a member of the group"
             );
         }
+
+        Ok(())
     }
 }

@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Type alias for the simple keyhive type used in tests.
-pub(crate) type SimpleKeyhive = Keyhive<
+pub type SimpleKeyhive = Keyhive<
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -34,15 +34,18 @@ pub(crate) type SimpleKeyhive = Keyhive<
 
 /// An in-memory connection using async channels for testing.
 #[derive(Debug, Clone)]
-pub(crate) struct ChannelConnection {
+pub struct ChannelConnection {
     remote_peer_id: KeyhivePeerId,
-    pub(crate) outbound_tx: Sender<SignedMessage>,
-    pub(crate) inbound_rx: Receiver<SignedMessage>,
+    /// Outbound channel: messages sent by this peer.
+    pub outbound_tx: Sender<SignedMessage>,
+    /// Inbound channel: messages received by this peer.
+    pub inbound_rx: Receiver<SignedMessage>,
 }
 
 impl ChannelConnection {
     /// Create a new channel connection with the given channels.
-    pub(crate) const fn new(
+    #[must_use]
+    pub const fn new(
         remote_peer_id: KeyhivePeerId,
         outbound_tx: Sender<SignedMessage>,
         inbound_rx: Receiver<SignedMessage>,
@@ -58,19 +61,20 @@ impl ChannelConnection {
 /// Channel is closed, cannot send.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("channel closed: cannot send")]
-pub(crate) struct ChannelSendError;
+pub struct ChannelSendError;
 
 /// Channel is closed, cannot receive.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("channel closed: cannot receive")]
-pub(crate) struct ChannelRecvError;
+pub struct ChannelRecvError;
 
 /// Create a pair of connected channel connections.
 ///
 /// Returns `(conn_a_to_b, conn_b_to_a)` where:
 /// * `conn_a_to_b` sends messages from A that B receives
 /// * `conn_b_to_a` sends messages from B that A receives
-pub(crate) fn create_channel_pair(
+#[must_use]
+pub fn create_channel_pair(
     peer_a: KeyhivePeerId,
     peer_b: &KeyhivePeerId,
 ) -> (ChannelConnection, ChannelConnection) {
@@ -110,31 +114,38 @@ impl KeyhiveConnection<Local> for ChannelConnection {
 }
 
 /// Create a simple keyhive instance for testing.
-pub(crate) async fn make_keyhive() -> SimpleKeyhive {
+///
+/// # Errors
+///
+/// Returns an error if keyhive generation fails.
+pub async fn make_keyhive() -> Result<SimpleKeyhive, Box<dyn core::error::Error>> {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
-        .await
-        .expect("failed to create keyhive")
+    Ok(Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await?)
 }
 
 /// Get the peer ID for a keyhive instance.
-pub(crate) fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
+#[must_use]
+pub fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
     let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
     KeyhivePeerId::from_bytes(id.to_bytes())
 }
 
 /// Serialize a contact card to CBOR bytes.
-pub(crate) fn serialize_contact_card(
+///
+/// # Errors
+///
+/// Returns an error if CBOR serialization fails.
+pub fn serialize_contact_card(
     contact_card: &keyhive_core::contact_card::ContactCard,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Box<dyn core::error::Error>> {
     let mut buf = Vec::new();
-    ciborium::into_writer(contact_card, &mut buf).expect("failed to serialize contact card");
-    buf
+    ciborium::into_writer(contact_card, &mut buf)?;
+    Ok(buf)
 }
 
 /// Type alias for the test protocol type.
-pub(crate) type TestProtocol = KeyhiveProtocol<
+pub type TestProtocol = KeyhiveProtocol<
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -152,23 +163,27 @@ pub(crate) type TestProtocol = KeyhiveProtocol<
 /// keyhive. The returned `Arc<Mutex<SimpleKeyhive>>` is the same one the
 /// protocol uses, so mutations made through the Arc are visible to the
 /// protocol.
-pub(crate) async fn make_protocol_with_shared_keyhive(
+///
+/// # Errors
+///
+/// Returns an error if contact card retrieval or serialization fails.
+pub async fn make_protocol_with_shared_keyhive(
     keyhive: SimpleKeyhive,
-) -> (
-    TestProtocol,
-    Arc<Mutex<SimpleKeyhive>>,
-    MemoryKeyhiveStorage,
-) {
+) -> Result<
+    (
+        TestProtocol,
+        Arc<Mutex<SimpleKeyhive>>,
+        MemoryKeyhiveStorage,
+    ),
+    Box<dyn core::error::Error>,
+> {
     let peer_id = keyhive_peer_id(&keyhive);
-    let cc = keyhive
-        .contact_card()
-        .await
-        .expect("failed to get contact card");
-    let cc_bytes = serialize_contact_card(&cc);
+    let cc = keyhive.contact_card().await?;
+    let cc_bytes = serialize_contact_card(&cc)?;
     let storage = MemoryKeyhiveStorage::new();
     let shared = Arc::new(Mutex::new(keyhive));
     let protocol = TestProtocol::new(shared.clone(), storage.clone(), peer_id, cc_bytes);
-    (protocol, shared, storage)
+    Ok((protocol, shared, storage))
 }
 
 /// Run a complete sync round from initiator to responder.
@@ -179,60 +194,54 @@ pub(crate) async fn make_protocol_with_shared_keyhive(
 /// 3. Initiator sends `SyncOps` (if any were requested)
 ///
 /// Returns the number of messages exchanged.
-pub(crate) async fn run_sync_round(
+///
+/// # Errors
+///
+/// Returns an error if any protocol step fails.
+pub async fn run_sync_round(
     initiator_proto: &TestProtocol,
     responder_proto: &TestProtocol,
     initiator_id: &KeyhivePeerId,
     responder_id: &KeyhivePeerId,
     initiator_conn: &ChannelConnection,
     responder_conn: &ChannelConnection,
-) -> usize {
+) -> Result<usize, Box<dyn core::error::Error>> {
     let mut messages = 0;
 
-    // 1. Initiator sends SyncRequest
-    initiator_proto
-        .sync_keyhive(Some(responder_id))
-        .await
-        .expect("initiator sync_keyhive failed");
+    initiator_proto.sync_keyhive(Some(responder_id)).await?;
 
-    // 2. Forward SyncRequest to responder
     let sync_request = responder_conn
         .inbound_rx
         .recv()
         .await
-        .expect("failed to receive sync request");
+        .map_err(|e| alloc::format!("recv sync request: {e}"))?;
     responder_proto
         .handle_message(initiator_id, sync_request)
-        .await
-        .expect("responder failed to handle sync request");
+        .await?;
     messages += 1;
 
-    // 3. Forward SyncResponse to initiator
     let sync_response = initiator_conn
         .inbound_rx
         .recv()
         .await
-        .expect("failed to receive sync response");
+        .map_err(|e| alloc::format!("recv sync response: {e}"))?;
     initiator_proto
         .handle_message(responder_id, sync_response)
-        .await
-        .expect("initiator failed to handle sync response");
+        .await?;
     messages += 1;
 
-    // 4. If initiator sent SyncOps, forward them
     if let Ok(sync_ops) = responder_conn.inbound_rx.try_recv() {
         responder_proto
             .handle_message(initiator_id, sync_ops)
-            .await
-            .expect("responder failed to handle sync ops");
+            .await?;
         messages += 1;
     }
 
-    messages
+    Ok(messages)
 }
 
 /// Harness for a two-peer test setup with shared keyhives.
-pub(crate) struct TwoPeerHarness {
+pub struct TwoPeerHarness {
     /// Alice's protocol handler.
     pub alice_proto: TestProtocol,
     /// Bob's protocol handler.
@@ -253,30 +262,25 @@ pub(crate) struct TwoPeerHarness {
 
 /// Exchange contact cards between two fresh keyhives and set up protocols
 /// and channel pairs. Returns a [`TwoPeerHarness`] with everything wired up.
-pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
-    let alice_keyhive = make_keyhive().await;
-    let bob_keyhive = make_keyhive().await;
+///
+/// # Errors
+///
+/// Returns an error if keyhive generation, contact card exchange, or protocol setup fails.
+pub async fn exchange_contact_cards_and_setup()
+-> Result<TwoPeerHarness, Box<dyn core::error::Error>> {
+    let alice_keyhive = make_keyhive().await?;
+    let bob_keyhive = make_keyhive().await?;
 
-    // Exchange contact cards at the keyhive level
-    let alice_cc = alice_keyhive
-        .contact_card()
-        .await
-        .expect("alice contact card");
-    let bob_cc = bob_keyhive.contact_card().await.expect("bob contact card");
-    alice_keyhive
-        .receive_contact_card(&bob_cc)
-        .await
-        .expect("alice receive bob cc");
-    bob_keyhive
-        .receive_contact_card(&alice_cc)
-        .await
-        .expect("bob receive alice cc");
+    let alice_cc = alice_keyhive.contact_card().await?;
+    let bob_cc = bob_keyhive.contact_card().await?;
+    alice_keyhive.receive_contact_card(&bob_cc).await?;
+    bob_keyhive.receive_contact_card(&alice_cc).await?;
 
     let alice_id = keyhive_peer_id(&alice_keyhive);
     let bob_id = keyhive_peer_id(&bob_keyhive);
 
-    let (alice_proto, alice_kh, _) = make_protocol_with_shared_keyhive(alice_keyhive).await;
-    let (bob_proto, bob_kh, _) = make_protocol_with_shared_keyhive(bob_keyhive).await;
+    let (alice_proto, alice_kh, _) = make_protocol_with_shared_keyhive(alice_keyhive).await?;
+    let (bob_proto, bob_kh, _) = make_protocol_with_shared_keyhive(bob_keyhive).await?;
 
     let (alice_conn, bob_conn) = create_channel_pair(alice_id.clone(), &bob_id);
 
@@ -285,7 +289,7 @@ pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
         .await;
     bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
 
-    TwoPeerHarness {
+    Ok(TwoPeerHarness {
         alice_proto,
         bob_proto,
         alice_kh,
@@ -294,44 +298,52 @@ pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
         bob_id,
         alice_conn,
         bob_conn,
-    }
+    })
 }
 
 /// Exchange contact cards between every pair of keyhives.
-pub(crate) async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhive]) {
+///
+/// # Errors
+///
+/// Returns an error if contact card retrieval or ingestion fails.
+pub async fn exchange_all_contact_cards(
+    keyhives: &[&SimpleKeyhive],
+) -> Result<(), Box<dyn core::error::Error>> {
     let mut cards = Vec::new();
     for kh in keyhives {
-        cards.push(kh.contact_card().await.expect("contact_card"));
+        cards.push(kh.contact_card().await?);
     }
     for (i, kh) in keyhives.iter().enumerate() {
         for (j, cc) in cards.iter().enumerate() {
             if i != j {
-                kh.receive_contact_card(cc)
-                    .await
-                    .expect("receive_contact_card");
+                kh.receive_contact_card(cc).await?;
             }
         }
     }
+    Ok(())
 }
 
 /// Create a group and add the given peers as Read members.
-pub(crate) async fn create_group_with_read_members(
+///
+/// # Errors
+///
+/// Returns an error if group generation, agent lookup, or member addition fails.
+pub async fn create_group_with_read_members(
     kh: &SimpleKeyhive,
     member_ids: &[&KeyhivePeerId],
-) -> GroupId {
-    let group = kh.generate_group(vec![]).await.expect("generate_group");
+) -> Result<GroupId, Box<dyn core::error::Error>> {
+    let group = kh.generate_group(vec![]).await?;
     let group_id = group.lock().await.group_id();
     for member_id in member_ids {
-        let identifier = member_id.to_identifier().expect("to_identifier");
-        let agent = kh.get_agent(identifier).await.expect("get_agent");
+        let identifier = member_id.to_identifier()?;
+        let agent = kh.get_agent(identifier).await.ok_or("agent not found")?;
         kh.add_member(
             agent,
             &Membered::Group(group_id, group.clone()),
             Access::Read,
             &[],
         )
-        .await
-        .expect("add_member");
+        .await?;
     }
-    group_id
+    Ok(group_id)
 }

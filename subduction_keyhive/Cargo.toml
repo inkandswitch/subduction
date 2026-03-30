@@ -12,6 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-channel = { workspace = true, optional = true }
 async-lock = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
@@ -22,6 +23,7 @@ futures = { workspace = true }
 future_form = { workspace = true }
 keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true }
+nonempty = { version = "0.10.0", optional = true }
 sedimentree_core = { workspace = true }
 rand = "0.8.5"
 serde = { workspace = true, optional = true, features = ["derive"] }
@@ -33,10 +35,11 @@ default = []
 bolero = ["dep:bolero"]
 serde = ["dep:serde", "std"]
 std = ["thiserror/std"]
+test_utils = ["serde", "dep:async-channel", "dep:nonempty"]
 
 [dev-dependencies]
-async-channel = { workspace = true }
-nonempty = "0.10.0"
+subduction_keyhive = { path = ".", features = ["test_utils"] }
+testresult = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
