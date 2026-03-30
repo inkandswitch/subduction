@@ -199,7 +199,7 @@
         packages = {
           subduction_cli = pkgs.rustPlatform.buildRustPackage {
             pname = "subduction_cli";
-            version = "0.10.0";
+            version = (builtins.fromTOML (builtins.readFile ./subduction_cli/Cargo.toml)).package.version;
             meta = {
               description = "CLI for running a Subduction sync server";
               longDescription = ''
