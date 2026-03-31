@@ -350,39 +350,40 @@ impl WasmSubduction {
         // Within each sedimentree, commits and fragments are loaded in
         // parallel via `try_join`.
         let sedimentrees = Arc::new(ShardedMap::new());
-        let loaded: Vec<Result<_, HydrationError<Local, JsStorage>>> =
-            futures::future::join_all(ids.iter().map(|&id| {
-                let storage = &storage;
-                async move {
-                    let (commits, fragments) = futures::future::try_join(
-                        async {
-                            storage
-                                .load_loose_commits(id)
-                                .await
-                                .map_err(HydrationError::LoadLooseCommitsError)
-                        },
-                        async {
-                            storage
-                                .load_fragments(id)
-                                .await
-                                .map_err(HydrationError::LoadFragmentsError)
-                        },
-                    )
-                    .await?;
+        let loaded: Vec<_> = futures::future::try_join_all(ids.iter().map(|&id| {
+            let storage = &storage;
+            async move {
+                let (commits, fragments) = futures::future::try_join(
+                    async {
+                        storage
+                            .load_loose_commits(id)
+                            .await
+                            .map_err(HydrationError::LoadLooseCommitsError)
+                    },
+                    async {
+                        storage
+                            .load_fragments(id)
+                            .await
+                            .map_err(HydrationError::LoadFragmentsError)
+                    },
+                )
+                .await?;
 
-                    let loose_commits: Vec<_> =
-                        commits.into_iter().map(|v| v.payload().clone()).collect();
-                    let fragments: Vec<_> =
-                        fragments.into_iter().map(|v| v.payload().clone()).collect();
+                let loose_commits: Vec<_> =
+                    commits.into_iter().map(|v| v.payload().clone()).collect();
+                let fragments: Vec<_> =
+                    fragments.into_iter().map(|v| v.payload().clone()).collect();
 
-                    Ok((id, Sedimentree::new(fragments, loose_commits)))
-                }
-            }))
-            .await;
+                Ok::<_, HydrationError<Local, JsStorage>>((
+                    id,
+                    Sedimentree::new(fragments, loose_commits),
+                ))
+            }
+        }))
+        .await?;
 
         // Merge + minimize sequentially (ShardedMap access is &mut per entry).
-        for result in loaded {
-            let (id, sedimentree) = result?;
+        for (id, sedimentree) in loaded {
             sedimentrees
                 .with_entry_or_default(id, |tree: &mut Sedimentree| tree.merge(sedimentree))
                 .await;

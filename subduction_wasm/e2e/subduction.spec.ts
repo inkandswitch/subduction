@@ -785,7 +785,7 @@ test.describe("Subduction", () => {
       expect(result.blobMetaSizeAfter).toBe(3);
     });
 
-    test("should hydrate multiple sedimentrees in parallel", async ({ page }) => {
+    test("should hydrate multiple sedimentrees correctly", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } =
           window.subduction;

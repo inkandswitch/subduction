@@ -69,8 +69,10 @@ impl WasmIndexedDbStorage {
     /// Create a new `IndexedDbStorage` instance, opening (or creating) the database.
     ///
     /// If `name` is `None`, uses the default database name
-    /// `"@automerge/subduction/db"`. Pass a custom name for multi-tenant
-    /// scenarios or isolated storage instances within the same origin.
+    /// `"@automerge/subduction/db"`.
+    ///
+    /// Pass a custom name for multi-tenant scenarios or isolated storage
+    /// instances within the same origin.
     ///
     /// # Errors
     ///
