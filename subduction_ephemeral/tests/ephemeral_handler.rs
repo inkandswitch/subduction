@@ -570,6 +570,284 @@ async fn subscribe_rejected_message_is_noop() -> TestResult {
     Ok(())
 }
 
+// ── Gossip Cycle Termination ────────────────────────────────────────────
+
+/// Simulates a 3-node ring topology (A → B → C → A) and verifies that
+/// gossip terminates: the message traverses the full ring but is never
+/// relayed more than once per node.
+///
+/// ```text
+///     ┌───────────────────────────┐
+///     │                           │
+///     ▼                           │
+///   Node A ──relay──► Node B ──relay──► Node C
+///   (origin)
+/// ```
+///
+/// A publishes a message. Its handler fans out to B (A's subscriber).
+/// B's handler receives it from A, inserts the nonce, and fans out to C
+/// (excluding A as relay+originator). C's handler receives it from B,
+/// inserts the nonce, and would fan out to A — but A is the originator,
+/// so the fan-out filter excludes A. Gossip terminates.
+///
+/// Additionally, if C's message were to somehow reach A's handler (e.g.,
+/// via a second path), A's nonce cache blocks re-processing.
+#[tokio::test]
+async fn gossip_terminates_in_ring_topology() -> TestResult {
+    // Each node has its own connections map and handler.
+    let conns_a: Connections = Arc::new(Mutex::new(Map::new()));
+    let conns_b: Connections = Arc::new(Mutex::new(Map::new()));
+    let conns_c: Connections = Arc::new(Mutex::new(Map::new()));
+
+    let (handler_a, event_rx_a) = make_open_handler(conns_a.clone());
+    let (handler_b, event_rx_b) = make_open_handler(conns_b.clone());
+    let (handler_c, event_rx_c) = make_open_handler(conns_c.clone());
+
+    let topic = Topic::new([0x42; 32]);
+    let signer_a = make_signer();
+    let peer_a = PeerId::from(Signer::<Sendable>::verifying_key(&signer_a));
+
+    // Use stable peer IDs for B and C (distinct from A).
+    let peer_b = peer(200);
+    let peer_c = peer(201);
+
+    // ── Wire ring: A sees B, B sees C, C sees A ────────────────────────
+    //
+    // For each node, register a ChannelMockConnection for its downstream
+    // peer and subscribe that peer to the topic.
+    let (_auth_a_b, handle_a_b) = register_peer(&conns_a, peer_b).await;
+    let (_auth_b_c, handle_b_c) = register_peer(&conns_b, peer_c).await;
+    let (_auth_c_a, handle_c_a) = register_peer(&conns_c, peer_a).await;
+
+    // Subscribe downstream peers on each handler.
+    // On Node A: peer B is subscribed.
+    handler_a
+        .handle(
+            &Authenticated::new_for_test(
+                ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_b).0,
+                peer_b,
+            ),
+            EphemeralMessage::Subscribe {
+                topics: NonEmpty::new(topic),
+            },
+        )
+        .await?;
+
+    // On Node B: peer C is subscribed.
+    handler_b
+        .handle(
+            &Authenticated::new_for_test(
+                ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_c).0,
+                peer_c,
+            ),
+            EphemeralMessage::Subscribe {
+                topics: NonEmpty::new(topic),
+            },
+        )
+        .await?;
+
+    // On Node C: peer A is subscribed.
+    handler_c
+        .handle(
+            &Authenticated::new_for_test(
+                ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_a).0,
+                peer_a,
+            ),
+            EphemeralMessage::Subscribe {
+                topics: NonEmpty::new(topic),
+            },
+        )
+        .await?;
+
+    // ── Step 1: A publishes ─────────────────────────────────────────────
+    let msg = make_signed_ephemeral(&signer_a, topic, vec![0xDE, 0xAD]).await;
+    handler_a.publish(msg).await;
+
+    // A's handler should have fanned out to B.
+    let msg_at_b =
+        tokio::time::timeout(Duration::from_millis(100), handle_a_b.outbound_rx.recv()).await??;
+
+    // ── Step 2: B receives from A, fans out to C ────────────────────────
+    // Simulate B's handler receiving the message relayed by A.
+    let auth_from_a_on_b = Authenticated::new_for_test(
+        ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_a).0,
+        peer_a,
+    );
+    handler_b.handle(&auth_from_a_on_b, msg_at_b).await?;
+
+    // B's callback should have fired (B received the message).
+    let b_event = tokio::time::timeout(Duration::from_millis(100), event_rx_b.recv()).await??;
+    assert_eq!(b_event.payload, vec![0xDE, 0xAD]);
+    assert_eq!(b_event.sender, peer_a);
+
+    // B should have fanned out to C (B's subscriber, excluding A=relay+originator).
+    let msg_at_c =
+        tokio::time::timeout(Duration::from_millis(100), handle_b_c.outbound_rx.recv()).await??;
+
+    // ── Step 3: C receives from B, tries to fan out to A ────────────────
+    let auth_from_b_on_c = Authenticated::new_for_test(
+        ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_b).0,
+        peer_b,
+    );
+    handler_c.handle(&auth_from_b_on_c, msg_at_c).await?;
+
+    // C's callback should have fired.
+    let c_event = tokio::time::timeout(Duration::from_millis(100), event_rx_c.recv()).await??;
+    assert_eq!(c_event.payload, vec![0xDE, 0xAD]);
+    assert_eq!(c_event.sender, peer_a);
+
+    // C's fan-out should NOT reach A, because A is the originator
+    // (filtered by `*p != sender` in the fan-out loop).
+    let relay_back_to_a =
+        tokio::time::timeout(Duration::from_millis(50), handle_c_a.outbound_rx.recv()).await;
+    assert!(
+        relay_back_to_a.is_err(),
+        "originator A should be excluded from C's fan-out — gossip must terminate"
+    );
+
+    // A's callback should NOT have received the message from the gossip
+    // ring (publish() doesn't deliver to the local callback; only
+    // recv_ephemeral does, and A never received this message via recv).
+    let a_bounceback = tokio::time::timeout(Duration::from_millis(50), event_rx_a.recv()).await;
+    assert!(
+        a_bounceback.is_err(),
+        "originator A should not get a callback from its own published message"
+    );
+
+    Ok(())
+}
+
+/// A stronger variant: 4-node ring where the originator has _two_ paths
+/// to receive the message back. Verifies that nonce dedup prevents
+/// re-processing even when the originator filter alone is insufficient.
+///
+/// ```text
+///   A ──► B ──► C ──► D ──► A
+///   │                       ▲
+///   └───────────────────────┘
+///         (D also sees A)
+/// ```
+///
+/// Additionally, we give D a _second_ subscriber E that connects back
+/// to B, forming a longer cycle: A→B→C→D→E→B. B's nonce cache breaks
+/// the cycle at E→B.
+#[tokio::test]
+async fn gossip_terminates_with_nonce_dedup_across_multiple_hops() -> TestResult {
+    let conns_a: Connections = Arc::new(Mutex::new(Map::new()));
+    let conns_b: Connections = Arc::new(Mutex::new(Map::new()));
+    let conns_c: Connections = Arc::new(Mutex::new(Map::new()));
+    let conns_d: Connections = Arc::new(Mutex::new(Map::new()));
+
+    let (handler_a, _event_rx_a) = make_open_handler(conns_a.clone());
+    let (handler_b, event_rx_b) = make_open_handler(conns_b.clone());
+    let (handler_c, _event_rx_c) = make_open_handler(conns_c.clone());
+    let (handler_d, event_rx_d) = make_open_handler(conns_d.clone());
+
+    let topic = Topic::new([0x99; 32]);
+    let signer_a = make_signer();
+    let peer_a = PeerId::from(Signer::<Sendable>::verifying_key(&signer_a));
+    let peer_b = peer(10);
+    let peer_c = peer(11);
+    let peer_d = peer(12);
+
+    // ── Wire: A→B, B→C, C→D, D→B (back-edge creating cycle through B) ─
+    let (_auth_a_b, handle_a_b) = register_peer(&conns_a, peer_b).await;
+    let (_auth_b_c, handle_b_c) = register_peer(&conns_b, peer_c).await;
+    let (_auth_c_d, handle_c_d) = register_peer(&conns_c, peer_d).await;
+    // D fans out to B — this is the back-edge that creates the cycle.
+    let (_auth_d_b, handle_d_b) = register_peer(&conns_d, peer_b).await;
+
+    // Subscribe downstream peers on each handler.
+    for (handler, subscriber) in [
+        (&handler_a, peer_b),
+        (&handler_b, peer_c),
+        (&handler_c, peer_d),
+        (&handler_d, peer_b),
+    ] {
+        handler
+            .handle(
+                &Authenticated::new_for_test(
+                    ChannelMockConnection::<EphemeralMessage>::new_with_handle(subscriber).0,
+                    subscriber,
+                ),
+                EphemeralMessage::Subscribe {
+                    topics: NonEmpty::new(topic),
+                },
+            )
+            .await?;
+    }
+
+    // ── Step 1: A publishes ─────────────────────────────────────────────
+    let msg = make_signed_ephemeral(&signer_a, topic, vec![0xCA, 0xFE]).await;
+    handler_a.publish(msg).await;
+
+    let msg_at_b =
+        tokio::time::timeout(Duration::from_millis(100), handle_a_b.outbound_rx.recv()).await??;
+
+    // ── Step 2: B receives from A → fans out to C ───────────────────────
+    let auth_a_on_b = Authenticated::new_for_test(
+        ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_a).0,
+        peer_a,
+    );
+    handler_b.handle(&auth_a_on_b, msg_at_b).await?;
+
+    let b_event = tokio::time::timeout(Duration::from_millis(100), event_rx_b.recv()).await??;
+    assert_eq!(b_event.payload, vec![0xCA, 0xFE]);
+
+    let msg_at_c =
+        tokio::time::timeout(Duration::from_millis(100), handle_b_c.outbound_rx.recv()).await??;
+
+    // ── Step 3: C receives from B → fans out to D ───────────────────────
+    let auth_b_on_c = Authenticated::new_for_test(
+        ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_b).0,
+        peer_b,
+    );
+    handler_c.handle(&auth_b_on_c, msg_at_c).await?;
+
+    let msg_at_d =
+        tokio::time::timeout(Duration::from_millis(100), handle_c_d.outbound_rx.recv()).await??;
+
+    // ── Step 4: D receives from C → tries to fan out to B ───────────────
+    let auth_c_on_d = Authenticated::new_for_test(
+        ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_c).0,
+        peer_c,
+    );
+    handler_d.handle(&auth_c_on_d, msg_at_d.clone()).await?;
+
+    let d_event = tokio::time::timeout(Duration::from_millis(100), event_rx_d.recv()).await??;
+    assert_eq!(d_event.payload, vec![0xCA, 0xFE]);
+
+    // D should have fanned out to B (its subscriber, excluding C=relay and A=originator).
+    let msg_back_at_b =
+        tokio::time::timeout(Duration::from_millis(100), handle_d_b.outbound_rx.recv()).await??;
+
+    // ── Step 5: B receives the SAME message again from D ────────────────
+    // B already processed this nonce in step 2. The nonce cache should
+    // reject it, preventing further fan-out and breaking the cycle.
+    let auth_d_on_b = Authenticated::new_for_test(
+        ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_d).0,
+        peer_d,
+    );
+    handler_b.handle(&auth_d_on_b, msg_back_at_b).await?;
+
+    // B's callback should NOT fire again (duplicate nonce dropped).
+    let b_second_event = tokio::time::timeout(Duration::from_millis(50), event_rx_b.recv()).await;
+    assert!(
+        b_second_event.is_err(),
+        "B should drop the duplicate — nonce cache prevents re-processing"
+    );
+
+    // B should NOT have re-fanned out to C (no further relay).
+    let c_second_msg =
+        tokio::time::timeout(Duration::from_millis(50), handle_b_c.outbound_rx.recv()).await;
+    assert!(
+        c_second_msg.is_err(),
+        "B should not re-relay — gossip cycle terminated by nonce dedup"
+    );
+
+    Ok(())
+}
+
 // ── Signature Verification ──────────────────────────────────────────────
 
 /// A message with a tampered signature should be dropped by the handler.
