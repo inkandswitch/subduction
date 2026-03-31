@@ -68,18 +68,25 @@ pub struct WasmIndexedDbStorage(IdbDatabase);
 impl WasmIndexedDbStorage {
     /// Create a new `IndexedDbStorage` instance, opening (or creating) the database.
     ///
+    /// If `name` is `None`, uses the default database name
+    /// `"@automerge/subduction/db"`.
+    ///
+    /// Pass a custom name for multi-tenant scenarios or isolated storage
+    /// instances within the same origin.
+    ///
     /// # Errors
     ///
     /// Returns a `JsValue` if the database could not be opened.
     #[wasm_bindgen]
     #[allow(clippy::too_many_lines)]
-    pub async fn setup(factory: &IdbFactory) -> Result<Self, JsValue> {
+    pub async fn setup(factory: &IdbFactory, name: Option<String>) -> Result<Self, JsValue> {
+        let name = name.as_deref().unwrap_or(DB_NAME);
         let span = tracing::debug_span!("IndexedDbStorage::setup");
         let _enter = span.enter();
 
-        tracing::debug!("opening IndexedDB database '{}'", DB_NAME);
+        tracing::debug!("opening IndexedDB database '{name}'");
 
-        let open_req: IdbOpenDbRequest = factory.open_with_u32(DB_NAME, DB_VERSION)?;
+        let open_req: IdbOpenDbRequest = factory.open_with_u32(name, DB_VERSION)?;
 
         // Create object stores on first open
         {

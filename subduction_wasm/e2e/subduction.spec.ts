@@ -784,6 +784,55 @@ test.describe("Subduction", () => {
       expect(result.commitCountAfter).toBe(1);
       expect(result.blobMetaSizeAfter).toBe(3);
     });
+
+    test("should hydrate multiple sedimentrees correctly", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } =
+          window.subduction;
+        const signer = await WebCryptoSigner.setup();
+        const storage = new MemoryStorage();
+
+        const syncer1 = new Subduction(signer, storage);
+
+        // Create 3 sedimentrees with 2 commits each
+        const ids = [
+          SedimentreeId.fromBytes(new Uint8Array(32).fill(1)),
+          SedimentreeId.fromBytes(new Uint8Array(32).fill(2)),
+          SedimentreeId.fromBytes(new Uint8Array(32).fill(3)),
+        ];
+
+        for (const id of ids) {
+          await syncer1.addCommit(id, [], new Uint8Array([10, 20]));
+          await syncer1.addCommit(id, [], new Uint8Array([30, 40]));
+        }
+
+        // Verify initial state
+        const idsBefore = await syncer1.sedimentreeIds();
+
+        // Hydrate a new instance from the same storage
+        const syncer2 = await Subduction.hydrate(signer, storage);
+        const idsAfter = await syncer2.sedimentreeIds();
+
+        // Verify all 3 sedimentrees loaded with correct commit counts
+        const commitCounts: number[] = [];
+        for (const id of ids) {
+          const commits = await syncer2.getCommits(id);
+          commitCounts.push(commits ? commits.length : 0);
+        }
+
+        return {
+          sedimentreeCountBefore: idsBefore.length,
+          sedimentreeCountAfter: idsAfter.length,
+          commitCounts,
+          error: null,
+        };
+      });
+
+      expect(result.error).toBeNull();
+      expect(result.sedimentreeCountBefore).toBe(3);
+      expect(result.sedimentreeCountAfter).toBe(3);
+      expect(result.commitCounts).toEqual([2, 2, 2]);
+    });
   });
 
   test.describe("Fragment Operations", () => {
