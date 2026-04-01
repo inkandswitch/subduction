@@ -30,6 +30,24 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;
 
+// ── TypeScript interface ────────────────────────────────────────────────
+
+#[wasm_bindgen(typescript_custom_section)]
+const TS_POLICY: &str = r#"
+/**
+ * Connection and storage authorization policy.
+ *
+ * Throwing (or returning a rejected promise) denies the operation.
+ * Resolving allows it.
+ */
+export interface Policy {
+    authorizeConnect(peerId: PeerId): Promise<void>;
+    authorizeFetch(peerId: PeerId, sedimentreeId: SedimentreeId): Promise<void>;
+    authorizePut(requestor: PeerId, author: PeerId, sedimentreeId: SedimentreeId): Promise<void>;
+    filterAuthorizedFetch(peerId: PeerId, ids: SedimentreeId[]): Promise<SedimentreeId[]>;
+}
+"#;
+
 // ── Duck-typed JS import ────────────────────────────────────────────────
 
 #[wasm_bindgen]

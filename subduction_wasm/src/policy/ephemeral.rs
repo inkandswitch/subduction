@@ -18,6 +18,23 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::{peer_id::WasmPeerId, topic::WasmTopic};
 
+// ── TypeScript interface ────────────────────────────────────────────────
+
+#[wasm_bindgen(typescript_custom_section)]
+const TS_EPHEMERAL_POLICY: &str = r#"
+/**
+ * Ephemeral message authorization policy.
+ *
+ * Throwing (or returning a rejected promise) denies the operation.
+ * Resolving allows it.
+ */
+export interface EphemeralPolicy {
+    authorizeSubscribe(peerId: PeerId, topic: Topic): Promise<void>;
+    authorizePublish(peerId: PeerId, topic: Topic): Promise<void>;
+    filterAuthorizedSubscribers(topic: Topic, peers: PeerId[]): Promise<PeerId[]>;
+}
+"#;
+
 // ── Duck-typed JS import ────────────────────────────────────────────────
 
 #[wasm_bindgen]
