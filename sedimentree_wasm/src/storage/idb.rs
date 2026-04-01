@@ -705,8 +705,10 @@ impl WasmIndexedDbStorage {
     /// Each fragment element must be a JS object with `{digest, signedFragment, blob}`.
     /// This matches the shape produced by `JsStorage::save_batch`.
     ///
-    /// The sedimentree ID is also registered in the `sedimentree_ids` store
-    /// within the same transaction.
+    /// The sedimentree ID is _not_ registered here — the caller
+    /// (`JsStorage::save_batch`) handles that via a separate
+    /// `saveSedimentreeId` call so the contract is enforced at the
+    /// duck-typed layer regardless of backend.
     ///
     /// # Errors
     ///
@@ -719,8 +721,7 @@ impl WasmIndexedDbStorage {
         commits: js_sys::Array,
         fragments: js_sys::Array,
     ) -> Result<u32, WasmSaveBatchAllError> {
-        let store_names = js_sys::Array::of3(
-            &JsValue::from_str(SEDIMENTREE_ID_STORE_NAME),
+        let store_names = js_sys::Array::of2(
             &JsValue::from_str(LOOSE_COMMIT_STORE_NAME),
             &JsValue::from_str(FRAGMENT_STORE_NAME),
         );
@@ -728,18 +729,6 @@ impl WasmIndexedDbStorage {
             .0
             .transaction_with_str_sequence_and_mode(&store_names, IdbTransactionMode::Readwrite)
             .map_err(WasmSaveBatchAllError::TransactionError)?;
-
-        // Register the sedimentree ID.
-        let id_store = tx
-            .object_store(SEDIMENTREE_ID_STORE_NAME)
-            .map_err(WasmSaveBatchAllError::ObjectStoreError)?;
-        let id_req = id_store
-            .put_with_key(
-                &JsValue::from(1u8),
-                &JsValue::from_str(&sedimentree_id.to_string()),
-            )
-            .map_err(WasmSaveBatchAllError::UnableToStore)?;
-        drop(await_idb(&id_req).await?);
 
         let sed_id = SedimentreeId::from(sedimentree_id.clone());
 
