@@ -2,17 +2,32 @@
 //!
 //! This module implements the keyhive synchronization protocol, which enables
 //! peers to reconcile their keyhive operations (delegations, revocations,
-//! prekey operations) through a three-phase exchange:
+//! prekey operations, CGKA operations). The protocol is stateless. An external
+//! orchestrator owns timing, caching, and syncpoint storage.
+//!
+//! ## Full sync exchange
 //!
 //! 1. **Sync Request**: The initiator sends hashes of operations accessible to
 //!    both peers, plus any pending operation hashes.
 //! 2. **Sync Response**: The responder computes set differences and sends back
 //!    operations the initiator is missing, along with hashes it wants from the
-//!    initiator.
-//! 3. **Sync Ops**: The initiator sends the requested operations.
+//!    initiator. Includes metadata totals for both sides.
+//! 3. **Sync Ops**: The initiator sends the requested operations (if any).
+//! 4. **Sync Confirmation**: Whichever side finishes last sends a confirmation
+//!    with its total, establishing a syncpoint for future lightweight checks.
 //!
-//! Contact card exchange is also handled for cases where peers don't yet know
-//! each other's identity.
+//! ## Lightweight sync check
+//!
+//! When the orchestrator has an established syncpoint for a peer, it can send
+//! a **Sync Check** instead of a full request. The check carries the sender's
+//! total and its syncpoint for the target. If both sides' totals match their
+//! respective syncpoints, no full sync is needed. Otherwise the protocol falls
+//! back to a full sync request.
+//!
+//! ## Contact card exchange
+//!
+//! When peers don't yet know each other's identity, the protocol handles
+//! requesting and sending contact cards before initiating sync.
 
 use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 
@@ -22,7 +37,7 @@ use keyhive_core::{
     event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    principal::agent::Agent,
+    principal::{agent::Agent, public::Public},
     store::ciphertext::CiphertextStore,
 };
 use keyhive_crypto::{
@@ -43,6 +58,60 @@ use crate::{
 
 /// Shared keyhive instance behind a mutex.
 type SharedKeyhive<Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<Signer, T, P, C, L, R>>>;
+
+/// Outcome of handling a keyhive sync message.
+///
+/// Returned from [`KeyhiveProtocol::handle_message`] to communicate what
+/// happened to the orchestrator, which manages syncpoints and timing.
+/// The protocol is stateless with respect to sync history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncOutcome {
+    /// Message handled normally. No action needed from the orchestrator.
+    Ok,
+
+    /// A [`Message::SyncCheck`] was received. The orchestrator should look up
+    /// its local syncpoint for the sender and call
+    /// [`KeyhiveProtocol::resolve_sync_check`].
+    SyncCheckReceived {
+        /// The peer that sent the sync check.
+        peer: KeyhivePeerId,
+        /// The sender's total operation count for this peer pair.
+        sender_total: u64,
+        /// The sender's syncpoint for us (last confirmed total).
+        sender_syncpoint: u64,
+    },
+
+    /// A [`Message::SyncConfirmation`] was received. The orchestrator should
+    /// set its syncpoint for this peer to `confirmer_total`.
+    ConfirmationReceived {
+        /// The peer that sent the confirmation.
+        peer: KeyhivePeerId,
+        /// The confirmer's total operation count.
+        confirmer_total: u64,
+    },
+
+    /// The protocol sent a [`Message::SyncConfirmation`] after completing a
+    /// sync exchange. The orchestrator should set its syncpoint for this peer
+    /// to `peer_total` (the remote peer's total from the exchange metadata).
+    ConfirmationSent {
+        /// The peer the confirmation was sent to.
+        peer: KeyhivePeerId,
+        /// The remote peer's total. Store as the local syncpoint for them.
+        peer_total: u64,
+    },
+
+    /// A sync check determined both sides are in sync. No sync needed.
+    InSync {
+        /// The peer that is in sync.
+        peer: KeyhivePeerId,
+    },
+
+    /// A sync check found a mismatch. A full sync request was sent.
+    SyncCheckFallback {
+        /// The peer that needs a full sync.
+        peer: KeyhivePeerId,
+    },
+}
 
 /// Main keyhive sync protocol handler.
 ///
@@ -205,10 +274,99 @@ where
         Ok(())
     }
 
+    /// Send a lightweight sync check to a peer.
+    ///
+    /// The orchestrator calls this instead of [`sync_keyhive`](Self::sync_keyhive)
+    /// when it has an established syncpoint for the target. Computes the local
+    /// total and sends a [`Message::SyncCheck`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if total computation, signing, or sending fails.
+    pub async fn sync_check_keyhive(
+        &self,
+        target: &KeyhivePeerId,
+        our_syncpoint_for_target: u64,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
+        let our_total = self.compute_total_for_peer(target).await?;
+        let msg = Message::SyncCheck {
+            sender_id: self.peer_id.clone(),
+            target_id: target.clone(),
+            sender_total: our_total,
+            sender_syncpoint: our_syncpoint_for_target,
+        };
+        self.sign_and_send(target, msg, false).await
+    }
+
+    /// Resolve a sync check received from a peer.
+    ///
+    /// The orchestrator calls this after receiving
+    /// [`SyncOutcome::SyncCheckReceived`], providing its local syncpoint for
+    /// the sender. The protocol applies the comparison rule: if both sides'
+    /// totals match their respective syncpoints, the peers are in sync.
+    /// Otherwise, falls back to a full sync request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if total computation or fallback sync fails.
+    pub async fn resolve_sync_check(
+        &self,
+        peer: &KeyhivePeerId,
+        sender_total: u64,
+        sender_syncpoint: u64,
+        local_syncpoint_for_sender: u64,
+    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+        let our_total = self.compute_total_for_peer(peer).await?;
+
+        let in_sync = local_syncpoint_for_sender == sender_total && sender_syncpoint == our_total;
+
+        if in_sync {
+            tracing::debug!(
+                peer = %peer,
+                "sync check passed, peers are in sync"
+            );
+            Ok(SyncOutcome::InSync { peer: peer.clone() })
+        } else {
+            tracing::debug!(
+                peer = %peer,
+                our_total,
+                sender_total,
+                sender_syncpoint,
+                local_syncpoint_for_sender,
+                "sync check mismatch, falling back to full sync"
+            );
+            self.sync_keyhive(Some(peer)).await?;
+            Ok(SyncOutcome::SyncCheckFallback { peer: peer.clone() })
+        }
+    }
+
+    /// Compute the total operation count for a peer pair.
+    ///
+    /// This is the number of intersection hashes plus pending hashes,
+    /// used for sync check/confirmation metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if hash or pending computation fails.
+    async fn compute_total_for_peer(
+        &self,
+        peer: &KeyhivePeerId,
+    ) -> Result<u64, ProtocolError<Conn::SendError>> {
+        let hash_count = self
+            .get_hashes_for_peer_pair(peer)
+            .await?
+            .map_or(0, |h| h.len());
+        let pending_count = self.get_pending_hashes().await?.len();
+        Ok((hash_count + pending_count) as u64)
+    }
+
     /// Handle an incoming signed message from a peer.
     ///
     /// Verifies the message signature, optionally ingests a contact card,
     /// and dispatches to the appropriate handler based on message type.
+    ///
+    /// Returns a [`SyncOutcome`] indicating what happened, so the orchestrator
+    /// can update its state (e.g. syncpoints) accordingly.
     ///
     /// # Errors
     ///
@@ -218,7 +376,7 @@ where
         &self,
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
         let verified = signed_msg.verify(from)?;
 
         if let Some(cc_bytes) = &verified.contact_card {
@@ -234,6 +392,24 @@ where
             Message::SyncOps { .. } => self.handle_sync_ops(message).await,
             Message::RequestContactCard { .. } => self.handle_request_contact_card(message).await,
             Message::MissingContactCard { .. } => self.handle_missing_contact_card(message).await,
+            Message::SyncCheck {
+                sender_id,
+                sender_total,
+                sender_syncpoint,
+                ..
+            } => Ok(SyncOutcome::SyncCheckReceived {
+                peer: sender_id.clone(),
+                sender_total: *sender_total,
+                sender_syncpoint: *sender_syncpoint,
+            }),
+            Message::SyncConfirmation {
+                sender_id,
+                confirmer_total,
+                ..
+            } => Ok(SyncOutcome::ConfirmationReceived {
+                peer: sender_id.clone(),
+                confirmer_total: *confirmer_total,
+            }),
         }
     }
 
@@ -241,7 +417,7 @@ where
     async fn handle_sync_request(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
         let Message::SyncRequest {
             sender_id,
             found: peer_found,
@@ -263,16 +439,21 @@ where
         );
 
         let Some(local_hashes) = self.get_hashes_for_peer_pair(&sender_id).await? else {
-            // We don't know this peer — request their contact card.
+            // We don't know this peer. Request their contact card.
             tracing::debug!(from = %sender_id, "no agent found, requesting contact card");
             let msg = Message::RequestContactCard {
                 sender_id: self.peer_id.clone(),
                 target_id: sender_id.clone(),
             };
-            return self.sign_and_send(&sender_id, msg, true).await;
+            self.sign_and_send(&sender_id, msg, true).await?;
+            return Ok(SyncOutcome::Ok);
         };
 
         let our_pending_hashes = self.get_pending_hashes().await?;
+
+        // Compute totals from the original collections before building sets.
+        let sync_responder_total = (local_hashes.len() + our_pending_hashes.len()) as u64;
+        let sync_requester_total = (peer_found.len() + peer_pending.len()) as u64;
 
         // Build sets for comparison.
         let peer_found_set: Set<EventHash> = peer_found.iter().copied().collect();
@@ -309,21 +490,30 @@ where
             target_id: sender_id.clone(),
             requested,
             found: found_ops,
+            sync_responder_total,
+            sync_requester_total,
         };
 
-        self.sign_and_send(&sender_id, response, false).await
+        self.sign_and_send(&sender_id, response, false).await?;
+        Ok(SyncOutcome::Ok)
     }
 
     /// Handle a `SyncResponse`: ingest events we received and send any
     /// requested ops back.
+    ///
+    /// If ops are sent back, the other side will confirm in `handle_sync_ops`.
+    /// If no ops are sent, we send a confirmation and return
+    /// [`SyncOutcome::ConfirmationSent`].
     async fn handle_sync_response(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
         let Message::SyncResponse {
             sender_id,
             requested: requested_hashes,
             found: found_events,
+            sync_responder_total,
+            sync_requester_total,
             ..
         } = message
         else {
@@ -359,21 +549,44 @@ where
                     sender_id: self.peer_id.clone(),
                     target_id: sender_id.clone(),
                     ops,
+                    sync_responder_total,
+                    sync_requester_total,
                 };
 
                 self.sign_and_send(&sender_id, msg, false).await?;
+                // The other side will send a confirmation after ingesting.
+                return Ok(SyncOutcome::Ok);
             }
         }
 
-        Ok(())
+        // No ops to send back. Send confirmation and establish syncpoint.
+        // Our total is sync_requester_total (we are the requester).
+        let confirmation = Message::SyncConfirmation {
+            sender_id: self.peer_id.clone(),
+            target_id: sender_id.clone(),
+            confirmer_total: sync_requester_total,
+        };
+        self.sign_and_send(&sender_id, confirmation, false).await?;
+
+        Ok(SyncOutcome::ConfirmationSent {
+            peer: sender_id,
+            peer_total: sync_responder_total,
+        })
     }
 
-    /// Handle `SyncOps`: ingest received operations.
+    /// Handle `SyncOps`: ingest received operations and send confirmation.
     async fn handle_sync_ops(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::SyncOps { sender_id, ops, .. } = message else {
+    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+        let Message::SyncOps {
+            sender_id,
+            ops,
+            sync_responder_total,
+            sync_requester_total,
+            ..
+        } = message
+        else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "SyncOps",
                 actual: message.variant_name(),
@@ -390,7 +603,19 @@ where
             self.ingest_events(&ops).await?;
         }
 
-        Ok(())
+        // Send confirmation after ingesting ops.
+        // Our total is sync_responder_total (we are the responder).
+        let confirmation = Message::SyncConfirmation {
+            sender_id: self.peer_id.clone(),
+            target_id: sender_id.clone(),
+            confirmer_total: sync_responder_total,
+        };
+        self.sign_and_send(&sender_id, confirmation, false).await?;
+
+        Ok(SyncOutcome::ConfirmationSent {
+            peer: sender_id,
+            peer_total: sync_requester_total,
+        })
     }
 
     /// Handle `RequestContactCard`: send our contact card to the requesting
@@ -398,7 +623,7 @@ where
     async fn handle_request_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
         let Message::RequestContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "RequestContactCard",
@@ -416,7 +641,8 @@ where
             target_id: sender_id.clone(),
         };
 
-        self.sign_and_send(&sender_id, msg, true).await
+        self.sign_and_send(&sender_id, msg, true).await?;
+        Ok(SyncOutcome::Ok)
     }
 
     /// Handle `MissingContactCard`: the contact card was already ingested in
@@ -424,7 +650,7 @@ where
     async fn handle_missing_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
         let Message::MissingContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "MissingContactCard",
@@ -437,7 +663,8 @@ where
             "received contact card, initiating sync"
         );
 
-        self.sync_keyhive(Some(&sender_id)).await
+        self.sync_keyhive(Some(&sender_id)).await?;
+        Ok(SyncOutcome::Ok)
     }
 
     /// Sign a message and send it to a peer.
@@ -504,13 +731,22 @@ where
                 let our_events = sync_events_for_agent(&keyhive, our_agent).await;
                 let their_events = sync_events_for_agent(&keyhive, their_agent).await;
 
-                // Get events accessible to both peers.
-                let intersection = our_events
-                    .into_iter()
-                    .filter(|(digest, _)| their_events.contains_key(digest))
-                    .collect();
+                // Start with public events (accessible to everyone).
+                let mut result: Map<Digest<StaticEvent<T>>, StaticEvent<T>> =
+                    if let Some(ref public_agent) = keyhive.get_agent(Public.id()).await {
+                        sync_events_for_agent(&keyhive, public_agent).await
+                    } else {
+                        Map::new()
+                    };
 
-                Ok(Some(intersection))
+                // Add events accessible to both peers (intersection).
+                for (digest, event) in our_events {
+                    if their_events.contains_key(&digest) {
+                        result.entry(digest).or_insert(event);
+                    }
+                }
+
+                Ok(Some(result))
             }
             _ => Ok(None),
         }
@@ -674,7 +910,7 @@ where
     }
 }
 
-/// Get sync-relevant events for an agent, excluding CGKA operations.
+/// Get sync-relevant events for an agent: membership, prekey, and CGKA operations.
 async fn sync_events_for_agent<Signer, T, P, C, L, R>(
     keyhive: &Keyhive<Signer, T, P, C, L, R>,
     agent: &Agent<Signer, T, L>,
@@ -704,8 +940,19 @@ where
         }
     }
 
-    // TODO: CGKA ops are currently excluded but will need to be added back in
-    // to support encryption.
+    // CGKA ops
+    match keyhive.cgka_ops_reachable_by_agent(agent).await {
+        Ok(cgka_ops) => {
+            for cgka_op in cgka_ops {
+                let op = Event::<Signer, T, L>::from(cgka_op);
+                ops.insert(Digest::hash(&op), op);
+            }
+        }
+        Err(e) => {
+            // Skipping rather than propagating so we still sync non-CGKA ops.
+            tracing::error!(error = %e, "failed to get CGKA ops for agent, skipping");
+        }
+    }
 
     ops.into_iter()
         .map(|(digest, event)| (digest.coerce(), event.into()))
@@ -731,7 +978,13 @@ const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::wildcard_enum_match_arm,
+    clippy::panic
+)]
 mod tests {
     use super::*;
     use crate::{
@@ -1113,6 +1366,14 @@ mod tests {
             bob_proto.handle_message(&alice_id, sync_ops).await.unwrap();
         }
 
+        // Handle any confirmation messages before next round
+        while let Ok(msg) = a_to_b_rx.try_recv() {
+            bob_proto.handle_message(&alice_id, msg).await.unwrap();
+        }
+        while let Ok(msg) = b_to_a_rx.try_recv() {
+            alice_proto.handle_message(&bob_id, msg).await.unwrap();
+        }
+
         // Now Bob → Alice sync
         bob_proto.sync_keyhive(Some(&alice_id)).await.unwrap();
 
@@ -1133,6 +1394,14 @@ mod tests {
                 .handle_message(&bob_id, sync_ops2)
                 .await
                 .unwrap();
+        }
+
+        // Handle any remaining confirmation messages
+        while let Ok(msg) = a_to_b_rx.try_recv() {
+            bob_proto.handle_message(&alice_id, msg).await.unwrap();
+        }
+        while let Ok(msg) = b_to_a_rx.try_recv() {
+            alice_proto.handle_message(&bob_id, msg).await.unwrap();
         }
 
         // After bidirectional sync, both should have the same pending state
@@ -1708,5 +1977,313 @@ mod tests {
                 "Carol should be a member of the group"
             );
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_round_produces_confirmation_with_correct_totals() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates a group so there are ops to sync
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+
+        let result = run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // The totals in ConfirmationSent and ConfirmationReceived should be > 0
+        // (there are ops from the group creation).
+        let mut found_confirmation_sent = false;
+        let mut found_confirmation_received = false;
+        for outcome in &result.outcomes {
+            match outcome {
+                SyncOutcome::ConfirmationSent { peer_total, .. } => {
+                    assert!(*peer_total > 0, "peer_total should be > 0");
+                    found_confirmation_sent = true;
+                }
+                SyncOutcome::ConfirmationReceived {
+                    confirmer_total, ..
+                } => {
+                    assert!(*confirmer_total > 0, "confirmer_total should be > 0");
+                    found_confirmation_received = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            found_confirmation_sent,
+            "sync round should produce ConfirmationSent, got: {:?}",
+            result.outcomes
+        );
+        assert!(
+            found_confirmation_received,
+            "sync round should produce ConfirmationReceived, got: {:?}",
+            result.outcomes
+        );
+    }
+
+    /// Extract syncpoints from a sync round's outcomes.
+    ///
+    /// Returns `(alice_syncpoint_for_bob, bob_syncpoint_for_alice)`.
+    /// Syncpoints come from `ConfirmationSent` (the sender's syncpoint for
+    /// the peer) and `ConfirmationReceived` (the receiver's syncpoint for
+    /// the sender).
+    fn extract_syncpoints(
+        outcomes: &[SyncOutcome],
+        alice_id: &KeyhivePeerId,
+        bob_id: &KeyhivePeerId,
+    ) -> (Option<u64>, Option<u64>) {
+        let mut alice_sp_for_bob: Option<u64> = None;
+        let mut bob_sp_for_alice: Option<u64> = None;
+
+        for outcome in outcomes {
+            match outcome {
+                // ConfirmationSent: the protocol sent a confirmation to `peer`.
+                // The sender's syncpoint for `peer` is `peer_total`.
+                SyncOutcome::ConfirmationSent { peer, peer_total } => {
+                    if peer == bob_id {
+                        // Alice sent confirmation to Bob → Alice's syncpoint for Bob
+                        alice_sp_for_bob = Some(*peer_total);
+                    } else if peer == alice_id {
+                        // Bob sent confirmation to Alice → Bob's syncpoint for Alice
+                        bob_sp_for_alice = Some(*peer_total);
+                    }
+                }
+                // ConfirmationReceived: the protocol received a confirmation from `peer`.
+                // The receiver's syncpoint for `peer` is `confirmer_total`.
+                SyncOutcome::ConfirmationReceived {
+                    peer,
+                    confirmer_total,
+                } => {
+                    if peer == alice_id {
+                        // Bob received confirmation from Alice → Bob's syncpoint for Alice
+                        bob_sp_for_alice = Some(*confirmer_total);
+                    } else if peer == bob_id {
+                        // Alice received confirmation from Bob → Alice's syncpoint for Bob
+                        alice_sp_for_bob = Some(*confirmer_total);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        (alice_sp_for_bob, bob_sp_for_alice)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_check_returns_in_sync_when_totals_match() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates a group and syncs with Bob
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+
+        // First sync round to get both sides aligned (exchanges ops)
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // Second sync round with no new ops — this is the steady state
+        // where syncpoints are established and valid. An orchestrator would
+        // invalidate syncpoints after the first round (which ingested ops),
+        // so the first round's syncpoints aren't usable. The second round
+        // exchanges zero ops, so its syncpoints remain valid.
+        let result = run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        let (alice_sp, bob_sp) = extract_syncpoints(&result.outcomes, &alice_id, &bob_id);
+        let alice_sp = alice_sp.expect("should have Alice's syncpoint for Bob");
+        let bob_sp = bob_sp.expect("should have Bob's syncpoint for Alice");
+
+        // Now Alice sends a sync check to Bob
+        alice_proto
+            .sync_check_keyhive(&bob_id, alice_sp)
+            .await
+            .expect("sync_check_keyhive failed");
+
+        // Bob receives the sync check
+        let check_msg = bob_conn
+            .inbound_rx
+            .recv()
+            .await
+            .expect("failed to receive sync check");
+        let outcome = bob_proto
+            .handle_message(&alice_id, check_msg)
+            .await
+            .expect("bob failed to handle sync check");
+
+        // Should be SyncCheckReceived — Bob needs to resolve it
+        let (sender_total, sender_syncpoint) = match outcome {
+            SyncOutcome::SyncCheckReceived {
+                sender_total,
+                sender_syncpoint,
+                ..
+            } => (sender_total, sender_syncpoint),
+            other => panic!("expected SyncCheckReceived, got: {other:?}"),
+        };
+
+        // Bob resolves with his syncpoint for Alice
+        let resolve_outcome = bob_proto
+            .resolve_sync_check(&alice_id, sender_total, sender_syncpoint, bob_sp)
+            .await
+            .expect("resolve_sync_check failed");
+
+        assert!(
+            matches!(resolve_outcome, SyncOutcome::InSync { .. }),
+            "peers should be in sync, got: {resolve_outcome:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_check_falls_back_when_out_of_sync() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates a group and syncs with Bob
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+
+        // First sync to exchange ops
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // Second sync to establish stable syncpoints (no ops exchanged)
+        let result = run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        let (alice_sp, bob_sp) = extract_syncpoints(&result.outcomes, &alice_id, &bob_id);
+        let alice_sp = alice_sp.expect("should have Alice's syncpoint for Bob");
+        let bob_sp = bob_sp.expect("should have Bob's syncpoint for Alice");
+
+        // Alice creates ANOTHER group with Bob (changes her state without syncing)
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+
+        // Alice sends sync check — her total has changed but she passes
+        // the stale syncpoint she got from the last round
+        alice_proto
+            .sync_check_keyhive(&bob_id, alice_sp)
+            .await
+            .expect("sync_check_keyhive failed");
+
+        let check_msg = bob_conn
+            .inbound_rx
+            .recv()
+            .await
+            .expect("failed to receive sync check");
+        let outcome = bob_proto
+            .handle_message(&alice_id, check_msg)
+            .await
+            .expect("bob failed to handle sync check");
+
+        let (sender_total, sender_syncpoint) = match outcome {
+            SyncOutcome::SyncCheckReceived {
+                sender_total,
+                sender_syncpoint,
+                ..
+            } => (sender_total, sender_syncpoint),
+            other => panic!("expected SyncCheckReceived, got: {other:?}"),
+        };
+
+        // Alice's sender_total should differ from Bob's syncpoint (she has new ops)
+        assert_ne!(
+            sender_total, bob_sp,
+            "Alice's total should have changed after creating a new group"
+        );
+
+        // Bob resolves — should fall back because totals don't match
+        let resolve_outcome = bob_proto
+            .resolve_sync_check(&alice_id, sender_total, sender_syncpoint, bob_sp)
+            .await
+            .expect("resolve_sync_check failed");
+
+        assert!(
+            matches!(resolve_outcome, SyncOutcome::SyncCheckFallback { .. }),
+            "should fall back to full sync, got: {resolve_outcome:?}"
+        );
+
+        // Bob should have sent a full SyncRequest (which is now in Alice's channel)
+        let fallback_msg = alice_conn
+            .inbound_rx
+            .recv()
+            .await
+            .expect("should have received fallback SyncRequest");
+        let fallback_outcome = alice_proto
+            .handle_message(&bob_id, fallback_msg)
+            .await
+            .expect("alice failed to handle fallback message");
+
+        // Alice should handle it normally (SyncRequest → Ok)
+        assert!(
+            matches!(fallback_outcome, SyncOutcome::Ok),
+            "fallback message should be handled as SyncRequest, got: {fallback_outcome:?}"
+        );
     }
 }

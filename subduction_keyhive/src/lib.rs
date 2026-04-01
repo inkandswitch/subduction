@@ -36,7 +36,7 @@ pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
 pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 #[cfg(feature = "serde")]
-pub use protocol::KeyhiveProtocol;
+pub use protocol::{KeyhiveProtocol, SyncOutcome};
 #[cfg(feature = "serde")]
 pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,

@@ -58,6 +58,16 @@ pub enum Message {
         ///
         /// These are operations we have that the initiator is missing.
         found: Vec<EventBytes>,
+
+        /// Total operation count for the responder (intersection + pending).
+        ///
+        /// Used by the sync check/confirmation shortcut protocol.
+        sync_responder_total: u64,
+
+        /// Total operation count for the requester (found + pending from request).
+        ///
+        /// Used by the sync check/confirmation shortcut protocol.
+        sync_requester_total: u64,
     },
 
     /// Send requested operations.
@@ -73,6 +83,16 @@ pub enum Message {
 
         /// The serialized operations being sent.
         ops: Vec<EventBytes>,
+
+        /// Total operation count for the responder (from the sync response).
+        ///
+        /// Passed through from the sync response for confirmation.
+        sync_responder_total: u64,
+
+        /// Total operation count for the requester (from the sync response).
+        ///
+        /// Passed through from the sync response for confirmation.
+        sync_requester_total: u64,
     },
 
     /// Request a peer's contact card.
@@ -98,6 +118,43 @@ pub enum Message {
         /// The peer ID of the target.
         target_id: KeyhivePeerId,
     },
+
+    /// Lightweight sync check.
+    ///
+    /// Sent instead of a full `SyncRequest` when the orchestrator has an
+    /// established syncpoint for the target. Carries the sender's total
+    /// operation count and its syncpoint (the last confirmed total for the
+    /// target). If both sides' counts match their respective syncpoints,
+    /// no full sync is needed.
+    SyncCheck {
+        /// The peer ID of the sender.
+        sender_id: KeyhivePeerId,
+
+        /// The peer ID of the target.
+        target_id: KeyhivePeerId,
+
+        /// The sender's total operation count for this peer pair.
+        sender_total: u64,
+
+        /// The sender's syncpoint for the target (last confirmed target total).
+        sender_syncpoint: u64,
+    },
+
+    /// Sync confirmation.
+    ///
+    /// Sent at the end of a sync exchange to establish a syncpoint.
+    /// The confirmer reports its own total so the remote peer can store
+    /// it as a syncpoint for future sync checks.
+    SyncConfirmation {
+        /// The peer ID of the sender (confirmer).
+        sender_id: KeyhivePeerId,
+
+        /// The peer ID of the target.
+        target_id: KeyhivePeerId,
+
+        /// The confirmer's total operation count for this peer pair.
+        confirmer_total: u64,
+    },
 }
 
 impl Message {
@@ -109,7 +166,9 @@ impl Message {
             | Message::SyncResponse { sender_id, .. }
             | Message::SyncOps { sender_id, .. }
             | Message::RequestContactCard { sender_id, .. }
-            | Message::MissingContactCard { sender_id, .. } => sender_id,
+            | Message::MissingContactCard { sender_id, .. }
+            | Message::SyncCheck { sender_id, .. }
+            | Message::SyncConfirmation { sender_id, .. } => sender_id,
         }
     }
 
@@ -121,7 +180,9 @@ impl Message {
             | Message::SyncResponse { target_id, .. }
             | Message::SyncOps { target_id, .. }
             | Message::RequestContactCard { target_id, .. }
-            | Message::MissingContactCard { target_id, .. } => target_id,
+            | Message::MissingContactCard { target_id, .. }
+            | Message::SyncCheck { target_id, .. }
+            | Message::SyncConfirmation { target_id, .. } => target_id,
         }
     }
 
@@ -134,6 +195,8 @@ impl Message {
             Message::SyncOps { .. } => "SyncOps",
             Message::RequestContactCard { .. } => "RequestContactCard",
             Message::MissingContactCard { .. } => "MissingContactCard",
+            Message::SyncCheck { .. } => "SyncCheck",
+            Message::SyncConfirmation { .. } => "SyncConfirmation",
         }
     }
 }
