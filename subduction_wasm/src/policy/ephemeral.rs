@@ -1,8 +1,7 @@
 //! JS-pluggable ephemeral policy.
 //!
 //! [`JsEphemeralPolicy`] is a duck-typed JS-imported interface for
-//! ephemeral message authorization (subscribe/publish), matching the
-//! emitted `EphemeralPolicy` TypeScript interface.
+//! ephemeral message authorization (subscribe/publish).
 //!
 //! Throwing (or returning a rejected promise) denies the operation.
 //! Resolving allows it.
@@ -11,39 +10,13 @@ use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 
 use future_form::Local;
 use futures::FutureExt;
-use js_sys::{Array, Promise, Uint8Array};
+use js_sys::{Promise, Uint8Array};
 use subduction_core::peer::id::PeerId;
 use subduction_ephemeral::{policy::EphemeralPolicy, topic::Topic};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-// ── TypeScript interface ────────────────────────────────────────────────
-
-#[wasm_bindgen(typescript_custom_section)]
-const TS_EPHEMERAL_POLICY: &str = r#"
-/**
- * Ephemeral message authorization policy.
- *
- * Throwing (or returning a rejected promise) denies the operation.
- * Resolving allows it.
- */
-export interface EphemeralPolicy {
-    /** Authorize a peer subscribing to ephemeral messages on a topic. */
-    authorizeSubscribe(peerId: Uint8Array, topic: Uint8Array): Promise<void>;
-
-    /** Authorize a peer publishing an ephemeral message to a topic. */
-    authorizePublish(peerId: Uint8Array, topic: Uint8Array): Promise<void>;
-
-    /**
-     * Filter a list of subscriber peer IDs to only those currently
-     * authorized for the given topic.
-     *
-     * The returned array must be a subset of `peers`; extra entries
-     * are silently discarded.
-     */
-    filterAuthorizedSubscribers(topic: Uint8Array, peers: Uint8Array[]): Promise<Uint8Array[]>;
-}
-"#;
+use crate::{peer_id::WasmPeerId, topic::WasmTopic};
 
 // ── Duck-typed JS import ────────────────────────────────────────────────
 
@@ -52,34 +25,32 @@ extern "C" {
     /// A duck-typed JS policy object for ephemeral message authorization.
     ///
     /// Any JS object with the required methods can be passed where a
-    /// `JsEphemeralPolicy` is expected. See the TypeScript `EphemeralPolicy`
-    /// interface for the required shape.
+    /// `JsEphemeralPolicy` is expected.
     #[wasm_bindgen(js_name = EphemeralPolicy, typescript_type = "EphemeralPolicy")]
     pub type JsEphemeralPolicy;
 
     #[wasm_bindgen(method, catch, js_name = authorizeSubscribe)]
     fn js_authorize_subscribe(
         this: &JsEphemeralPolicy,
-        peer_id: Uint8Array,
-        topic: Uint8Array,
+        peer_id: WasmPeerId,
+        topic: WasmTopic,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = authorizePublish)]
     fn js_authorize_publish(
         this: &JsEphemeralPolicy,
-        peer_id: Uint8Array,
-        topic: Uint8Array,
+        peer_id: WasmPeerId,
+        topic: WasmTopic,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = filterAuthorizedSubscribers)]
     fn js_filter_authorized_subscribers(
         this: &JsEphemeralPolicy,
-        topic: Uint8Array,
-        peers: Array,
+        topic: WasmTopic,
+        peers: Vec<WasmPeerId>,
     ) -> Result<Promise, JsValue>;
 }
 
-// wasm_bindgen extern types need a manual Clone impl.
 impl Clone for JsEphemeralPolicy {
     fn clone(&self) -> Self {
         JsCast::unchecked_into(JsValue::from(self).clone())
@@ -128,14 +99,6 @@ impl JsEphemeralDenied {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-fn peer_bytes(peer: PeerId) -> Uint8Array {
-    Uint8Array::from(peer.as_bytes().as_slice())
-}
-
-fn topic_bytes(id: Topic) -> Uint8Array {
-    Uint8Array::from(id.as_bytes().as_slice())
-}
-
 async fn await_void_promise(result: Result<Promise, JsValue>) -> Result<(), JsEphemeralDenied> {
     let promise = result.map_err(|e| JsEphemeralDenied::from_js(&e))?;
     JsFuture::from(promise)
@@ -155,7 +118,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
         peer: PeerId,
         id: Topic,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::SubscribeDisallowed>> {
-        let result = self.js_authorize_subscribe(peer_bytes(peer), topic_bytes(id));
+        let result = self.js_authorize_subscribe(WasmPeerId::from(peer), WasmTopic::from(id));
         async move { await_void_promise(result).await }.boxed_local()
     }
 
@@ -164,7 +127,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
         peer: PeerId,
         id: Topic,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::PublishDisallowed>> {
-        let result = self.js_authorize_publish(peer_bytes(peer), topic_bytes(id));
+        let result = self.js_authorize_publish(WasmPeerId::from(peer), WasmTopic::from(id));
         async move { await_void_promise(result).await }.boxed_local()
     }
 
@@ -173,11 +136,8 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
         id: Topic,
         peers: Vec<PeerId>,
     ) -> <Local as future_form::FutureForm>::Future<'_, Vec<PeerId>> {
-        let js_peers = Array::new();
-        for peer in &peers {
-            js_peers.push(&peer_bytes(*peer));
-        }
-        let result = self.js_filter_authorized_subscribers(topic_bytes(id), js_peers);
+        let wasm_peers: Vec<WasmPeerId> = peers.iter().copied().map(WasmPeerId::from).collect();
+        let result = self.js_filter_authorized_subscribers(WasmTopic::from(id), wasm_peers);
         async move {
             let Ok(promise) = result else {
                 return Vec::new();
@@ -187,7 +147,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
                 return Vec::new();
             };
 
-            let Ok(arr) = resolved.dyn_into::<Array>() else {
+            let Ok(arr) = resolved.dyn_into::<js_sys::Array>() else {
                 return Vec::new();
             };
 
@@ -196,7 +156,12 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
             let allowed: BTreeSet<PeerId> = peers.into_iter().collect();
             arr.iter()
                 .filter_map(|item| {
-                    let bytes: Uint8Array = item.dyn_into().ok()?;
+                    // The returned items are WasmPeerId objects;
+                    // extract bytes via their toBytes() method.
+                    let to_bytes = js_sys::Reflect::get(&item, &"toBytes".into()).ok()?;
+                    let func: js_sys::Function = to_bytes.dyn_into().ok()?;
+                    let bytes_val = func.call0(&item).ok()?;
+                    let bytes: Uint8Array = bytes_val.dyn_into().ok()?;
                     let vec = bytes.to_vec();
                     let arr: [u8; 32] = vec.try_into().ok()?;
                     let peer = PeerId::new(arr);
