@@ -54,9 +54,7 @@ export interface Policy {
 extern "C" {
     /// A duck-typed JS policy object for connection and storage authorization.
     ///
-    /// Any JS object with the required methods can be passed where a
-    /// `JsPolicy` is expected. See the [module-level docs](self) for
-    /// the required interface.
+    /// Must implement the `Policy` TypeScript interface emitted by this module.
     #[wasm_bindgen(js_name = Policy, typescript_type = "Policy")]
     pub type JsPolicy;
 

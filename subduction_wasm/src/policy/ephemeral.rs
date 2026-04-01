@@ -41,8 +41,8 @@ export interface EphemeralPolicy {
 extern "C" {
     /// A duck-typed JS policy object for ephemeral message authorization.
     ///
-    /// Any JS object with the required methods can be passed where a
-    /// `JsEphemeralPolicy` is expected.
+    /// Must implement the `EphemeralPolicy` TypeScript interface emitted by
+    /// this module.
     #[wasm_bindgen(js_name = EphemeralPolicy, typescript_type = "EphemeralPolicy")]
     pub type JsEphemeralPolicy;
 
