@@ -697,6 +697,79 @@ impl WasmIndexedDbStorage {
             })
     }
 
+    // ==================== Batch Operations ====================
+
+    /// Save a batch of commits and fragments in a single IDB transaction.
+    ///
+    /// Each commit element must be a JS object with `{digest, signedCommit, blob}`.
+    /// Each fragment element must be a JS object with `{digest, signedFragment, blob}`.
+    /// This matches the shape produced by `JsStorage::save_batch`.
+    ///
+    /// The sedimentree ID is also registered in the `sedimentree_ids` store
+    /// within the same transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmSaveBatchAllError`] on transaction, store access, or
+    /// record extraction failures.
+    #[wasm_bindgen(js_name = saveBatchAll)]
+    pub async fn wasm_save_batch_all(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        commits: js_sys::Array,
+        fragments: js_sys::Array,
+    ) -> Result<u32, WasmSaveBatchAllError> {
+        let store_names = js_sys::Array::of3(
+            &JsValue::from_str(SEDIMENTREE_ID_STORE_NAME),
+            &JsValue::from_str(LOOSE_COMMIT_STORE_NAME),
+            &JsValue::from_str(FRAGMENT_STORE_NAME),
+        );
+        let tx = self
+            .0
+            .transaction_with_str_sequence_and_mode(&store_names, IdbTransactionMode::Readwrite)
+            .map_err(WasmSaveBatchAllError::TransactionError)?;
+
+        // Register the sedimentree ID.
+        let id_store = tx
+            .object_store(SEDIMENTREE_ID_STORE_NAME)
+            .map_err(WasmSaveBatchAllError::ObjectStoreError)?;
+        let id_req = id_store
+            .put_with_key(
+                &JsValue::from(1u8),
+                &JsValue::from_str(&sedimentree_id.to_string()),
+            )
+            .map_err(WasmSaveBatchAllError::UnableToStore)?;
+        drop(await_idb(&id_req).await?);
+
+        let sed_id = SedimentreeId::from(sedimentree_id.clone());
+
+        // Write commits.
+        let commit_store = tx
+            .object_store(LOOSE_COMMIT_STORE_NAME)
+            .map_err(WasmSaveBatchAllError::ObjectStoreError)?;
+        for item in commits.iter() {
+            let record = extract_commit_record(&item, sed_id)?;
+            let req = commit_store
+                .put(&record.into())
+                .map_err(WasmSaveBatchAllError::UnableToStore)?;
+            drop(await_idb(&req).await?);
+        }
+
+        // Write fragments.
+        let fragment_store = tx
+            .object_store(FRAGMENT_STORE_NAME)
+            .map_err(WasmSaveBatchAllError::ObjectStoreError)?;
+        for item in fragments.iter() {
+            let record = extract_fragment_record(&item, sed_id)?;
+            let req = fragment_store
+                .put(&record.into())
+                .map_err(WasmSaveBatchAllError::UnableToStore)?;
+            drop(await_idb(&req).await?);
+        }
+
+        Ok(commits.length() + fragments.length())
+    }
+
     /// Helper to list digests for a given store.
     async fn list_digests_for_store(
         &self,
@@ -854,6 +927,104 @@ impl From<AwaitIdbError> for JsValue {
         err.into()
     }
 }
+
+// ── Batch helpers ───────────────────────────────────────────────────────
+
+/// Extract a commit `Record` from a JS object shaped
+/// `{digest: Digest, signedCommit: SignedLooseCommit, blob: Uint8Array}`.
+fn extract_commit_record(
+    obj: &JsValue,
+    sedimentree_id: SedimentreeId,
+) -> Result<Record, WasmSaveBatchAllError> {
+    let digest_val = js_sys::Reflect::get(obj, &JsValue::from_str("digest"))
+        .map_err(WasmSaveBatchAllError::ReflectError)?;
+    let digest = WasmDigest::try_from_js_value(digest_val)
+        .map_err(WasmSaveBatchAllError::ConversionError)?;
+
+    let signed_val = js_sys::Reflect::get(obj, &JsValue::from_str("signedCommit"))
+        .map_err(WasmSaveBatchAllError::ReflectError)?;
+    let signed = WasmSignedLooseCommit::try_from_js_value(signed_val)
+        .map_err(WasmSaveBatchAllError::ConversionError)?;
+
+    let blob_val = js_sys::Reflect::get(obj, &JsValue::from_str("blob"))
+        .map_err(WasmSaveBatchAllError::ReflectError)?;
+    let blob = Uint8Array::new(&blob_val);
+
+    Ok(Record {
+        sedimentree_id,
+        digest: digest.to_hex_string(),
+        signed: signed.as_bytes().to_vec(),
+        blob: blob.to_vec(),
+    })
+}
+
+/// Extract a fragment `Record` from a JS object shaped
+/// `{digest: Digest, signedFragment: SignedFragment, blob: Uint8Array}`.
+fn extract_fragment_record(
+    obj: &JsValue,
+    sedimentree_id: SedimentreeId,
+) -> Result<Record, WasmSaveBatchAllError> {
+    let digest_val = js_sys::Reflect::get(obj, &JsValue::from_str("digest"))
+        .map_err(WasmSaveBatchAllError::ReflectError)?;
+    let digest = WasmDigest::try_from_js_value(digest_val)
+        .map_err(WasmSaveBatchAllError::ConversionError)?;
+
+    let signed_val = js_sys::Reflect::get(obj, &JsValue::from_str("signedFragment"))
+        .map_err(WasmSaveBatchAllError::ReflectError)?;
+    let signed = WasmSignedFragment::try_from_js_value(signed_val)
+        .map_err(WasmSaveBatchAllError::ConversionError)?;
+
+    let blob_val = js_sys::Reflect::get(obj, &JsValue::from_str("blob"))
+        .map_err(WasmSaveBatchAllError::ReflectError)?;
+    let blob = Uint8Array::new(&blob_val);
+
+    Ok(Record {
+        sedimentree_id,
+        digest: digest.to_hex_string(),
+        signed: signed.as_bytes().to_vec(),
+        blob: blob.to_vec(),
+    })
+}
+
+// ── Batch error type ────────────────────────────────────────────────────
+
+/// Error types for `saveBatchAll`.
+#[derive(Debug, Error)]
+pub enum WasmSaveBatchAllError {
+    /// Failed to begin `IndexedDB` transaction.
+    #[error("saveBatchAll IndexedDB transaction error: {0:?}")]
+    TransactionError(JsValue),
+
+    /// Failed to access an object store.
+    #[error("saveBatchAll IndexedDB object store error: {0:?}")]
+    ObjectStoreError(JsValue),
+
+    /// Failed to store a record in `IndexedDB`.
+    #[error("unable to store record in IndexedDB: {0:?}")]
+    UnableToStore(JsValue),
+
+    /// Failed to read a property from a JS object.
+    #[error("saveBatchAll reflect error: {0:?}")]
+    ReflectError(JsValue),
+
+    /// Failed to convert a JS value to a Rust type.
+    #[error("saveBatchAll conversion error: {0:?}")]
+    ConversionError(JsValue),
+
+    /// Error awaiting `IndexedDB` operation.
+    #[error("error awaiting IndexedDB operation: {0:?}")]
+    AwaitIdbError(#[from] AwaitIdbError),
+}
+
+impl From<WasmSaveBatchAllError> for JsValue {
+    fn from(err: WasmSaveBatchAllError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WasmSaveBatchAllError");
+        err.into()
+    }
+}
+
+// ── Per-operation error types ───────────────────────────────────────────
 
 /// Error types for `saveSedimentreeId`.
 #[derive(Debug, Error)]

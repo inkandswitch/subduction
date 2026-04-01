@@ -545,6 +545,8 @@ impl Storage<Local> for JsStorage {
                 "JsStorage::save_batch"
             );
 
+            self.save_sedimentree_id(sedimentree_id).await?;
+
             // Build JS arrays of {digest, signedCommit/signedFragment, blob}
             // objects and cross the FFI boundary once. The JS side writes
             // everything in a single IDB transaction.

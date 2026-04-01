@@ -556,21 +556,27 @@ where
                         // Route BatchSyncResponse to pending callers before handler dispatch.
                         if let Some(resp) = H::as_batch_sync_response(&msg) {
                             let mut consumed = false;
-                            {
+
+                            // Clone the mux list while holding the lock, then
+                            // drop it before awaiting resolve_pending.
+                            let muxes_for_peer = {
                                 let multiplexers = self.multiplexers.lock().await;
-                                if let Some(muxes) = multiplexers.get(&peer_id) {
-                                    for mux in muxes {
-                                        if mux.resolve_pending(resp).await {
-                                            tracing::debug!(
-                                                "routed BatchSyncResponse to pending caller for peer {}",
-                                                peer_id
-                                            );
-                                            consumed = true;
-                                            break;
-                                        }
+                                multiplexers.get(&peer_id).cloned()
+                            };
+
+                            if let Some(muxes) = muxes_for_peer {
+                                for mux in &muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        tracing::debug!(
+                                            "routed BatchSyncResponse to pending caller for peer {}",
+                                            peer_id
+                                        );
+                                        consumed = true;
+                                        break;
                                     }
                                 }
                             }
+
                             if consumed {
                                 continue;
                             }
