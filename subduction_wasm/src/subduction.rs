@@ -51,7 +51,6 @@ use subduction_ephemeral::{
     config::EphemeralConfig,
     handler::EphemeralHandler,
     message::{EphemeralMessage, EphemeralPayload},
-    policy::OpenEphemeralPolicy,
     topic::Topic,
 };
 use wasm_bindgen::prelude::*;
@@ -108,7 +107,11 @@ impl Spawn<Local> for WasmSpawn {
 
 use crate::{
     clock::JsClock,
-    policy::{JsPolicy, make_open_policy},
+    policy::{
+        JsPolicy,
+        ephemeral::{JsEphemeralPolicy, make_open_ephemeral_policy},
+        make_open_policy,
+    },
 };
 
 type WasmConn = MessageTransport<JsTransport>;
@@ -123,11 +126,11 @@ type WasmHandler = ComposedHandler<
         WASM_SHARD_COUNT,
         crate::remote_heads::JsRemoteHeadsObserver,
     >,
-    EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy, JsClock>,
+    EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>,
     crate::wire::WireMessage,
 >;
 
-type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, OpenEphemeralPolicy, JsClock>;
+type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>;
 
 type WasmSubductionCore = Subduction<
     'static,
@@ -170,9 +173,10 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
-    /// * `policy` - Optional JS object implementing authorization.
-    ///   Must have `authorizeConnect(...)`, `authorizeFetch(...)`, `authorizePut(...)`,
-    ///   `filterAuthorizedFetch(...)`. Defaults to allow-all.
+    /// * `policy` - Optional connection/storage authorization policy.
+    ///   Defaults to allow-all.
+    /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
+    ///   Defaults to allow-all.
     ///
     /// # Panics
     ///
@@ -188,6 +192,7 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
         policy: Option<JsPolicy>,
+        ephemeral_policy: Option<JsEphemeralPolicy>,
         on_remote_heads: Option<js_sys::Function>,
         on_ephemeral: Option<js_sys::Function>,
     ) -> Self {
@@ -225,9 +230,10 @@ impl WasmSubduction {
             observer.clone(),
         );
 
+        let eph_policy = ephemeral_policy.unwrap_or_else(make_open_ephemeral_policy);
         let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
             connections.clone(),
-            OpenEphemeralPolicy,
+            eph_policy,
             EphemeralConfig::default(),
             JsClock,
         );
@@ -302,6 +308,10 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `policy` - Optional connection/storage authorization policy.
+    ///   Defaults to allow-all.
+    /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
+    ///   Defaults to allow-all.
     ///
     /// # Panics
     ///
@@ -320,6 +330,7 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
         policy: Option<JsPolicy>,
+        ephemeral_policy: Option<JsEphemeralPolicy>,
         on_remote_heads: Option<js_sys::Function>,
         on_ephemeral: Option<js_sys::Function>,
     ) -> Result<Self, WasmHydrationError> {
@@ -415,9 +426,10 @@ impl WasmSubduction {
             observer.clone(),
         );
 
+        let eph_policy = ephemeral_policy.unwrap_or_else(make_open_ephemeral_policy);
         let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
             connections.clone(),
-            OpenEphemeralPolicy,
+            eph_policy,
             EphemeralConfig::default(),
             JsClock,
         );

@@ -170,6 +170,7 @@ async function setupPeer(
         null,
         null,
         null,
+        null,
         callback
       );
 
