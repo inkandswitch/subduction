@@ -38,6 +38,7 @@ use super::error::IoError;
 /// and fragments from the diff.
 ///
 /// Policy-rejected diffs are logged and silently ignored (returns `Ok(())`).
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn recv_batch_sync_response<
     F: FutureForm,
     S: Storage<F>,
@@ -164,7 +165,10 @@ pub(crate) async fn recv_batch_sync_response<
         .collect();
 
     for author_id in all_authors {
-        let putter = putter_cache.get(&author_id).expect("putter was cached");
+        let Some(putter) = putter_cache.get(&author_id) else {
+            tracing::warn!("putter for author {author_id} unexpectedly missing from cache");
+            continue;
+        };
         let commits = commits_by_author.remove(&author_id).unwrap_or_default();
         let fragments = fragments_by_author.remove(&author_id).unwrap_or_default();
 
@@ -183,7 +187,6 @@ pub(crate) async fn recv_batch_sync_response<
             .await
             .map_err(IoError::Storage)?;
 
-        // Update in-memory tree
         for commit in commit_payloads {
             sedimentrees
                 .with_entry_or_default(id, |tree| tree.add_commit(commit))

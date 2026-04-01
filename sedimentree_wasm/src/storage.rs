@@ -529,6 +529,7 @@ impl Storage<Local> for JsStorage {
 
     // ==================== Batch Operations ====================
 
+    #[allow(clippy::cast_possible_truncation)] // Wasm-only: u32 pointers
     fn save_batch(
         &self,
         sedimentree_id: SedimentreeId,
