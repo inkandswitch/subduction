@@ -1,28 +1,16 @@
 //! Pluggable policy types for Wasm.
 //!
 //! [`JsPolicy`] is a duck-typed JS-imported interface for connection and
-//! storage authorization. Any JS object with the right method signatures
-//! can serve as a policy — including Rust-exported types like a future
-//! `WasmKeyhivePolicy`.
+//! storage authorization. Any JS object matching the emitted `Policy`
+//! TypeScript interface can serve as a policy — including Rust-exported
+//! types like a future `WasmKeyhivePolicy`.
 //!
-//! [`JsEphemeralPolicy`] is a separate interface for ephemeral message
-//! authorization (subscribe/publish).
+//! [`JsEphemeralPolicy`](ephemeral::JsEphemeralPolicy) is a separate
+//! interface for ephemeral message authorization (subscribe/publish),
+//! matching the emitted `EphemeralPolicy` TypeScript interface.
 //!
-//! # JS interface
-//!
-//! A policy object must implement:
-//!
-//! ```js
-//! {
-//!   authorizeConnect(peerId: Uint8Array): Promise<void>,
-//!   authorizeFetch(peerId: Uint8Array, sedimentreeId: Uint8Array): Promise<void>,
-//!   authorizePut(requestor: Uint8Array, author: Uint8Array, sedimentreeId: Uint8Array): Promise<void>,
-//!   filterAuthorizedFetch(peerId: Uint8Array, ids: Uint8Array[]): Promise<Uint8Array[]>,
-//! }
-//! ```
-//!
-//! Throwing (or returning a rejected promise) denies the operation.
-//! Resolving allows it.
+//! Both interfaces follow the same convention: throwing (or returning a
+//! rejected promise) denies the operation; resolving allows it.
 
 pub mod ephemeral;
 
@@ -40,6 +28,41 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
+// ── TypeScript interface ────────────────────────────────────────────────
+
+#[wasm_bindgen(typescript_custom_section)]
+const TS_POLICY: &str = r#"
+/**
+ * Connection and storage authorization policy.
+ *
+ * Throwing (or returning a rejected promise) denies the operation.
+ * Resolving allows it.
+ */
+export interface Policy {
+    /** Authorize an inbound peer connection. */
+    authorizeConnect(peerId: Uint8Array): Promise<void>;
+
+    /** Authorize fetching data for a sedimentree on behalf of a peer. */
+    authorizeFetch(peerId: Uint8Array, sedimentreeId: Uint8Array): Promise<void>;
+
+    /**
+     * Authorize writing data for a sedimentree.
+     *
+     * `author` is the verified signing key of the data's author (may differ
+     * from `requestor`, which is the peer relaying the write).
+     */
+    authorizePut(requestor: Uint8Array, author: Uint8Array, sedimentreeId: Uint8Array): Promise<void>;
+
+    /**
+     * Filter a list of sedimentree IDs to only those the peer may fetch.
+     *
+     * The returned array must be a subset of `ids`; extra entries are
+     * silently discarded.
+     */
+    filterAuthorizedFetch(peerId: Uint8Array, ids: Uint8Array[]): Promise<Uint8Array[]>;
+}
+"#;
+
 // ── Duck-typed JS import ────────────────────────────────────────────────
 
 #[wasm_bindgen]
@@ -49,7 +72,7 @@ extern "C" {
     /// Any JS object with the required methods can be passed where a
     /// `JsPolicy` is expected. See the [module-level docs](self) for
     /// the required interface.
-    #[wasm_bindgen(js_name = Policy)]
+    #[wasm_bindgen(js_name = Policy, typescript_type = "Policy")]
     pub type JsPolicy;
 
     #[wasm_bindgen(method, catch, js_name = authorizeConnect)]
