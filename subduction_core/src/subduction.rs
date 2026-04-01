@@ -556,20 +556,21 @@ where
                         // Route BatchSyncResponse to pending callers before handler dispatch.
                         if let Some(resp) = H::as_batch_sync_response(&msg) {
                             let mut consumed = false;
-                            let multiplexers = self.multiplexers.lock().await;
-                            if let Some(muxes) = multiplexers.get(&peer_id) {
-                                for mux in muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        tracing::debug!(
-                                            "routed BatchSyncResponse to pending caller for peer {}",
-                                            peer_id
-                                        );
-                                        consumed = true;
-                                        break;
+                            {
+                                let multiplexers = self.multiplexers.lock().await;
+                                if let Some(muxes) = multiplexers.get(&peer_id) {
+                                    for mux in muxes {
+                                        if mux.resolve_pending(resp).await {
+                                            tracing::debug!(
+                                                "routed BatchSyncResponse to pending caller for peer {}",
+                                                peer_id
+                                            );
+                                            consumed = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                            drop(multiplexers);
                             if consumed {
                                 continue;
                             }

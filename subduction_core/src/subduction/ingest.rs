@@ -9,10 +9,17 @@
 //! [`SyncHandler`]: crate::handler::sync::SyncHandler
 //! [`Sedimentree`]: sedimentree_core::sedimentree::Sedimentree
 
+use alloc::vec::Vec;
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob, collections::Map, crypto::digest::Digest, depth::DepthMetric, fragment::Fragment,
-    id::SedimentreeId, loose_commit::LooseCommit, sedimentree::Sedimentree,
+    blob::Blob,
+    collections::{Map, Set},
+    crypto::digest::Digest,
+    depth::DepthMetric,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+    sedimentree::Sedimentree,
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -55,6 +62,11 @@ pub(crate) async fn recv_batch_sync_response<
 
     let mut putter_cache: Map<PeerId, Putter<F, S>> = Map::new();
 
+    // Collect verified commits and fragments grouped by author,
+    // so we can call save_batch once per author instead of once per item.
+    let mut commits_by_author: Map<PeerId, Vec<VerifiedMeta<LooseCommit>>> = Map::new();
+    let mut fragments_by_author: Map<PeerId, Vec<VerifiedMeta<Fragment>>> = Map::new();
+
     for (signed_commit, blob) in diff.missing_commits {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
@@ -64,8 +76,6 @@ pub(crate) async fn recv_batch_sync_response<
             }
         };
 
-        // Check blob integrity before policy (cheap check first, avoids
-        // wasting policy work on attacker-controlled blob mismatches).
         let verified_meta = match VerifiedMeta::new(verified, blob) {
             Ok(vm) => vm,
             Err(e) => {
@@ -77,7 +87,7 @@ pub(crate) async fn recv_batch_sync_response<
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
-        #[allow(clippy::map_entry)] // async in insertion path
+        #[allow(clippy::map_entry)]
         if !putter_cache.contains_key(&author_id) {
             match storage.get_putter::<F>(*from, author, id).await {
                 Ok(p) => {
@@ -91,13 +101,14 @@ pub(crate) async fn recv_batch_sync_response<
                 }
             }
         }
-        let Some(putter) = putter_cache.get(&author_id) else {
+        if !putter_cache.contains_key(&author_id) {
             continue;
-        };
+        }
 
-        insert_commit_locally(sedimentrees, putter, verified_meta)
-            .await
-            .map_err(IoError::Storage)?;
+        commits_by_author
+            .entry(author_id)
+            .or_default()
+            .push(verified_meta);
     }
 
     for (signed_fragment, blob) in diff.missing_fragments {
@@ -120,7 +131,7 @@ pub(crate) async fn recv_batch_sync_response<
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
-        #[allow(clippy::map_entry)] // async in insertion path
+        #[allow(clippy::map_entry)]
         if !putter_cache.contains_key(&author_id) {
             match storage.get_putter::<F>(*from, author, id).await {
                 Ok(p) => {
@@ -134,14 +145,55 @@ pub(crate) async fn recv_batch_sync_response<
                 }
             }
         }
-
-        let Some(putter) = putter_cache.get(&author_id) else {
+        if !putter_cache.contains_key(&author_id) {
             continue;
-        };
+        }
 
-        insert_fragment_locally(sedimentrees, putter, verified_meta)
+        fragments_by_author
+            .entry(author_id)
+            .or_default()
+            .push(verified_meta);
+    }
+
+    // Flush each author's batch to storage in a single save_batch call,
+    // then update the in-memory sedimentree for each item.
+    let all_authors: Set<PeerId> = commits_by_author
+        .keys()
+        .chain(fragments_by_author.keys())
+        .copied()
+        .collect();
+
+    for author_id in all_authors {
+        let putter = putter_cache.get(&author_id).expect("putter was cached");
+        let commits = commits_by_author.remove(&author_id).unwrap_or_default();
+        let fragments = fragments_by_author.remove(&author_id).unwrap_or_default();
+
+        // Clone payloads for in-memory tree updates before moving into save_batch.
+        let commit_payloads: Vec<LooseCommit> = commits
+            .iter()
+            .map(|v: &VerifiedMeta<LooseCommit>| v.payload().clone())
+            .collect();
+        let fragment_payloads: Vec<Fragment> = fragments
+            .iter()
+            .map(|v: &VerifiedMeta<Fragment>| v.payload().clone())
+            .collect();
+
+        putter
+            .save_batch(commits, fragments)
             .await
             .map_err(IoError::Storage)?;
+
+        // Update in-memory tree
+        for commit in commit_payloads {
+            sedimentrees
+                .with_entry_or_default(id, |tree| tree.add_commit(commit))
+                .await;
+        }
+        for fragment in fragment_payloads {
+            sedimentrees
+                .with_entry_or_default(id, |tree| tree.add_fragment(fragment))
+                .await;
+        }
     }
 
     Ok(())

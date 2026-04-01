@@ -58,6 +58,9 @@ export interface SedimentreeStorage {
     loadAllFragments(sedimentreeId: SedimentreeId): Promise<FragmentWithBlob[]>;
     deleteFragment(sedimentreeId: SedimentreeId, digest: Digest): Promise<void>;
     deleteAllFragments(sedimentreeId: SedimentreeId): Promise<void>;
+
+    // Batch save: write all commits + fragments in a single storage transaction.
+    saveBatchAll(sedimentreeId: SedimentreeId, commits: Array<{digest: Digest, signedCommit: SignedLooseCommit, blob: Uint8Array}>, fragments: Array<{digest: Digest, signedFragment: SignedFragment, blob: Uint8Array}>): Promise<number>;
 }
 "#;
 
@@ -145,6 +148,16 @@ extern "C" {
 
     #[wasm_bindgen(method, js_name = deleteAllFragments)]
     fn js_delete_all_fragments(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
+
+    // ==================== Batch Operations ====================
+
+    #[wasm_bindgen(method, js_name = saveBatchAll)]
+    fn js_save_batch_all(
+        this: &JsStorage,
+        sedimentree_id: &JsSedimentreeId,
+        commits: &js_sys::Array,
+        fragments: &js_sys::Array,
+    ) -> Promise;
 }
 
 impl core::fmt::Debug for JsStorage {
@@ -532,15 +545,63 @@ impl Storage<Local> for JsStorage {
                 "JsStorage::save_batch"
             );
 
-            self.save_sedimentree_id(sedimentree_id).await?;
+            // Build JS arrays of {digest, signedCommit/signedFragment, blob}
+            // objects and cross the FFI boundary once. The JS side writes
+            // everything in a single IDB transaction.
+            let js_commits = js_sys::Array::new_with_length(num_commits as u32);
+            for (i, verified) in commits.into_iter().enumerate() {
+                let digest = Digest::hash(verified.payload());
+                let signed: WasmSignedLooseCommit = verified.signed().clone().into();
+                let blob = Uint8Array::from(verified.blob().contents().as_slice());
 
-            for verified in commits {
-                Storage::<Local>::save_loose_commit(self, sedimentree_id, verified).await?;
+                let obj = js_sys::Object::new();
+                js_sys::Reflect::set(
+                    &obj,
+                    &JsValue::from_str("digest"),
+                    &WasmDigest::from(digest).into(),
+                )
+                .ok();
+                js_sys::Reflect::set(
+                    &obj,
+                    &JsValue::from_str("signedCommit"),
+                    &JsValue::from(signed),
+                )
+                .ok();
+                js_sys::Reflect::set(&obj, &JsValue::from_str("blob"), &blob).ok();
+                js_commits.set(i as u32, obj.into());
             }
 
-            for verified in fragments {
-                Storage::<Local>::save_fragment(self, sedimentree_id, verified).await?;
+            let js_fragments = js_sys::Array::new_with_length(num_fragments as u32);
+            for (i, verified) in fragments.into_iter().enumerate() {
+                let digest = Digest::hash(verified.payload());
+                let signed: WasmSignedFragment = verified.signed().clone().into();
+                let blob = Uint8Array::from(verified.blob().contents().as_slice());
+
+                let obj = js_sys::Object::new();
+                js_sys::Reflect::set(
+                    &obj,
+                    &JsValue::from_str("digest"),
+                    &WasmDigest::from(digest).into(),
+                )
+                .ok();
+                js_sys::Reflect::set(
+                    &obj,
+                    &JsValue::from_str("signedFragment"),
+                    &JsValue::from(signed),
+                )
+                .ok();
+                js_sys::Reflect::set(&obj, &JsValue::from_str("blob"), &blob).ok();
+                js_fragments.set(i as u32, obj.into());
             }
+
+            let js_promise = self.js_save_batch_all(
+                &WasmSedimentreeId::from(sedimentree_id).into(),
+                &js_commits,
+                &js_fragments,
+            );
+            JsFuture::from(js_promise)
+                .await
+                .map_err(JsStorageError::JsError)?;
 
             Ok(num_commits + num_fragments)
         })
