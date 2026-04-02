@@ -2697,7 +2697,7 @@ mod tests {
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             // Deep should dominate shallow
-            let frags: BTreeSet<_> = minimized.fragments().map(|f| f.head()).collect();
+            let frags: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
             assert!(
                 frags.contains(&e) && !frags.contains(&c),
                 "deep fragment should dominate shallow: surviving heads = {frags:?}"
@@ -2726,10 +2726,10 @@ mod tests {
         /// covers C→A (depth 1). They don't overlap — C is not in
         /// `deep_frag`'s range. Both survive minimize.
         ///
-        /// For loose commits: B is in block C→A (covered by shallow_frag),
+        /// For loose commits: B is in block C→A (covered by `shallow_frag`),
         /// so B is pruned. D is in block E→C; block E is covered by
-        /// deep_frag (E is its boundary), so D is also pruned. F is in
-        /// block G→E (covered by deep_frag), so F is pruned.
+        /// `deep_frag` (E is its boundary), so D is also pruned. F is in
+        /// block G→E (covered by `deep_frag`), so F is pruned.
         #[test]
         fn different_depth_non_overlapping_both_survive() {
             let a = d2(1);
@@ -2757,7 +2757,7 @@ mod tests {
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             // Both fragments should survive (non-overlapping)
-            let frags: BTreeSet<_> = minimized.fragments().map(|f| f.head()).collect();
+            let frags: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
             assert_eq!(
                 frags.len(),
                 2,
@@ -2790,9 +2790,9 @@ mod tests {
         /// boundary subset). `shallow2` is independent — C and A are not
         /// in `deep_frag`'s range. After minimize:
         /// - `deep_frag` and `shallow2` survive; `shallow1` is pruned
-        /// - F and H are in block I→E, covered by deep_frag → pruned
-        /// - B is in block C→A or E→C, covered by shallow2 or deep_frag → pruned
-        /// - D is in block E→C, block E covered by deep_frag → pruned
+        /// - F and H are in block I→E, covered by `deep_frag` → pruned
+        /// - B is in block C→A or E→C, covered by `shallow2` or `deep_frag` → pruned
+        /// - D is in block E→C, block E covered by `deep_frag` → pruned
         #[test]
         fn three_levels_partial_domination() {
             let a = d2(1);
@@ -2827,7 +2827,7 @@ mod tests {
             );
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
-            let frag_heads: BTreeSet<_> = minimized.fragments().map(|f| f.head()).collect();
+            let frag_heads: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
 
             // deep_frag and shallow2 survive; shallow1 is dominated
             assert!(

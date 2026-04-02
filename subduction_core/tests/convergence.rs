@@ -17,7 +17,7 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::id::CommitId,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_core::{
     authenticated::Authenticated,
@@ -26,7 +26,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -510,7 +510,7 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
     assert_eq!(alice_commits.len(), 3);
 
     // Read back commit IDs
-    let mut commit_ids: Vec<CommitId> = alice_commits.iter().map(|c| c.head()).collect();
+    let mut commit_ids: Vec<CommitId> = alice_commits.iter().map(LooseCommit::head).collect();
     commit_ids.sort();
     let (d0, d1, d2) = (commit_ids[0], commit_ids[1], commit_ids[2]);
 

@@ -22,23 +22,23 @@ use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
-        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
+        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
-    fragment::{Fragment, FragmentSummary, id::FragmentId},
+    fragment::{id::FragmentId, Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -87,9 +87,11 @@ async fn make_test_commit(
 ) -> (Signed<LooseCommit>, Blob, LooseCommit) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
+    #[allow(clippy::indexing_slicing)]
     let head = CommitId::new({
         let mut bytes = [0u8; 32];
-        bytes[..data.len().min(32)].copy_from_slice(&data[..data.len().min(32)]);
+        let n = data.len().min(32);
+        bytes[..n].copy_from_slice(&data[..n]);
         bytes
     });
     let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta);

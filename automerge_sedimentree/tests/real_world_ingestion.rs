@@ -165,8 +165,11 @@ fn build_tree(bytes: &[u8], d: &FullDecomp) -> (Sedimentree, Vec<Fragment>, Vec<
         .map(|(i, (raw, parents))| {
             let head = CommitId::new({
                 let mut bytes = [0u8; 32];
-                bytes[0] = i as u8;
-                bytes[1] = (i >> 8) as u8;
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    bytes[0] = i as u8;
+                    bytes[1] = (i >> 8) as u8;
+                }
                 // Use raw bytes hash for uniqueness
                 let blob = Blob::new(raw.clone());
                 let digest = Digest::hash(&blob);

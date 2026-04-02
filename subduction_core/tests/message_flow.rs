@@ -14,12 +14,12 @@ use future_form::{Local, Sendable};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
+        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -30,6 +30,7 @@ use subduction_core::{
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
+#[allow(clippy::indexing_slicing)]
 async fn make_test_commit_with_data(
     id: &SedimentreeId,
     data: &[u8],
@@ -38,7 +39,8 @@ async fn make_test_commit_with_data(
     let blob_meta = BlobMeta::new(&blob);
     let head = CommitId::new({
         let mut bytes = [0u8; 32];
-        bytes[..data.len().min(32)].copy_from_slice(&data[..data.len().min(32)]);
+        let len = data.len().min(32);
+        bytes[..len].copy_from_slice(&data[..len]);
         bytes
     });
     let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta);

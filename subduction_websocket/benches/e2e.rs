@@ -36,11 +36,13 @@
 
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use criterion_pprof::criterion::{Output, PProfProfiler};
 use future_form::Sendable;
-use rand::{Rng, SeedableRng, rngs::StdRng};
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use sedimentree_core::{
+    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use subduction_core::{
     connection::message::SyncMessage,
     handler::sync::SyncHandler,
@@ -49,12 +51,12 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
+    tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn},
     DEFAULT_MAX_MESSAGE_SIZE,
-    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
@@ -62,6 +64,12 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 fn signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
+}
+
+fn commit_id_from_rng(rng: &mut StdRng) -> CommitId {
+    let mut bytes = [0u8; 32];
+    rng.fill(&mut bytes);
+    CommitId::new(bytes)
 }
 
 fn blob_from_seed(rng: &mut StdRng, size: usize) -> Blob {
@@ -289,9 +297,10 @@ fn bench_single_commit_sync(c: &mut Criterion) {
 
                     let sed_id = SedimentreeId::new([0u8; 32]);
                     let mut rng = StdRng::seed_from_u64(0);
+                    let head = commit_id_from_rng(&mut rng);
                     let blob = blob_from_seed(&mut rng, 64);
                     client
-                        .add_commit(sed_id, BTreeSet::new(), blob)
+                        .add_commit(sed_id, head, BTreeSet::new(), blob)
                         .await
                         .expect("add commit");
 
@@ -330,9 +339,10 @@ fn bench_batch_sync(c: &mut Criterion) {
                         let mut rng = StdRng::seed_from_u64(0);
 
                         for _ in 0..count {
+                            let head = commit_id_from_rng(&mut rng);
                             let blob = blob_from_seed(&mut rng, 64);
                             client
-                                .add_commit(sed_id, BTreeSet::new(), blob)
+                                .add_commit(sed_id, head, BTreeSet::new(), blob)
                                 .await
                                 .expect("add commit");
                         }
@@ -375,9 +385,10 @@ fn bench_large_blob_sync(c: &mut Criterion) {
 
                         let sed_id = SedimentreeId::new([0u8; 32]);
                         let mut rng = StdRng::seed_from_u64(0);
+                        let head = commit_id_from_rng(&mut rng);
                         let blob = blob_from_seed(&mut rng, size);
                         client
-                            .add_commit(sed_id, BTreeSet::new(), blob)
+                            .add_commit(sed_id, head, BTreeSet::new(), blob)
                             .await
                             .expect("add commit");
 
@@ -413,18 +424,20 @@ fn bench_bidirectional_sync(c: &mut Criterion) {
                     let mut rng = StdRng::seed_from_u64(0);
 
                     for _ in 0..5 {
+                        let head = commit_id_from_rng(&mut rng);
                         let blob = blob_from_seed(&mut rng, 64);
                         server
                             .subduction()
-                            .add_commit(sed_id, BTreeSet::new(), blob)
+                            .add_commit(sed_id, head, BTreeSet::new(), blob)
                             .await
                             .expect("server add commit");
                     }
 
                     for _ in 0..5 {
+                        let head = commit_id_from_rng(&mut rng);
                         let blob = blob_from_seed(&mut rng, 64);
                         client
-                            .add_commit(sed_id, BTreeSet::new(), blob)
+                            .add_commit(sed_id, head, BTreeSet::new(), blob)
                             .await
                             .expect("client add commit");
                     }
@@ -457,10 +470,11 @@ fn bench_incremental_sync(c: &mut Criterion) {
 
             // Pre-populate with 50 commits
             for _ in 0..50 {
+                let head = commit_id_from_rng(&mut rng);
                 let blob = blob_from_seed(&mut rng, 64);
                 server
                     .subduction()
-                    .add_commit(sed_id, BTreeSet::new(), blob)
+                    .add_commit(sed_id, head, BTreeSet::new(), blob)
                     .await
                     .expect("server add commit");
             }
@@ -479,9 +493,10 @@ fn bench_incremental_sync(c: &mut Criterion) {
                 let mut rng = StdRng::seed_from_u64(seed_counter);
                 seed_counter += 1;
 
+                let head = commit_id_from_rng(&mut rng);
                 let blob = blob_from_seed(&mut rng, 64);
                 client
-                    .add_commit(sed_id, BTreeSet::new(), blob)
+                    .add_commit(sed_id, head, BTreeSet::new(), blob)
                     .await
                     .expect("add commit");
 
@@ -521,9 +536,10 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                                 let client = connected_client(seed, server_peer_id, bound).await;
 
                                 let mut rng = StdRng::seed_from_u64(i);
+                                let head = commit_id_from_rng(&mut rng);
                                 let blob = blob_from_seed(&mut rng, 64);
                                 client
-                                    .add_commit(sed_id, BTreeSet::new(), blob)
+                                    .add_commit(sed_id, head, BTreeSet::new(), blob)
                                     .await
                                     .expect("add commit");
 
