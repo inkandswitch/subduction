@@ -9,6 +9,7 @@ use sedimentree_core::{
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
+use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
@@ -313,6 +314,61 @@ impl MemoryStorage {
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)
+        })
+    }
+
+    // ==================== Batch Operations ====================
+
+    /// Save commits and fragments in a single batch.
+    #[wasm_bindgen(js_name = saveBatchAll)]
+    pub fn save_batch_all(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        commits: js_sys::Array,
+        fragments: js_sys::Array,
+    ) -> Promise {
+        let inner = self.inner.clone();
+        let id: SedimentreeId = sedimentree_id.clone().into();
+        future_to_promise(async move {
+            Storage::<Local>::save_sedimentree_id(&inner, id)
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+            for item in commits.iter() {
+                let signed_val = js_sys::Reflect::get(&item, &JsValue::from_str("signedCommit"))
+                    .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
+                let signed = WasmSignedLooseCommit::try_from_js_value(signed_val)
+                    .map_err(|e| JsValue::from_str(&alloc::format!("conversion error: {e:?}")))?;
+                let blob_val = js_sys::Reflect::get(&item, &JsValue::from_str("blob"))
+                    .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
+                let blob = Blob::new(Uint8Array::new(&blob_val).to_vec());
+
+                let verified =
+                    VerifiedMeta::try_from_trusted(Signed::<LooseCommit>::from(signed), blob)
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                Storage::<Local>::save_loose_commit(&inner, id, verified)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            }
+
+            for item in fragments.iter() {
+                let signed_val = js_sys::Reflect::get(&item, &JsValue::from_str("signedFragment"))
+                    .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
+                let signed = WasmSignedFragment::try_from_js_value(signed_val)
+                    .map_err(|e| JsValue::from_str(&alloc::format!("conversion error: {e:?}")))?;
+                let blob_val = js_sys::Reflect::get(&item, &JsValue::from_str("blob"))
+                    .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
+                let blob = Blob::new(Uint8Array::new(&blob_val).to_vec());
+
+                let verified =
+                    VerifiedMeta::try_from_trusted(Signed::<Fragment>::from(signed), blob)
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                Storage::<Local>::save_fragment(&inner, id, verified)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            }
+
+            Ok(JsValue::from(commits.length() + fragments.length()))
         })
     }
 }
