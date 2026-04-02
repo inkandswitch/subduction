@@ -9,8 +9,7 @@ use sedimentree_core::{
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
-use wasm_bindgen::convert::TryFromJsValue;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::{
