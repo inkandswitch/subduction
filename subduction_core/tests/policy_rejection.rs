@@ -6,20 +6,20 @@ use core::{convert::Infallible, fmt, time::Duration};
 use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 
 use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use sedimentree_core::{
     blob::Blob,
-    crypto::{digest::Digest, fingerprint::FingerprintSeed},
+    crypto::fingerprint::FingerprintSeed,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, SyncMessage, SyncResult},
         test_utils::{
-            ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn, TokioSpawn,
-            test_signer,
+            test_signer, ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn,
+            TokioSpawn,
         },
     },
     peer::id::PeerId,
@@ -146,9 +146,9 @@ fn make_test_blob(data: &[u8]) -> Blob {
     Blob::new(data.to_vec())
 }
 
-fn make_commit_parts(data: &[u8]) -> (BTreeSet<Digest<LooseCommit>>, Blob) {
+fn make_commit_parts(data: &[u8]) -> (CommitId, BTreeSet<CommitId>, Blob) {
     let blob = make_test_blob(data);
-    (BTreeSet::new(), blob)
+    (CommitId::new([0xDD; 32]), BTreeSet::new(), blob)
 }
 
 /// Local operations (`add_sedimentree`, `add_commit`) bypass policy — the
@@ -188,10 +188,10 @@ async fn local_add_commit_bypasses_put_policy() {
             .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
-    let (parents, blob) = make_commit_parts(b"test data");
+    let (head, parents, blob) = make_commit_parts(b"test data");
 
     // Local operations succeed even with a rejecting put policy
-    let result = subduction.add_commit(id, parents, blob).await;
+    let result = subduction.add_commit(id, head, parents, blob).await;
     assert!(result.is_ok(), "Local add_commit should bypass policy");
 }
 
@@ -435,7 +435,12 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
     // Create a commit signed by the UNAUTHORIZED author.
     let blob = Blob::new(b"unauthorized data".to_vec());
     let blob_meta = sedimentree_core::blob::BlobMeta::new(&blob);
-    let commit = LooseCommit::new(sedimentree_id, BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(
+        sedimentree_id,
+        CommitId::new([0xBB; 32]),
+        BTreeSet::new(),
+        blob_meta,
+    );
     let verified =
         subduction_crypto::signed::Signed::seal::<Sendable, _>(&unauthorized_signer, commit).await;
     let signed_commit = verified.into_signed();
@@ -463,7 +468,12 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
     // Now send a commit signed by the ALLOWED author — should succeed.
     let allowed_blob = Blob::new(b"authorized data".to_vec());
     let allowed_blob_meta = sedimentree_core::blob::BlobMeta::new(&allowed_blob);
-    let allowed_commit = LooseCommit::new(sedimentree_id, BTreeSet::new(), allowed_blob_meta);
+    let allowed_commit = LooseCommit::new(
+        sedimentree_id,
+        CommitId::new([0xAA; 32]),
+        BTreeSet::new(),
+        allowed_blob_meta,
+    );
     let allowed_verified =
         subduction_crypto::signed::Signed::seal::<Sendable, _>(&allowed_signer, allowed_commit)
             .await;

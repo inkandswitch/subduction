@@ -11,10 +11,9 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
-    crypto::digest::Digest,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
     fragment::Fragment,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
@@ -22,13 +21,13 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct CommitDag {
     nodes: Vec<Node>,
-    node_map: Map<Digest<LooseCommit>, NodeIdx>,
+    node_map: Map<CommitId, NodeIdx>,
     edges: Vec<Edge>,
 }
 
 #[derive(Debug, Clone)]
 struct Node {
-    hash: Digest<LooseCommit>,
+    id: CommitId,
     parents: Option<EdgeIdx>,
     children: Option<EdgeIdx>,
 }
@@ -52,7 +51,7 @@ impl CommitDag {
         let nodes = commits
             .clone()
             .map(|c| Node {
-                hash: Digest::hash(c),
+                id: c.head(),
                 parents: None,
                 children: None,
             })
@@ -60,7 +59,7 @@ impl CommitDag {
         let node_map = nodes
             .iter()
             .enumerate()
-            .map(|(idx, node)| (node.hash, NodeIdx(idx)))
+            .map(|(idx, node)| (node.id, NodeIdx(idx)))
             .collect::<Map<_, _>>();
 
         let mut dag = CommitDag {
@@ -73,8 +72,8 @@ impl CommitDag {
             #[allow(clippy::expect_used)]
             let child_idx = *dag
                 .node_map
-                .get(&Digest::hash(commit))
-                .expect("commit digest not in node_map");
+                .get(&commit.head())
+                .expect("commit id not in node_map");
 
             for parent in commit.parents() {
                 if let Some(parent) = dag.node_map.get(parent) {
@@ -206,16 +205,13 @@ impl CommitDag {
         let mut tips = self.tips().collect::<Vec<_>>();
         tips.sort_by_key(|idx| {
             #[allow(clippy::expect_used)]
-            self.nodes
-                .get(idx.0)
-                .expect("NodeId not in self.nodes")
-                .hash
+            self.nodes.get(idx.0).expect("NodeId not in self.nodes").id
         });
 
         for tip in tips {
-            let mut block: Option<(Digest<LooseCommit>, Vec<Digest<LooseCommit>>)> = None;
-            for hash in self.reverse_topo(tip) {
-                let depth = strategy.to_depth(hash);
+            let mut block: Option<(CommitId, Vec<CommitId>)> = None;
+            for id in self.reverse_topo(tip) {
+                let depth = strategy.to_depth(id);
                 if depth >= MAX_STRATA_DEPTH {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
@@ -228,14 +224,14 @@ impl CommitDag {
                                 .push(block);
                         }
                     }
-                    block = Some((hash, vec![hash]));
+                    block = Some((id, vec![id]));
                 }
                 if let Some((_, commits)) = &mut block {
                     if depth < MAX_STRATA_DEPTH {
-                        commits.push(hash);
+                        commits.push(id);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && depth < MAX_STRATA_DEPTH {
-                    blockless_commits.insert(hash);
+                } else if !commits_to_blocks.contains_key(&id) && depth < MAX_STRATA_DEPTH {
+                    blockless_commits.insert(id);
                 }
             }
             // We never found a start hash for this block, so the start must be the root hash
@@ -272,7 +268,7 @@ impl CommitDag {
         let nodes = remaining_commits
             .iter()
             .map(|&c| Node {
-                hash: c,
+                id: c,
                 parents: None,
                 children: None,
             })
@@ -280,7 +276,7 @@ impl CommitDag {
         let node_map = nodes
             .iter()
             .enumerate()
-            .map(|(idx, node)| (node.hash, NodeIdx(idx)))
+            .map(|(idx, node)| (node.id, NodeIdx(idx)))
             .collect::<Map<_, _>>();
 
         let mut dag = CommitDag {
@@ -290,7 +286,7 @@ impl CommitDag {
         };
 
         for (child_idx, commit) in remaining_commits.into_iter().enumerate() {
-            for parent in self.parents_of_hash(commit) {
+            for parent in self.parents_of_id(commit) {
                 if let Some(parent) = dag.node_map.get(&parent) {
                     dag.add_edge(*parent, NodeIdx(child_idx));
                 }
@@ -310,40 +306,34 @@ impl CommitDag {
     }
 
     fn parents(&self, node: NodeIdx) -> impl Iterator<Item = NodeIdx> + '_ {
-        Parents::new(self, node)
+        ParentsIter::new(self, node)
     }
 
-    fn parents_of_hash(
-        &self,
-        hash: Digest<LooseCommit>,
-    ) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
+    fn parents_of_id(&self, id: CommitId) -> impl Iterator<Item = CommitId> + '_ {
         self.node_map
-            .get(&hash)
+            .get(&id)
             .map(|idx| {
                 self.parents(*idx).map(|i| {
                     #[allow(clippy::expect_used)]
-                    self.nodes
-                        .get(i.0)
-                        .expect("nodeId wasn't in self.nodes")
-                        .hash
+                    self.nodes.get(i.0).expect("nodeId wasn't in self.nodes").id
                 })
             })
             .into_iter()
             .flatten()
     }
 
-    fn reverse_topo(&self, start: NodeIdx) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
+    fn reverse_topo(&self, start: NodeIdx) -> impl Iterator<Item = CommitId> + '_ {
         ReverseTopo::new(self, start)
     }
 
-    pub(crate) fn contains_commit(&self, commit: &Digest<LooseCommit>) -> bool {
-        self.node_map.contains_key(commit)
+    pub(crate) fn contains_commit(&self, id: &CommitId) -> bool {
+        self.node_map.contains_key(id)
     }
 
-    pub(crate) fn heads(&self) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
+    pub(crate) fn heads(&self) -> impl Iterator<Item = CommitId> + '_ {
         self.nodes.iter().filter_map(|node| {
             if node.children.is_none() {
-                Some(node.hash)
+                Some(node.id)
             } else {
                 None
             }
@@ -351,8 +341,8 @@ impl CommitDag {
     }
 
     #[cfg(test)]
-    fn commit_hashes(&self) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
-        self.nodes.iter().map(|node| node.hash)
+    fn commit_ids(&self) -> impl Iterator<Item = CommitId> + '_ {
+        self.nodes.iter().map(|node| node.id)
     }
 }
 
@@ -374,7 +364,7 @@ impl<'a> ReverseTopo<'a> {
 }
 
 impl Iterator for ReverseTopo<'_> {
-    type Item = Digest<LooseCommit>;
+    type Item = CommitId;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.stack.pop() {
@@ -385,30 +375,30 @@ impl Iterator for ReverseTopo<'_> {
             let mut parents = self.dag.parents(node).collect::<Vec<_>>();
             parents.sort_by_key(|p| {
                 #[allow(clippy::expect_used)]
-                self.dag.nodes.get(p.0).expect("node is not in DAG").hash
+                self.dag.nodes.get(p.0).expect("node is not in DAG").id
             });
             self.stack.extend(parents);
-            return Some(self.dag.nodes.get(node.0)?.hash);
+            return Some(self.dag.nodes.get(node.0)?.id);
         }
         None
     }
 }
 
-struct Parents<'a> {
+struct ParentsIter<'a> {
     dag: &'a CommitDag,
     edge: Option<EdgeIdx>,
 }
 
-impl<'a> Parents<'a> {
+impl<'a> ParentsIter<'a> {
     fn new(dag: &'a CommitDag, node: NodeIdx) -> Self {
-        Parents {
+        ParentsIter {
             dag,
             edge: dag.nodes.get(node.0).and_then(|x| x.parents),
         }
     }
 }
 
-impl Iterator for Parents<'_> {
+impl Iterator for ParentsIter<'_> {
     type Item = NodeIdx;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -430,10 +420,9 @@ mod tests {
     use crate::{
         blob::{Blob, BlobMeta},
         collections::{Map, Set},
-        crypto::digest::Digest,
         depth::{Depth, DepthMetric},
         id::SedimentreeId,
-        loose_commit::LooseCommit,
+        loose_commit::{id::CommitId, LooseCommit},
     };
 
     fn make_sedimentree_id(seed: u8) -> SedimentreeId {
@@ -443,16 +432,21 @@ mod tests {
     fn make_commit(
         sedimentree_id: SedimentreeId,
         seed: u8,
-        parents: BTreeSet<Digest<LooseCommit>>,
+        parents: BTreeSet<CommitId>,
     ) -> LooseCommit {
         let blob = Blob::from(&[seed][..]);
         let blob_meta = BlobMeta::new(&blob);
-        LooseCommit::new(sedimentree_id, parents, blob_meta)
+        let head = CommitId::new({
+            let mut bytes = [0u8; 32];
+            bytes[0] = seed;
+            bytes
+        });
+        LooseCommit::new(sedimentree_id, head, parents, blob_meta)
     }
 
-    /// A mock depth metric that returns predetermined depths for specific digests.
+    /// A mock depth metric that returns predetermined depths for specific identifiers.
     struct MockDepthMetric {
-        depths: Map<Digest<LooseCommit>, Depth>,
+        depths: Map<CommitId, Depth>,
     }
 
     impl MockDepthMetric {
@@ -460,14 +454,14 @@ mod tests {
             Self { depths: Map::new() }
         }
 
-        fn set_depth(&mut self, digest: Digest<LooseCommit>, depth: Depth) {
-            self.depths.insert(digest, depth);
+        fn set_depth(&mut self, id: CommitId, depth: Depth) {
+            self.depths.insert(id, depth);
         }
     }
 
     impl DepthMetric for MockDepthMetric {
-        fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
-            self.depths.get(&digest).copied().unwrap_or(Depth(0))
+        fn to_depth(&self, id: CommitId) -> Depth {
+            self.depths.get(&id).copied().unwrap_or(Depth(0))
         }
     }
 
@@ -478,25 +472,25 @@ mod tests {
 
         // Create commits: b is root, a has b as parent
         let b = make_commit(sedimentree_id, 1, BTreeSet::new());
-        let b_hash = Digest::hash(&b);
-        let a = make_commit(sedimentree_id, 2, BTreeSet::from([b_hash]));
-        let a_hash = Digest::hash(&a);
+        let b_id = b.head();
+        let a = make_commit(sedimentree_id, 2, BTreeSet::from([b_id]));
+        let a_id = a.head();
 
         // Set up mock depths: a=2, b=0
         let mut depth_metric = MockDepthMetric::new();
-        depth_metric.set_depth(a_hash, Depth(2));
-        depth_metric.set_depth(b_hash, Depth(0));
+        depth_metric.set_depth(a_id, Depth(2));
+        depth_metric.set_depth(b_id, Depth(0));
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
         let simplified = dag
             .simplify(&[], &depth_metric)
-            .commit_hashes()
+            .commit_ids()
             .collect::<Set<_>>();
 
         // With no fragments, simplify keeps block boundaries + heads
         // Both a and b should remain (a is head, b would be pruned but there's no fragment)
-        assert_eq!(simplified, Set::from([a_hash, b_hash]));
+        assert_eq!(simplified, Set::from([a_id, b_id]));
     }
 
     /// Two consecutive block boundary commits (both depth >= threshold).
@@ -506,24 +500,24 @@ mod tests {
 
         // Create commits: b is root, a has b as parent
         let b = make_commit(sedimentree_id, 1, BTreeSet::new());
-        let b_hash = Digest::hash(&b);
-        let a = make_commit(sedimentree_id, 2, BTreeSet::from([b_hash]));
-        let a_hash = Digest::hash(&a);
+        let b_id = b.head();
+        let a = make_commit(sedimentree_id, 2, BTreeSet::from([b_id]));
+        let a_id = a.head();
 
         // Set up mock depths: a=2, b=2
         let mut depth_metric = MockDepthMetric::new();
-        depth_metric.set_depth(a_hash, Depth(2));
-        depth_metric.set_depth(b_hash, Depth(2));
+        depth_metric.set_depth(a_id, Depth(2));
+        depth_metric.set_depth(b_id, Depth(2));
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
         let simplified = dag
             .simplify(&[], &depth_metric)
-            .commit_hashes()
+            .commit_ids()
             .collect::<Set<_>>();
 
         // Both are block boundaries, both remain
-        assert_eq!(simplified, Set::from([a_hash, b_hash]));
+        assert_eq!(simplified, Set::from([a_id, b_id]));
     }
 
     #[test]
@@ -532,18 +526,18 @@ mod tests {
 
         // Create a DAG: a and b are roots, c has both as parents, d has c as parent
         let a = make_commit(sedimentree_id, 1, BTreeSet::new());
-        let a_hash = Digest::hash(&a);
+        let a_id = a.head();
         let b = make_commit(sedimentree_id, 2, BTreeSet::new());
-        let b_hash = Digest::hash(&b);
-        let c = make_commit(sedimentree_id, 3, BTreeSet::from([a_hash, b_hash]));
-        let c_hash = Digest::hash(&c);
-        let d = make_commit(sedimentree_id, 4, BTreeSet::from([c_hash]));
+        let b_id = b.head();
+        let c = make_commit(sedimentree_id, 3, BTreeSet::from([a_id, b_id]));
+        let c_id = c.head();
+        let d = make_commit(sedimentree_id, 4, BTreeSet::from([c_id]));
 
         let dag = CommitDag::from_commits([&a, &b, &c, &d].into_iter());
 
         assert_eq!(
-            dag.parents_of_hash(c_hash).collect::<Set<_>>(),
-            Set::from([a_hash, b_hash])
+            dag.parents_of_id(c_id).collect::<Set<_>>(),
+            Set::from([a_id, b_id])
         );
     }
 }

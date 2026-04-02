@@ -1,5 +1,9 @@
 //! Subduction-specific fragment types.
 
+use sedimentree_core::{
+    crypto::digest::Digest,
+    loose_commit::{id::CommitId, LooseCommit},
+};
 use sedimentree_wasm::{depth::WasmDepth, digest::WasmDigest};
 use subduction_core::subduction::request::FragmentRequested;
 use wasm_bindgen::prelude::*;
@@ -16,14 +20,16 @@ impl WasmFragmentRequested {
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new(digest: &WasmDigest, depth: &WasmDepth) -> Self {
-        FragmentRequested::new(digest.clone().into(), depth.clone().into()).into()
+        let commit_id = CommitId::new(Digest::<LooseCommit>::from(digest.clone()).into_bytes());
+        FragmentRequested::new(commit_id, depth.clone().into()).into()
     }
 
-    /// Get the digest of the requested fragment.
+    /// Get the head commit identifier of the requested fragment.
     #[must_use]
     #[wasm_bindgen(getter)]
     pub fn head(&self) -> WasmDigest {
-        (*self.0.head()).into()
+        let id = self.0.head();
+        WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*id.as_bytes()))
     }
 
     /// Get the depth of the requested fragment.

@@ -1,8 +1,8 @@
 //! Causal identity for fragments.
 
-use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
+use crate::loose_commit::id::CommitId;
 
-/// The causal identity of a fragment: its head commit digest.
+/// The causal identity of a fragment: its head commit identifier.
 ///
 /// Since the fragmentation algorithm is deterministic given a head commit
 /// and the depth metric, the head uniquely identifies the fragment's
@@ -15,18 +15,18 @@ use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 /// fingerprints (`Fingerprint<CommitId>`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FragmentId(Digest<LooseCommit>);
+pub struct FragmentId(CommitId);
 
 impl FragmentId {
-    /// Create a [`FragmentId`] from a fragment's head digest.
+    /// Create a [`FragmentId`] from a fragment's head commit identifier.
     #[must_use]
-    pub const fn new(head: Digest<LooseCommit>) -> Self {
+    pub const fn new(head: CommitId) -> Self {
         Self(head)
     }
 
-    /// The head digest.
+    /// The head commit identifier.
     #[must_use]
-    pub const fn head(&self) -> Digest<LooseCommit> {
+    pub const fn head(&self) -> CommitId {
         self.0
     }
 }
@@ -53,6 +53,6 @@ impl core::fmt::Display for FragmentId {
 #[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for FragmentId {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        Ok(Self(Digest::arbitrary(u)?))
+        Ok(Self(CommitId::arbitrary(u)?))
     }
 }

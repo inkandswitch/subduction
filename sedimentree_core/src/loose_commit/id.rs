@@ -1,31 +1,79 @@
 //! Causal identity for loose commits.
 
-use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
-
-/// The causal identity of a loose commit: its content digest.
+/// A user-supplied opaque identifier for a loose commit.
 ///
-/// For commits, the causal identity happens to be the content hash itself.
-/// This newtype exists for symmetry with [`FragmentId`](crate::fragment::id::FragmentId),
-/// where the causal identity (head + boundary range) is genuinely distinct
-/// from the content hash.
+/// Unlike [`Digest`](crate::crypto::digest::Digest), which is a content hash
+/// computed by the system, `CommitId` is provided by the caller at construction
+/// time. The user decides how commits are identified — typically the hash of
+/// the underlying document change (e.g., an Automerge `ChangeHash`).
 ///
-/// Two commits with the same [`CommitId`] are the same item for
-/// set reconciliation, regardless of parent or blob metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+/// Two commits with the same `CommitId` are the same item for
+/// set reconciliation, regardless of blob metadata.
+///
+/// This newtype exists in parallel with [`FragmentId`](crate::fragment::id::FragmentId)
+/// to keep fragment fingerprints (`Fingerprint<FragmentId>`) type-distinct from
+/// commit fingerprints (`Fingerprint<CommitId>`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CommitId(Digest<LooseCommit>);
+pub struct CommitId([u8; 32]);
 
 impl CommitId {
-    /// Create from a commit digest.
+    /// Create a [`CommitId`] from raw bytes.
     #[must_use]
-    pub const fn new(digest: Digest<LooseCommit>) -> Self {
-        Self(digest)
+    pub const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 
-    /// The underlying commit digest.
+    /// The raw bytes of this identifier.
     #[must_use]
-    pub const fn digest(&self) -> Digest<LooseCommit> {
-        self.0
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for CommitId {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self::new(bytes)
+    }
+}
+
+impl From<CommitId> for [u8; 32] {
+    fn from(id: CommitId) -> Self {
+        id.0
+    }
+}
+
+impl core::fmt::Debug for CommitId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "CommitId(")?;
+        for byte in &self.0[..4] {
+            write!(f, "{byte:02x}")?;
+        }
+        write!(f, "…)")
+    }
+}
+
+impl core::fmt::Display for CommitId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for CommitId {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let bytes: [u8; 32] = u.arbitrary()?;
+        Ok(Self(bytes))
+    }
+}
+
+#[cfg(feature = "bolero")]
+impl bolero::generator::TypeGenerator for CommitId {
+    fn generate<D: bolero::Driver>(driver: &mut D) -> Option<Self> {
+        let bytes: [u8; 32] = bolero::generator::TypeGenerator::generate(driver)?;
+        Some(Self(bytes))
     }
 }

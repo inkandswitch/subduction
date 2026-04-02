@@ -4,8 +4,11 @@ use alloc::string::ToString;
 use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
-    blob::Blob, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob,
+    crypto::digest::Digest,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
@@ -115,9 +118,9 @@ impl MemoryStorage {
     pub fn load_commit(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<LooseCommit> = digest.clone().into();
+        let commit_id: CommitId = digest.clone().into();
         future_to_promise(async move {
-            let result = Storage::<Local>::load_loose_commit(&inner, id, digest)
+            let result = Storage::<Local>::load_loose_commit(&inner, id, commit_id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
@@ -137,12 +140,12 @@ impl MemoryStorage {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         future_to_promise(async move {
-            let digests = Storage::<Local>::list_commit_digests(&inner, id)
+            let commit_ids = Storage::<Local>::list_commit_ids(&inner, id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
-            for d in digests {
-                result.push(&JsDigest::from(WasmDigest::from(d)));
+            for cid in commit_ids {
+                result.push(&JsDigest::from(WasmDigest::from(cid)));
             }
             Ok(result.into())
         })
@@ -176,9 +179,9 @@ impl MemoryStorage {
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<LooseCommit> = digest.clone().into();
+        let commit_id: CommitId = digest.clone().into();
         future_to_promise(async move {
-            Storage::<Local>::delete_loose_commit(&inner, id, digest)
+            Storage::<Local>::delete_loose_commit(&inner, id, commit_id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

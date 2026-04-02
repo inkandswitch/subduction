@@ -6,8 +6,11 @@ use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    collections::Set,
+    crypto::digest::Digest,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -52,15 +55,16 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     #[must_use]
     pub fn load_loose_commit(
         &self,
-        digest: Digest<LooseCommit>,
+        commit_id: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, S::Error>> {
-        self.storage.load_loose_commit(self.sedimentree_id, digest)
+        self.storage
+            .load_loose_commit(self.sedimentree_id, commit_id)
     }
 
-    /// List all commit digests for this sedimentree.
+    /// List all commit IDs for this sedimentree.
     #[must_use]
-    pub fn list_commit_digests(&self) -> K::Future<'_, Result<Set<Digest<LooseCommit>>, S::Error>> {
-        self.storage.list_commit_digests(self.sedimentree_id)
+    pub fn list_commit_ids(&self) -> K::Future<'_, Result<Set<CommitId>, S::Error>> {
+        self.storage.list_commit_ids(self.sedimentree_id)
     }
 
     /// Load all loose commits with their blobs for this sedimentree.

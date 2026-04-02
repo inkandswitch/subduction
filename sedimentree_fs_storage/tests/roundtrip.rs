@@ -10,11 +10,11 @@ use std::collections::BTreeSet;
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::{Blob, verified::VerifiedBlobMeta},
+    blob::{verified::VerifiedBlobMeta, Blob},
     crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::storage::traits::Storage;
@@ -36,22 +36,23 @@ async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
     let signer = test_signer();
     let id = make_sedimentree_id(0x01);
 
-    // Create a commit
+    let head = CommitId::new([0x42; 32]);
     let blob = Blob::new(vec![1, 2, 3, 4, 5]);
     let verified_blob = VerifiedBlobMeta::new(blob);
     let verified: VerifiedMeta<LooseCommit> =
-        VerifiedMeta::seal::<Sendable, _>(&signer, (id, BTreeSet::new()), verified_blob).await;
+        VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, BTreeSet::new()), verified_blob)
+            .await;
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
     let original_blob_bytes = verified.blob().contents().clone();
-    let digest = Digest::hash(verified.payload());
+    let commit_id = verified.payload().head();
 
     // Save
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
 
     // Reload
-    let loaded = Storage::<Sendable>::load_loose_commit(&storage, id, digest)
+    let loaded = Storage::<Sendable>::load_loose_commit(&storage, id, commit_id)
         .await?
         .expect("commit should exist after save");
 
@@ -70,6 +71,7 @@ async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
         loaded.payload(),
         &LooseCommit::new(
             id,
+            head,
             BTreeSet::new(),
             sedimentree_core::blob::BlobMeta::new(&Blob::new(vec![1, 2, 3, 4, 5])),
         ),
@@ -87,24 +89,26 @@ async fn save_load_loose_commit_with_parents_roundtrip() -> testresult::TestResu
     let signer = test_signer();
     let id = make_sedimentree_id(0x02);
 
+    let head = CommitId::new([0x50; 32]);
     let parents = BTreeSet::from([
-        Digest::<LooseCommit>::force_from_bytes([0x10; 32]),
-        Digest::<LooseCommit>::force_from_bytes([0x20; 32]),
-        Digest::<LooseCommit>::force_from_bytes([0x30; 32]),
+        CommitId::new([0x10; 32]),
+        CommitId::new([0x20; 32]),
+        CommitId::new([0x30; 32]),
     ]);
 
     let blob = Blob::new(vec![10; 128]);
     let verified_blob = VerifiedBlobMeta::new(blob);
     let verified: VerifiedMeta<LooseCommit> =
-        VerifiedMeta::seal::<Sendable, _>(&signer, (id, parents.clone()), verified_blob).await;
+        VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, parents.clone()), verified_blob)
+            .await;
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
-    let digest = Digest::hash(verified.payload());
+    let commit_id = verified.payload().head();
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
 
-    let loaded = Storage::<Sendable>::load_loose_commit(&storage, id, digest)
+    let loaded = Storage::<Sendable>::load_loose_commit(&storage, id, commit_id)
         .await?
         .expect("commit should exist after save");
 
@@ -130,9 +134,9 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
     let signer = test_signer();
     let id = make_sedimentree_id(0x03);
 
-    let head = Digest::<LooseCommit>::force_from_bytes([0x01; 32]);
-    let boundary = BTreeSet::from([Digest::<LooseCommit>::force_from_bytes([0x02; 32])]);
-    let checkpoints = vec![Digest::<LooseCommit>::force_from_bytes([0x03; 32])];
+    let head = CommitId::new([0x01; 32]);
+    let boundary = BTreeSet::from([CommitId::new([0x02; 32])]);
+    let checkpoints = vec![CommitId::new([0x03; 32])];
 
     let blob = Blob::new(vec![42; 256]);
     let verified_blob = VerifiedBlobMeta::new(blob);
@@ -169,9 +173,6 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
 }
 
 /// Verify that `Digest::hash` on a fragment matches the storage key.
-///
-/// Regression test: storage backends use `Digest::hash(&fragment)` (canonical
-/// wire encoding) as the key. Fragments must be loadable by this digest.
 #[tokio::test]
 async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
@@ -179,12 +180,9 @@ async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
     let signer = test_signer();
     let id = make_sedimentree_id(0x05);
 
-    let head = Digest::<LooseCommit>::force_from_bytes([0xAA; 32]);
-    let boundary = BTreeSet::from([
-        Digest::<LooseCommit>::force_from_bytes([0xBB; 32]),
-        Digest::<LooseCommit>::force_from_bytes([0xCC; 32]),
-    ]);
-    let checkpoints = vec![Digest::<LooseCommit>::force_from_bytes([0xDD; 32])];
+    let head = CommitId::new([0xAA; 32]);
+    let boundary = BTreeSet::from([CommitId::new([0xBB; 32]), CommitId::new([0xCC; 32])]);
+    let checkpoints = vec![CommitId::new([0xDD; 32])];
 
     let blob = Blob::new(vec![99; 100]);
     let verified_blob = VerifiedBlobMeta::new(blob);
@@ -197,11 +195,9 @@ async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
 
     let digest_from_hash = Digest::hash(verified.payload());
 
-    // Save using the storage backend (which uses Digest::hash internally)
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
 
-    // Load using Digest::hash — must find the fragment
     let loaded = Storage::<Sendable>::load_fragment(&storage, id, digest_from_hash)
         .await?
         .expect("fragment must be loadable by Digest::hash");
@@ -225,14 +221,20 @@ async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
 
-    let mut expected_digests = BTreeSet::new();
+    let mut expected_ids = BTreeSet::new();
 
     for i in 0..5u8 {
+        let head = CommitId::new({
+            let mut bytes = [0u8; 32];
+            bytes[0] = i;
+            bytes
+        });
         let blob = Blob::new(vec![i; 64]);
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<Sendable, _>(&signer, (id, BTreeSet::new()), verified_blob).await;
-        expected_digests.insert(Digest::hash(verified.payload()));
+            VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, BTreeSet::new()), verified_blob)
+                .await;
+        expected_ids.insert(verified.payload().head());
         if let Err(e) = Storage::<Sendable>::save_loose_commit(&storage, id, verified).await {
             eprintln!("save_loose_commit failed: {e:?}");
             return Err(e.into());
@@ -241,10 +243,10 @@ async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
 
     let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
 
-    let loaded_digests: BTreeSet<_> = loaded.iter().map(|v| Digest::hash(v.payload())).collect();
+    let loaded_ids: BTreeSet<_> = loaded.iter().map(|v| v.payload().head()).collect();
 
     assert_eq!(
-        loaded_digests, expected_digests,
+        loaded_ids, expected_ids,
         "all saved commits must be loadable"
     );
 

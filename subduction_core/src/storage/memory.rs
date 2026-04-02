@@ -3,7 +3,7 @@
 use alloc::{sync::Arc, vec::Vec};
 
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use sedimentree_core::{
     blob::Blob,
     codec::error::DecodeError,
@@ -11,7 +11,7 @@ use sedimentree_core::{
     crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use thiserror::Error;
@@ -26,8 +26,8 @@ use super::traits::Storage;
 #[allow(clippy::type_complexity)]
 pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
-    /// Commits stored as (Signed<LooseCommit>, Blob) pairs.
-    commits: Arc<Mutex<Map<SedimentreeId, Map<Digest<LooseCommit>, (Signed<LooseCommit>, Blob)>>>>,
+    /// Commits stored as (Signed<LooseCommit>, Blob) pairs, keyed by [`CommitId`].
+    commits: Arc<Mutex<Map<SedimentreeId, Map<CommitId, (Signed<LooseCommit>, Blob)>>>>,
     /// Fragments stored as (Signed<Fragment>, Blob) pairs.
     fragments: Arc<Mutex<Map<SedimentreeId, Map<Digest<Fragment>, (Signed<Fragment>, Blob)>>>>,
 }
@@ -93,8 +93,12 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         verified: VerifiedMeta<LooseCommit>,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            let digest = Digest::hash(verified.payload());
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
+            let commit_id = verified.payload().head();
+            tracing::debug!(
+                ?sedimentree_id,
+                ?commit_id,
+                "MemoryStorage::save_loose_commit"
+            );
 
             let (signed, _payload, blob) = verified.into_full_parts();
             self.commits
@@ -102,7 +106,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 .await
                 .entry(sedimentree_id)
                 .or_default()
-                .insert(digest, (signed, blob));
+                .insert(commit_id, (signed, blob));
             Ok(())
         })
     }
@@ -110,26 +114,30 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<LooseCommit>,
+        commit_id: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::load_loose_commit");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?commit_id,
+                "MemoryStorage::load_loose_commit"
+            );
             let locked = self.commits.lock().await;
             locked
                 .get(&sedimentree_id)
-                .and_then(|map| map.get(&digest))
+                .and_then(|map| map.get(&commit_id))
                 .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed.clone(), blob.clone()))
                 .transpose()
                 .map_err(MemoryStorageError::from)
         })
     }
 
-    fn list_commit_digests(
+    fn list_commit_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<Digest<LooseCommit>>, Self::Error>> {
+    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::list_commit_digests");
+            tracing::debug!(?sedimentree_id, "MemoryStorage::list_commit_ids");
             let locked = self.commits.lock().await;
             Ok(locked
                 .get(&sedimentree_id)
@@ -163,16 +171,16 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<LooseCommit>,
+        commit_id: CommitId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
-                ?digest,
+                ?commit_id,
                 "MemoryStorage::delete_loose_commit"
             );
             if let Some(map) = self.commits.lock().await.get_mut(&sedimentree_id) {
-                map.remove(&digest);
+                map.remove(&commit_id);
             }
             Ok(())
         })
@@ -310,14 +318,14 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             self.ids.lock().await.insert(sedimentree_id);
 
             for verified in commits {
-                let digest = Digest::hash(verified.payload());
+                let commit_id = verified.payload().head();
                 let (signed, _payload, blob) = verified.into_full_parts();
                 self.commits
                     .lock()
                     .await
                     .entry(sedimentree_id)
                     .or_default()
-                    .insert(digest, (signed, blob));
+                    .insert(commit_id, (signed, blob));
             }
 
             for verified in fragments {

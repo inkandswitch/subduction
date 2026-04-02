@@ -103,6 +103,20 @@ impl<T> From<WasmDigest> for Digest<T> {
     }
 }
 
+/// Convert from `CommitId` to `WasmDigest`.
+impl From<sedimentree_core::loose_commit::id::CommitId> for WasmDigest {
+    fn from(id: sedimentree_core::loose_commit::id::CommitId) -> Self {
+        Self(*id.as_bytes())
+    }
+}
+
+/// Convert from `WasmDigest` to `CommitId`.
+impl From<WasmDigest> for sedimentree_core::loose_commit::id::CommitId {
+    fn from(digest: WasmDigest) -> Self {
+        sedimentree_core::loose_commit::id::CommitId::new(digest.0)
+    }
+}
+
 /// An error indicating an invalid [`Digest`].
 #[derive(Debug, Error)]
 pub enum WasmInvalidDigest {

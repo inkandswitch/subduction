@@ -22,10 +22,10 @@ use std::collections::BTreeSet;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    crypto::{digest::Digest, fingerprint::FingerprintSeed},
-    fragment::{Fragment, checkpoint::Checkpoint},
+    crypto::fingerprint::FingerprintSeed,
+    fragment::{checkpoint::Checkpoint, Fragment},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::Sedimentree,
 };
 use subduction_core::connection::test_utils::new_test_subduction;
@@ -48,24 +48,24 @@ fn make_fragment(
     checkpoint_bytes: &[u8],
     blob_seed: u8,
 ) -> (Fragment, Blob) {
-    let head = Digest::force_from_bytes({
+    let head = CommitId::new({
         let mut h = [head_byte; 32];
         // Ensure head has depth > 0 (first byte == 0x00 for depth 1)
         h[0] = 0x00;
         h
     });
-    let boundary: BTreeSet<Digest<LooseCommit>> = boundary_bytes
+    let boundary: BTreeSet<CommitId> = boundary_bytes
         .iter()
         .map(|b| {
             let mut arr = [*b; 32];
             arr[0] = 0x00;
             arr[1] = 0x00; // depth 2 for boundary
-            Digest::force_from_bytes(arr)
+            CommitId::new(arr)
         })
         .collect();
     let checkpoints: BTreeSet<Checkpoint> = checkpoint_bytes
         .iter()
-        .map(|b| Checkpoint::new(Digest::force_from_bytes([*b; 32])))
+        .map(|b| Checkpoint::new(CommitId::new([*b; 32])))
         .collect();
     let blob = make_blob(blob_seed);
     let fragment = Fragment::from_parts(sed_id, head, boundary, checkpoints, BlobMeta::new(&blob));
@@ -75,12 +75,17 @@ fn make_fragment(
 /// Create a loose commit with the given parents.
 fn make_loose_commit(
     sed_id: SedimentreeId,
-    parents: &[Digest<LooseCommit>],
+    parents: &[CommitId],
     blob_seed: u8,
 ) -> (LooseCommit, Blob) {
-    let parent_set: BTreeSet<Digest<LooseCommit>> = parents.iter().copied().collect();
+    let parent_set: BTreeSet<CommitId> = parents.iter().copied().collect();
     let blob = make_blob(blob_seed);
-    let commit = LooseCommit::new(sed_id, parent_set, BlobMeta::new(&blob));
+    let commit = LooseCommit::new(
+        sed_id,
+        CommitId::new([blob_seed; 32]),
+        parent_set,
+        BlobMeta::new(&blob),
+    );
     (commit, blob)
 }
 
@@ -101,8 +106,8 @@ async fn add_sedimentree_stores_all_items() -> TestResult {
     let (c1, c1_blob) = make_loose_commit(sed_id, &[frag1_head], 10);
     let (c2, c2_blob) = make_loose_commit(sed_id, &[frag1_head], 11);
     let (c3, c3_blob) = make_loose_commit(sed_id, &[frag2_head], 12);
-    let (c4, c4_blob) = make_loose_commit(sed_id, &[Digest::hash(&c1)], 13);
-    let (c5, c5_blob) = make_loose_commit(sed_id, &[Digest::hash(&c2), Digest::hash(&c3)], 14);
+    let (c4, c4_blob) = make_loose_commit(sed_id, &[c1.head()], 13);
+    let (c5, c5_blob) = make_loose_commit(sed_id, &[c2.head(), c3.head()], 14);
 
     let fragments = vec![frag1.clone(), frag2.clone()];
     let commits = vec![c1.clone(), c2.clone(), c3.clone(), c4.clone(), c5.clone()];
@@ -149,7 +154,7 @@ async fn add_sedimentree_survives_minimize() -> TestResult {
     // Loose commits whose parents point to fragment HEAD (not interior members)
     let (c1, c1_blob) = make_loose_commit(sed_id, &[frag1_head], 10);
     let (c2, c2_blob) = make_loose_commit(sed_id, &[frag1_head], 11);
-    let (c3, c3_blob) = make_loose_commit(sed_id, &[Digest::hash(&c1), Digest::hash(&c2)], 12);
+    let (c3, c3_blob) = make_loose_commit(sed_id, &[c1.head(), c2.head()], 12);
 
     let sedimentree = Sedimentree::new(vec![frag1.clone()], vec![c1, c2, c3]);
     let blobs = vec![frag1_blob, c1_blob, c2_blob, c3_blob];
@@ -176,7 +181,7 @@ fn minimize_keeps_loose_commits_with_interior_parents() {
     let sed_id = make_sed_id(0x30);
 
     // Fragment with interior member at [0x50; 32]
-    let interior_member = Digest::<LooseCommit>::force_from_bytes([0x50; 32]);
+    let interior_member = CommitId::new([0x50; 32]);
 
     let (frag1, _frag1_blob) = make_fragment(sed_id, 0x01, &[0xA0], &[0x50], 1);
 

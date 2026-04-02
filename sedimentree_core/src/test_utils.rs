@@ -1,7 +1,7 @@
 //! Test utilities for sedimentree testing.
 //!
 //! This module provides shared helpers for constructing test fixtures,
-//! including digests with specific depths, fragments, and commit DAGs.
+//! including identifiers with specific depths, fragments, and commit DAGs.
 //!
 //! Enable with the `test_utils` feature flag.
 
@@ -23,17 +23,17 @@ use crate::{
     blob::{Blob, BlobMeta},
     collections::{Map, Set},
     commit::CommitStore,
-    crypto::digest::Digest,
+
     depth::{Depth, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,
 };
 
-/// Create a digest with a specific number of leading zero bytes.
+/// Create a [`CommitId`] with a specific number of leading zero bytes.
 ///
-/// The `seed` parameter ensures different digests with the same depth
+/// The `seed` parameter ensures different identifiers with the same depth
 /// produce different values.
 ///
 /// # Example
@@ -41,13 +41,13 @@ use crate::{
 /// ```
 /// use sedimentree_core::test_utils::digest_with_depth;
 ///
-/// // Create a depth-2 digest (2 leading zero bytes)
+/// // Create a depth-2 identifier (2 leading zero bytes)
 /// let d1 = digest_with_depth(2, 1);
 /// let d2 = digest_with_depth(2, 2);
-/// assert_ne!(d1, d2); // Different seeds produce different digests
+/// assert_ne!(d1, d2); // Different seeds produce different identifiers
 /// ```
 #[must_use]
-pub fn digest_with_depth(leading_zeros: u8, seed: u8) -> Digest<LooseCommit> {
+pub fn digest_with_depth(leading_zeros: u8, seed: u8) -> CommitId {
     let mut bytes = [0u8; 32];
     // Set leading zeros (bytes already initialized to 0, but explicit for clarity)
     for slot in bytes.iter_mut().take(leading_zeros as usize) {
@@ -61,15 +61,15 @@ pub fn digest_with_depth(leading_zeros: u8, seed: u8) -> Digest<LooseCommit> {
     if let Some(slot) = bytes.get_mut(leading_zeros as usize + 1) {
         *slot = seed;
     }
-    Digest::force_from_bytes(bytes)
+    CommitId::new(bytes)
 }
 
-/// Create a digest with leading zeros using an RNG for randomness.
+/// Create a [`CommitId`] with leading zeros using an RNG for randomness.
 ///
 /// Unlike [`digest_with_depth`], this uses an RNG for the non-zero bytes,
 /// providing more randomness for property-based testing.
 #[must_use]
-pub fn random_digest_with_depth<R: Rng>(rng: &mut R, leading_zeros: u32) -> Digest<LooseCommit> {
+pub fn random_digest_with_depth<R: Rng>(rng: &mut R, leading_zeros: u32) -> CommitId {
     let mut bytes: [u8; 32] = rng.r#gen();
     for slot in bytes.iter_mut().take(leading_zeros as usize) {
         *slot = 0;
@@ -80,15 +80,15 @@ pub fn random_digest_with_depth<R: Rng>(rng: &mut R, leading_zeros: u32) -> Dige
     {
         *slot = 1;
     }
-    Digest::force_from_bytes(bytes)
+    CommitId::new(bytes)
 }
 
-/// Create a random commit digest.
+/// Create a random [`CommitId`].
 #[must_use]
-pub fn random_commit_digest<R: Rng>(rng: &mut R) -> Digest<LooseCommit> {
+pub fn random_commit_id<R: Rng>(rng: &mut R) -> CommitId {
     let mut bytes = [0u8; 32];
     rng.fill_bytes(&mut bytes);
-    Digest::force_from_bytes(bytes)
+    CommitId::new(bytes)
 }
 
 /// Create a random [`BlobMeta`].
@@ -105,8 +105,8 @@ pub fn random_blob_meta<R: Rng>(rng: &mut R) -> BlobMeta {
 pub fn make_fragment_at_depth(
     depth: u8,
     seed: u8,
-    boundary: BTreeSet<Digest<LooseCommit>>,
-    checkpoints: &[Digest<LooseCommit>],
+    boundary: BTreeSet<CommitId>,
+    checkpoints: &[CommitId],
 ) -> Fragment {
     let sedimentree_id = SedimentreeId::new([seed; 32]);
     let head = digest_with_depth(depth, seed);
@@ -122,13 +122,13 @@ pub fn make_simple_fragment(head_depth: u8, head_seed: u8, boundary_seed: u8) ->
     make_fragment_at_depth(head_depth, head_seed, BTreeSet::from([boundary]), &[])
 }
 
-/// A mock depth metric that returns predetermined depths for specific digests.
+/// A mock depth metric that returns predetermined depths for specific identifiers.
 ///
 /// This allows tests to control which commits are "deep" (fragment-worthy)
 /// without relying on hash patterns.
 #[derive(Debug, Clone, Default)]
 pub struct MockDepthMetric {
-    depths: Map<Digest<LooseCommit>, Depth>,
+    depths: Map<CommitId, Depth>,
 }
 
 impl MockDepthMetric {
@@ -138,15 +138,15 @@ impl MockDepthMetric {
         Self { depths: Map::new() }
     }
 
-    /// Set the depth for a specific digest.
-    pub fn set_depth(&mut self, digest: Digest<LooseCommit>, depth: Depth) {
-        self.depths.insert(digest, depth);
+    /// Set the depth for a specific identifier.
+    pub fn set_depth(&mut self, id: CommitId, depth: Depth) {
+        self.depths.insert(id, depth);
     }
 }
 
 impl DepthMetric for MockDepthMetric {
-    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
-        self.depths.get(&digest).copied().unwrap_or(Depth(0))
+    fn to_depth(&self, id: CommitId) -> Depth {
+        self.depths.get(&id).copied().unwrap_or(Depth(0))
     }
 }
 
@@ -160,8 +160,8 @@ pub struct TestGraph {
     sedimentree_id: SedimentreeId,
     /// Map from node name to the actual commit
     commits: Map<String, LooseCommit>,
-    /// Cached digests for fast lookup
-    digests: Map<String, Digest<LooseCommit>>,
+    /// Cached identifiers for fast lookup
+    ids: Map<String, CommitId>,
     /// Mock depth metric with predetermined depths
     depth_metric: MockDepthMetric,
 }
@@ -212,31 +212,27 @@ impl TestGraph {
 
         // Create commits in topological order (nodes with no parents first)
         // For simplicity, we'll create all commits with empty parents first,
-        // then update with actual parent digests
+        // then update with actual parent identifiers
         let mut commits: Map<String, LooseCommit> = Map::new();
-        let mut digests: Map<String, Digest<LooseCommit>> = Map::new();
+        let mut ids: Map<String, CommitId> = Map::new();
         let mut depth_metric = MockDepthMetric::new();
 
-        // First pass: create placeholder digests by creating commits without parents
-        // We need to do this because parent digests depend on the commits themselves
+        // First pass: generate unique CommitIds for each node
         for (name, _depth) in node_info {
-            let blob = Blob::new(rng.r#gen::<[u8; 16]>().into());
-            let blob_meta = BlobMeta::new(&blob);
-            let commit = LooseCommit::new(sedimentree_id, BTreeSet::new(), blob_meta);
-            let digest = Digest::hash(&commit);
-            commits.insert((*name).to_string(), commit);
-            digests.insert((*name).to_string(), digest);
+            let id_bytes: [u8; 32] = rng.r#gen();
+            let commit_id = CommitId::new(id_bytes);
+            ids.insert((*name).to_string(), commit_id);
         }
 
-        // Second pass: recreate commits with correct parents
+        // Second pass: create commits with correct parents and heads
         for (name, depth) in node_info {
             let parent_names = parents_by_name.get(*name);
-            let parents: BTreeSet<Digest<LooseCommit>> = parent_names
+            let parents: BTreeSet<CommitId> = parent_names
                 .map(|names| {
                     names
                         .iter()
                         .map(|n| {
-                            *digests
+                            *ids
                                 .get(n)
                                 .unwrap_or_else(|| panic!("Parent node not found: {n}"))
                         })
@@ -246,20 +242,19 @@ impl TestGraph {
 
             let blob = Blob::new(rng.r#gen::<[u8; 16]>().into());
             let blob_meta = BlobMeta::new(&blob);
-            let commit = LooseCommit::new(sedimentree_id, parents, blob_meta);
-            let digest = Digest::hash(&commit);
+            let commit_id = *ids.get(*name).expect("id should exist");
+            let commit = LooseCommit::new(sedimentree_id, commit_id, parents, blob_meta);
 
             commits.insert((*name).to_string(), commit);
-            digests.insert((*name).to_string(), digest);
 
             #[allow(clippy::cast_possible_truncation)]
-            depth_metric.set_depth(digest, Depth(*depth as u32));
+            depth_metric.set_depth(commit_id, Depth(*depth as u32));
         }
 
         Self {
             sedimentree_id,
             commits,
-            digests,
+            ids,
             depth_metric,
         }
     }
@@ -270,16 +265,16 @@ impl TestGraph {
         self.commits.values().cloned().collect()
     }
 
-    /// Get the digest for a named node.
+    /// Get the [`CommitId`] for a named node.
     ///
     /// # Panics
     ///
     /// Panics if the node name doesn't exist.
     #[must_use]
     #[allow(clippy::panic)]
-    pub fn node_hash(&self, node: &str) -> Digest<LooseCommit> {
+    pub fn node_hash(&self, node: &str) -> CommitId {
         *self
-            .digests
+            .ids
             .get(node)
             .unwrap_or_else(|| panic!("Node not found: {node}"))
     }
@@ -316,13 +311,13 @@ impl TestGraph {
         Sedimentree::new(fragments, self.commits())
     }
 
-    /// Look up a commit's parent set by digest.
+    /// Look up a commit's parent set by identifier.
     ///
-    /// Returns `None` if the digest is not in the graph.
+    /// Returns `None` if the identifier is not in the graph.
     #[must_use]
-    pub fn lookup_parents(&self, digest: Digest<LooseCommit>) -> Option<Set<Digest<LooseCommit>>> {
+    pub fn lookup_parents(&self, id: CommitId) -> Option<Set<CommitId>> {
         self.commits.values().find_map(|c| {
-            if Digest::hash(c) == digest {
+            if c.head() == id {
                 Some(c.parents().iter().copied().collect())
             } else {
                 None
@@ -357,11 +352,11 @@ impl TestGraph {
 }
 
 impl CommitStore<'_> for TestGraph {
-    type Node = Set<Digest<LooseCommit>>;
+    type Node = Set<CommitId>;
     type LookupError = Infallible;
 
-    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
-        Ok(self.lookup_parents(digest))
+    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
+        Ok(self.lookup_parents(id))
     }
 }
 
@@ -394,13 +389,13 @@ impl<'a> arbitrary::Arbitrary<'a> for ArbitraryDag {
         let n_loose: usize = u.int_in_range(0..=5)?;
 
         let mut fragments = Vec::with_capacity(n_frags);
-        let mut heads: Vec<Digest<LooseCommit>> = Vec::with_capacity(n_frags);
+        let mut heads: Vec<CommitId> = Vec::with_capacity(n_frags);
 
         // Use a single RNG seeded once, so each head is unique by construction.
         let mut rng = SmallRng::seed_from_u64(u.arbitrary()?);
 
         for _ in 0..n_frags {
-            let head = random_commit_digest(&mut rng);
+            let head = random_commit_id(&mut rng);
             let mut boundary = BTreeSet::new();
 
             // Each fragment references 0..=2 previous fragment heads
@@ -432,7 +427,8 @@ impl<'a> arbitrary::Arbitrary<'a> for ArbitraryDag {
                 parents.insert(heads[idx]);
             }
             let blob_meta = BlobMeta::arbitrary(u)?;
-            commits.push(LooseCommit::new(sid, parents, blob_meta));
+            let commit_id = random_commit_id(&mut rng);
+            commits.push(LooseCommit::new(sid, commit_id, parents, blob_meta));
         }
 
         Ok(ArbitraryDag {
@@ -470,7 +466,7 @@ impl<'a> arbitrary::Arbitrary<'a> for CyclicGraph {
         let mut rng = SmallRng::seed_from_u64(u.arbitrary()?);
 
         for _ in 0..n_frags {
-            let head = random_commit_digest(&mut rng);
+            let head = random_commit_id(&mut rng);
             let mut boundary = BTreeSet::new();
             // Reference the previous fragment's head (linear chain)
             if let Some(&prev) = heads.last() {
@@ -546,10 +542,10 @@ mod tests {
         assert_eq!(commits.len(), 4);
 
         // Find commit d and verify it has two parents
-        let d_hash = graph.node_hash("d");
+        let d_id = graph.node_hash("d");
         let d_commit = commits
             .iter()
-            .find(|c| Digest::hash(*c) == d_hash)
+            .find(|c| c.head() == d_id)
             .ok_or("commit d not found")?;
         assert_eq!(d_commit.parents().len(), 2);
 

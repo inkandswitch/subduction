@@ -4,46 +4,52 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use sedimentree_core::collections::{Map, Set};
 
-use sedimentree_core::{commit::FragmentState, crypto::digest::Digest, loose_commit::LooseCommit};
+use sedimentree_core::{
+    commit::FragmentState,
+    crypto::digest::Digest,
+    loose_commit::{id::CommitId, LooseCommit},
+};
 use sedimentree_wasm::{
     digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmBlobMeta,
     sedimentree_id::WasmSedimentreeId,
 };
 use wasm_bindgen::prelude::*;
 
+use crate::WasmParents;
+
 /// The state of a fragment while being built.
 #[derive(Debug, Clone)]
 #[wasm_bindgen(js_name = FragmentState)]
-pub struct WasmFragmentState(pub(crate) FragmentState<Set<Digest<LooseCommit>>>);
+pub struct WasmFragmentState(pub(crate) FragmentState<WasmParents>);
 
 #[wasm_bindgen(js_class = FragmentState)]
 impl WasmFragmentState {
     /// The "newest" element of the fragment.
     ///
-    /// This digest provides a stable point from which
+    /// This identifier provides a stable point from which
     /// the rest of the fragment is built.
     #[must_use]
-    pub fn head_digest(&self) -> WasmDigest {
-        self.0.head_digest().into()
+    pub fn head_id(&self) -> WasmDigest {
+        let id = self.0.head_id();
+        WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*id.as_bytes()))
     }
 
     /// All members of the fragment.
     ///
-    /// This includes all history between the `head_digest`
+    /// This includes all history between the `head_id`
     /// and the `boundary` (not including the boundary elements).
     #[must_use]
     pub fn members(&self) -> Vec<WasmDigest> {
         self.0
             .members()
             .iter()
-            .copied()
-            .map(WasmDigest::from)
+            .map(|id| WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*id.as_bytes())))
             .collect()
     }
 
     /// The checkpoints of the fragment.
     ///
-    /// These are all of the [`Digest`]s that match a valid level
+    /// These are all of the identifiers that match a valid level
     /// below the target, so that it is possible to know which other fragments
     /// this one covers.
     #[must_use]
@@ -51,8 +57,7 @@ impl WasmFragmentState {
         self.0
             .checkpoints()
             .iter()
-            .copied()
-            .map(WasmDigest::from)
+            .map(|id| WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*id.as_bytes())))
             .collect()
     }
 
@@ -63,8 +68,13 @@ impl WasmFragmentState {
 
         let mut map = Map::new();
         for (key, value) in boundary {
-            let wasm_key: WasmDigest = (*key).into();
-            let wasm_value: Set<WasmDigest> = value.iter().copied().map(WasmDigest::from).collect();
+            let wasm_key =
+                WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*key.as_bytes()));
+            let wasm_value: Set<WasmDigest> = value
+                .0
+                .iter()
+                .map(|id| WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*id.as_bytes())))
+                .collect();
             map.insert(wasm_key, wasm_value);
         }
         WasmBoundary(map)
@@ -85,8 +95,8 @@ impl WasmFragmentState {
     }
 }
 
-impl From<FragmentState<Set<Digest<LooseCommit>>>> for WasmFragmentState {
-    fn from(state: FragmentState<Set<Digest<LooseCommit>>>) -> Self {
+impl From<FragmentState<WasmParents>> for WasmFragmentState {
+    fn from(state: FragmentState<WasmParents>) -> Self {
         WasmFragmentState(state)
     }
 }
@@ -125,8 +135,7 @@ impl From<Map<WasmDigest, Set<WasmDigest>>> for WasmBoundary {
 #[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
 pub struct WasmFragmentStateStore(
-    #[allow(clippy::type_complexity)]
-    pub(crate)  RefCell<Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>>,
+    #[allow(clippy::type_complexity)] pub(crate) RefCell<Map<CommitId, FragmentState<WasmParents>>>,
 );
 
 #[wasm_bindgen(js_class = FragmentStateStore)]
@@ -140,25 +149,19 @@ impl WasmFragmentStateStore {
 
     /// Insert a fragment state into the store.
     pub fn insert(&self, digest: &WasmDigest, state: &WasmFragmentState) {
-        self.0
-            .borrow_mut()
-            .insert(digest.clone().into(), state.0.clone());
+        let id = CommitId::new(Digest::<LooseCommit>::from(digest.clone()).into_bytes());
+        self.0.borrow_mut().insert(id, state.0.clone());
     }
 
     /// Get a fragment state from the store.
     pub fn get(&self, digest: &WasmDigest) -> Option<WasmFragmentState> {
-        self.0
-            .borrow()
-            .get(&digest.clone().into())
-            .cloned()
-            .map(WasmFragmentState)
+        let id = CommitId::new(Digest::<LooseCommit>::from(digest.clone()).into_bytes());
+        self.0.borrow().get(&id).cloned().map(WasmFragmentState)
     }
 }
 
 #[allow(clippy::implicit_hasher)]
-impl From<WasmFragmentStateStore>
-    for Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>
-{
+impl From<WasmFragmentStateStore> for Map<CommitId, FragmentState<WasmParents>> {
     fn from(store: WasmFragmentStateStore) -> Self {
         store.0.into_inner()
     }

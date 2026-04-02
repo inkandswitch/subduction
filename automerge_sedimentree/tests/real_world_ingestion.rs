@@ -14,7 +14,7 @@
     clippy::unwrap_used
 )]
 
-use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
+use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -23,7 +23,7 @@ use sedimentree_core::{
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::{Sedimentree, SedimentreeItem},
 };
 
@@ -31,8 +31,8 @@ use sedimentree_core::{
 /// Does NOT extract raw bytes — just builds the fragment index.
 struct MetadataDecomp {
     change_count: usize,
-    heads: Vec<Digest<LooseCommit>>,
-    covered: Set<Digest<LooseCommit>>,
+    heads: Vec<CommitId>,
+    covered: Set<CommitId>,
     uncovered_count: usize,
     fragment_count: usize,
 }
@@ -40,25 +40,18 @@ struct MetadataDecomp {
 fn decompose_meta(doc: &Automerge) -> MetadataDecomp {
     let metadata = doc.get_changes_meta(&[]);
     let change_count = metadata.len();
-    let all_digests: Set<Digest<LooseCommit>> = metadata
-        .iter()
-        .map(|m| Digest::force_from_bytes(m.hash.0))
-        .collect();
+    let all_digests: Set<CommitId> = metadata.iter().map(|m| CommitId::new(m.hash.0)).collect();
 
     let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
-    let heads: Vec<Digest<LooseCommit>> = doc
-        .get_heads()
-        .iter()
-        .map(|h| Digest::force_from_bytes(h.0))
-        .collect();
-    let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
+    let heads: Vec<CommitId> = doc.get_heads().iter().map(|h| CommitId::new(h.0)).collect();
+    let mut known: Map<CommitId, FragmentState<OwnedParents>> = Map::new();
 
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
         .expect("build_fragment_store");
     let fragment_count = fresh.len();
 
-    let covered: Set<Digest<LooseCommit>> = known
+    let covered: Set<CommitId> = known
         .values()
         .flat_map(|s| s.members().iter().copied())
         .collect();
@@ -82,7 +75,7 @@ struct FullDecomp {
     fragment_blobs: Vec<Vec<u8>>,
     /// Raw change bytes per loose commit.
     uncovered_blobs: Vec<Vec<u8>>,
-    uncovered_parents: Vec<std::collections::BTreeSet<Digest<LooseCommit>>>,
+    uncovered_parents: Vec<std::collections::BTreeSet<CommitId>>,
     fragment_state_blobs: Vec<(FragmentState<OwnedParents>, Blob)>,
 }
 
@@ -91,19 +84,15 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
     let change_count = metadata.len();
 
     let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
-    let heads: Vec<Digest<LooseCommit>> = doc
-        .get_heads()
-        .iter()
-        .map(|h| Digest::force_from_bytes(h.0))
-        .collect();
-    let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
+    let heads: Vec<CommitId> = doc.get_heads().iter().map(|h| CommitId::new(h.0)).collect();
+    let mut known: Map<CommitId, FragmentState<OwnedParents>> = Map::new();
 
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
         .expect("build_fragment_store");
     let states: Vec<_> = fresh.into_iter().cloned().collect();
 
-    let covered: Set<Digest<LooseCommit>> = known
+    let covered: Set<CommitId> = known
         .values()
         .flat_map(|s| s.members().iter().copied())
         .collect();
@@ -137,18 +126,12 @@ fn decompose_full(doc: &Automerge) -> FullDecomp {
     let mut uncovered_blobs = Vec::new();
     let mut uncovered_parents = Vec::new();
     for change in &changes {
-        let digest = Digest::force_from_bytes(change.hash().0);
-        if covered.contains(&digest) {
+        let id = CommitId::new(change.hash().0);
+        if covered.contains(&id) {
             continue;
         }
         uncovered_blobs.push(change.raw_bytes().to_vec());
-        uncovered_parents.push(
-            change
-                .deps()
-                .iter()
-                .map(|d| Digest::force_from_bytes(d.0))
-                .collect(),
-        );
+        uncovered_parents.push(change.deps().iter().map(|d| CommitId::new(d.0)).collect());
     }
 
     FullDecomp {
@@ -178,8 +161,24 @@ fn build_tree(bytes: &[u8], d: &FullDecomp) -> (Sedimentree, Vec<Fragment>, Vec<
         .uncovered_blobs
         .iter()
         .zip(d.uncovered_parents.iter())
-        .map(|(raw, parents)| {
-            LooseCommit::new(id, parents.clone(), BlobMeta::new(&Blob::new(raw.clone())))
+        .enumerate()
+        .map(|(i, (raw, parents))| {
+            let head = CommitId::new({
+                let mut bytes = [0u8; 32];
+                bytes[0] = i as u8;
+                bytes[1] = (i >> 8) as u8;
+                // Use raw bytes hash for uniqueness
+                let blob = Blob::new(raw.clone());
+                let digest = Digest::hash(&blob);
+                bytes[2..].copy_from_slice(&digest.as_bytes()[..30]);
+                bytes
+            });
+            LooseCommit::new(
+                id,
+                head,
+                parents.clone(),
+                BlobMeta::new(&Blob::new(raw.clone())),
+            )
         })
         .collect();
 

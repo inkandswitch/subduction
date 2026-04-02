@@ -22,26 +22,23 @@ use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
-        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
+        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    crypto::{
-        digest::Digest,
-        fingerprint::{Fingerprint, FingerprintSeed},
-    },
-    fragment::{Fragment, FragmentSummary, id::FragmentId},
+    crypto::fingerprint::{Fingerprint, FingerprintSeed},
+    fragment::{id::FragmentId, Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -90,7 +87,12 @@ async fn make_test_commit(
 ) -> (Signed<LooseCommit>, Blob, LooseCommit) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
-    let commit = LooseCommit::new(*id, BTreeSet::new(), blob_meta);
+    let head = CommitId::new({
+        let mut bytes = [0u8; 32];
+        bytes[..data.len().min(32)].copy_from_slice(&data[..data.len().min(32)]);
+        bytes
+    });
+    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit.clone()).await;
     (verified.into_signed(), blob, commit)
 }
@@ -101,8 +103,8 @@ async fn make_test_fragment(
 ) -> (Signed<Fragment>, Blob, FragmentSummary) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
-    // Fragment head is a LooseCommit digest - use a deterministic value for tests
-    let head = Digest::force_from_bytes([data.first().copied().unwrap_or(0); 32]);
+    // Fragment head - use a deterministic value for tests
+    let head = CommitId::new([data.first().copied().unwrap_or(0); 32]);
     let fragment = Fragment::new(*id, head, BTreeSet::new(), &[], blob_meta);
     let summary = fragment.summary().clone();
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
@@ -235,7 +237,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
     // Create a commit that Bob has but Alice doesn't
     let (_commit_b, _blob_b, raw_commit_b) =
         make_test_commit(&sedimentree_id, b"commit B - bob has this").await;
-    let commit_b_id = raw_commit_b.commit_id();
+    let commit_b_id = raw_commit_b.head();
     let commit_b_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_b_id);
 
     // Bob sends a BatchSyncRequest claiming to have commit B (as a fingerprint)
@@ -305,7 +307,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
         make_test_commit(&sedimentree_id, b"commit A - alice").await;
     let (commit_b, blob_b, raw_commit_b) =
         make_test_commit(&sedimentree_id, b"commit B - bob").await;
-    let commit_b_id = raw_commit_b.commit_id();
+    let commit_b_id = raw_commit_b.head();
     let commit_b_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_b_id);
 
     // Set up Alice with commit A
@@ -567,8 +569,8 @@ async fn test_second_sync_round_has_empty_diff() -> TestResult {
 
     // Round 1: Bob sends BatchSyncRequest claiming both commits.
     // Alice has both → diff should be empty (no missing, no requesting).
-    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_a.commit_id());
-    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_b.commit_id());
+    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_a.head());
+    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_b.head());
 
     let request = BatchSyncRequest {
         id: sedimentree_id,
@@ -709,8 +711,8 @@ async fn test_incremental_sync_then_convergence() -> TestResult {
 
     // Bob has commit B (overlap) + commit C (novel). Bob sends request.
     let (_commit_c, _blob_c, raw_c) = make_test_commit(&sedimentree_id, b"bob commit C").await;
-    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_b.commit_id());
-    let fp_c: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_c.commit_id());
+    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_b.head());
+    let fp_c: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_c.head());
 
     let request = BatchSyncRequest {
         id: sedimentree_id,
@@ -781,7 +783,7 @@ async fn test_incremental_sync_then_convergence() -> TestResult {
     );
 
     // Second round: Bob claims A, B, C. Alice has A, B, C. Diff should be empty.
-    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_a.commit_id());
+    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &raw_a.head());
 
     let request2 = BatchSyncRequest {
         id: sedimentree_id,
@@ -858,7 +860,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Bob sends a request claiming to have the same commit (as a fingerprint)
-    let commit_id = raw_commit.commit_id();
+    let commit_id = raw_commit.head();
     let commit_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_id);
 
     let request = BatchSyncRequest {

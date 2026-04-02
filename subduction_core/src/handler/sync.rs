@@ -17,7 +17,7 @@
 
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -26,7 +26,7 @@ use sedimentree_core::{
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
@@ -34,11 +34,11 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use crate::{
     authenticated::Authenticated,
     connection::{
-        Connection,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
             SyncResult,
         },
+        Connection,
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
@@ -95,14 +95,14 @@ pub struct SyncHandler<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -110,14 +110,14 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric + Clone,
-    R: RemoteHeadsObserver + Clone,
-    const N: usize,
-> Clone for SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric + Clone,
+        R: RemoteHeadsObserver + Clone,
+        const N: usize,
+    > Clone for SyncHandler<F, S, C, P, M, N, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -134,13 +134,13 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        const N: usize,
+    > SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -172,14 +172,14 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > SyncHandler<F, S, C, P, M, N, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
@@ -291,14 +291,14 @@ impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
 // ---------------------------------------------------------------------------
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
@@ -310,14 +310,14 @@ impl<
 // ---------------------------------------------------------------------------
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > SyncHandler<F, S, C, P, M, N, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
@@ -702,18 +702,17 @@ impl<
             .map_err(IoError::Storage)?;
         let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
 
-        let commit_by_digest: Map<Digest<LooseCommit>, VerifiedMeta<LooseCommit>> =
-            verified_commits
-                .into_iter()
-                .map(|vm| (Digest::hash(vm.payload()), vm))
-                .collect();
+        let commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = verified_commits
+            .into_iter()
+            .map(|vm| (vm.payload().head(), vm))
+            .collect();
         let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> = verified_fragments
             .into_iter()
             .map(|vm| (Digest::hash(vm.payload()), vm))
             .collect();
 
         let (
-            local_commit_digests,
+            local_commit_ids,
             local_fragment_digests,
             our_missing_commit_fingerprints,
             our_missing_fragment_fingerprints,
@@ -722,7 +721,7 @@ impl<
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
             if let Entry::Vacant(entry) = locked.entry(id) {
-                let loose_commits: Vec<_> = commit_by_digest
+                let loose_commits: Vec<_> = commit_by_id
                     .values()
                     .map(|vm| vm.payload().clone())
                     .collect();
@@ -751,7 +750,7 @@ impl<
             (
                 diff.local_only_commits
                     .iter()
-                    .map(|(digest, _)| **digest)
+                    .map(|(id, _)| **id)
                     .collect::<Vec<_>>(),
                 diff.local_only_fragments
                     .iter()
@@ -768,8 +767,8 @@ impl<
             heads: raw_heads,
         };
 
-        for digest in local_commit_digests {
-            if let Some(verified) = commit_by_digest.get(&digest) {
+        for commit_id in local_commit_ids {
+            if let Some(verified) = commit_by_id.get(&commit_id) {
                 their_missing_commits.push((verified.signed().clone(), verified.blob().clone()));
             }
         }
@@ -882,7 +881,7 @@ impl<
     }
 
     /// Compute the current heads for a sedimentree (without a counter).
-    async fn heads_for(&self, id: SedimentreeId) -> Vec<Digest<LooseCommit>> {
+    async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
         let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
         locked
             .get(&id)

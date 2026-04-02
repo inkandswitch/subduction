@@ -15,10 +15,9 @@ use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::id::CommitId,
 };
 use subduction_core::{
     authenticated::Authenticated,
@@ -27,7 +26,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -124,19 +123,44 @@ async fn multi_round_convergence_with_fragments() -> TestResult {
     // ── Phase 1: initial data (no connection yet, no broadcasts) ──
 
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(1))
+        .add_commit(
+            sed_id,
+            CommitId::new([1; 32]),
+            BTreeSet::new(),
+            make_blob(1),
+        )
         .await?; // A1
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(2))
+        .add_commit(
+            sed_id,
+            CommitId::new([2; 32]),
+            BTreeSet::new(),
+            make_blob(2),
+        )
         .await?; // A2
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(3))
+        .add_commit(
+            sed_id,
+            CommitId::new([3; 32]),
+            BTreeSet::new(),
+            make_blob(3),
+        )
         .await?; // A3
 
-    bob.add_commit(sed_id, BTreeSet::new(), make_blob(4))
-        .await?; // B1
-    bob.add_commit(sed_id, BTreeSet::new(), make_blob(5))
-        .await?; // B2
+    bob.add_commit(
+        sed_id,
+        CommitId::new([4; 32]),
+        BTreeSet::new(),
+        make_blob(4),
+    )
+    .await?; // B1
+    bob.add_commit(
+        sed_id,
+        CommitId::new([5; 32]),
+        BTreeSet::new(),
+        make_blob(5),
+    )
+    .await?; // B2
 
     // ── Phase 2: connect + first sync (establishes overlap) ──
 
@@ -175,17 +199,22 @@ async fn multi_round_convergence_with_fragments() -> TestResult {
     // Give a short sleep after each to let the listen loops drain.
 
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(6))
+        .add_commit(
+            sed_id,
+            CommitId::new([6; 32]),
+            BTreeSet::new(),
+            make_blob(6),
+        )
         .await?; // A4
 
     // Alice's fragment: synthetic head with depth 2 (2 leading zero bytes)
-    let alice_frag_head = Digest::<LooseCommit>::force_from_bytes({
+    let alice_frag_head = CommitId::new({
         let mut b = [0u8; 32];
         b[2] = 1;
         b[3] = 0xAA;
         b
     });
-    let alice_frag_boundary = BTreeSet::from([Digest::<LooseCommit>::force_from_bytes({
+    let alice_frag_boundary = BTreeSet::from([CommitId::new({
         let mut b = [0u8; 32];
         b[0] = 0xFF;
         b[1] = 0xAA;
@@ -201,16 +230,21 @@ async fn multi_round_convergence_with_fragments() -> TestResult {
         )
         .await?;
 
-    bob.add_commit(sed_id, BTreeSet::new(), make_blob(8))
-        .await?; // B3
+    bob.add_commit(
+        sed_id,
+        CommitId::new([8; 32]),
+        BTreeSet::new(),
+        make_blob(8),
+    )
+    .await?; // B3
 
-    let bob_frag_head = Digest::<LooseCommit>::force_from_bytes({
+    let bob_frag_head = CommitId::new({
         let mut b = [0u8; 32];
         b[2] = 1;
         b[3] = 0xBB;
         b
     });
-    let bob_frag_boundary = BTreeSet::from([Digest::<LooseCommit>::force_from_bytes({
+    let bob_frag_boundary = BTreeSet::from([CommitId::new({
         let mut b = [0u8; 32];
         b[0] = 0xFF;
         b[1] = 0xBB;
@@ -278,10 +312,20 @@ async fn multi_round_convergence_with_fragments() -> TestResult {
     // ── Phase 6: new data breaks convergence (liveness proof) ──
 
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(10))
+        .add_commit(
+            sed_id,
+            CommitId::new([10; 32]),
+            BTreeSet::new(),
+            make_blob(10),
+        )
         .await?; // A5
-    bob.add_commit(sed_id, BTreeSet::new(), make_blob(11))
-        .await?; // B4
+    bob.add_commit(
+        sed_id,
+        CommitId::new([11; 32]),
+        BTreeSet::new(),
+        make_blob(11),
+    )
+    .await?; // B4
 
     // Sync immediately — before broadcasts can fully settle, the sync
     // should ensure both sides converge. Whether data arrives via
@@ -346,7 +390,7 @@ async fn multi_round_convergence_with_fragments() -> TestResult {
 struct AlwaysDeep;
 
 impl DepthMetric for AlwaysDeep {
-    fn to_depth(&self, _digest: Digest<LooseCommit>) -> Depth {
+    fn to_depth(&self, _id: CommitId) -> Depth {
         Depth(2)
     }
 }
@@ -435,13 +479,28 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
     // ── Alice adds 3 commits (no connection, no broadcasts) ──
 
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(20))
+        .add_commit(
+            sed_id,
+            CommitId::new([20; 32]),
+            BTreeSet::new(),
+            make_blob(20),
+        )
         .await?;
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(21))
+        .add_commit(
+            sed_id,
+            CommitId::new([21; 32]),
+            BTreeSet::new(),
+            make_blob(21),
+        )
         .await?;
     alice
-        .add_commit(sed_id, BTreeSet::new(), make_blob(22))
+        .add_commit(
+            sed_id,
+            CommitId::new([22; 32]),
+            BTreeSet::new(),
+            make_blob(22),
+        )
         .await?;
 
     let alice_commits = alice
@@ -450,10 +509,10 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
         .expect("alice should have commits");
     assert_eq!(alice_commits.len(), 3);
 
-    // Read back real commit digests
-    let mut digests: Vec<Digest<LooseCommit>> = alice_commits.iter().map(Digest::hash).collect();
-    digests.sort();
-    let (d0, d1, d2) = (digests[0], digests[1], digests[2]);
+    // Read back commit IDs
+    let mut commit_ids: Vec<CommitId> = alice_commits.iter().map(|c| c.head()).collect();
+    commit_ids.sort();
+    let (d0, d1, d2) = (commit_ids[0], commit_ids[1], commit_ids[2]);
 
     // ── Bob adds a fragment covering all 3 of Alice's commit digests ──
     //

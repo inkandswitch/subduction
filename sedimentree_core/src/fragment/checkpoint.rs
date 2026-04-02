@@ -1,21 +1,18 @@
 //! Checkpoint type for fragment interior commits.
 //!
-//! A [`Checkpoint`] is a truncated commit digest marking a commit that falls
+//! A [`Checkpoint`] is a truncated commit identifier marking a commit that falls
 //! within a fragment's causal range. Checkpoints enable efficient coverage
-//! checks (`supports_block`) without storing full 32-byte digests.
+//! checks (`supports_block`) without storing full 32-byte identifiers.
 
 use core::fmt;
 
-use crate::{
-    crypto::{digest::Digest, truncated::Truncated},
-    loose_commit::LooseCommit,
-};
+use crate::loose_commit::id::CommitId;
 
-/// A truncated commit digest marking a commit within a fragment's range.
+/// A truncated commit identifier marking a commit within a fragment's range.
 ///
-/// Checkpoints are stored as 12-byte truncations of the full 32-byte BLAKE3
-/// commit digest. This provides:
-/// - Compact storage (~62% savings vs full digest)
+/// Checkpoints are stored as 12-byte truncations of the full 32-byte
+/// commit identifier. This provides:
+/// - Compact storage (~62% savings vs full identifier)
 /// - Negligible random collision probability (~10⁻¹⁷ at 1M items)
 /// - Efficient set membership checks
 ///
@@ -27,21 +24,17 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct Checkpoint(Truncated<Digest<LooseCommit>>);
+pub struct Checkpoint([u8; 12]);
 
 impl Checkpoint {
-    /// Create a checkpoint from a full commit digest.
+    /// Create a checkpoint from a full commit identifier.
     ///
-    /// The digest is truncated to 12 bytes.
+    /// The identifier is truncated to 12 bytes.
     #[must_use]
-    pub fn new(digest: Digest<LooseCommit>) -> Self {
-        Self(Truncated::new(digest))
-    }
-
-    /// Create a checkpoint from an already-truncated value.
-    #[must_use]
-    pub const fn from_truncated(truncated: Truncated<Digest<LooseCommit>>) -> Self {
-        Self(truncated)
+    pub fn new(id: CommitId) -> Self {
+        let mut bytes = [0u8; 12];
+        bytes.copy_from_slice(&id.as_bytes()[..12]);
+        Self(bytes)
     }
 
     /// Create a checkpoint from raw bytes.
@@ -49,31 +42,19 @@ impl Checkpoint {
     /// This is the inverse of [`as_bytes`](Self::as_bytes).
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 12]) -> Self {
-        Self(Truncated::from_bytes(bytes))
-    }
-
-    /// The underlying truncated digest.
-    #[must_use]
-    pub const fn as_truncated(&self) -> &Truncated<Digest<LooseCommit>> {
-        &self.0
+        Self(bytes)
     }
 
     /// The raw bytes of the truncated checkpoint.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 12] {
-        self.0.as_bytes()
+        &self.0
     }
 }
 
-impl From<Digest<LooseCommit>> for Checkpoint {
-    fn from(digest: Digest<LooseCommit>) -> Self {
-        Self::new(digest)
-    }
-}
-
-impl From<Truncated<Digest<LooseCommit>>> for Checkpoint {
-    fn from(truncated: Truncated<Digest<LooseCommit>>) -> Self {
-        Self::from_truncated(truncated)
+impl From<CommitId> for Checkpoint {
+    fn from(id: CommitId) -> Self {
+        Self::new(id)
     }
 }
 
@@ -105,8 +86,8 @@ impl fmt::Display for Checkpoint {
 #[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Checkpoint {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let truncated: Truncated<Digest<LooseCommit>> = u.arbitrary()?;
-        Ok(Self(truncated))
+        let bytes: [u8; 12] = u.arbitrary()?;
+        Ok(Self(bytes))
     }
 }
 
@@ -115,9 +96,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checkpoint_from_digest() {
-        let digest = Digest::<LooseCommit>::force_from_bytes([42u8; 32]);
-        let checkpoint = Checkpoint::new(digest);
+    fn checkpoint_from_commit_id() {
+        let id = CommitId::new([42u8; 32]);
+        let checkpoint = Checkpoint::new(id);
         assert_eq!(checkpoint.as_bytes(), &[42u8; 12]);
     }
 
@@ -128,8 +109,8 @@ mod tests {
         let mut bytes_b = [0u8; 32];
         bytes_b[31] = 2;
 
-        let a = Checkpoint::new(Digest::<LooseCommit>::force_from_bytes(bytes_a));
-        let b = Checkpoint::new(Digest::<LooseCommit>::force_from_bytes(bytes_b));
+        let a = Checkpoint::new(CommitId::new(bytes_a));
+        let b = Checkpoint::new(CommitId::new(bytes_b));
         assert_eq!(a, b); // Same first 12 bytes
     }
 }

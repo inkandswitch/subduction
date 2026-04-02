@@ -30,9 +30,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, id::FragmentId},
+    fragment::{id::FragmentId, Fragment},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -700,7 +700,7 @@ fn decode_remote_heads(payload: &[u8], offset: &mut usize) -> Result<RemoteHeads
     let capacity = core::cmp::min(count, remaining / 32);
     let mut heads = Vec::with_capacity(capacity);
     for _ in 0..count {
-        heads.push(Digest::force_from_bytes(read_array::<32>(payload, offset)?));
+        heads.push(CommitId::new(read_array::<32>(payload, offset)?));
     }
     Ok(RemoteHeads { counter, heads })
 }
@@ -1251,6 +1251,7 @@ mod tests {
             let blob = Blob::new(Vec::new());
             let commit = LooseCommit::new(
                 id,
+                CommitId::new([0x42; 32]),
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&blob),
             );
@@ -1273,7 +1274,7 @@ mod tests {
             let blob = Blob::new(Vec::new());
             let fragment = Fragment::new(
                 id,
-                Digest::force_from_bytes([2u8; 32]),
+                CommitId::new([2u8; 32]),
                 BTreeSet::new(),
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&blob),

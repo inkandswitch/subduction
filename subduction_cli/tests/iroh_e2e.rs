@@ -29,7 +29,7 @@ use std::{
 };
 
 use future_form::Sendable;
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId};
 use subduction_core::{
     connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,
@@ -230,8 +230,13 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
 /// Push a commit to a server via LP client and sync.
 async fn push_commit(client: &TestSubduction, sed_id: SedimentreeId, payload: &[u8]) {
     let blob = Blob::new(payload.to_vec());
+    let head = CommitId::new({
+        let mut bytes = [0u8; 32];
+        bytes[..payload.len().min(32)].copy_from_slice(&payload[..payload.len().min(32)]);
+        bytes
+    });
     client
-        .add_commit(sed_id, BTreeSet::new(), blob)
+        .add_commit(sed_id, head, BTreeSet::new(), blob)
         .await
         .expect("add commit");
 

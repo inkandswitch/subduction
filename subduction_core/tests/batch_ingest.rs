@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use sedimentree_core::{blob::Blob, id::SedimentreeId};
+use sedimentree_core::{blob::Blob, id::SedimentreeId, loose_commit::id::CommitId};
 use subduction_core::connection::test_utils::new_test_subduction;
 use testresult::TestResult;
 
@@ -18,8 +18,8 @@ async fn add_commits_batch_stores_all_commits() -> TestResult {
     let sed_id = SedimentreeId::new([1u8; 32]);
     let commit_count = 10;
 
-    let commits: Vec<(BTreeSet<_>, Blob)> = (0..commit_count)
-        .map(|i| (BTreeSet::new(), make_blob(i)))
+    let commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)> = (0..commit_count)
+        .map(|i| (CommitId::new([i + 100; 32]), BTreeSet::new(), make_blob(i)))
         .collect();
 
     sd.add_commits_batch(sed_id, commits).await?;

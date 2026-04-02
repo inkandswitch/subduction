@@ -20,7 +20,9 @@ use std::{
 
 use future_form::Sendable;
 use rand::RngCore;
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::{
+    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use subduction_core::{
     connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,
@@ -29,7 +31,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -75,6 +77,12 @@ fn init_tracing() {
 
 fn signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
+}
+
+fn random_commit_id() -> CommitId {
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    CommitId::new(bytes)
 }
 
 fn random_blob(size: usize) -> Blob {
@@ -350,7 +358,7 @@ async fn client_to_server_sync() -> TestResult {
     let sed_id = SedimentreeId::new([42u8; 32]);
     client
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), random_blob(64))
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob(64))
         .await?;
 
     let (had_success, _stats, call_errs, io_errs) = client
@@ -385,7 +393,7 @@ async fn bidirectional_sync() -> TestResult {
     let sed_id = SedimentreeId::new([99u8; 32]);
     client
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), random_blob(64))
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob(64))
         .await?;
 
     // Client syncs to server
@@ -402,7 +410,7 @@ async fn bidirectional_sync() -> TestResult {
     // Server adds more data to the same sedimentree
     server
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), random_blob(64))
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob(64))
         .await?;
 
     // Client syncs again (should pull server's new data)
@@ -420,12 +428,12 @@ async fn bidirectional_sync() -> TestResult {
     let server_set: BTreeSet<_> = server_commits
         .into_iter()
         .flatten()
-        .map(|c| c.commit_id())
+        .map(|c| c.head())
         .collect();
     let client_set: BTreeSet<_> = client_commits
         .into_iter()
         .flatten()
-        .map(|c| c.commit_id())
+        .map(|c| c.head())
         .collect();
 
     assert_eq!(
@@ -464,11 +472,11 @@ async fn multiple_concurrent_clients() -> TestResult {
     let sed_id = SedimentreeId::new([77u8; 32]);
     client_a
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), random_blob(64))
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob(64))
         .await?;
     client_b
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), random_blob(64))
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob(64))
         .await?;
 
     let (ok_a, _, errs_a, io_a) = client_a
@@ -515,7 +523,7 @@ async fn server_to_client_sync() -> TestResult {
     let blob = Blob::new(b"hello from server".to_vec());
     server
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), blob)
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob)
         .await?;
 
     // sync_all (not full_sync) because the client doesn't know this tree yet
@@ -568,7 +576,7 @@ async fn large_message_handling() -> TestResult {
 
     client
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), blob)
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob)
         .await?;
 
     let (had_success, _stats, call_errs, io_errs) = client
@@ -620,7 +628,7 @@ async fn message_ordering() -> TestResult {
         data.push(i);
         client
             .subduction
-            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))
             .await?;
     }
 
@@ -663,6 +671,7 @@ async fn disconnect_and_reconnect() -> TestResult {
         .subduction
         .add_commit(
             sed_id,
+            random_commit_id(),
             BTreeSet::new(),
             Blob::new(b"before-disconnect".to_vec()),
         )
@@ -687,6 +696,7 @@ async fn disconnect_and_reconnect() -> TestResult {
         .subduction
         .add_commit(
             sed_id,
+            random_commit_id(),
             BTreeSet::new(),
             Blob::new(b"while-disconnected".to_vec()),
         )
@@ -752,6 +762,7 @@ async fn discovery_mode_handshake() -> TestResult {
         .subduction
         .add_commit(
             sed_id,
+            random_commit_id(),
             BTreeSet::new(),
             Blob::new(b"discover-mode-data".to_vec()),
         )
@@ -824,7 +835,7 @@ async fn multiple_concurrent_clients_full_convergence() -> TestResult {
     // Server adds an initial commit
     server
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), random_blob(64))
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob(64))
         .await?;
 
     let num_clients = 3;
@@ -857,7 +868,7 @@ async fn multiple_concurrent_clients_full_convergence() -> TestResult {
         data.push(u8::try_from(i).expect("< 256 clients"));
         client
             .subduction
-            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))
             .await?;
     }
 
@@ -929,7 +940,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
         data.push(i);
         server
             .subduction
-            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))
             .await?;
     }
 
@@ -939,7 +950,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
         data.push(i);
         client
             .subduction
-            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))
             .await?;
     }
 

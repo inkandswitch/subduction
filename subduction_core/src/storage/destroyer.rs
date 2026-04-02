@@ -11,7 +11,7 @@ use alloc::sync::Arc;
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    crypto::digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
+    crypto::digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::id::CommitId,
 };
 
 use super::traits::Storage;
@@ -51,12 +51,9 @@ impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
 
     /// Delete a loose commit and its blob by digest.
     #[must_use]
-    pub fn delete_loose_commit(
-        &self,
-        digest: Digest<LooseCommit>,
-    ) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn delete_loose_commit(&self, commit_id: CommitId) -> K::Future<'_, Result<(), S::Error>> {
         self.storage
-            .delete_loose_commit(self.sedimentree_id, digest)
+            .delete_loose_commit(self.sedimentree_id, commit_id)
     }
 
     /// Delete all loose commits and their blobs for this sedimentree.

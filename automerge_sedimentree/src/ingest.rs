@@ -48,9 +48,8 @@ use sedimentree_core::{
     commit::{
         CommitStore, CountLeadingZeroBytes, FragmentError, FragmentState, MissingCommitError,
     },
-    crypto::digest::Digest,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::Sedimentree,
 };
 
@@ -65,7 +64,7 @@ pub enum IngestError {
 
     /// A depth-0 commit was passed as a fragment head.
     #[error("depth-0 commit cannot be a fragment head: {0}")]
-    DepthZeroHead(Digest<LooseCommit>),
+    DepthZeroHead(CommitId),
 }
 
 /// Extract the concrete error from a [`FragmentError`] produced by
@@ -138,19 +137,15 @@ pub fn ingest_automerge(
     let change_count = metadata.len();
 
     let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
-    let heads: Vec<Digest<LooseCommit>> = doc
-        .get_heads()
-        .iter()
-        .map(|h| Digest::force_from_bytes(h.0))
-        .collect();
+    let heads: Vec<CommitId> = doc.get_heads().iter().map(|h| CommitId::new(h.0)).collect();
 
-    let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
+    let mut known: Map<CommitId, FragmentState<OwnedParents>> = Map::new();
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
         .map_err(extract_fragment_error)?;
     let states: Vec<_> = fresh.into_iter().cloned().collect();
 
-    let covered: Set<Digest<LooseCommit>> = known
+    let covered: Set<CommitId> = known
         .values()
         .flat_map(|s| s.members().iter().copied())
         .collect();
@@ -210,19 +205,15 @@ pub fn ingest_automerge_par(
     let change_count = metadata.len();
 
     let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
-    let heads: Vec<Digest<LooseCommit>> = doc
-        .get_heads()
-        .iter()
-        .map(|h| Digest::force_from_bytes(h.0))
-        .collect();
+    let heads: Vec<CommitId> = doc.get_heads().iter().map(|h| CommitId::new(h.0)).collect();
 
-    let mut known: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
+    let mut known: Map<CommitId, FragmentState<OwnedParents>> = Map::new();
     let fresh = store
         .build_fragment_store(&heads, &mut known, &CountLeadingZeroBytes)
         .map_err(extract_fragment_error)?;
     let states: Vec<_> = fresh.into_iter().cloned().collect();
 
-    let covered: Set<Digest<LooseCommit>> = known
+    let covered: Set<CommitId> = known
         .values()
         .flat_map(|s| s.members().iter().copied())
         .collect();
@@ -344,14 +335,14 @@ fn compress_fragments_par(
 /// considering the loose commit "covered" by the fragment and pruning it.
 fn collect_loose_commits(
     changes: &[automerge::Change],
-    covered: &Set<Digest<LooseCommit>>,
+    covered: &Set<CommitId>,
     states: &[FragmentState<OwnedParents>],
     sedimentree_id: SedimentreeId,
 ) -> (Vec<LooseCommit>, Vec<Blob>) {
-    // Build a mapping: covered member digest → fragment head digest.
-    let mut member_to_head: Map<Digest<LooseCommit>, Digest<LooseCommit>> = Map::new();
+    // Build a mapping: covered member id → fragment head id.
+    let mut member_to_head: Map<CommitId, CommitId> = Map::new();
     for state in states {
-        let head = state.head_digest();
+        let head = state.head_id();
         for member in state.members() {
             if *member != head {
                 member_to_head.insert(*member, head);
@@ -362,22 +353,22 @@ fn collect_loose_commits(
     let mut loose_commits = Vec::new();
     let mut blobs = Vec::new();
     for change in changes {
-        let digest = Digest::force_from_bytes(change.hash().0);
-        if covered.contains(&digest) {
+        let id = CommitId::new(change.hash().0);
+        if covered.contains(&id) {
             continue;
         }
         // Remap parents: if a parent is a fragment member, point to
         // the fragment head instead so minimize doesn't prune us.
-        let parents: BTreeSet<Digest<LooseCommit>> = change
+        let parents: BTreeSet<CommitId> = change
             .deps()
             .iter()
             .map(|d| {
-                let dep = Digest::force_from_bytes(d.0);
+                let dep = CommitId::new(d.0);
                 member_to_head.get(&dep).copied().unwrap_or(dep)
             })
             .collect();
         let blob = Blob::new(change.raw_bytes().to_vec());
-        let commit = LooseCommit::new(sedimentree_id, parents, BlobMeta::new(&blob));
+        let commit = LooseCommit::new(sedimentree_id, id, parents, BlobMeta::new(&blob));
         loose_commits.push(commit);
         blobs.push(blob);
     }

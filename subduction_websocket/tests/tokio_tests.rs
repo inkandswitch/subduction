@@ -3,8 +3,7 @@
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use std::{
     collections::BTreeSet,
@@ -13,20 +12,20 @@ use std::{
     time::Duration,
 };
 use subduction_core::{
-    connection::{Connection, Reconnect, message::SyncMessage},
+    connection::{message::SyncMessage, Connection, Reconnect},
     handler::sync::SyncHandler,
     handshake::audience::Audience,
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
+    tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn},
     DEFAULT_MAX_MESSAGE_SIZE,
-    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -52,9 +51,17 @@ fn random_blob() -> Blob {
     Blob::new(bytes.to_vec())
 }
 
-fn random_commit() -> (BTreeSet<Digest<LooseCommit>>, Blob) {
+fn random_commit() -> (CommitId, BTreeSet<CommitId>, Blob) {
     let blob = random_blob();
-    (BTreeSet::new(), blob)
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    (CommitId::new(bytes), BTreeSet::new(), blob)
+}
+
+fn random_commit_id() -> CommitId {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    CommitId::new(bytes)
 }
 
 type TestSubduction = Arc<
@@ -354,9 +361,9 @@ async fn multiple_concurrent_clients() -> TestResult {
     });
 
     // Add initial commit to server
-    let (parents1, blob1) = random_commit();
+    let (head1, parents1, blob1) = random_commit();
     server_subduction
-        .add_commit(sed_id, parents1, blob1)
+        .add_commit(sed_id, head1, parents1, blob1)
         .await?;
 
     let server = TokioWebSocketServer::new(
@@ -428,8 +435,8 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Phase 2: Each client adds its own commit
     for (client, _) in &clients {
-        let (parents, blob) = random_commit();
-        client.add_commit(sed_id, parents, blob).await?;
+        let (head, parents, blob) = random_commit();
+        client.add_commit(sed_id, head, parents, blob).await?;
     }
 
     // Phase 3: All clients sync again to push their commits to the server
@@ -566,7 +573,7 @@ async fn large_message_handling() -> TestResult {
 
     // Add large commit
     client
-        .add_commit(sed_id, BTreeSet::new(), large_blob)
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), large_blob)
         .await?;
 
     // Sync with server
@@ -656,8 +663,8 @@ async fn message_ordering() -> TestResult {
 
     // Add multiple commits in order
     for _ in 0..5 {
-        let (parents, blob) = random_commit();
-        client.add_commit(sed_id, parents, blob).await?;
+        let (head, parents, blob) = random_commit();
+        client.add_commit(sed_id, head, parents, blob).await?;
     }
 
     // Sync all commits to server
@@ -905,7 +912,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
         let mut data = b"server-commit-".to_vec();
         data.push(i);
         server_subduction
-            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))
             .await?;
     }
 
@@ -914,7 +921,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
         let mut data = b"client-commit-".to_vec();
         data.push(i);
         client
-            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))
             .await?;
     }
 

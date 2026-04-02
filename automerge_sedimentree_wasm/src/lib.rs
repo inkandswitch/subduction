@@ -20,7 +20,10 @@ use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
 use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
 use sedimentree_core::{
-    commit::CommitStore, crypto::digest::Digest, hex::decode_hex, loose_commit::LooseCommit,
+    commit::{CommitStore, Parents},
+    crypto::digest::Digest,
+    hex::decode_hex,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use sedimentree_wasm::digest::{JsDigest, WasmDigest};
 use subduction_wasm::subduction::WasmHashMetric;
@@ -54,8 +57,9 @@ impl WasmSedimentreeAutomerge {
         known_states: &WasmFragmentStateStore,
         hash_metric: &WasmHashMetric,
     ) -> Result<WasmFragmentState, WasmFragmentError> {
+        let head_id = CommitId::new(Digest::<LooseCommit>::from(head.clone()).into_bytes());
         Ok(self
-            .fragment(head.clone().into(), &known_states.0.borrow(), hash_metric)
+            .fragment(head_id, &known_states.0.borrow(), hash_metric)
             .map(WasmFragmentState)?)
     }
 
@@ -72,9 +76,13 @@ impl WasmSedimentreeAutomerge {
         known_fragment_states: &WasmFragmentStateStore,
         strategy: &WasmHashMetric,
     ) -> Result<Vec<WasmFragmentState>, WasmFragmentError> {
-        let heads: Vec<Digest<LooseCommit>> = head_digests
+        let heads: Vec<CommitId> = head_digests
             .into_iter()
-            .map(|js_digest| WasmDigest::from(&js_digest).into())
+            .map(|js_digest| {
+                CommitId::new(
+                    Digest::<LooseCommit>::from(WasmDigest::from(&js_digest)).into_bytes(),
+                )
+            })
             .collect();
 
         let fresh = self
@@ -94,13 +102,23 @@ impl core::fmt::Debug for WasmSedimentreeAutomerge {
     }
 }
 
+/// A Wasm-compatible [`Parents`] wrapper around a set of [`CommitId`]s.
+#[derive(Debug, Clone)]
+pub struct WasmParents(Set<CommitId>);
+
+impl Parents for WasmParents {
+    fn parents(&self) -> Set<CommitId> {
+        self.0.clone()
+    }
+}
+
 impl CommitStore<'static> for WasmSedimentreeAutomerge {
-    type Node = Set<Digest<LooseCommit>>;
+    type Node = WasmParents;
     type LookupError = WasmLookupError;
 
-    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
+    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
         let mut hexes = Vec::with_capacity(32);
-        for byte in digest.as_bytes() {
+        for byte in id.as_bytes() {
             hexes.push(alloc::format!("{byte:02x}"));
         }
         let hash_hex = hexes.join("");
@@ -168,11 +186,9 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
             deps.push(automerge::ChangeHash(arr32));
         }
 
-        Ok(Some(
-            deps.into_iter()
-                .map(|h| Digest::force_from_bytes(h.0))
-                .collect(),
-        ))
+        Ok(Some(WasmParents(
+            deps.into_iter().map(|h| CommitId::new(h.0)).collect(),
+        )))
     }
 }
 

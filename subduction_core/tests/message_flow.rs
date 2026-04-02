@@ -14,12 +14,12 @@ use future_form::{Local, Sendable};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
+        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -36,7 +36,12 @@ async fn make_test_commit_with_data(
 ) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
-    let commit = LooseCommit::new(*id, BTreeSet::new(), blob_meta);
+    let head = CommitId::new({
+        let mut bytes = [0u8; 32];
+        bytes[..data.len().min(32)].copy_from_slice(&data[..data.len().min(32)]);
+        bytes
+    });
+    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }

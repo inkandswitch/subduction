@@ -15,22 +15,26 @@
 //!
 //! ```text
 //! Save: VerifiedMeta<LooseCommit> → storage (signed bytes + blob)
-//! Load: digest → VerifiedMeta<LooseCommit> (reconstructed from trusted storage)
+//! Load: commit_id → VerifiedMeta<LooseCommit> (reconstructed from trusted storage)
 //! ```
 //!
 //! # Content-Addressed Storage
 //!
-//! Commits and fragments are keyed by the digest of their payload:
+//! Commits are keyed by their `CommitId` (user-supplied identity).
+//! Fragments are keyed by the digest of their payload:
 //!
-//! - O(1) lookup by digest for sync protocols
+//! - O(1) lookup by ID/digest for sync protocols
 //! - Efficient "what do I have vs. what do you have" comparisons
 
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    collections::Set,
+    crypto::digest::Digest,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -71,30 +75,30 @@ pub trait Storage<K: FutureForm + ?Sized> {
 
     /// Save a verified loose commit with its blob.
     ///
-    /// The commit and blob are stored atomically. The digest is computed from
-    /// the commit payload and used as the key.
+    /// The commit and blob are stored atomically. The commit is keyed by its
+    /// `CommitId` (from `head()`).
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
         verified: VerifiedMeta<LooseCommit>,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    /// Load a loose commit with its blob by digest.
+    /// Load a loose commit with its blob by commit ID.
     ///
-    /// Returns `None` if no commit exists with the given digest.
+    /// Returns `None` if no commit exists with the given ID.
     /// The returned `VerifiedMeta` is reconstructed from trusted storage
     /// without re-verifying the signature or blob.
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<LooseCommit>,
+        commit_id: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>;
 
-    /// List all commit digests for a sedimentree.
-    fn list_commit_digests(
+    /// List all commit IDs for a sedimentree.
+    fn list_commit_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<Digest<LooseCommit>>, Self::Error>>;
+    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>>;
 
     /// Load all loose commits with their blobs for a sedimentree.
     ///
@@ -105,11 +109,11 @@ pub trait Storage<K: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>;
 
-    /// Delete a loose commit and its blob by digest.
+    /// Delete a loose commit and its blob by commit ID.
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<LooseCommit>,
+        commit_id: CommitId,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
     /// Delete all loose commits and their blobs for a sedimentree.
