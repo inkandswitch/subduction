@@ -11,12 +11,17 @@ use crate::loose_commit::id::CommitId;
 /// A truncated commit identifier marking a commit within a fragment's range.
 ///
 /// Checkpoints are stored as 12-byte truncations of the full 32-byte
-/// commit identifier. This provides:
+/// [`CommitId`]. This provides:
 /// - Compact storage (~62% savings vs full identifier)
 /// - Negligible random collision probability (~10⁻¹⁷ at 1M items)
 /// - Efficient set membership checks
 ///
 /// # Security Properties
+///
+/// The collision bounds below assume that [`CommitId`] values have
+/// uniformly distributed bytes (e.g., they are cryptographic hashes
+/// such as Automerge `ChangeHash`). Structured or sequential identifiers
+/// that differ only in bytes beyond the truncation window will collide.
 ///
 /// - **Random collision**: ~N²/2⁹⁶ where N is set size
 /// - **Adversarial collision**: ~2⁴⁸ work (birthday attack on 96 bits)

@@ -311,6 +311,11 @@ impl WasmIndexedDbStorage {
 
     /// Save a commit with its blob to storage (compound storage).
     ///
+    /// The `commit_id` parameter is used as the storage key and _must_
+    /// match the `head()` embedded in the signed commit payload. The
+    /// caller is responsible for maintaining this invariant; the storage
+    /// layer does not decode the signed payload to verify it.
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmSaveCommitError`] if the commit could not be saved.
@@ -341,7 +346,7 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
-    /// Load a commit by digest, returning `CommitWithBlob` or null.
+    /// Load a commit by its identifier, returning `CommitWithBlob` or null.
     ///
     /// # Errors
     ///

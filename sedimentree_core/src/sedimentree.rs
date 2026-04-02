@@ -178,6 +178,11 @@ pub struct Sedimentree {
 
 impl Sedimentree {
     /// Constructor for a [`Sedimentree`].
+    ///
+    /// If `commits` contains duplicate [`CommitId`] values, only one is
+    /// retained (last-in-wins per [`BTreeMap`] collection semantics).
+    /// For well-behaved peers this should never happen since each commit
+    /// has a unique user-supplied identifier.
     #[must_use]
     pub fn new(fragments: Vec<Fragment>, commits: Vec<LooseCommit>) -> Self {
         Self {
@@ -310,7 +315,7 @@ impl Sedimentree {
     /// Returns true if this [`Sedimentree`] has a commit with the given causal identity.
     #[must_use]
     pub fn has_loose_commit(&self, id: CommitId) -> bool {
-        self.commits.values().any(|c| c.head() == id)
+        self.commits.contains_key(&id)
     }
 
     /// Returns true if this [`Sedimentree`] has a fragment starting with the given digest.
@@ -2646,6 +2651,199 @@ mod tests {
             assert!(
                 remaining.contains(&x) && remaining.contains(&y),
                 "blockless commits on a separate branch should survive: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Multi-level: deeper fragment dominates shallower
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///
+        ///   deep_frag(head=E, boundary={A}, checkpoints={C})   depth 2
+        ///   shallow_frag(head=C, boundary={A})                  depth 1
+        /// ```
+        ///
+        /// The deep fragment (depth 2, head=E) covers the entire range
+        /// A→E. The shallow fragment (depth 1, head=C) covers A→C, a
+        /// subset. After minimize:
+        /// - `deep_frag` supports `shallow_frag` (E covers C via checkpoint,
+        ///   A is a boundary subset)
+        /// - Only `deep_frag` survives
+        /// - All loose commits (B, D) are in the single block E→A, covered
+        ///   by `deep_frag` → all pruned
+        #[test]
+        fn deeper_fragment_dominates_shallower_all_intermediates_pruned() {
+            let a = d2(1); // oldest
+            let b = d0(2);
+            let c = d1(3); // checkpoint in deep fragment, head of shallow
+            let d = d0(4);
+            let e = d2(5); // newest
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let deep_frag = fragment(e, &[a], &[c]);
+            let shallow_frag = fragment(c, &[a], &[]);
+
+            let tree = Sedimentree::new(vec![deep_frag.clone(), shallow_frag.clone()], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            // Deep should dominate shallow
+            let frags: BTreeSet<_> = minimized.fragments().map(|f| f.head()).collect();
+            assert!(
+                frags.contains(&e) && !frags.contains(&c),
+                "deep fragment should dominate shallow: surviving heads = {frags:?}"
+            );
+
+            // All loose commits should be pruned
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "all intermediates should be pruned when deep fragment covers the range"
+            );
+        }
+
+        // ============================================================
+        // Multi-level: non-overlapping ranges both survive
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2) ← F(d0) ← G(d2)
+        ///     oldest                                              newest
+        ///
+        ///   shallow_frag(head=C, boundary={A})         covers A→C
+        ///   deep_frag(head=G, boundary={E}, ckpts={})  covers E→G
+        /// ```
+        ///
+        /// The deep fragment covers G→E (depth 2). The shallow fragment
+        /// covers C→A (depth 1). They don't overlap — C is not in
+        /// `deep_frag`'s range. Both survive minimize.
+        ///
+        /// For loose commits: B is in block C→A (covered by shallow_frag),
+        /// so B is pruned. D is in block E→C; block E is covered by
+        /// deep_frag (E is its boundary), so D is also pruned. F is in
+        /// block G→E (covered by deep_frag), so F is pruned.
+        #[test]
+        fn different_depth_non_overlapping_both_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3);
+            let d = d0(4);
+            let e = d2(5);
+            let f = d0(6);
+            let g = d2(7);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+            ];
+
+            let shallow_frag = fragment(c, &[a], &[]);
+            let deep_frag = fragment(g, &[e], &[]);
+
+            let tree = Sedimentree::new(vec![shallow_frag.clone(), deep_frag.clone()], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            // Both fragments should survive (non-overlapping)
+            let frags: BTreeSet<_> = minimized.fragments().map(|f| f.head()).collect();
+            assert_eq!(
+                frags.len(),
+                2,
+                "both fragments should survive: heads = {frags:?}"
+            );
+
+            // All depth-0 intermediates should be pruned (each is in a
+            // block whose boundary commit is covered by some fragment)
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                !remaining.contains(&b) && !remaining.contains(&d) && !remaining.contains(&f),
+                "all depth-0 intermediates should be pruned: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Three levels: depth 2 dominates depth 1, separate depth 1 survives
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2) ← F(d0) ← G(d1) ← H(d0) ← I(d2)
+        ///     oldest                                                                newest
+        ///
+        ///   deep_frag(head=I, boundary={E}, checkpoints={G})    covers I→E
+        ///   shallow1(head=G, boundary={E})                      covers G→E (dominated by deep)
+        ///   shallow2(head=C, boundary={A})                      covers C→A (NOT dominated)
+        /// ```
+        ///
+        /// `shallow1` is dominated by `deep_frag` (G is a checkpoint, E is
+        /// boundary subset). `shallow2` is independent — C and A are not
+        /// in `deep_frag`'s range. After minimize:
+        /// - `deep_frag` and `shallow2` survive; `shallow1` is pruned
+        /// - F and H are in block I→E, covered by deep_frag → pruned
+        /// - B is in block C→A or E→C, covered by shallow2 or deep_frag → pruned
+        /// - D is in block E→C, block E covered by deep_frag → pruned
+        #[test]
+        fn three_levels_partial_domination() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3);
+            let d = d0(4);
+            let e = d2(5);
+            let f = d0(6);
+            let g = d1(7);
+            let h = d0(8);
+            let i = d2(9);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+                commit(h, &[g]),
+                commit(i, &[h]),
+            ];
+
+            let deep_frag = fragment(i, &[e], &[g]);
+            let shallow1 = fragment(g, &[e], &[]);
+            let shallow2 = fragment(c, &[a], &[]);
+
+            let tree = Sedimentree::new(
+                vec![deep_frag.clone(), shallow1.clone(), shallow2.clone()],
+                commits,
+            );
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let frag_heads: BTreeSet<_> = minimized.fragments().map(|f| f.head()).collect();
+
+            // deep_frag and shallow2 survive; shallow1 is dominated
+            assert!(
+                frag_heads.contains(&i) && frag_heads.contains(&c),
+                "deep and independent shallow should survive: heads = {frag_heads:?}"
+            );
+            assert!(
+                !frag_heads.contains(&g),
+                "dominated shallow1 should be pruned: heads = {frag_heads:?}"
+            );
+
+            // All intermediates pruned
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.is_empty(),
+                "all intermediates should be pruned by the two surviving fragments: got {remaining:?}"
             );
         }
     }

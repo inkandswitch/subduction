@@ -70,6 +70,9 @@ impl WasmCommitId {
     /// Returns an error if the string is not valid hex or not 32 bytes.
     #[wasm_bindgen(js_name = fromHexString)]
     pub fn from_hex_string(s: &str) -> Result<WasmCommitId, WasmInvalidCommitId> {
+        if !s.len().is_multiple_of(2) {
+            return Err(WasmInvalidCommitId::InvalidHex);
+        }
         if s.len() != 64 {
             return Err(WasmInvalidCommitId::WrongLength(s.len() / 2));
         }

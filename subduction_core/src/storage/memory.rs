@@ -20,8 +20,11 @@ use super::traits::Storage;
 
 /// An in-memory storage backend.
 ///
-/// Commits and fragments are stored in content-addressed maps keyed by digest.
-/// Each commit/fragment is stored together with its blob as a `VerifiedMeta<T>`.
+/// Commits are keyed by user-supplied [`CommitId`] with first-write-wins
+/// semantics: if a commit with the same [`CommitId`] is saved twice, the
+/// first payload is retained and subsequent saves are no-ops.
+///
+/// Fragments remain content-addressed, keyed by [`Digest<Fragment>`].
 #[derive(Debug, Clone, Default)]
 #[allow(clippy::type_complexity)]
 pub struct MemoryStorage {
@@ -325,7 +328,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                     .await
                     .entry(sedimentree_id)
                     .or_default()
-                    .insert(commit_id, (signed, blob));
+                    .entry(commit_id)
+                    .or_insert((signed, blob));
             }
 
             for verified in fragments {

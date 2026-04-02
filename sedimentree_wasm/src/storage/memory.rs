@@ -91,14 +91,18 @@ impl MemoryStorage {
     // ==================== Commits (compound with blob) ====================
 
     /// Save a commit with its blob.
+    ///
+    /// The `commit_id` parameter must match the `head()` embedded in
+    /// the signed commit payload. This is validated with a debug assertion.
     #[wasm_bindgen(js_name = saveCommit)]
     pub fn save_commit(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        _commit_id: &WasmCommitId,
+        commit_id: &WasmCommitId,
         signed_commit: &WasmSignedLooseCommit,
         blob: &Uint8Array,
     ) -> Promise {
+        let expected_id: CommitId = commit_id.into();
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         let signed: Signed<LooseCommit> = signed_commit.clone().into();
@@ -107,6 +111,11 @@ impl MemoryStorage {
             // Reconstruct from trusted JS storage without re-verification
             let verified = VerifiedMeta::try_from_trusted(signed, blob)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            debug_assert_eq!(
+                verified.payload().head(),
+                expected_id,
+                "commit_id parameter must match the embedded head"
+            );
             Storage::<Local>::save_loose_commit(&inner, id, verified)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
