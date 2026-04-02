@@ -2154,6 +2154,502 @@ mod tests {
         }
     }
 
+    /// Tests verifying that `minimize` correctly prunes loose commits
+    /// when they are covered by fragments.
+    ///
+    /// These tests use human-readable `CommitId` values with explicit
+    /// leading-zero structure to control the depth metric:
+    ///
+    /// ```text
+    /// Depth 0:  [0x01, 0x00, ..., N]   — no leading zero bytes
+    /// Depth 1:  [0x00, 0x01, ..., N]   — one leading zero byte
+    /// Depth 2+: [0x00, 0x00, 0x01, N]  — two leading zero bytes (≥ MAX_STRATA_DEPTH)
+    /// ```
+    ///
+    /// The trailing byte `N` distinguishes commits at the same depth.
+    mod minimize_commit_coverage_tests {
+        use alloc::{collections::BTreeSet, vec};
+
+        use crate::{
+            blob::{Blob, BlobMeta},
+            commit::CountLeadingZeroBytes,
+            fragment::Fragment,
+            id::SedimentreeId,
+            loose_commit::{LooseCommit, id::CommitId},
+            sedimentree::Sedimentree,
+        };
+
+        const SID: SedimentreeId = SedimentreeId::new([0x42; 32]);
+
+        /// Commit identifier at depth 0 (no leading zero bytes).
+        ///
+        /// Layout: `[n, 0, 0, ..., 0]` — first byte is non-zero.
+        const fn d0(n: u8) -> CommitId {
+            assert!(n != 0, "n must be non-zero for depth 0");
+            let mut b = [0u8; 32];
+            b[0] = n;
+            CommitId::new(b)
+        }
+
+        /// Commit identifier at depth 1 (one leading zero byte).
+        ///
+        /// Layout: `[0, n, 0, ..., 0]` — one leading zero, then non-zero.
+        const fn d1(n: u8) -> CommitId {
+            assert!(n != 0, "n must be non-zero for depth 1");
+            let mut b = [0u8; 32];
+            b[1] = n;
+            CommitId::new(b)
+        }
+
+        /// Commit identifier at depth 2 (two leading zero bytes, ≥ `MAX_STRATA_DEPTH`).
+        ///
+        /// Layout: `[0, 0, n, 0, ..., 0]` — two leading zeros, then non-zero.
+        /// The distinguishing byte `n` is at index 2, well within the
+        /// 12-byte `Checkpoint` truncation window.
+        const fn d2(n: u8) -> CommitId {
+            assert!(n != 0, "n must be non-zero for depth 2");
+            let mut b = [0u8; 32];
+            b[2] = n;
+            CommitId::new(b)
+        }
+
+        fn blob_meta() -> BlobMeta {
+            BlobMeta::new(&Blob::new(vec![0xAB]))
+        }
+
+        fn commit(head: CommitId, parents: &[CommitId]) -> LooseCommit {
+            LooseCommit::new(SID, head, parents.iter().copied().collect(), blob_meta())
+        }
+
+        fn fragment(head: CommitId, boundary: &[CommitId], checkpoints: &[CommitId]) -> Fragment {
+            Fragment::new(
+                SID,
+                head,
+                boundary.iter().copied().collect(),
+                checkpoints,
+                blob_meta(),
+            )
+        }
+
+        fn remaining_commit_ids(tree: &Sedimentree) -> BTreeSet<CommitId> {
+            tree.loose_commits().map(LooseCommit::head).collect()
+        }
+
+        // ============================================================
+        // Linear chain: fragment covers all intermediate commits
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d0) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///   ╰── fragment(head=E, boundary={A}) ──╯
+        /// ```
+        ///
+        /// All commits A–E are in a block bounded by two depth-2 commits.
+        /// The fragment's `supports_block` covers E (head), A (boundary),
+        /// and B/C/D should be pruned because they're in a block fully
+        /// covered by the fragment.
+        #[test]
+        fn linear_chain_all_intermediates_pruned() {
+            let a = d2(1); // oldest, root
+            let b = d0(2);
+            let c = d0(3);
+            let d = d0(4);
+            let e = d2(5); // newest, tip
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            // head = newest depth-2 commit, boundary = oldest depth-2 commit
+            let frag = fragment(e, &[a], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "all commits in a fully covered block should be pruned"
+            );
+        }
+
+        /// Same chain, but no fragment — all commits survive minimize.
+        #[test]
+        fn linear_chain_no_fragment_all_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d0(3);
+            let d = d0(4);
+            let e = d2(5);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let tree = Sedimentree::new(vec![], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert_eq!(
+                remaining_commit_ids(&minimized).len(),
+                5,
+                "without fragments, no commits should be pruned"
+            );
+        }
+
+        // ============================================================
+        // Fragment with checkpoints covers intermediate depth-1 commits
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///   ╰── fragment(head=E, boundary={A}, checkpoints={C}) ──╯
+        /// ```
+        ///
+        /// C is a depth-1 commit recorded as a checkpoint. The fragment
+        /// covers the entire block A→E. All commits should be pruned.
+        #[test]
+        fn checkpoint_covers_intermediate_depth1_commit() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3); // intermediate, recorded as checkpoint
+            let d = d0(4);
+            let e = d2(5);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let frag = fragment(e, &[a], &[c]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "all commits in a block with checkpoints should be pruned"
+            );
+        }
+
+        // ============================================================
+        // Commits between checkpoints are also covered
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d1) ← F(d0) ← G(d2)
+        ///     oldest                                              newest
+        ///   ╰── fragment(head=G, boundary={A}, checkpoints={C, E}) ──╯
+        /// ```
+        ///
+        /// B is between A and C, D is between C and E, F is between E and G.
+        /// All three intermediate depth-0 commits should be pruned.
+        #[test]
+        fn commits_between_checkpoints_are_covered() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3);
+            let d = d0(4);
+            let e = d1(5);
+            let f = d0(6);
+            let g = d2(7);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+            ];
+
+            let frag = fragment(g, &[a], &[c, e]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "commits between checkpoints should be pruned when block is covered"
+            );
+        }
+
+        // ============================================================
+        // Partial coverage: commits outside the fragment survive
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d2)    D(d0) ← E(d0)
+        ///   ╰── fragment(head=C, boundary={A}) ──╯
+        /// ```
+        ///
+        /// D and E are not in any block covered by the fragment
+        /// (they're disconnected and have no depth-2 boundaries).
+        /// They should survive minimize.
+        #[test]
+        fn commits_outside_fragment_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d2(3);
+            let d = d0(4);
+            let e = d0(5);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[]),
+                commit(e, &[d]),
+            ];
+
+            let frag = fragment(c, &[a], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.contains(&d) && remaining.contains(&e),
+                "commits outside the fragment's block should survive: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Diamond DAG: fragment covers both branches
+        // ============================================================
+
+        /// ```text
+        ///        A(d2)      newest
+        ///       ╱    ╲
+        ///     B(d0)  C(d0)
+        ///       ╲    ╱
+        ///        D(d2)      oldest
+        /// ╰── fragment(head=A, boundary={D}) ──╯
+        /// ```
+        ///
+        /// B and C are intermediate depth-0 commits on separate branches.
+        /// The fragment covers the entire block.
+        #[test]
+        fn diamond_dag_intermediates_pruned() {
+            let d = d2(4); // oldest, root
+            let b = d0(2);
+            let c = d0(3);
+            let a = d2(1); // newest, tip
+
+            let commits = vec![
+                commit(d, &[]),
+                commit(b, &[d]),
+                commit(c, &[d]),
+                commit(a, &[b, c]),
+            ];
+
+            // head = newest (A), boundary = oldest (D)
+            let frag = fragment(a, &[d], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "diamond DAG intermediates should be pruned when block is covered"
+            );
+        }
+
+        // ============================================================
+        // Diamond with checkpoint on one branch
+        // ============================================================
+
+        /// ```text
+        ///        A(d2)      newest
+        ///       ╱    ╲
+        ///     B(d1)  C(d0)
+        ///       ╲    ╱
+        ///        D(d2)      oldest
+        /// ╰── fragment(head=A, boundary={D}, checkpoints={B}) ──╯
+        /// ```
+        #[test]
+        fn diamond_with_checkpoint_on_one_branch() {
+            let d = d2(4); // oldest, root
+            let b = d1(2); // checkpoint
+            let c = d0(3);
+            let a = d2(1); // newest, tip
+
+            let commits = vec![
+                commit(d, &[]),
+                commit(b, &[d]),
+                commit(c, &[d]),
+                commit(a, &[b, c]),
+            ];
+
+            let frag = fragment(a, &[d], &[b]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "diamond with checkpoint should prune all commits in covered block"
+            );
+        }
+
+        // ============================================================
+        // Two fragments covering adjacent blocks
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d2) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///   ╰── frag1(C, {A}) ──╯╰── frag2(E, {C}) ──╯
+        /// ```
+        ///
+        /// Two fragments each cover one block. B and D are
+        /// intermediate depth-0 commits in different blocks.
+        /// frag1 covers the block from C (newer) back to A (older).
+        /// frag2 covers the block from E (newest) back to C.
+        #[test]
+        fn adjacent_fragments_cover_all_intermediates() {
+            let a = d2(1); // oldest
+            let b = d0(2);
+            let c = d2(3);
+            let d = d0(4);
+            let e = d2(5); // newest
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let frag1 = fragment(c, &[a], &[]);
+            let frag2 = fragment(e, &[c], &[]);
+            let tree = Sedimentree::new(vec![frag1, frag2], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "two adjacent fragments should prune all intermediates"
+            );
+        }
+
+        // ============================================================
+        // Gap between fragments: uncovered intermediates survive
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d2) ← D(d0) ← E(d0) ← F(d2) ← G(d0) ← H(d2) ← I(d0) ← J(d2)
+        ///     oldest                                                                        newest
+        ///   ╰── frag1(C, {A}) ──╯                                        ╰── frag2(J, {H}) ──╯
+        /// ```
+        ///
+        /// The block identified by F contains [F, E, D]. F is NOT in any
+        /// fragment's head, boundary, or checkpoints — so this block is
+        /// genuinely uncovered and D, E should survive.
+        ///
+        /// Meanwhile B (in block C, covered by frag1) and I (in block J,
+        /// covered by frag2) should be pruned.
+        #[test]
+        fn gap_between_fragments_intermediates_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d2(3);
+            let d = d0(4);
+            let e = d0(5);
+            let f = d2(6); // block boundary NOT in any fragment
+            let g = d0(7);
+            let h = d2(8);
+            let i = d0(9);
+            let j = d2(10);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+                commit(h, &[g]),
+                commit(i, &[h]),
+                commit(j, &[i]),
+            ];
+
+            // frag1 covers C→A, frag2 covers J→H
+            // Block F (containing F, E, D) and block H (containing H, G)
+            // are NOT covered by any fragment.
+            // Block C (B) and block J (I) ARE covered.
+            let frag1 = fragment(c, &[a], &[]);
+            let frag2 = fragment(j, &[h], &[]);
+            let tree = Sedimentree::new(vec![frag1, frag2], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.contains(&d) && remaining.contains(&e),
+                "commits in uncovered block F should survive: got {remaining:?}"
+            );
+            assert!(
+                !remaining.contains(&b) && !remaining.contains(&i),
+                "commits in covered blocks should be pruned: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Tail commits (before any depth-2 boundary) survive
+        // ============================================================
+
+        /// ```text
+        ///   X(d0) ← Y(d0) ← A(d2) ← B(d0) ← C(d2)
+        ///     oldest                            newest
+        ///                    ╰── frag(C, {A}) ──╯
+        /// ```
+        ///
+        /// X and Y are older than A (the first depth-2 boundary). In
+        /// reverse-topo from C, the traversal hits A and starts a block,
+        /// but X and Y come _after_ A is flushed. They end up in a block
+        /// whose end is A — and since the fragment supports A (it's the
+        /// boundary), that block is also covered.
+        ///
+        /// To get truly "blockless" tail commits we need them reachable
+        /// from a tip but with no depth-2 commit anywhere in their
+        /// ancestry path.
+        #[test]
+        fn tail_commits_on_separate_branch_survive() {
+            let x = d0(10); // oldest, root, separate branch
+            let y = d0(11);
+            let a = d2(1);
+            let b = d0(2);
+            let c = d2(3); // newest tip
+
+            let commits = vec![
+                commit(x, &[]),
+                commit(y, &[x]),
+                // a and the main chain are disconnected from x/y
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+            ];
+
+            // Fragment covers the main chain only
+            let frag = fragment(c, &[a], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.contains(&x) && remaining.contains(&y),
+                "blockless commits on a separate branch should survive: got {remaining:?}"
+            );
+        }
+    }
+
     /// Tests verifying that `fingerprint_summarize` and `diff_remote_fingerprints`
     /// operate correctly on pre-minimized trees.
     ///
