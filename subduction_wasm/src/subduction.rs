@@ -14,19 +14,18 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::id::CommitId,
     sedimentree::Sedimentree,
 };
 use subduction_core::{
@@ -38,9 +37,9 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
-        error::HydrationError,
-        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
+        error::HydrationError,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
@@ -68,12 +67,13 @@ use crate::{
     sync_stats::WasmSyncStats,
     topic::WasmTopic,
     transport::{
+        DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         websocket::WasmWebSocket,
-        JsTransport, WasmAuthenticatedTransport, DEFAULT_LOCAL_SERVICE_NAME,
     },
 };
 use sedimentree_wasm::{
+    commit_id::{JsCommitId, WasmCommitId},
     depth::{JsToDepth, WasmDepth},
     digest::{JsDigest, WasmDigest},
     fragment::WasmFragment,
@@ -108,8 +108,9 @@ impl Spawn<Local> for WasmSpawn {
 use crate::{
     clock::JsClock,
     policy::{
-        ephemeral::{make_open_ephemeral_policy, JsEphemeralPolicy},
-        make_open_policy, JsPolicy,
+        JsPolicy,
+        ephemeral::{JsEphemeralPolicy, make_open_ephemeral_policy},
+        make_open_policy,
     },
 };
 
@@ -937,15 +938,15 @@ impl WasmSubduction {
     pub async fn add_commit(
         &self,
         id: &WasmSedimentreeId,
-        head: &WasmDigest,
-        parents: Vec<JsDigest>,
+        head: &WasmCommitId,
+        parents: Vec<JsCommitId>,
         blob: &Uint8Array,
     ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
-        let core_head = CommitId::new(Digest::<LooseCommit>::from(head.clone()).into_bytes());
+        let core_head = CommitId::from(head);
         let core_parents: BTreeSet<CommitId> = parents
             .iter()
-            .map(|d| CommitId::new(Digest::<LooseCommit>::from(WasmDigest::from(d)).into_bytes()))
+            .map(|p| CommitId::from(WasmCommitId::from(p)))
             .collect();
         let blob: Blob = blob.clone().to_vec().into();
 
@@ -970,20 +971,20 @@ impl WasmSubduction {
     pub async fn add_fragment(
         &self,
         id: &WasmSedimentreeId,
-        head: &WasmDigest,
-        boundary: Vec<JsDigest>,
-        checkpoints: Vec<JsDigest>,
+        head: &WasmCommitId,
+        boundary: Vec<JsCommitId>,
+        checkpoints: Vec<JsCommitId>,
         blob: &Uint8Array,
     ) -> Result<(), WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
-        let core_head = CommitId::new(Digest::<LooseCommit>::from(head.clone()).into_bytes());
+        let core_head = CommitId::from(head);
         let core_boundary: BTreeSet<CommitId> = boundary
             .iter()
-            .map(|d| CommitId::new(Digest::<LooseCommit>::from(WasmDigest::from(d)).into_bytes()))
+            .map(|p| CommitId::from(WasmCommitId::from(p)))
             .collect();
         let core_checkpoints: Vec<CommitId> = checkpoints
             .iter()
-            .map(|d| CommitId::new(Digest::<LooseCommit>::from(WasmDigest::from(d)).into_bytes()))
+            .map(|p| CommitId::from(WasmCommitId::from(p)))
             .collect();
         let blob: Blob = blob.clone().to_vec().into();
 
@@ -1368,12 +1369,11 @@ impl WasmHashMetric {
 impl DepthMetric for WasmHashMetric {
     fn to_depth(&self, id: CommitId) -> Depth {
         if let Some(func) = &self.0 {
-            let wasm_digest =
-                WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*id.as_bytes()));
+            let wasm_commit_id = WasmCommitId::from(id);
 
             #[allow(clippy::expect_used)]
             let js_value = func
-                .call1(&JsValue::NULL, &JsValue::from(wasm_digest))
+                .call1(&JsValue::NULL, &JsValue::from(wasm_commit_id))
                 .expect("callback failed");
 
             #[allow(clippy::expect_used)]

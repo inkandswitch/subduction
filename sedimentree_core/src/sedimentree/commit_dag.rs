@@ -13,7 +13,7 @@ use crate::{
     collections::{Map, Set},
     depth::{DepthMetric, MAX_STRATA_DEPTH},
     fragment::Fragment,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
@@ -422,7 +422,7 @@ mod tests {
         collections::{Map, Set},
         depth::{Depth, DepthMetric},
         id::SedimentreeId,
-        loose_commit::{id::CommitId, LooseCommit},
+        loose_commit::{LooseCommit, id::CommitId},
     };
 
     fn make_sedimentree_id(seed: u8) -> SedimentreeId {

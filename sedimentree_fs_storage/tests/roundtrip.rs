@@ -10,11 +10,11 @@ use std::collections::BTreeSet;
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::{verified::VerifiedBlobMeta, Blob},
+    blob::{Blob, verified::VerifiedBlobMeta},
     crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::storage::traits::Storage;

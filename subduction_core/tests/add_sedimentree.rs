@@ -23,9 +23,9 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
     crypto::fingerprint::FingerprintSeed,
-    fragment::{checkpoint::Checkpoint, Fragment},
+    fragment::{Fragment, checkpoint::Checkpoint},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,
 };
 use subduction_core::connection::test_utils::new_test_subduction;

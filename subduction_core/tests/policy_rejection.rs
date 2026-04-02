@@ -6,20 +6,20 @@ use core::{convert::Infallible, fmt, time::Duration};
 use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::Blob,
     crypto::fingerprint::FingerprintSeed,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, SyncMessage, SyncResult},
         test_utils::{
-            test_signer, ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn,
-            TokioSpawn,
+            ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn, TokioSpawn,
+            test_signer,
         },
     },
     peer::id::PeerId,

@@ -4,12 +4,13 @@ use alloc::{borrow::ToOwned, collections::BTreeSet, vec::Vec};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     crypto::digest::Digest,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
-use super::digest::{JsDigest, WasmDigest};
+use super::digest::WasmDigest;
+use crate::commit_id::{JsCommitId, WasmCommitId};
 use js_sys::Uint8Array;
 
 use crate::{sedimentree_id::WasmSedimentreeId, signed::WasmSignedLooseCommit};
@@ -28,18 +29,14 @@ impl WasmLooseCommit {
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
         sedimentree_id: WasmSedimentreeId,
-        head: WasmDigest,
-        parents: Vec<JsDigest>,
+        head: WasmCommitId,
+        parents: Vec<JsCommitId>,
         blob_meta: &WasmBlobMeta,
     ) -> Self {
-        let head_bytes: [u8; 32] = Digest::<LooseCommit>::from(head).into_bytes();
-        let core_head = CommitId::new(head_bytes);
+        let core_head = CommitId::from(head);
         let core_parents: BTreeSet<CommitId> = parents
             .iter()
-            .map(|d| {
-                let bytes: [u8; 32] = Digest::<LooseCommit>::from(WasmDigest::from(d)).into_bytes();
-                CommitId::new(bytes)
-            })
+            .map(|p| CommitId::from(WasmCommitId::from(p)))
             .collect();
 
         let core_commit = LooseCommit::new(
@@ -55,10 +52,8 @@ impl WasmLooseCommit {
     /// Get the commit's head identifier.
     #[must_use]
     #[wasm_bindgen(getter, js_name = commitId)]
-    pub fn commit_id(&self) -> WasmDigest {
-        WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(
-            *self.0.head().as_bytes(),
-        ))
+    pub fn commit_id(&self) -> WasmCommitId {
+        WasmCommitId::from(self.0.head())
     }
 
     /// Get the digest of the commit (content hash).
@@ -68,14 +63,14 @@ impl WasmLooseCommit {
         Digest::hash(&self.0).into()
     }
 
-    /// Get the parent digests of the commit.
+    /// Get the parent commit identifiers.
     #[wasm_bindgen(getter)]
     #[must_use]
-    pub fn parents(&self) -> Vec<WasmDigest> {
+    pub fn parents(&self) -> Vec<WasmCommitId> {
         self.0
             .parents()
             .iter()
-            .map(|id| WasmDigest::from(Digest::<LooseCommit>::force_from_bytes(*id.as_bytes())))
+            .map(|id| WasmCommitId::from(*id))
             .collect()
     }
 

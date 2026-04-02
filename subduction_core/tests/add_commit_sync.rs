@@ -14,7 +14,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,

@@ -19,7 +19,7 @@ use sedimentree_core::{
     collections::{Map, Set},
     commit::{CommitStore, FragmentState},
     loose_commit::id::CommitId,
-    test_utils::{seeded_rng, TestGraph},
+    test_utils::{TestGraph, seeded_rng},
 };
 
 type Known = Map<CommitId, FragmentState<Set<CommitId>>>;

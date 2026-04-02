@@ -49,7 +49,7 @@ use sedimentree_core::{
         CommitStore, CountLeadingZeroBytes, FragmentError, FragmentState, MissingCommitError,
     },
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,
 };
 

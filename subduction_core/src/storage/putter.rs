@@ -10,7 +10,7 @@ use sedimentree_core::{
     crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 

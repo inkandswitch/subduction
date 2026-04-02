@@ -12,20 +12,20 @@ use std::{
     time::Duration,
 };
 use subduction_core::{
-    connection::{message::SyncMessage, Connection, Reconnect},
+    connection::{Connection, Reconnect, message::SyncMessage},
     handler::sync::SyncHandler,
     handshake::audience::Audience,
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
-    tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn},
     DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;

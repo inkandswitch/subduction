@@ -772,11 +772,7 @@ impl From<[u8; 32]> for MinimalTreeHash {
 }
 
 /// Checks if any of the given commits has a commit boundary.
-pub fn has_commit_boundary<
-    I: IntoIterator<Item = D>,
-    D: Into<CommitId>,
-    M: DepthMetric,
->(
+pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<CommitId>, M: DepthMetric>(
     commits: I,
     depth_metric: &M,
 ) -> bool {
@@ -913,19 +909,10 @@ mod tests {
 
     /// Build a fragment with a specific head and boundary, suitable for
     /// testing the dependency graph in `topsorted_blob_order`.
-    fn make_fragment_with_deps(
-        head_bytes: [u8; 32],
-        boundary: BTreeSet<CommitId>,
-    ) -> Fragment {
+    fn make_fragment_with_deps(head_bytes: [u8; 32], boundary: BTreeSet<CommitId>) -> Fragment {
         let sid = make_sedimentree_id(0);
         let blob_meta = make_blob_meta(0);
-        Fragment::new(
-            sid,
-            CommitId::new(head_bytes),
-            boundary,
-            &[],
-            blob_meta,
-        )
+        Fragment::new(sid, CommitId::new(head_bytes), boundary, &[], blob_meta)
     }
 
     fn unique_head(id: u8) -> [u8; 32] {
@@ -1037,10 +1024,7 @@ mod tests {
         let c = make_fragment_with_deps(c_head, BTreeSet::from([CommitId::new(d_head)]));
         let a = make_fragment_with_deps(
             a_head,
-            BTreeSet::from([
-                CommitId::new(b_head),
-                CommitId::new(c_head),
-            ]),
+            BTreeSet::from([CommitId::new(b_head), CommitId::new(c_head)]),
         );
 
         let mut tree = Sedimentree::default();

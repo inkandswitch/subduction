@@ -31,7 +31,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;

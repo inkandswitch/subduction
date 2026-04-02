@@ -21,11 +21,10 @@ use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
 use sedimentree_core::{
     commit::{CommitStore, Parents},
-    crypto::digest::Digest,
     hex::decode_hex,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::id::CommitId,
 };
-use sedimentree_wasm::digest::{JsDigest, WasmDigest};
+use sedimentree_wasm::commit_id::WasmCommitId;
 use subduction_wasm::subduction::WasmHashMetric;
 use wasm_bindgen::prelude::*;
 
@@ -53,11 +52,11 @@ impl WasmSedimentreeAutomerge {
     #[wasm_bindgen(js_name = fragment)]
     pub fn js_fragment(
         &self,
-        head: &WasmDigest,
+        head: &WasmCommitId,
         known_states: &WasmFragmentStateStore,
         hash_metric: &WasmHashMetric,
     ) -> Result<WasmFragmentState, WasmFragmentError> {
-        let head_id = CommitId::new(Digest::<LooseCommit>::from(head.clone()).into_bytes());
+        let head_id = CommitId::from(head);
         Ok(self
             .fragment(head_id, &known_states.0.borrow(), hash_metric)
             .map(WasmFragmentState)?)
@@ -72,17 +71,13 @@ impl WasmSedimentreeAutomerge {
     #[wasm_bindgen(js_name = buildFragmentStore)]
     pub fn js_build_fragment_store(
         &self,
-        head_digests: Vec<JsDigest>,
+        head_ids: Vec<sedimentree_wasm::commit_id::JsCommitId>,
         known_fragment_states: &WasmFragmentStateStore,
         strategy: &WasmHashMetric,
     ) -> Result<Vec<WasmFragmentState>, WasmFragmentError> {
-        let heads: Vec<CommitId> = head_digests
+        let heads: Vec<CommitId> = head_ids
             .into_iter()
-            .map(|js_digest| {
-                CommitId::new(
-                    Digest::<LooseCommit>::from(WasmDigest::from(&js_digest)).into_bytes(),
-                )
-            })
+            .map(|js_id| CommitId::from(WasmCommitId::from(&js_id)))
             .collect();
 
         let fresh = self
@@ -192,16 +187,16 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
     }
 }
 
-/// Compute the digest of a base58-encoded ID string.
+/// Compute the commit ID of a base58-encoded ID string.
 ///
 /// # Errors
 ///
 /// Returns a `WasmFromBase58Error` if the input string is not valid base58.
 #[wasm_bindgen(js_name = digestOfBase58Id)]
-pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, WasmFromBase58Error> {
+pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmCommitId, WasmFromBase58Error> {
     let decoded = b58_str.from_base58()?;
     let raw: [u8; 32] = blake3::hash(&decoded).into();
-    Ok(Digest::<LooseCommit>::force_from_bytes(raw).into())
+    Ok(WasmCommitId::from(CommitId::new(raw)))
 }
 
 #[wasm_bindgen]

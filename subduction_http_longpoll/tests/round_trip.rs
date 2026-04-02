@@ -21,7 +21,9 @@ use std::{
 
 use future_form::Sendable;
 use rand::RngCore;
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId};
+use sedimentree_core::{
+    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use subduction_core::{
     connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,
@@ -499,7 +501,9 @@ async fn large_message_handling() -> TestResult {
     rand::thread_rng().fill_bytes(&mut large_data);
     let blob = Blob::new(large_data);
 
-    client.add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob).await?;
+    client
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob)
+        .await?;
 
     let (had_success, _stats, call_errs, io_errs) =
         client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;

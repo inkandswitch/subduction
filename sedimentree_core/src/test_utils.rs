@@ -23,7 +23,6 @@ use crate::{
     blob::{Blob, BlobMeta},
     collections::{Map, Set},
     commit::CommitStore,
-
     depth::{Depth, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
@@ -232,8 +231,7 @@ impl TestGraph {
                     names
                         .iter()
                         .map(|n| {
-                            *ids
-                                .get(n)
+                            *ids.get(n)
                                 .unwrap_or_else(|| panic!("Parent node not found: {n}"))
                         })
                         .collect()

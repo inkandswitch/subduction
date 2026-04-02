@@ -14,7 +14,7 @@
     clippy::unwrap_used
 )]
 
-use automerge::{Automerge, ChangeHash, ReadDoc, ROOT};
+use automerge::{Automerge, ChangeHash, ROOT, ReadDoc};
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -23,7 +23,7 @@ use sedimentree_core::{
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{Sedimentree, SedimentreeItem},
 };
 

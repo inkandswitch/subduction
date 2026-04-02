@@ -9,7 +9,7 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
+    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
     codec::{
         decode::{self, DecodeFields},
         encode::{self, EncodeFields},

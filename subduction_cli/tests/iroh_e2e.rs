@@ -29,7 +29,9 @@ use std::{
 };
 
 use future_form::Sendable;
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId};
+use sedimentree_core::{
+    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use subduction_core::{
     connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,

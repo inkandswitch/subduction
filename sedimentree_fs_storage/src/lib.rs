@@ -33,8 +33,13 @@
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use sedimentree_core::{
-    blob::Blob, codec::error::DecodeError, collections::Set, crypto::digest::Digest,
-    fragment::Fragment, id::SedimentreeId,     loose_commit::{LooseCommit, id::CommitId},
+    blob::Blob,
+    codec::error::DecodeError,
+    collections::Set,
+    crypto::digest::Digest,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use std::{
     path::{Path, PathBuf},
@@ -416,7 +421,11 @@ impl Storage<Sendable> for FsStorage {
         commit_id: CommitId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?commit_id, "FsStorage::delete_loose_commit");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?commit_id,
+                "FsStorage::delete_loose_commit"
+            );
 
             let signed_path = self.commit_signed_path(sedimentree_id, commit_id);
             let blob_path = self.commit_blob_path(sedimentree_id, commit_id);
