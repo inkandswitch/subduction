@@ -4768,7 +4768,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "async-lock",
  "base58",
