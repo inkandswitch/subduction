@@ -16,7 +16,6 @@ use wasm_bindgen_futures::future_to_promise;
 
 use crate::{
     commit_id::WasmCommitId,
-    digest::WasmDigest,
     fragment::WasmFragmentWithBlob,
     loose_commit::WasmCommitWithBlob,
     sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
@@ -128,6 +127,49 @@ impl MemoryStorage {
         })
     }
 
+    /// Load a single commit by its ID, returning `CommitWithBlob` or null.
+    #[wasm_bindgen(js_name = loadCommit)]
+    pub fn load_commit(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        commit_id: &WasmCommitId,
+    ) -> Promise {
+        let inner = self.inner.clone();
+        let id: SedimentreeId = sedimentree_id.clone().into();
+        let cid: CommitId = commit_id.into();
+        future_to_promise(async move {
+            let result = Storage::<Local>::load_loose_commit(&inner, id, cid)
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            match result {
+                Some(verified) => {
+                    let signed = WasmSignedLooseCommit::from(verified.signed().clone());
+                    let blob = Uint8Array::from(verified.blob().contents().as_slice());
+                    Ok(WasmCommitWithBlob::new(signed, blob).into())
+                }
+                None => Ok(JsValue::NULL),
+            }
+        })
+    }
+
+    /// Delete a single commit by its ID.
+    #[wasm_bindgen(js_name = deleteCommit)]
+    pub fn delete_commit(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        commit_id: &WasmCommitId,
+    ) -> Promise {
+        let inner = self.inner.clone();
+        let id: SedimentreeId = sedimentree_id.clone().into();
+        let cid: CommitId = commit_id.into();
+        future_to_promise(async move {
+            Storage::<Local>::delete_loose_commit(&inner, id, cid)
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            Ok(JsValue::UNDEFINED)
+        })
+    }
+
     /// List all commit IDs for a sedimentree.
     #[wasm_bindgen(js_name = listCommitIds)]
     pub fn list_commit_ids(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
@@ -184,7 +226,7 @@ impl MemoryStorage {
     pub fn save_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        _digest: &WasmDigest,
+        _fragment_head: &WasmCommitId,
         signed_fragment: &WasmSignedFragment,
         blob: &Uint8Array,
     ) -> Promise {

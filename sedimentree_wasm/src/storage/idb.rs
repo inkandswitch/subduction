@@ -23,7 +23,7 @@ use web_sys::{
 
 use crate::{
     commit_id::WasmCommitId,
-    digest::{WasmDigest, WasmInvalidDigest},
+    digest::WasmInvalidDigest,
     fragment::WasmFragmentWithBlob,
     loose_commit::WasmCommitWithBlob,
     sedimentree_id::WasmSedimentreeId,
@@ -517,13 +517,13 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_save_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
         signed: &WasmSignedFragment,
         blob: &Uint8Array,
     ) -> Result<(), WasmSaveFragmentError> {
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
-            digest: digest.to_hex_string(),
+            digest: fragment_head.to_hex_string(),
             signed: signed.as_bytes().to_vec(),
             blob: blob.to_vec(),
         };
@@ -991,14 +991,14 @@ fn extract_commit_record(
 }
 
 /// Extract a fragment `Record` from a JS object shaped
-/// `{digest: Digest, signedFragment: SignedFragment, blob: Uint8Array}`.
+/// `{fragmentHead: CommitId, signedFragment: SignedFragment, blob: Uint8Array}`.
 fn extract_fragment_record(
     obj: &JsValue,
     sedimentree_id: SedimentreeId,
 ) -> Result<Record, WasmSaveBatchAllError> {
-    let digest_val = js_sys::Reflect::get(obj, &JsValue::from_str("digest"))
+    let fragment_head_val = js_sys::Reflect::get(obj, &JsValue::from_str("fragmentHead"))
         .map_err(WasmSaveBatchAllError::ReflectError)?;
-    let digest = WasmDigest::try_from_js_value(digest_val)
+    let fragment_head = WasmCommitId::try_from_js_value(fragment_head_val)
         .map_err(WasmSaveBatchAllError::ConversionError)?;
 
     let signed_val = js_sys::Reflect::get(obj, &JsValue::from_str("signedFragment"))
@@ -1012,7 +1012,7 @@ fn extract_fragment_record(
 
     Ok(Record {
         sedimentree_id,
-        digest: digest.to_hex_string(),
+        digest: fragment_head.to_hex_string(),
         signed: signed.as_bytes().to_vec(),
         blob: blob.to_vec(),
     })

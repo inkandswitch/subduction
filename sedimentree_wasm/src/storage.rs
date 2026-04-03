@@ -12,7 +12,6 @@ use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
     codec::error::DecodeError,
-    crypto::digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::{LooseCommit, id::CommitId},
@@ -27,7 +26,6 @@ use from_js_ref::FromJsRef;
 
 use crate::{
     commit_id::{JsCommitId, WasmCommitId},
-    digest::{JsDigest, WasmDigest},
     fragment::WasmFragmentWithBlob,
     loose_commit::WasmCommitWithBlob,
     sedimentree_id::{
@@ -53,7 +51,7 @@ export interface SedimentreeStorage {
     deleteAllCommits(sedimentreeId: SedimentreeId): Promise<void>;
 
     // Compound storage for fragments (signed data + blob stored together)
-    saveFragment(sedimentreeId: SedimentreeId, digest: Digest, signedFragment: SignedFragment, blob: Uint8Array): Promise<void>;
+    saveFragment(sedimentreeId: SedimentreeId, fragmentHead: CommitId, signedFragment: SignedFragment, blob: Uint8Array): Promise<void>;
     loadFragment(sedimentreeId: SedimentreeId, fragmentHead: CommitId): Promise<FragmentWithBlob | null>;
     listFragmentIds(sedimentreeId: SedimentreeId): Promise<CommitId[]>;
     loadAllFragments(sedimentreeId: SedimentreeId): Promise<FragmentWithBlob[]>;
@@ -61,7 +59,7 @@ export interface SedimentreeStorage {
     deleteAllFragments(sedimentreeId: SedimentreeId): Promise<void>;
 
     // Batch save: write all commits + fragments in a single storage transaction.
-    saveBatchAll(sedimentreeId: SedimentreeId, commits: Array<{commitId: CommitId, signedCommit: SignedLooseCommit, blob: Uint8Array}>, fragments: Array<{digest: Digest, signedFragment: SignedFragment, blob: Uint8Array}>): Promise<number>;
+    saveBatchAll(sedimentreeId: SedimentreeId, commits: Array<{commitId: CommitId, signedCommit: SignedLooseCommit, blob: Uint8Array}>, fragments: Array<{fragmentHead: CommitId, signedFragment: SignedFragment, blob: Uint8Array}>): Promise<number>;
 }
 "#;
 
@@ -122,7 +120,7 @@ extern "C" {
     fn js_save_fragment(
         this: &JsStorage,
         sedimentree_id: &JsSedimentreeId,
-        digest: &JsDigest,
+        fragment_head: &JsCommitId,
         signed_fragment: &JsSignedFragment,
         blob: &Uint8Array,
     ) -> Promise;
@@ -386,15 +384,15 @@ impl Storage<Local> for JsStorage {
         verified: VerifiedMeta<Fragment>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            let digest = Digest::hash(verified.payload());
-            tracing::debug!(?sedimentree_id, ?digest, "JsStorage::save_fragment");
+            let fragment_head = verified.payload().head();
+            tracing::debug!(?sedimentree_id, ?fragment_head, "JsStorage::save_fragment");
 
             let signed: WasmSignedFragment = verified.signed().clone().into();
             let blob = Uint8Array::from(verified.blob().contents().as_slice());
 
             let js_promise = self.js_save_fragment(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
-                &WasmDigest::from(digest).into(),
+                &WasmCommitId::from(fragment_head).into(),
                 &signed.into(),
                 &blob,
             );
@@ -584,15 +582,15 @@ impl Storage<Local> for JsStorage {
 
             let js_fragments = js_sys::Array::new_with_length(num_fragments as u32);
             for (i, verified) in fragments.into_iter().enumerate() {
-                let digest = Digest::hash(verified.payload());
+                let fragment_head = verified.payload().head();
                 let signed: WasmSignedFragment = verified.signed().clone().into();
                 let blob = Uint8Array::from(verified.blob().contents().as_slice());
 
                 let obj = js_sys::Object::new();
                 js_sys::Reflect::set(
                     &obj,
-                    &JsValue::from_str("digest"),
-                    &WasmDigest::from(digest).into(),
+                    &JsValue::from_str("fragmentHead"),
+                    &WasmCommitId::from(fragment_head).into(),
                 )
                 .ok();
                 js_sys::Reflect::set(

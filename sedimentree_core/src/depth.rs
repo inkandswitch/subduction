@@ -14,10 +14,13 @@ pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 /// This means that the same data can appear in multiple strata, but may be fragmented
 /// into smaller or larger sections based on a hash hardness metric.
 ///
-/// The depth is determined by the number of leading zeros in each hash in base 10.
-/// If there's zero-or-more leading zeros, it may only live in the topmost (0th) layer.
-/// If there is one leading zero (or more), it can only live in the 0th or 1st layer.
-/// If there are two leading zeros (or more), it can only live in the 0th, 1st, or 2nd layer
+/// The depth is determined by a [`DepthMetric`] applied to the commit's
+/// [`CommitId`]. The default metric ([`CountLeadingZeroBytes`](crate::commit::CountLeadingZeroBytes))
+/// counts leading zero bytes, giving ~1/256 probability per depth level.
+///
+/// If there are zero leading zero bytes, the commit lives only in the topmost (0th) layer.
+/// If there is one leading zero byte (or more), it can live in the 0th or 1st layer.
+/// If there are two leading zero bytes (or more), it can live in the 0th, 1st, or 2nd layer
 /// (and so on).
 ///
 /// ```diagram
@@ -61,9 +64,9 @@ impl<T: DepthMetric> DepthMetric for Box<T> {
 
 /// A depth strategy that counts leading zero bytes in the commit identifier.
 ///
-/// For example, the identifier `0x00012345...` has a depth of 3,
-/// the identifier `0x00abcdef...` has a depth of 2,
-/// and the identifier `0x12345678...` has a depth of 0.
+/// For example, the identifier `[0x00, 0x00, 0x23, ...]` has a depth of 2,
+/// the identifier `[0x00, 0xAB, 0xCD, ...]` has a depth of 1,
+/// and the identifier `[0x12, 0x34, 0x56, ...]` has a depth of 0.
 #[derive(Debug, Clone, Copy)]
 pub struct CountLeadingZeroBytes;
 
