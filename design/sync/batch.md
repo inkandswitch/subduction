@@ -80,7 +80,7 @@ struct BatchSyncRequest {
 struct FingerprintSummary {
     seed: FingerprintSeed,                       // 128-bit SipHash key (random per request)
     commit_fingerprints: Vec<Fingerprint<CommitId>>,     // 8 bytes each
-    fragment_fingerprints: Vec<Fingerprint<FragmentId>>, // 8 bytes each
+    fragment_fingerprints: Vec<Fingerprint<CommitId>>,   // 8 bytes each
 }
 
 struct RequestId {
@@ -109,7 +109,7 @@ struct SyncDiff {
 
 struct RequestedData {
     commit_fingerprints: Vec<Fingerprint<CommitId>>,       // Commits responder lacks
-    fragment_fingerprints: Vec<Fingerprint<FragmentId>>,   // Fragments responder lacks
+    fragment_fingerprints: Vec<Fingerprint<CommitId>>,     // Fragments responder lacks
 }
 ```
 
@@ -166,14 +166,14 @@ When the response echoes back fingerprints, the requester must resolve them to a
 
 ```
 ┌──────────────────────────┐         ┌──────────────────────────┐
-│    Fingerprint<CommitId> │ ──────> │    Digest<LooseCommit>   │
+│    Fingerprint<CommitId> │ ──────> │    CommitId              │
 │    (8 bytes, from resp)  │         │    (32 bytes, for load)  │
 └──────────────────────────┘         └──────────────────────────┘
 ```
 
 ```rust
 // Build lookup tables from in-memory sedimentree + seed
-let commit_lookup: Map<Fingerprint<CommitId>, Digest<LooseCommit>> =
+let commit_lookup: Map<Fingerprint<CommitId>, CommitId> =
     sedimentree.loose_commits()
         .map(|c| (Fingerprint::new(&seed, &c.commit_id()), c.digest()))
         .collect();
@@ -208,7 +208,7 @@ Sent as WebSocket binary frames with a maximum size of 5 MB.
 ```rust
 struct RemoteHeads {
     counter: u64,                          // Per-peer monotonic counter (higher = newer)
-    heads: Vec<Digest<LooseCommit>>,       // Tip commits of the sedimentree
+    heads: Vec<CommitId>,                   // Tip commits of the sedimentree
 }
 ```
 
@@ -334,7 +334,7 @@ After receiving the response, the requester builds a reverse-lookup table and se
 ```rust
 // Build reverse-lookup: Fingerprint → Digest
 let sedimentree = local_sedimentrees.get(&id);
-let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> =
+let commit_fp_to_digest: Map<Fingerprint<CommitId>, CommitId> =
     sedimentree.loose_commits()
         .map(|c| (Fingerprint::new(&seed, &c.commit_id()), c.digest()))
         .collect();

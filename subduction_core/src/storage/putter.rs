@@ -6,8 +6,10 @@ use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    collections::Set,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -72,21 +74,10 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
             .save_loose_commit(self.sedimentree_id, verified)
     }
 
-    /// Load a loose commit with its blob by digest.
-    ///
-    /// Returns `None` if no commit exists with the given digest.
+    /// List all commit IDs for this sedimentree.
     #[must_use]
-    pub fn load_loose_commit(
-        &self,
-        digest: Digest<LooseCommit>,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, S::Error>> {
-        self.storage.load_loose_commit(self.sedimentree_id, digest)
-    }
-
-    /// List all commit digests for this sedimentree.
-    #[must_use]
-    pub fn list_commit_digests(&self) -> K::Future<'_, Result<Set<Digest<LooseCommit>>, S::Error>> {
-        self.storage.list_commit_digests(self.sedimentree_id)
+    pub fn list_commit_ids(&self) -> K::Future<'_, Result<Set<CommitId>, S::Error>> {
+        self.storage.list_commit_ids(self.sedimentree_id)
     }
 
     /// Load all loose commits with their blobs for this sedimentree.
@@ -114,21 +105,22 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
         self.storage.save_fragment(self.sedimentree_id, verified)
     }
 
-    /// Load a fragment with its blob by digest.
+    /// Load a fragment with its blob by fragment head [`CommitId`].
     ///
-    /// Returns `None` if no fragment exists with the given digest.
+    /// Returns `None` if no fragment exists with the given identity.
     #[must_use]
     pub fn load_fragment(
         &self,
-        digest: Digest<Fragment>,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, S::Error>> {
-        self.storage.load_fragment(self.sedimentree_id, digest)
+        self.storage
+            .load_fragment(self.sedimentree_id, fragment_head)
     }
 
-    /// List all fragment digests for this sedimentree.
+    /// List all fragment head [`CommitId`] values for this sedimentree.
     #[must_use]
-    pub fn list_fragment_digests(&self) -> K::Future<'_, Result<Set<Digest<Fragment>>, S::Error>> {
-        self.storage.list_fragment_digests(self.sedimentree_id)
+    pub fn list_fragment_ids(&self) -> K::Future<'_, Result<Set<CommitId>, S::Error>> {
+        self.storage.list_fragment_ids(self.sedimentree_id)
     }
 
     /// Load all fragments with their blobs for this sedimentree.

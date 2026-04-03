@@ -7,7 +7,7 @@ use async_lock::Mutex;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob, collections::Map, commit::CountLeadingZeroBytes, crypto::digest::Digest,
-    id::SedimentreeId, loose_commit::LooseCommit,
+    id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
     connection::test_utils::{
@@ -26,24 +26,19 @@ use subduction_core::{
 };
 use testresult::TestResult;
 
-fn make_commit_parts() -> (BTreeSet<Digest<LooseCommit>>, Blob) {
+fn make_commit_parts() -> (CommitId, BTreeSet<CommitId>, Blob) {
     let contents = vec![0u8; 32];
     let blob = Blob::new(contents);
-    (BTreeSet::new(), blob)
+    (CommitId::new([0xCC; 32]), BTreeSet::new(), blob)
 }
 
 #[allow(clippy::type_complexity)]
-fn make_fragment_parts() -> (
-    Digest<LooseCommit>,
-    BTreeSet<Digest<LooseCommit>>,
-    Vec<Digest<LooseCommit>>,
-    Blob,
-) {
+fn make_fragment_parts() -> (CommitId, BTreeSet<CommitId>, Vec<CommitId>, Blob) {
     let contents = vec![0u8; 32];
     let blob = Blob::new(contents);
-    let head = Digest::<LooseCommit>::force_from_bytes([1u8; 32]);
-    let boundary = BTreeSet::from([Digest::<LooseCommit>::force_from_bytes([2u8; 32])]);
-    let checkpoints = vec![Digest::<LooseCommit>::force_from_bytes([3u8; 32])];
+    let head = CommitId::new([1u8; 32]);
+    let boundary = BTreeSet::from([CommitId::new([2u8; 32])]);
+    let checkpoints = vec![CommitId::new([3u8; 32])];
     (head, boundary, checkpoints, blob)
 }
 
@@ -92,9 +87,9 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
 
     // Add a commit - the send will fail
     let id = SedimentreeId::new([1u8; 32]);
-    let (parents, blob) = make_commit_parts();
+    let (head, parents, blob) = make_commit_parts();
 
-    let _ = subduction.add_commit(id, parents, blob).await;
+    let _ = subduction.add_commit(id, head, parents, blob).await;
 
     // Connection should be unregistered after send failure
     assert_eq!(
@@ -279,9 +274,9 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
 
     // Add a commit - sends will succeed
     let id = SedimentreeId::new([1u8; 32]);
-    let (parents, blob) = make_commit_parts();
+    let (head, parents, blob) = make_commit_parts();
 
-    let _ = subduction.add_commit(id, parents, blob).await;
+    let _ = subduction.add_commit(id, head, parents, blob).await;
 
     // Both connections should still be registered (sends succeeded)
     assert_eq!(

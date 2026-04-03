@@ -1,12 +1,10 @@
 //! Fragment types for Sedimentree data partitioning.
 
 pub mod checkpoint;
-pub mod id;
 
 use alloc::{collections::BTreeSet, vec::Vec};
 
 use checkpoint::Checkpoint;
-use id::FragmentId;
 
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
@@ -19,7 +17,7 @@ use crate::{
     crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::id::CommitId,
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -40,14 +38,14 @@ pub struct Fragment {
 impl Fragment {
     /// Constructor for a [`Fragment`].
     ///
-    /// The `checkpoints` are raw commit digests that fall within the fragment's
+    /// The `checkpoints` are raw commit identifiers that fall within the fragment's
     /// range. They are truncated to 12 bytes internally for compact storage.
     #[must_use]
     pub fn new(
         sedimentree_id: SedimentreeId,
-        head: Digest<LooseCommit>,
-        boundary: BTreeSet<Digest<LooseCommit>>,
-        checkpoints: &[Digest<LooseCommit>],
+        head: CommitId,
+        boundary: BTreeSet<CommitId>,
+        checkpoints: &[CommitId],
         blob_meta: BlobMeta,
     ) -> Self {
         let truncated_checkpoints: BTreeSet<Checkpoint> =
@@ -68,8 +66,8 @@ impl Fragment {
     #[must_use]
     pub const fn from_parts(
         sedimentree_id: SedimentreeId,
-        head: Digest<LooseCommit>,
-        boundary: BTreeSet<Digest<LooseCommit>>,
+        head: CommitId,
+        boundary: BTreeSet<CommitId>,
         checkpoints: BTreeSet<Checkpoint>,
         blob_meta: BlobMeta,
     ) -> Self {
@@ -116,17 +114,17 @@ impl Fragment {
             || self.summary.boundary.is_superset(&other.boundary)
     }
 
-    /// Returns true if this [`Fragment`] supports the given commit digest.
+    /// Returns true if this [`Fragment`] supports the given commit identifier.
     ///
     /// A commit is supported if it falls within the fragment's range:
     /// - The head (top of range)
     /// - Any checkpoint (interior, truncated comparison)
     /// - Any boundary commit (bottom of range)
     #[must_use]
-    pub fn supports_block(&self, digest: Digest<LooseCommit>) -> bool {
-        self.summary.head == digest
-            || self.checkpoints.contains(&Checkpoint::new(digest))
-            || self.summary.boundary.contains(&digest)
+    pub fn supports_block(&self, id: CommitId) -> bool {
+        self.summary.head == id
+            || self.checkpoints.contains(&Checkpoint::new(id))
+            || self.summary.boundary.contains(&id)
     }
 
     /// Convert to a [`FragmentSummary`].
@@ -143,13 +141,13 @@ impl Fragment {
 
     /// The head of the fragment.
     #[must_use]
-    pub const fn head(&self) -> Digest<LooseCommit> {
+    pub const fn head(&self) -> CommitId {
         self.summary.head
     }
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &BTreeSet<Digest<LooseCommit>> {
+    pub const fn boundary(&self) -> &BTreeSet<CommitId> {
         &self.summary.boundary
     }
 
@@ -157,12 +155,6 @@ impl Fragment {
     #[must_use]
     pub const fn checkpoints(&self) -> &BTreeSet<Checkpoint> {
         &self.checkpoints
-    }
-
-    /// The causal identity of this fragment (its head digest).
-    #[must_use]
-    pub const fn fragment_id(&self) -> FragmentId {
-        FragmentId::new(self.summary.head)
     }
 
     /// The [`SedimentreeId`] this fragment belongs to.
@@ -173,12 +165,7 @@ impl Fragment {
 }
 
 impl HasBlobMeta for Fragment {
-    type Args = (
-        SedimentreeId,
-        Digest<LooseCommit>,
-        BTreeSet<Digest<LooseCommit>>,
-        Vec<Digest<LooseCommit>>,
-    );
+    type Args = (SedimentreeId, CommitId, BTreeSet<CommitId>, Vec<CommitId>);
 
     fn blob_meta(&self) -> BlobMeta {
         self.summary().blob_meta()
@@ -196,8 +183,8 @@ impl HasBlobMeta for Fragment {
 impl<'a> arbitrary::Arbitrary<'a> for Fragment {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let sedimentree_id: SedimentreeId = u.arbitrary()?;
-        let head: Digest<LooseCommit> = u.arbitrary()?;
-        let boundary: BTreeSet<Digest<LooseCommit>> = u.arbitrary()?;
+        let head: CommitId = u.arbitrary()?;
+        let boundary: BTreeSet<CommitId> = u.arbitrary()?;
         let checkpoints: BTreeSet<Checkpoint> = u.arbitrary()?;
         let blob_meta: BlobMeta = u.arbitrary()?;
         Ok(Self::from_parts(
@@ -216,19 +203,15 @@ impl<'a> arbitrary::Arbitrary<'a> for Fragment {
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FragmentSummary {
-    head: Digest<LooseCommit>,
-    boundary: BTreeSet<Digest<LooseCommit>>,
+    head: CommitId,
+    boundary: BTreeSet<CommitId>,
     blob_meta: BlobMeta,
 }
 
 impl FragmentSummary {
     /// Constructor for a [`FragmentSummary`].
     #[must_use]
-    pub const fn new(
-        head: Digest<LooseCommit>,
-        boundary: BTreeSet<Digest<LooseCommit>>,
-        blob_meta: BlobMeta,
-    ) -> Self {
+    pub const fn new(head: CommitId, boundary: BTreeSet<CommitId>, blob_meta: BlobMeta) -> Self {
         Self {
             head,
             boundary,
@@ -238,13 +221,13 @@ impl FragmentSummary {
 
     /// The head of the fragment.
     #[must_use]
-    pub const fn head(&self) -> Digest<LooseCommit> {
+    pub const fn head(&self) -> CommitId {
         self.head
     }
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &BTreeSet<Digest<LooseCommit>> {
+    pub const fn boundary(&self) -> &BTreeSet<CommitId> {
         &self.boundary
     }
 
@@ -330,7 +313,7 @@ impl DecodeFields for Fragment {
         offset += 32;
 
         let head_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let head = Digest::<LooseCommit>::force_from_bytes(head_bytes);
+        let head = CommitId::new(head_bytes);
         offset += 32;
 
         let blob_digest_bytes: [u8; 32] = decode::array(buf, offset)?;
@@ -372,10 +355,7 @@ impl DecodeFields for Fragment {
 
         decode::verify_sorted(&boundary_arrays)?;
 
-        let boundary: BTreeSet<Digest<LooseCommit>> = boundary_arrays
-            .into_iter()
-            .map(Digest::force_from_bytes)
-            .collect();
+        let boundary: BTreeSet<CommitId> = boundary_arrays.into_iter().map(CommitId::new).collect();
 
         let mut checkpoint_arrays: Vec<[u8; CHECKPOINT_BYTES]> =
             Vec::with_capacity(checkpoint_count);
@@ -407,18 +387,17 @@ mod tests {
         use super::super::*;
         use crate::{crypto::digest::Digest, sedimentree::Sedimentree};
 
-        /// `Digest::hash(&fragment)` must be deterministic and must match
-        /// the key used by `Sedimentree`'s fragment map and all storage
-        /// backends.
+        /// `Digest::hash(&fragment)` must be deterministic, and the
+        /// `Sedimentree` map key must be the fragment's head [`CommitId`].
         #[test]
         fn digest_hash_is_deterministic() -> testresult::TestResult {
             let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
             let fragment = Fragment::from_parts(
                 SedimentreeId::new([0x01; 32]),
-                Digest::force_from_bytes([0x10; 32]),
+                CommitId::new([0x10; 32]),
                 alloc::collections::BTreeSet::from([
-                    Digest::force_from_bytes([0x20; 32]),
-                    Digest::force_from_bytes([0x30; 32]),
+                    CommitId::new([0x20; 32]),
+                    CommitId::new([0x30; 32]),
                 ]),
                 alloc::collections::BTreeSet::new(),
                 BlobMeta::new(&blob),
@@ -429,13 +408,17 @@ mod tests {
             let d2: Digest<Fragment> = Digest::hash(&fragment);
             assert_eq!(d1, d2, "Digest::hash must be deterministic");
 
-            // The digest used as a Sedimentree map key must match.
+            // The Sedimentree map key must be the head CommitId.
             let tree = Sedimentree::new(alloc::vec![fragment.clone()], alloc::vec![]);
             let (map_key, _) = tree
                 .fragment_entries()
                 .next()
                 .ok_or("tree should contain one fragment")?;
-            assert_eq!(*map_key, d1, "Sedimentree map key must equal Digest::hash");
+            assert_eq!(
+                *map_key,
+                fragment.head(),
+                "Sedimentree map key must equal head()"
+            );
 
             Ok(())
         }
@@ -491,11 +474,10 @@ mod tests {
     use crate::{
         blob::{Blob, BlobMeta},
         commit::CountLeadingZeroBytes,
-        crypto::digest::Digest,
         fragment::{Fragment, FragmentSummary},
         id::SedimentreeId,
-        loose_commit::LooseCommit,
-        test_utils::digest_with_depth,
+        loose_commit::id::CommitId,
+        test_utils::commit_id_with_depth,
     };
 
     fn make_blob_meta(seed: u8) -> BlobMeta {
@@ -504,9 +486,9 @@ mod tests {
     }
 
     fn make_fragment(
-        head: Digest<LooseCommit>,
-        boundary: BTreeSet<Digest<LooseCommit>>,
-        checkpoints: &[Digest<LooseCommit>],
+        head: CommitId,
+        boundary: BTreeSet<CommitId>,
+        checkpoints: &[CommitId],
     ) -> Fragment {
         let sedimentree_id = SedimentreeId::new([0x42; 32]);
         let blob_meta = make_blob_meta(1);
@@ -519,8 +501,8 @@ mod tests {
 
     #[test]
     fn supports_block_head() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
 
         // Head should be supported
@@ -529,8 +511,8 @@ mod tests {
 
     #[test]
     fn supports_block_boundary() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
 
         // Boundary should be supported
@@ -539,9 +521,9 @@ mod tests {
 
     #[test]
     fn supports_block_checkpoint() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
-        let checkpoint = digest_with_depth(1, 50);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
+        let checkpoint = commit_id_with_depth(1, 50);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[checkpoint]);
 
         // Checkpoint should be supported (via truncated match)
@@ -550,11 +532,11 @@ mod tests {
 
     #[test]
     fn supports_block_unknown_digest() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
 
-        let unknown = digest_with_depth(1, 200);
+        let unknown = commit_id_with_depth(1, 200);
         assert!(!fragment.supports_block(unknown));
     }
 
@@ -565,10 +547,10 @@ mod tests {
     #[test]
     fn deeper_supports_shallower_with_matching_range() {
         // Deep fragment (depth 3)
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
-        let shallow_head = digest_with_depth(2, 1);
-        let shallow_boundary = digest_with_depth(1, 101);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
+        let shallow_head = commit_id_with_depth(2, 1);
+        let shallow_boundary = commit_id_with_depth(1, 101);
 
         // Deep fragment has shallow's head and boundary in checkpoints
         let deep = make_fragment(
@@ -590,13 +572,13 @@ mod tests {
     #[test]
     fn shallower_never_supports_deeper() {
         // Shallow fragment (depth 2)
-        let shallow_head = digest_with_depth(2, 1);
-        let shallow_boundary = digest_with_depth(1, 100);
+        let shallow_head = commit_id_with_depth(2, 1);
+        let shallow_boundary = commit_id_with_depth(1, 100);
         let shallow = make_fragment(shallow_head, BTreeSet::from([shallow_boundary]), &[]);
 
         // Deep fragment summary (depth 3)
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 101);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 101);
         let deep_summary = FragmentSummary::new(
             deep_head,
             BTreeSet::from([deep_boundary]),
@@ -610,12 +592,12 @@ mod tests {
     #[test]
     fn same_depth_partial_overlap_no_support() {
         // Two fragments at depth 2 with different heads
-        let head1 = digest_with_depth(2, 1);
-        let boundary1 = digest_with_depth(1, 100);
+        let head1 = commit_id_with_depth(2, 1);
+        let boundary1 = commit_id_with_depth(1, 100);
         let fragment1 = make_fragment(head1, BTreeSet::from([boundary1]), &[]);
 
-        let head2 = digest_with_depth(2, 2);
-        let boundary2 = digest_with_depth(1, 101);
+        let head2 = commit_id_with_depth(2, 2);
+        let boundary2 = commit_id_with_depth(1, 101);
         let summary2 = FragmentSummary::new(head2, BTreeSet::from([boundary2]), make_blob_meta(2));
 
         // Neither should support the other
@@ -625,9 +607,9 @@ mod tests {
     #[test]
     fn supports_boundary_subset() {
         // Fragment with boundary {A, B}
-        let head = digest_with_depth(2, 1);
-        let boundary_a = digest_with_depth(1, 100);
-        let boundary_b = digest_with_depth(1, 101);
+        let head = commit_id_with_depth(2, 1);
+        let boundary_a = commit_id_with_depth(1, 100);
+        let boundary_b = commit_id_with_depth(1, 101);
         let fragment = make_fragment(head, BTreeSet::from([boundary_a, boundary_b]), &[]);
 
         // Summary with same head but boundary subset {A}
@@ -640,10 +622,10 @@ mod tests {
     #[test]
     fn supports_head_in_checkpoints_boundary_in_checkpoints() {
         // Deep fragment
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
-        let checkpoint1 = digest_with_depth(2, 50);
-        let checkpoint2 = digest_with_depth(1, 51);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
+        let checkpoint1 = commit_id_with_depth(2, 50);
+        let checkpoint2 = commit_id_with_depth(1, 51);
 
         let deep = make_fragment(
             deep_head,
@@ -663,12 +645,12 @@ mod tests {
 
     #[test]
     fn no_support_when_head_not_in_range() {
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
         let deep = make_fragment(deep_head, BTreeSet::from([deep_boundary]), &[]);
 
         // Shallow with head not in deep's range
-        let other_head = digest_with_depth(2, 99);
+        let other_head = commit_id_with_depth(2, 99);
         let shallow_summary = FragmentSummary::new(
             other_head,
             BTreeSet::from([deep_boundary]), // boundary matches, but head doesn't
@@ -680,15 +662,15 @@ mod tests {
 
     #[test]
     fn no_support_when_boundary_not_in_range() {
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
-        let shallow_head = digest_with_depth(2, 50);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
+        let shallow_head = commit_id_with_depth(2, 50);
 
         // Deep has shallow's head in checkpoints
         let deep = make_fragment(deep_head, BTreeSet::from([deep_boundary]), &[shallow_head]);
 
         // Shallow boundary is NOT in deep's range
-        let other_boundary = digest_with_depth(1, 200);
+        let other_boundary = commit_id_with_depth(1, 200);
         let shallow_summary = FragmentSummary::new(
             shallow_head,
             BTreeSet::from([other_boundary]),

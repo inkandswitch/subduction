@@ -1,7 +1,7 @@
 //! Sync statistics for wasm bindings.
 
 use alloc::vec::Vec;
-use sedimentree_wasm::digest::WasmDigest;
+use sedimentree_wasm::commit_id::WasmCommitId;
 use subduction_core::connection::stats::SyncStats;
 use wasm_bindgen::prelude::*;
 
@@ -16,7 +16,7 @@ pub struct WasmSyncStats {
     fragments_received: usize,
     commits_sent: usize,
     fragments_sent: usize,
-    remote_heads: Vec<WasmDigest>,
+    remote_heads: Vec<WasmCommitId>,
 }
 
 #[wasm_bindgen(js_class = SyncStats)]
@@ -79,7 +79,7 @@ impl WasmSyncStats {
     /// The remote peer's heads for this sedimentree.
     #[must_use]
     #[wasm_bindgen(getter, js_name = remoteHeads)]
-    pub fn remote_heads(&self) -> Vec<WasmDigest> {
+    pub fn remote_heads(&self) -> Vec<WasmCommitId> {
         self.remote_heads.clone()
     }
 }
@@ -95,7 +95,7 @@ impl From<SyncStats> for WasmSyncStats {
                 .remote_heads
                 .heads
                 .into_iter()
-                .map(WasmDigest::from)
+                .map(WasmCommitId::from)
                 .collect(),
         }
     }

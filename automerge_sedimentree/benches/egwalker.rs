@@ -28,12 +28,12 @@ use rand::{Rng, SeedableRng, rngs::SmallRng};
 use sedimentree_core::{
     blob::BlobMeta,
     collections::Map,
-    commit::{CommitStore, CountLeadingZeroBytes, CountTrailingZerosInBase},
+    commit::{CommitStore, CountLeadingZeroBytes, FragmentState},
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
-    depth::DepthMetric,
+    depth::{CountTrailingZerosInBase, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,
 };
 
@@ -72,7 +72,7 @@ fn load_automerge(bytes: &[u8]) -> Automerge {
 
 /// Generate a random digest with specified leading zero bytes.
 #[allow(clippy::indexing_slicing)]
-fn random_digest_with_depth(rng: &mut SmallRng, depth: u32) -> Digest<LooseCommit> {
+fn random_commit_id_with_depth(rng: &mut SmallRng, depth: u32) -> CommitId {
     let mut bytes = [0u8; 32];
     rng.fill(&mut bytes);
 
@@ -87,7 +87,7 @@ fn random_digest_with_depth(rng: &mut SmallRng, depth: u32) -> Digest<LooseCommi
         }
     }
 
-    Digest::force_from_bytes(bytes)
+    CommitId::new(bytes)
 }
 
 /// Generate synthetic fragments matching the expected distribution for a document.
@@ -118,18 +118,18 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
             0
         };
 
-        let head = random_digest_with_depth(&mut rng, depth);
+        let head = random_commit_id_with_depth(&mut rng, depth);
 
         // Generate 1-3 boundary commits at same or higher depth
         let boundary_count = rng.gen_range(1..=3);
         let boundary: BTreeSet<_> = (0..boundary_count)
-            .map(|_| random_digest_with_depth(&mut rng, depth))
+            .map(|_| random_commit_id_with_depth(&mut rng, depth))
             .collect();
 
         // Generate checkpoints (commits at higher depths within this fragment)
         let checkpoint_count = rng.gen_range(0..=10);
         let checkpoints: Vec<_> = (0..checkpoint_count)
-            .map(|_| random_digest_with_depth(&mut rng, depth + 1))
+            .map(|_| random_commit_id_with_depth(&mut rng, depth + 1))
             .collect();
 
         // Blob size: average commit is ~100 bytes, fragment covers ~256 commits
@@ -224,16 +224,16 @@ fn generate_fragments_for_metric(
             }
         };
 
-        let head = random_digest_with_depth(&mut rng, depth);
+        let head = random_commit_id_with_depth(&mut rng, depth);
 
         let boundary_count = rng.gen_range(1..=3);
         let boundary: BTreeSet<_> = (0..boundary_count)
-            .map(|_| random_digest_with_depth(&mut rng, depth))
+            .map(|_| random_commit_id_with_depth(&mut rng, depth))
             .collect();
 
         let checkpoint_count = rng.gen_range(0..=10);
         let checkpoints: Vec<_> = (0..checkpoint_count)
-            .map(|_| random_digest_with_depth(&mut rng, depth + 1))
+            .map(|_| random_commit_id_with_depth(&mut rng, depth + 1))
             .collect();
 
         // Blob size scales with fragment rate (larger fragments for sparser metrics)
@@ -268,16 +268,17 @@ fn generate_loose_commits(count: usize, seed: u64) -> Vec<LooseCommit> {
     (0..count)
         .map(|_| {
             let parent_count = rng.gen_range(0..=2);
-            let parents: BTreeSet<_> = (0..parent_count)
-                .map(|_| random_digest_with_depth(&mut rng, 0))
+            let parents: BTreeSet<CommitId> = (0..parent_count)
+                .map(|_| random_commit_id_with_depth(&mut rng, 0))
                 .collect();
+            let head = random_commit_id_with_depth(&mut rng, 0);
             let blob_digest = Digest::force_from_bytes({
                 let mut b = [0u8; 32];
                 rng.fill(&mut b);
                 b
             });
             let blob_meta = BlobMeta::from_digest_size(blob_digest, 100);
-            LooseCommit::new(sedimentree_id, parents, blob_meta)
+            LooseCommit::new(sedimentree_id, head, parents, blob_meta)
         })
         .collect()
 }
@@ -615,11 +616,7 @@ fn bench_build_fragment_store(c: &mut Criterion) {
         // Pre-build the index outside the bench loop (we're benchmarking
         // the fragment building, not the indexing).
         let store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
-        let heads: Vec<Digest<LooseCommit>> = doc
-            .get_heads()
-            .iter()
-            .map(|h| Digest::force_from_bytes(h.0))
-            .collect();
+        let heads: Vec<CommitId> = doc.get_heads().iter().map(|h| CommitId::new(h.0)).collect();
 
         group.throughput(Throughput::Elements(change_count));
         group.bench_with_input(
@@ -627,10 +624,7 @@ fn bench_build_fragment_store(c: &mut Criterion) {
             &(store, heads),
             |b, (store, heads)| {
                 b.iter(|| {
-                    let mut known: Map<
-                        Digest<LooseCommit>,
-                        sedimentree_core::commit::FragmentState<OwnedParents>,
-                    > = Map::new();
+                    let mut known: Map<CommitId, FragmentState<OwnedParents>> = Map::new();
                     store
                         .build_fragment_store(black_box(heads), &mut known, &CountLeadingZeroBytes)
                         .expect("build_fragment_store");

@@ -36,7 +36,7 @@ mod generators {
         crypto::{digest::Digest, fingerprint::FingerprintSeed},
         fragment::Fragment,
         id::SedimentreeId,
-        loose_commit::LooseCommit,
+        loose_commit::{LooseCommit, id::CommitId},
         sedimentree::FingerprintSummary,
     };
     use subduction_core::{
@@ -49,12 +49,12 @@ mod generators {
     };
     use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
-    /// Generate a deterministic commit digest from a seed.
-    pub(super) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
+    /// Generate a deterministic commit ID from a seed.
+    pub(super) fn commit_id_from_seed(seed: u64) -> CommitId {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut bytes = [0u8; 32];
         rng.fill(&mut bytes);
-        Digest::force_from_bytes(bytes)
+        CommitId::new(bytes)
     }
 
     /// Generate a deterministic blob digest from a seed.
@@ -92,10 +92,11 @@ mod generators {
     /// Generate a loose commit from a seed.
     pub(super) fn loose_commit_from_seed(seed: u64) -> LooseCommit {
         let id = sedimentree_id_from_seed(seed);
-        let parent = digest_from_seed(seed.wrapping_add(1));
+        let head = commit_id_from_seed(seed);
+        let parent = commit_id_from_seed(seed.wrapping_add(1));
         let blob = blob_from_seed(seed.wrapping_add(2), 64);
         let blob_meta = BlobMeta::new(&blob);
-        LooseCommit::new(id, BTreeSet::from([parent]), blob_meta)
+        LooseCommit::new(id, head, BTreeSet::from([parent]), blob_meta)
     }
 
     /// Generate a fragment from a seed.
@@ -106,16 +107,16 @@ mod generators {
         num_members: usize,
     ) -> Fragment {
         let id = sedimentree_id_from_seed(seed);
-        let digest = digest_from_seed(seed);
-        let parents: BTreeSet<Digest<LooseCommit>> = (0..num_parents)
-            .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
+        let head = commit_id_from_seed(seed);
+        let boundary: BTreeSet<CommitId> = (0..num_parents)
+            .map(|i| commit_id_from_seed(seed.wrapping_add(100 + i as u64)))
             .collect();
-        let members: Vec<Digest<LooseCommit>> = (0..num_members)
-            .map(|i| digest_from_seed(seed.wrapping_add(200 + i as u64)))
+        let checkpoints: Vec<CommitId> = (0..num_members)
+            .map(|i| commit_id_from_seed(seed.wrapping_add(200 + i as u64)))
             .collect();
         let blob = blob_from_seed(seed.wrapping_add(300), 128);
         let blob_meta = BlobMeta::new(&blob);
-        Fragment::new(id, digest, parents, &members, blob_meta)
+        Fragment::new(id, head, boundary, &checkpoints, blob_meta)
     }
 
     /// Generate a request ID from seeds.
@@ -963,7 +964,7 @@ mod display {
     use criterion::{Criterion, black_box};
     use subduction_core::storage::id::StorageId;
 
-    use super::generators::{digest_from_seed, peer_id_from_seed, sedimentree_id_from_seed};
+    use super::generators::{commit_id_from_seed, peer_id_from_seed, sedimentree_id_from_seed};
 
     /// Benchmark Display implementations for ID types.
     ///
@@ -989,9 +990,9 @@ mod display {
             b.iter(|| format!("{}", black_box(&id)));
         });
 
-        group.bench_function("digest", |b| {
-            let digest = digest_from_seed(12345);
-            b.iter(|| format!("{}", black_box(&digest)));
+        group.bench_function("commit_id", |b| {
+            let commit_id = commit_id_from_seed(12345);
+            b.iter(|| format!("{}", black_box(&commit_id)));
         });
 
         group.finish();

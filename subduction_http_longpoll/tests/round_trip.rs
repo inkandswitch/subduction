@@ -21,7 +21,9 @@ use std::{
 
 use future_form::Sendable;
 use rand::RngCore;
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::{
+    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use subduction_core::{
     connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,
@@ -83,6 +85,12 @@ fn init_tracing() {
 
 fn signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
+}
+
+fn random_commit_id() -> CommitId {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    CommitId::new(bytes)
 }
 
 // ─── Test Server Harness ─────────────────────────────────────────────────────
@@ -367,6 +375,7 @@ async fn known_peer_connect() -> TestResult {
     client
         .add_commit(
             sed_id,
+            random_commit_id(),
             BTreeSet::new(),
             Blob::new(b"known-peer-data".to_vec()),
         )
@@ -396,7 +405,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Server adds an initial commit
     server
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), random_blob())
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob())
         .await?;
 
     let num_clients = 3;
@@ -427,7 +436,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 2: Each client adds its own commit
     for client in &clients {
         client
-            .add_commit(sed_id, BTreeSet::new(), random_blob())
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), random_blob())
             .await?;
     }
 
@@ -492,7 +501,9 @@ async fn large_message_handling() -> TestResult {
     rand::thread_rng().fill_bytes(&mut large_data);
     let blob = Blob::new(large_data);
 
-    client.add_commit(sed_id, BTreeSet::new(), blob).await?;
+    client
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob)
+        .await?;
 
     let (had_success, _stats, call_errs, io_errs) =
         client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
@@ -539,7 +550,7 @@ async fn message_ordering() -> TestResult {
         let mut data = b"ordered-commit-".to_vec();
         data.push(i);
         client
-            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))
             .await?;
     }
 
@@ -576,6 +587,7 @@ async fn disconnect_and_reconnect() -> TestResult {
     client1
         .add_commit(
             sed_id,
+            random_commit_id(),
             BTreeSet::new(),
             Blob::new(b"before-disconnect".to_vec()),
         )
@@ -599,6 +611,7 @@ async fn disconnect_and_reconnect() -> TestResult {
         .subduction
         .add_commit(
             sed_id,
+            random_commit_id(),
             BTreeSet::new(),
             Blob::new(b"while-disconnected".to_vec()),
         )
@@ -644,7 +657,7 @@ async fn server_to_client_sync() -> TestResult {
     let blob = Blob::new(b"hello from server".to_vec());
     server
         .subduction
-        .add_commit(sed_id, BTreeSet::new(), blob)
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob)
         .await
         .expect("add commit");
 
@@ -699,7 +712,7 @@ async fn bidirectional_sync() -> TestResult {
         let blob = Blob::new(data);
         server
             .subduction
-            .add_commit(sed_id, BTreeSet::new(), blob)
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob)
             .await
             .expect("server add commit");
     }
@@ -710,7 +723,7 @@ async fn bidirectional_sync() -> TestResult {
         data.push(i);
         let blob = Blob::new(data);
         client
-            .add_commit(sed_id, BTreeSet::new(), blob)
+            .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob)
             .await
             .expect("client add commit");
     }

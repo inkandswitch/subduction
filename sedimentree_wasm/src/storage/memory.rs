@@ -4,8 +4,10 @@ use alloc::string::ToString;
 use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
-    blob::Blob, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
@@ -13,7 +15,7 @@ use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::{
-    digest::{JsDigest, WasmDigest},
+    commit_id::WasmCommitId,
     fragment::WasmFragmentWithBlob,
     loose_commit::WasmCommitWithBlob,
     sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
@@ -87,14 +89,24 @@ impl MemoryStorage {
     // ==================== Commits (compound with blob) ====================
 
     /// Save a commit with its blob.
+    ///
+    /// The `commit_id` parameter must match the `head()` embedded in
+    /// the signed commit payload. Returns an error if they differ.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error if:
+    /// - The signed payload cannot be decoded
+    /// - The `commit_id` does not match the embedded `head()`
     #[wasm_bindgen(js_name = saveCommit)]
     pub fn save_commit(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        _digest: &WasmDigest,
+        commit_id: &WasmCommitId,
         signed_commit: &WasmSignedLooseCommit,
         blob: &Uint8Array,
     ) -> Promise {
+        let expected_id: CommitId = commit_id.into();
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         let signed: Signed<LooseCommit> = signed_commit.clone().into();
@@ -103,6 +115,11 @@ impl MemoryStorage {
             // Reconstruct from trusted JS storage without re-verification
             let verified = VerifiedMeta::try_from_trusted(signed, blob)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            if verified.payload().head() != expected_id {
+                return Err(JsValue::from_str(
+                    "commit_id parameter does not match the embedded head",
+                ));
+            }
             Storage::<Local>::save_loose_commit(&inner, id, verified)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -110,14 +127,18 @@ impl MemoryStorage {
         })
     }
 
-    /// Load a commit by digest, returning `CommitWithBlob` or null.
+    /// Load a single commit by its ID, returning `CommitWithBlob` or null.
     #[wasm_bindgen(js_name = loadCommit)]
-    pub fn load_commit(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
+    pub fn load_commit(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        commit_id: &WasmCommitId,
+    ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<LooseCommit> = digest.clone().into();
+        let cid: CommitId = commit_id.into();
         future_to_promise(async move {
-            let result = Storage::<Local>::load_loose_commit(&inner, id, digest)
+            let result = Storage::<Local>::load_loose_commit(&inner, id, cid)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
@@ -131,18 +152,36 @@ impl MemoryStorage {
         })
     }
 
-    /// List all commit digests for a sedimentree.
-    #[wasm_bindgen(js_name = listCommitDigests)]
-    pub fn list_commit_digests(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
+    /// Delete a single commit by its ID.
+    #[wasm_bindgen(js_name = deleteCommit)]
+    pub fn delete_commit(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        commit_id: &WasmCommitId,
+    ) -> Promise {
+        let inner = self.inner.clone();
+        let id: SedimentreeId = sedimentree_id.clone().into();
+        let cid: CommitId = commit_id.into();
+        future_to_promise(async move {
+            Storage::<Local>::delete_loose_commit(&inner, id, cid)
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            Ok(JsValue::UNDEFINED)
+        })
+    }
+
+    /// List all commit IDs for a sedimentree.
+    #[wasm_bindgen(js_name = listCommitIds)]
+    pub fn list_commit_ids(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         future_to_promise(async move {
-            let digests = Storage::<Local>::list_commit_digests(&inner, id)
+            let commit_ids = Storage::<Local>::list_commit_ids(&inner, id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
-            for d in digests {
-                result.push(&JsDigest::from(WasmDigest::from(d)));
+            for cid in commit_ids {
+                result.push(&JsValue::from(WasmCommitId::from(cid)));
             }
             Ok(result.into())
         })
@@ -167,24 +206,6 @@ impl MemoryStorage {
         })
     }
 
-    /// Delete a commit by digest.
-    #[wasm_bindgen(js_name = deleteCommit)]
-    pub fn delete_commit(
-        &self,
-        sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
-    ) -> Promise {
-        let inner = self.inner.clone();
-        let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<LooseCommit> = digest.clone().into();
-        future_to_promise(async move {
-            Storage::<Local>::delete_loose_commit(&inner, id, digest)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            Ok(JsValue::UNDEFINED)
-        })
-    }
-
     /// Delete all commits for a sedimentree.
     #[wasm_bindgen(js_name = deleteAllCommits)]
     pub fn delete_all_commits(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
@@ -205,7 +226,7 @@ impl MemoryStorage {
     pub fn save_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        _digest: &WasmDigest,
+        _fragment_head: &WasmCommitId,
         signed_fragment: &WasmSignedFragment,
         blob: &Uint8Array,
     ) -> Promise {
@@ -224,18 +245,18 @@ impl MemoryStorage {
         })
     }
 
-    /// Load a fragment by digest, returning `FragmentWithBlob` or null.
+    /// Load a fragment by its identifier, returning `FragmentWithBlob` or null.
     #[wasm_bindgen(js_name = loadFragment)]
     pub fn load_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<Fragment> = digest.clone().into();
+        let fragment_head = CommitId::from(fragment_head);
         future_to_promise(async move {
-            let result = Storage::<Local>::load_fragment(&inner, id, digest)
+            let result = Storage::<Local>::load_fragment(&inner, id, fragment_head)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
@@ -249,18 +270,18 @@ impl MemoryStorage {
         })
     }
 
-    /// List all fragment digests for a sedimentree.
-    #[wasm_bindgen(js_name = listFragmentDigests)]
-    pub fn list_fragment_digests(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
+    /// List all fragment IDs for a sedimentree.
+    #[wasm_bindgen(js_name = listFragmentIds)]
+    pub fn list_fragment_ids(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         future_to_promise(async move {
-            let digests = Storage::<Local>::list_fragment_digests(&inner, id)
+            let fragment_ids = Storage::<Local>::list_fragment_ids(&inner, id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
-            for d in digests {
-                result.push(&JsDigest::from(WasmDigest::from(d)));
+            for fid in fragment_ids {
+                result.push(&JsValue::from(WasmCommitId::from(fid)));
             }
             Ok(result.into())
         })
@@ -285,18 +306,18 @@ impl MemoryStorage {
         })
     }
 
-    /// Delete a fragment by digest.
+    /// Delete a fragment by its identifier.
     #[wasm_bindgen(js_name = deleteFragment)]
     pub fn delete_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<Fragment> = digest.clone().into();
+        let fragment_head = CommitId::from(fragment_head);
         future_to_promise(async move {
-            Storage::<Local>::delete_fragment(&inner, id, digest)
+            Storage::<Local>::delete_fragment(&inner, id, fragment_head)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

@@ -121,7 +121,7 @@ use sedimentree_core::{
     depth::{Depth, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintResolver, Sedimentree},
 };
 use subduction_crypto::{
@@ -207,11 +207,11 @@ pub struct Subduction<
 #[derive(Debug, Clone)]
 pub struct FragmentBatchItem {
     /// The head commit of the fragment.
-    pub head: Digest<LooseCommit>,
+    pub head: CommitId,
     /// The boundary commits (fragment edges).
-    pub boundary: BTreeSet<Digest<LooseCommit>>,
+    pub boundary: BTreeSet<CommitId>,
     /// Checkpoint digests within the fragment.
-    pub checkpoints: Vec<Digest<LooseCommit>>,
+    pub checkpoints: Vec<CommitId>,
     /// The blob containing the fragment's data.
     pub blob: Blob,
 }
@@ -1097,7 +1097,8 @@ where
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
-        parents: BTreeSet<Digest<LooseCommit>>,
+        head: CommitId,
+        parents: BTreeSet<CommitId>,
         blob: Blob,
     ) -> Result<Option<FragmentRequested>, WriteError<F, S, C, H::Message, P::PutDisallowed>> {
         let self_id = self.peer_id();
@@ -1105,10 +1106,10 @@ where
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<F, _>(&self.signer, (id, parents), verified_blob).await;
+            VerifiedMeta::seal::<F, _>(&self.signer, (id, head, parents), verified_blob).await;
 
-        let commit_digest = Digest::hash(verified_meta.payload());
-        tracing::debug!("adding commit {:?} to sedimentree {:?}", commit_digest, id);
+        let commit_head = verified_meta.payload().head();
+        tracing::debug!("adding commit {:?} to sedimentree {:?}", commit_head, id);
 
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
@@ -1169,9 +1170,9 @@ where
         }
 
         let mut maybe_requested_fragment = None;
-        let depth = self.depth_metric.to_depth(commit_digest);
+        let depth = self.depth_metric.to_depth(commit_head);
         if depth != Depth(0) {
-            maybe_requested_fragment = Some(FragmentRequested::new(commit_digest, depth));
+            maybe_requested_fragment = Some(FragmentRequested::new(commit_head, depth));
         }
 
         Ok(maybe_requested_fragment)
@@ -1191,9 +1192,9 @@ where
     pub async fn add_fragment(
         &self,
         id: SedimentreeId,
-        head: Digest<LooseCommit>,
-        boundary: BTreeSet<Digest<LooseCommit>>,
-        checkpoints: &[Digest<LooseCommit>],
+        head: CommitId,
+        boundary: BTreeSet<CommitId>,
+        checkpoints: &[CommitId],
         blob: Blob,
     ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
         let verified_blob = VerifiedBlobMeta::new(blob);
@@ -1300,7 +1301,7 @@ where
     pub async fn add_commits_batch(
         &self,
         id: SedimentreeId,
-        commits: Vec<(BTreeSet<Digest<LooseCommit>>, Blob)>,
+        commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
     ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
         if commits.is_empty() {
             return Ok(());
@@ -1311,10 +1312,10 @@ where
         let count = commits.len();
         tracing::info!("bulk-inserting {count} commits into sedimentree {id:?}");
 
-        for (parents, blob) in commits {
+        for (head, parents, blob) in commits {
             let verified_blob = VerifiedBlobMeta::new(blob);
             let verified_meta: VerifiedMeta<LooseCommit> =
-                VerifiedMeta::seal::<F, _>(&self.signer, (id, parents), verified_blob).await;
+                VerifiedMeta::seal::<F, _>(&self.signer, (id, head, parents), verified_blob).await;
 
             self.insert_commit_locally(&putter, verified_meta)
                 .await
@@ -2329,48 +2330,70 @@ where
             .unwrap_or_default()
             .heads(&self.depth_metric);
 
-        let requested_commit_digests: Vec<Digest<LooseCommit>> = requesting
+        let mut requested_commit_ids: Vec<CommitId> = requesting
             .commit_fingerprints
             .iter()
             .filter_map(|fp| {
-                let digest = resolver.resolve_commit(fp);
-                if digest.is_none() {
-                    tracing::warn!("requested commit fingerprint {fp} not found in resolver");
+                let id = resolver.resolve_commit(fp);
+                if id.is_none() {
+                    // Coverage-only fingerprints (fragment head/boundary) are in
+                    // the summary but intentionally not in the resolver. The remote
+                    // echoing them back is expected when it doesn't have that CommitId.
+                    tracing::debug!("requested commit fingerprint {fp} not found in resolver");
                 }
-                digest
+                id
             })
             .collect();
 
-        let requested_fragment_digests: Vec<Digest<Fragment>> = requesting
+        // DAG-ancestry pruning: don't send commits that are ancestors of
+        // commits the remote already has. The "shared" commits are those
+        // in our resolver that the remote did NOT request (they have them).
+        if !requested_commit_ids.is_empty() {
+            let tree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
+            let requested_set: Set<CommitId> = requested_commit_ids.iter().copied().collect();
+            let shared: Set<CommitId> = tree
+                .loose_commits()
+                .map(LooseCommit::head)
+                .filter(|cid| !requested_set.contains(cid))
+                .collect();
+            if !shared.is_empty() {
+                let ancestors = tree.ancestors_of(&shared);
+                requested_commit_ids.retain(|cid| !ancestors.contains(cid));
+            }
+        }
+
+        let requested_fragment_ids: Vec<CommitId> = requesting
             .fragment_fingerprints
             .iter()
             .filter_map(|fp| {
-                let digest = resolver.resolve_fragment(fp);
-                if digest.is_none() {
+                let id = resolver.resolve_fragment(fp);
+                if id.is_none() {
                     tracing::warn!("requested fragment fingerprint {fp} not found in resolver");
                 }
-                digest
+                id
             })
             .collect();
 
         // Load commits and fragments from storage (compound with blobs), build wire messages
         let (commit_messages, fragment_messages) = {
             // With compound storage, load_loose_commits returns VerifiedMeta which contains both signed data and blob
-            let commit_by_digest: Map<Digest<LooseCommit>, VerifiedMeta<LooseCommit>> =
-                if requested_commit_digests.is_empty() {
+            let commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> =
+                if requested_commit_ids.is_empty() {
                     Map::default()
                 } else {
-                    fetcher
+                    let mut map = Map::new();
+                    for vm in fetcher
                         .load_loose_commits()
                         .await
                         .map_err(IoError::Storage)?
-                        .into_iter()
-                        .map(|vm| (Digest::hash(vm.payload()), vm))
-                        .collect()
+                    {
+                        map.entry(vm.payload().head()).or_insert(vm);
+                    }
+                    map
                 };
 
-            let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> =
-                if requested_fragment_digests.is_empty() {
+            let fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> =
+                if requested_fragment_ids.is_empty() {
                     Map::default()
                 } else {
                     fetcher
@@ -2378,13 +2401,13 @@ where
                         .await
                         .map_err(IoError::Storage)?
                         .into_iter()
-                        .map(|vm| (Digest::hash(vm.payload()), vm))
+                        .map(|vm| (vm.payload().head(), vm))
                         .collect()
                 };
 
             let mut commit_msgs = Vec::new();
-            for commit_digest in &requested_commit_digests {
-                if let Some(verified) = commit_by_digest.get(commit_digest) {
+            for commit_id in &requested_commit_ids {
+                if let Some(verified) = commit_by_id.get(commit_id) {
                     let msg: H::Message = SyncMessage::LooseCommit {
                         id,
                         commit: verified.signed().clone(),
@@ -2400,8 +2423,8 @@ where
             }
 
             let mut fragment_msgs = Vec::new();
-            for fragment_digest in &requested_fragment_digests {
-                if let Some(verified) = fragment_by_digest.get(fragment_digest) {
+            for frag_id in &requested_fragment_ids {
+                if let Some(verified) = fragment_by_id.get(frag_id) {
                     let msg: H::Message = SyncMessage::Fragment {
                         id,
                         fragment: verified.signed().clone(),
@@ -2826,40 +2849,34 @@ mod tests {
         blob::{Blob, BlobMeta},
         collections::Map,
         commit::CountLeadingZeroBytes,
-        crypto::digest::Digest,
         fragment::Fragment,
         id::SedimentreeId,
-        loose_commit::LooseCommit,
+        loose_commit::{LooseCommit, id::CommitId},
     };
     use subduction_crypto::signed::Signed;
     use testresult::TestResult;
 
-    fn make_commit_parts() -> (BTreeSet<Digest<LooseCommit>>, Blob) {
+    fn make_commit_parts() -> (CommitId, BTreeSet<CommitId>, Blob) {
         let contents = vec![0u8; 32];
         let blob = Blob::new(contents);
-        (BTreeSet::new(), blob)
+        (CommitId::new([0xCC; 32]), BTreeSet::new(), blob)
     }
 
     async fn make_signed_test_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blob) {
-        let (parents, blob) = make_commit_parts();
+        let (head, parents, blob) = make_commit_parts();
         let blob_meta = BlobMeta::new(&blob);
-        let commit = LooseCommit::new(*id, parents, blob_meta);
+        let commit = LooseCommit::new(*id, head, parents, blob_meta);
         let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
         (verified.into_signed(), blob)
     }
 
     #[allow(clippy::type_complexity)]
-    fn make_fragment_parts() -> (
-        Digest<LooseCommit>,
-        BTreeSet<Digest<LooseCommit>>,
-        Vec<Digest<LooseCommit>>,
-        Blob,
-    ) {
+    fn make_fragment_parts() -> (CommitId, BTreeSet<CommitId>, Vec<CommitId>, Blob) {
         let contents = vec![0u8; 32];
         let blob = Blob::new(contents);
-        let head = Digest::<LooseCommit>::force_from_bytes([1u8; 32]);
-        let boundary = BTreeSet::from([Digest::<LooseCommit>::force_from_bytes([2u8; 32])]);
-        let checkpoints = vec![Digest::<LooseCommit>::force_from_bytes([3u8; 32])];
+        let head = CommitId::new([1u8; 32]);
+        let boundary = BTreeSet::from([CommitId::new([2u8; 32])]);
+        let checkpoints = vec![CommitId::new([3u8; 32])];
         (head, boundary, checkpoints, blob)
     }
 

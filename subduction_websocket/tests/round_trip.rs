@@ -12,6 +12,7 @@ use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
+    loose_commit::id::CommitId,
 };
 use subduction_core::{
     handler::sync::SyncHandler,
@@ -40,6 +41,12 @@ const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 
 fn test_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
+}
+
+fn random_commit_id() -> CommitId {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    CommitId::new(bytes)
 }
 
 type TestSubduction = Arc<
@@ -152,7 +159,7 @@ async fn batch_sync() -> TestResult {
     });
 
     server_subduction
-        .add_commit(sed_id, BTreeSet::new(), blob1)
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob1)
         .await?;
 
     let inserted = server_subduction
@@ -199,8 +206,12 @@ async fn batch_sync() -> TestResult {
     client.add_connection(client_ws).await?;
     assert_eq!(client.connected_peer_ids().await.len(), 1);
 
-    client.add_commit(sed_id, BTreeSet::new(), blob2).await?;
-    client.add_commit(sed_id, BTreeSet::new(), blob3).await?;
+    client
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob2)
+        .await?;
+    client
+        .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob3)
+        .await?;
 
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
@@ -302,10 +313,20 @@ async fn second_sync_round_is_empty() -> TestResult {
 
     // Server has 2 commits
     server
-        .add_commit(sed_id, BTreeSet::new(), Blob::new(blob_bytes[0].to_vec()))
+        .add_commit(
+            sed_id,
+            random_commit_id(),
+            BTreeSet::new(),
+            Blob::new(blob_bytes[0].to_vec()),
+        )
         .await?;
     server
-        .add_commit(sed_id, BTreeSet::new(), Blob::new(blob_bytes[1].to_vec()))
+        .add_commit(
+            sed_id,
+            random_commit_id(),
+            BTreeSet::new(),
+            Blob::new(blob_bytes[1].to_vec()),
+        )
         .await?;
 
     let ws_server = TokioWebSocketServer::new(
@@ -334,10 +355,20 @@ async fn second_sync_round_is_empty() -> TestResult {
 
     // Client has 2 different commits
     client
-        .add_commit(sed_id, BTreeSet::new(), Blob::new(blob_bytes[2].to_vec()))
+        .add_commit(
+            sed_id,
+            random_commit_id(),
+            BTreeSet::new(),
+            Blob::new(blob_bytes[2].to_vec()),
+        )
         .await?;
     client
-        .add_commit(sed_id, BTreeSet::new(), Blob::new(blob_bytes[3].to_vec()))
+        .add_commit(
+            sed_id,
+            random_commit_id(),
+            BTreeSet::new(),
+            Blob::new(blob_bytes[3].to_vec()),
+        )
         .await?;
 
     // NOTE: listener_fut (spawned above) already runs Subduction::listen().

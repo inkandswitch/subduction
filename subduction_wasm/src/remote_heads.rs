@@ -1,7 +1,7 @@
 //! Wasm [`RemoteHeadsObserver`] that forwards notifications to a JS callback.
 
 use sedimentree_core::id::SedimentreeId;
-use sedimentree_wasm::{digest::WasmDigest, sedimentree_id::WasmSedimentreeId};
+use sedimentree_wasm::{commit_id::WasmCommitId, sedimentree_id::WasmSedimentreeId};
 use subduction_core::{
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsObserver},
@@ -53,7 +53,7 @@ impl RemoteHeadsObserver for JsRemoteHeadsObserver {
         let js_heads = heads
             .heads
             .into_iter()
-            .map(|d| JsValue::from(WasmDigest::from(d)))
+            .map(|d| JsValue::from(WasmCommitId::from(d)))
             .collect::<js_sys::Array>();
 
         if let Err(e) = callback.call3(

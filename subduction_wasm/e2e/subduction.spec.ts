@@ -508,13 +508,14 @@ test.describe("Subduction", () => {
   test.describe("Data Round-Trip", () => {
     test("should store and retrieve a commit", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(1));
         const blob = new Uint8Array([10, 20, 30, 40, 50]);
-        await syncer.addCommit(sedId, [], blob);
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head, [], blob);
 
         const ids = await syncer.sedimentreeIds();
         const commits = await syncer.getCommits(sedId);
@@ -533,13 +534,14 @@ test.describe("Subduction", () => {
 
     test("should retrieve commit metadata after addCommit", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(2));
         const blobData = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
-        await syncer.addCommit(sedId, [], blobData);
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head, [], blobData);
 
         // Verify the commit has the expected blob metadata
         const commits = await syncer.getCommits(sedId);
@@ -561,18 +563,20 @@ test.describe("Subduction", () => {
 
     test("should chain commits with parent references", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(3));
 
-        await syncer.addCommit(sedId, [], new Uint8Array([1, 2, 3]));
+        const head1 = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head1, [], new Uint8Array([1, 2, 3]));
         const commits1 = await syncer.getCommits(sedId);
-        const parentDigest = commits1![0].digest;
+        const parentId = commits1![0].commitId;
 
         // Second commit references the first as parent
-        await syncer.addCommit(sedId, [parentDigest], new Uint8Array([4, 5, 6]));
+        const head2 = new CommitId(new Uint8Array(32).fill(2));
+        await syncer.addCommit(sedId, head2, [parentId], new Uint8Array([4, 5, 6]));
         const commits2 = await syncer.getCommits(sedId);
 
         // Find the child commit (the one with a parent)
@@ -592,22 +596,25 @@ test.describe("Subduction", () => {
 
     test("should add multiple commits and list them", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(4));
 
-        // Create a chain of 3 commits (digest is a getter property)
-        await syncer.addCommit(sedId, [], new Uint8Array([1]));
+        // Create a chain of 3 commits (commitId is a getter property)
+        const head1 = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head1, [], new Uint8Array([1]));
         const commits1 = await syncer.getCommits(sedId);
-        const parent1 = commits1![0].digest;
+        const parent1 = commits1![0].commitId;
 
-        await syncer.addCommit(sedId, [parent1], new Uint8Array([2]));
+        const head2 = new CommitId(new Uint8Array(32).fill(2));
+        await syncer.addCommit(sedId, head2, [parent1], new Uint8Array([2]));
         const commits2 = await syncer.getCommits(sedId);
-        const parent2 = commits2![commits2!.length - 1].digest;
+        const parent2 = commits2![commits2!.length - 1].commitId;
 
-        await syncer.addCommit(sedId, [parent2], new Uint8Array([3]));
+        const head3 = new CommitId(new Uint8Array(32).fill(3));
+        await syncer.addCommit(sedId, head3, [parent2], new Uint8Array([3]));
         const commits3 = await syncer.getCommits(sedId);
 
         return {
@@ -622,12 +629,13 @@ test.describe("Subduction", () => {
   test.describe("Sedimentree Lifecycle", () => {
     test("should remove a sedimentree", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(5));
-        await syncer.addCommit(sedId, [], new Uint8Array([42]));
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head, [], new Uint8Array([42]));
 
         const idsBefore = await syncer.sedimentreeIds();
         await syncer.removeSedimentree(sedId);
@@ -645,7 +653,7 @@ test.describe("Subduction", () => {
 
     test("should track multiple sedimentree IDs", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
@@ -653,9 +661,12 @@ test.describe("Subduction", () => {
         const sedId2 = SedimentreeId.fromBytes(new Uint8Array(32).fill(20));
         const sedId3 = SedimentreeId.fromBytes(new Uint8Array(32).fill(30));
 
-        await syncer.addCommit(sedId1, [], new Uint8Array([1]));
-        await syncer.addCommit(sedId2, [], new Uint8Array([2]));
-        await syncer.addCommit(sedId3, [], new Uint8Array([3]));
+        const head1 = new CommitId(new Uint8Array(32).fill(1));
+        const head2 = new CommitId(new Uint8Array(32).fill(2));
+        const head3 = new CommitId(new Uint8Array(32).fill(3));
+        await syncer.addCommit(sedId1, head1, [], new Uint8Array([1]));
+        await syncer.addCommit(sedId2, head2, [], new Uint8Array([2]));
+        await syncer.addCommit(sedId3, head3, [], new Uint8Array([3]));
 
         const ids = await syncer.sedimentreeIds();
 
@@ -686,13 +697,14 @@ test.describe("Subduction", () => {
   test.describe("Blob Operations", () => {
     test("should store a commit and retrieve its blob by digest", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(50));
         const blobData = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]);
-        await syncer.addCommit(sedId, [], blobData);
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head, [], blobData);
 
         // Get the blob digest from the commit's blobMeta
         const commits = await syncer.getCommits(sedId);
@@ -718,7 +730,7 @@ test.describe("Subduction", () => {
 
     test("should return all blobs for a sedimentree via getBlobs", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
@@ -726,10 +738,12 @@ test.describe("Subduction", () => {
         const blob1 = new Uint8Array([1, 2, 3]);
         const blob2 = new Uint8Array([4, 5, 6, 7]);
 
-        await syncer.addCommit(sedId, [], blob1);
+        const head1 = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head1, [], blob1);
         const commits = await syncer.getCommits(sedId);
-        const parentDigest = commits![0].digest;
-        await syncer.addCommit(sedId, [parentDigest], blob2);
+        const parentId = commits![0].commitId;
+        const head2 = new CommitId(new Uint8Array(32).fill(2));
+        await syncer.addCommit(sedId, head2, [parentId], blob2);
 
         const blobs = await syncer.getBlobs(sedId);
 
@@ -747,14 +761,15 @@ test.describe("Subduction", () => {
   test.describe("Hydration", () => {
     test("should persist and retrieve commits across hydrate", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
 
         // Create instance, add data
         const syncer1 = new Subduction(signer, storage);
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(60));
-        await syncer1.addCommit(sedId, [], new Uint8Array([11, 22, 33]));
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncer1.addCommit(sedId, head, [], new Uint8Array([11, 22, 33]));
 
         const commitsBefore = await syncer1.getCommits(sedId);
         const commitCountBefore = commitsBefore ? commitsBefore.length : 0;
@@ -787,7 +802,7 @@ test.describe("Subduction", () => {
 
     test("should hydrate multiple sedimentrees correctly", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } =
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } =
           window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
@@ -801,9 +816,12 @@ test.describe("Subduction", () => {
           SedimentreeId.fromBytes(new Uint8Array(32).fill(3)),
         ];
 
+        let commitCounter = 1;
         for (const id of ids) {
-          await syncer1.addCommit(id, [], new Uint8Array([10, 20]));
-          await syncer1.addCommit(id, [], new Uint8Array([30, 40]));
+          const headA = new CommitId(new Uint8Array(32).fill(commitCounter++));
+          await syncer1.addCommit(id, headA, [], new Uint8Array([10, 20]));
+          const headB = new CommitId(new Uint8Array(32).fill(commitCounter++));
+          await syncer1.addCommit(id, headB, [], new Uint8Array([30, 40]));
         }
 
         // Verify initial state
@@ -838,20 +856,19 @@ test.describe("Subduction", () => {
   test.describe("Fragment Operations", () => {
     test("should add a fragment and retrieve it via getFragments", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(70));
 
         // Add a commit first (needed as the fragment's head)
-        await syncer.addCommit(sedId, [], new Uint8Array([1, 2, 3, 4]));
-        const commits = await syncer.getCommits(sedId);
-        const headDigest = commits![0].digest;
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head, [], new Uint8Array([1, 2, 3, 4]));
 
         // Add a fragment with that commit as head, empty boundary
         const fragmentBlob = new Uint8Array([10, 20, 30, 40, 50]);
-        await syncer.addFragment(sedId, headDigest, [], [], fragmentBlob);
+        await syncer.addFragment(sedId, head, [], [], fragmentBlob);
 
         const fragments = await syncer.getFragments(sedId);
 
@@ -871,18 +888,19 @@ test.describe("Subduction", () => {
   test.describe("Edge Cases", () => {
     test("should handle duplicate addCommit gracefully", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer, new MemoryStorage());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(80));
         const blobData = new Uint8Array([99, 98, 97]);
 
-        // Add the same commit twice (same parents=[], same blob)
-        await syncer.addCommit(sedId, [], blobData);
+        // Add the same commit twice (same head, same parents=[], same blob)
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncer.addCommit(sedId, head, [], blobData);
         let threwOnSecond = false;
         try {
-          await syncer.addCommit(sedId, [], blobData);
+          await syncer.addCommit(sedId, head, [], blobData);
         } catch {
           threwOnSecond = true;
         }

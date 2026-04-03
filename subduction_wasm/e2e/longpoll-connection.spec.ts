@@ -187,7 +187,7 @@ test.describe("Long-Poll Connection Tests", () => {
   test("should sync data between two peers via long-poll", async ({ page }) => {
     test.setTimeout(30_000);
     const result = await page.evaluate(async (baseUrl) => {
-      const { Subduction, SubductionLongPoll, WebCryptoSigner, MemoryStorage, SedimentreeId } = window.subduction;
+      const { Subduction, SubductionLongPoll, WebCryptoSigner, MemoryStorage, SedimentreeId, CommitId } = window.subduction;
 
       try {
         const serviceName = baseUrl.replace("http://", "");
@@ -201,7 +201,8 @@ test.describe("Long-Poll Connection Tests", () => {
         await syncerA.addConnection(authA.toTransport());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(99));
-        await syncerA.addCommit(sedId, [], new Uint8Array([1, 2, 3, 4, 5]));
+        const head = new CommitId(new Uint8Array(32).fill(1));
+        await syncerA.addCommit(sedId, head, [], new Uint8Array([1, 2, 3, 4, 5]));
         await syncerA.syncWithPeer(serverPeerId, sedId, true, 5000n);
 
         // Peer B: connect, sync from server, verify data arrived

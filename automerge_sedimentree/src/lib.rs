@@ -17,8 +17,7 @@ use core::{cell::RefCell, convert::Infallible};
 use sedimentree_core::{
     collections::Set,
     commit::{CommitStore, Parents},
-    crypto::digest::Digest,
-    loose_commit::LooseCommit,
+    loose_commit::id::CommitId,
 };
 
 /// A newtype wrapper around [`Automerge`] for use as a Sedimentree commit store.
@@ -41,8 +40,8 @@ impl<'a> CommitStore<'a> for SedimentreeAutomerge<'a> {
     type Node = SedimentreeChangeMetadata<'a>;
     type LookupError = Infallible;
 
-    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
-        let change_hash = automerge::ChangeHash(*digest.as_bytes());
+    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
+        let change_hash = automerge::ChangeHash(*id.as_bytes());
         let change_meta = self.0.get_change_meta_by_hash(&change_hash);
         Ok(change_meta.map(SedimentreeChangeMetadata::from))
     }
@@ -68,8 +67,8 @@ impl CommitStore<'static> for SedimentreeAutoCommit {
     type Node = SedimentreeChangeMetadata<'static>;
     type LookupError = Infallible;
 
-    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
-        let change_hash = ChangeHash(*digest.as_bytes());
+    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
+        let change_hash = ChangeHash(*id.as_bytes());
         let mut borrowed = self.0.borrow_mut();
         let change_meta = borrowed.get_change_meta_by_hash(&change_hash);
         Ok(change_meta.map(|x| SedimentreeChangeMetadata::from(x.into_owned())))
@@ -93,11 +92,11 @@ impl<'a> From<SedimentreeChangeMetadata<'a>> for ChangeMetadata<'a> {
 }
 
 impl Parents for SedimentreeChangeMetadata<'_> {
-    fn parents(&self) -> Set<Digest<LooseCommit>> {
+    fn parents(&self) -> Set<CommitId> {
         self.0
             .deps
             .iter()
-            .map(|change_hash| Digest::force_from_bytes(change_hash.0))
+            .map(|change_hash| CommitId::new(change_hash.0))
             .collect()
     }
 }

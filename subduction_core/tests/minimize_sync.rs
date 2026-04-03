@@ -10,11 +10,8 @@
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob,
-    commit::CountLeadingZeroBytes,
-    crypto::{digest::Digest, fingerprint::FingerprintSeed},
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, commit::CountLeadingZeroBytes, crypto::fingerprint::FingerprintSeed,
+    id::SedimentreeId, loose_commit::id::CommitId,
 };
 use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
@@ -29,10 +26,10 @@ use subduction_core::{
 };
 use testresult::TestResult;
 
-/// Create a `Digest<LooseCommit>` with `n` leading zero bytes.
+/// Create a `CommitId` with `n` leading zero bytes.
 ///
 /// This controls the depth assigned by `CountLeadingZeroBytes`.
-fn digest_with_leading_zeros(n: u8, seed: u8) -> Digest<LooseCommit> {
+fn digest_with_leading_zeros(n: u8, seed: u8) -> CommitId {
     let mut bytes = [0u8; 32];
     // First non-zero byte (ensures exact depth)
     if let Some(slot) = bytes.get_mut(n as usize) {
@@ -42,7 +39,7 @@ fn digest_with_leading_zeros(n: u8, seed: u8) -> Digest<LooseCommit> {
     if let Some(slot) = bytes.get_mut(n as usize + 1) {
         *slot = seed;
     }
-    Digest::force_from_bytes(bytes)
+    CommitId::new(bytes)
 }
 
 fn make_unique_blob(seed: u8) -> Blob {
@@ -162,7 +159,12 @@ async fn add_commit_preserves_all_commits_without_fragments() -> TestResult {
 
     for i in 0..5u8 {
         subduction
-            .add_commit(sed_id, BTreeSet::new(), make_unique_blob(i))
+            .add_commit(
+                sed_id,
+                CommitId::new([i + 100; 32]),
+                BTreeSet::new(),
+                make_unique_blob(i),
+            )
             .await?;
     }
 

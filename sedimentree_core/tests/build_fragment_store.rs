@@ -18,19 +18,18 @@
 use sedimentree_core::{
     collections::{Map, Set},
     commit::{CommitStore, FragmentState},
-    crypto::digest::Digest,
-    loose_commit::LooseCommit,
+    loose_commit::id::CommitId,
     test_utils::{TestGraph, seeded_rng},
 };
 
-type Known = Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>;
+type Known = Map<CommitId, FragmentState<Set<CommitId>>>;
 
 /// Helper: run `build_fragment_store` on a `TestGraph` starting from named heads.
 fn run_fragment_store(
     graph: &TestGraph,
     head_names: &[&str],
-) -> (Vec<FragmentState<Set<Digest<LooseCommit>>>>, Known) {
-    let heads: Vec<Digest<LooseCommit>> = head_names.iter().map(|n| graph.node_hash(n)).collect();
+) -> (Vec<FragmentState<Set<CommitId>>>, Known) {
+    let heads: Vec<CommitId> = head_names.iter().map(|n| graph.node_hash(n)).collect();
     let mut known: Known = Map::new();
     let fresh = graph
         .build_fragment_store(&heads, &mut known, graph.depth_metric())
@@ -39,8 +38,8 @@ fn run_fragment_store(
     (fresh_owned, known)
 }
 
-/// Collect all member digests across all known fragments.
-fn all_covered(known: &Known) -> Set<Digest<LooseCommit>> {
+/// Collect all member identifiers across all known fragments.
+fn all_covered(known: &Known) -> Set<CommitId> {
     known
         .values()
         .flat_map(|s| s.members().iter().copied())
@@ -90,7 +89,7 @@ fn linear_single_depth_1_boundary() {
     assert_eq!(fresh.len(), 1, "should produce exactly 1 fragment");
 
     let frag = &fresh[0];
-    assert_eq!(frag.head_digest(), graph.node_hash("b"));
+    assert_eq!(frag.head_id(), graph.node_hash("b"));
 
     let members: Set<_> = frag.members().iter().copied().collect();
     assert!(
@@ -137,7 +136,7 @@ fn linear_two_depth_1_boundaries_absorbed() {
     );
 
     let frag = &fresh[0];
-    assert_eq!(frag.head_digest(), graph.node_hash("d"));
+    assert_eq!(frag.head_id(), graph.node_hash("d"));
 
     let members: Set<_> = frag.members().iter().copied().collect();
     assert!(members.contains(&graph.node_hash("a")));
@@ -199,7 +198,7 @@ fn linear_depth_escalation() {
     );
 
     let frag = &fresh[0];
-    assert_eq!(frag.head_digest(), graph.node_hash("f"));
+    assert_eq!(frag.head_id(), graph.node_hash("f"));
 
     let members: Set<_> = frag.members().iter().copied().collect();
     for name in &["a", "b", "c", "d", "e", "f"] {
@@ -442,7 +441,7 @@ fn second_call_produces_no_new_fragments() {
         &[("a", "b"), ("b", "c"), ("c", "d"), ("d", "e")],
     );
 
-    let heads: Vec<Digest<LooseCommit>> = vec![graph.node_hash("e")];
+    let heads: Vec<CommitId> = vec![graph.node_hash("e")];
     let mut known: Known = Map::new();
 
     let first = graph

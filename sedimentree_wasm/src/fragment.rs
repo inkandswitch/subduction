@@ -9,7 +9,7 @@ use wasm_refgen::wasm_refgen;
 use js_sys::Uint8Array;
 
 use crate::{
-    digest::{JsDigest, WasmDigest},
+    commit_id::{JsCommitId, WasmCommitId},
     loose_commit::WasmBlobMeta,
     sedimentree_id::WasmSedimentreeId,
     signed::WasmSignedFragment,
@@ -29,21 +29,21 @@ impl WasmFragment {
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
         sedimentree_id: WasmSedimentreeId,
-        head: WasmDigest,
-        boundary: Vec<JsDigest>,
-        checkpoints: Vec<JsDigest>,
+        head: WasmCommitId,
+        boundary: Vec<JsCommitId>,
+        checkpoints: Vec<JsCommitId>,
         blob_meta: WasmBlobMeta,
     ) -> Self {
         let cps: Vec<_> = checkpoints
             .iter()
-            .map(|d| WasmDigest::from(d).into())
+            .map(|p| WasmCommitId::from(p).into())
             .collect();
         Fragment::new(
             sedimentree_id.into(),
             head.into(),
             boundary
                 .iter()
-                .map(|d| WasmDigest::from(d).into())
+                .map(|p| WasmCommitId::from(p).into())
                 .collect(),
             &cps,
             blob_meta.into(),
@@ -51,18 +51,23 @@ impl WasmFragment {
         .into()
     }
 
-    /// Get the head digest of the fragment.
+    /// Get the head commit identifier of the fragment.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn head(&self) -> WasmDigest {
-        self.0.head().into()
+    pub fn head(&self) -> WasmCommitId {
+        WasmCommitId::from(self.0.head())
     }
 
-    /// Get the boundary digests of the fragment.
+    /// Get the boundary commit identifiers of the fragment.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn boundary(&self) -> Vec<WasmDigest> {
-        self.0.boundary().iter().copied().map(Into::into).collect()
+    pub fn boundary(&self) -> Vec<WasmCommitId> {
+        self.0
+            .boundary()
+            .iter()
+            .copied()
+            .map(WasmCommitId::from)
+            .collect()
     }
 
     /// Get the blob metadata of the fragment.

@@ -12,8 +12,7 @@ use automerge::Automerge;
 use sedimentree_core::{
     collections::{Map, Set},
     commit::{CommitStore, Parents},
-    crypto::digest::Digest,
-    loose_commit::LooseCommit,
+    loose_commit::id::CommitId,
 };
 
 /// Pre-indexed parent digests for a single commit.
@@ -24,10 +23,10 @@ use sedimentree_core::{
 /// O(n) linear scan that [`SedimentreeAutomerge`](crate::SedimentreeAutomerge)
 /// incurs per call.
 #[derive(Debug, Clone)]
-pub struct OwnedParents(Set<Digest<LooseCommit>>);
+pub struct OwnedParents(Set<CommitId>);
 
 impl Parents for OwnedParents {
-    fn parents(&self) -> Set<Digest<LooseCommit>> {
+    fn parents(&self) -> Set<CommitId> {
         self.0.clone()
     }
 }
@@ -56,7 +55,7 @@ impl Parents for OwnedParents {
 /// ```
 #[derive(Debug, Clone)]
 pub struct IndexedSedimentreeAutomerge {
-    index: Map<Digest<LooseCommit>, OwnedParents>,
+    index: Map<CommitId, OwnedParents>,
 }
 
 impl IndexedSedimentreeAutomerge {
@@ -69,13 +68,13 @@ impl IndexedSedimentreeAutomerge {
         let mut index = Map::new();
 
         for change in changes {
-            let digest = Digest::force_from_bytes(change.hash().0);
-            let parents: Set<Digest<LooseCommit>> = change
+            let id = CommitId::new(change.hash().0);
+            let parents: Set<CommitId> = change
                 .deps()
                 .iter()
-                .map(|dep| Digest::force_from_bytes(dep.0))
+                .map(|dep| CommitId::new(dep.0))
                 .collect();
-            index.insert(digest, OwnedParents(parents));
+            index.insert(id, OwnedParents(parents));
         }
 
         Self { index }
@@ -94,13 +93,9 @@ impl IndexedSedimentreeAutomerge {
         let mut index = Map::new();
 
         for meta in metadata {
-            let digest = Digest::force_from_bytes(meta.hash.0);
-            let parents: Set<Digest<LooseCommit>> = meta
-                .deps
-                .iter()
-                .map(|dep| Digest::force_from_bytes(dep.0))
-                .collect();
-            index.insert(digest, OwnedParents(parents));
+            let id = CommitId::new(meta.hash.0);
+            let parents: Set<CommitId> = meta.deps.iter().map(|dep| CommitId::new(dep.0)).collect();
+            index.insert(id, OwnedParents(parents));
         }
 
         Self { index }
@@ -117,8 +112,8 @@ impl CommitStore<'static> for IndexedSedimentreeAutomerge {
     type Node = OwnedParents;
     type LookupError = Infallible;
 
-    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
-        Ok(self.index.get(&digest).cloned())
+    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
+        Ok(self.index.get(&id).cloned())
     }
 }
 
@@ -152,13 +147,13 @@ mod tests {
         assert!(change_count > 0, "document should have changes");
 
         let commit_store = IndexedSedimentreeAutomerge::from_metadata(&metadata);
-        let heads: Vec<Digest<LooseCommit>> = am_doc
+        let heads: Vec<CommitId> = am_doc
             .get_heads()
             .iter()
-            .map(|h| Digest::force_from_bytes(h.0))
+            .map(|h| CommitId::new(h.0))
             .collect();
         let strategy = CountLeadingZeroBytes;
-        let mut known_states: Map<Digest<LooseCommit>, FragmentState<OwnedParents>> = Map::new();
+        let mut known_states: Map<CommitId, FragmentState<OwnedParents>> = Map::new();
 
         let fragment_states =
             commit_store.build_fragment_store(&heads, &mut known_states, &strategy)?;
@@ -181,7 +176,7 @@ mod tests {
             fragment_blobs.push(blob);
         }
 
-        let covered: Set<Digest<LooseCommit>> = known_states
+        let covered: Set<CommitId> = known_states
             .values()
             .flat_map(|state| state.members().iter().copied())
             .collect();
@@ -189,8 +184,8 @@ mod tests {
         let uncovered_blobs: Vec<Vec<u8>> = changes
             .iter()
             .filter(|change| {
-                let digest = Digest::force_from_bytes(change.hash().0);
-                !covered.contains(&digest)
+                let id = CommitId::new(change.hash().0);
+                !covered.contains(&id)
             })
             .map(|change| change.raw_bytes().to_vec())
             .collect();

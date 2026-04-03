@@ -22,7 +22,8 @@ use web_sys::{
 };
 
 use crate::{
-    digest::{WasmDigest, WasmInvalidDigest},
+    commit_id::WasmCommitId,
+    digest::WasmInvalidDigest,
     fragment::WasmFragmentWithBlob,
     loose_commit::WasmCommitWithBlob,
     sedimentree_id::WasmSedimentreeId,
@@ -310,6 +311,11 @@ impl WasmIndexedDbStorage {
 
     /// Save a commit with its blob to storage (compound storage).
     ///
+    /// The `commit_id` parameter is used as the storage key and _must_
+    /// match the `head()` embedded in the signed commit payload. The
+    /// caller is responsible for maintaining this invariant; the storage
+    /// layer does not decode the signed payload to verify it.
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmSaveCommitError`] if the commit could not be saved.
@@ -317,13 +323,13 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_save_commit(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        commit_id: &WasmCommitId,
         signed: &WasmSignedLooseCommit,
         blob: &Uint8Array,
     ) -> Result<(), WasmSaveCommitError> {
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
-            digest: digest.to_hex_string(),
+            digest: commit_id.to_hex_string(),
             signed: signed.as_bytes().to_vec(),
             blob: blob.to_vec(),
         };
@@ -340,7 +346,7 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
-    /// Load a commit by digest, returning `CommitWithBlob` or null.
+    /// Load a commit by its identifier, returning `CommitWithBlob` or null.
     ///
     /// # Errors
     ///
@@ -349,11 +355,11 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_load_commit(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        commit_id: &WasmCommitId,
     ) -> Result<Option<WasmCommitWithBlob>, WasmLoadCommitError> {
         let key = js_sys::Array::of2(
             &JsValue::from_str(&sedimentree_id.to_string()),
-            &JsValue::from_str(&digest.to_hex_string()),
+            &JsValue::from_str(&commit_id.to_hex_string()),
         );
         let req = self
             .0
@@ -381,17 +387,17 @@ impl WasmIndexedDbStorage {
         Ok(Some(WasmCommitWithBlob::new(signed, blob)))
     }
 
-    /// List all commit digests for a sedimentree.
+    /// List all commit IDs for a sedimentree.
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmListDigestsError`] if digests could not be listed.
-    #[wasm_bindgen(js_name = listCommitDigests)]
-    pub async fn wasm_list_commit_digests(
+    /// Returns a [`WasmListDigestsError`] if commit IDs could not be listed.
+    #[wasm_bindgen(js_name = listCommitIds)]
+    pub async fn wasm_list_commit_ids(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-    ) -> Result<Vec<WasmDigest>, WasmListDigestsError> {
-        self.list_digests_for_store(sedimentree_id, LOOSE_COMMIT_STORE_NAME)
+    ) -> Result<Vec<WasmCommitId>, WasmListDigestsError> {
+        self.list_commit_ids_for_store(sedimentree_id, LOOSE_COMMIT_STORE_NAME)
             .await
     }
 
@@ -451,11 +457,11 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_delete_commit(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        commit_id: &WasmCommitId,
     ) -> Result<(), WasmDeleteCommitError> {
         let key = js_sys::Array::of2(
             &JsValue::from_str(&sedimentree_id.to_string()),
-            &JsValue::from_str(&digest.to_hex_string()),
+            &JsValue::from_str(&commit_id.to_hex_string()),
         );
         let req = self
             .0
@@ -511,13 +517,13 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_save_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
         signed: &WasmSignedFragment,
         blob: &Uint8Array,
     ) -> Result<(), WasmSaveFragmentError> {
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
-            digest: digest.to_hex_string(),
+            digest: fragment_head.to_hex_string(),
             signed: signed.as_bytes().to_vec(),
             blob: blob.to_vec(),
         };
@@ -534,7 +540,7 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
-    /// Load a fragment by digest, returning `FragmentWithBlob` or null.
+    /// Load a fragment by its identifier, returning `FragmentWithBlob` or null.
     ///
     /// # Errors
     ///
@@ -543,11 +549,11 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_load_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Result<Option<WasmFragmentWithBlob>, WasmLoadFragmentError> {
         let key = js_sys::Array::of2(
             &JsValue::from_str(&sedimentree_id.to_string()),
-            &JsValue::from_str(&digest.to_hex_string()),
+            &JsValue::from_str(&fragment_head.to_hex_string()),
         );
         let req = self
             .0
@@ -576,17 +582,17 @@ impl WasmIndexedDbStorage {
         Ok(Some(WasmFragmentWithBlob::new(signed, blob)))
     }
 
-    /// List all fragment digests for a sedimentree.
+    /// List all fragment IDs for a sedimentree.
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmListDigestsError`] if digests could not be listed.
-    #[wasm_bindgen(js_name = listFragmentDigests)]
-    pub async fn wasm_list_fragment_digests(
+    /// Returns a [`WasmListDigestsError`] if fragment IDs could not be listed.
+    #[wasm_bindgen(js_name = listFragmentIds)]
+    pub async fn wasm_list_fragment_ids(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-    ) -> Result<Vec<WasmDigest>, WasmListDigestsError> {
-        self.list_digests_for_store(sedimentree_id, FRAGMENT_STORE_NAME)
+    ) -> Result<Vec<WasmCommitId>, WasmListDigestsError> {
+        self.list_fragment_ids_for_store(sedimentree_id, FRAGMENT_STORE_NAME)
             .await
     }
 
@@ -637,7 +643,7 @@ impl WasmIndexedDbStorage {
         Ok(result)
     }
 
-    /// Delete a fragment by digest.
+    /// Delete a fragment by its identifier.
     ///
     /// # Errors
     ///
@@ -646,11 +652,11 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_delete_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Result<(), WasmDeleteFragmentError> {
         let key = js_sys::Array::of2(
             &JsValue::from_str(&sedimentree_id.to_string()),
-            &JsValue::from_str(&digest.to_hex_string()),
+            &JsValue::from_str(&fragment_head.to_hex_string()),
         );
         let req = self
             .0
@@ -701,8 +707,8 @@ impl WasmIndexedDbStorage {
 
     /// Save a batch of commits and fragments in a single IDB transaction.
     ///
-    /// Each commit element must be a JS object with `{digest, signedCommit, blob}`.
-    /// Each fragment element must be a JS object with `{digest, signedFragment, blob}`.
+    /// Each commit element must be a JS object with `{commitId, signedCommit, blob}`.
+    /// Each fragment element must be a JS object with `{fragmentHead, signedFragment, blob}`.
     /// This matches the shape produced by `JsStorage::save_batch`.
     ///
     /// The sedimentree ID is _not_ registered here — the caller
@@ -759,12 +765,12 @@ impl WasmIndexedDbStorage {
         Ok(commits.length() + fragments.length())
     }
 
-    /// Helper to list digests for a given store.
-    async fn list_digests_for_store(
+    /// Helper to list commit IDs for a given store.
+    async fn list_commit_ids_for_store(
         &self,
         sedimentree_id: &WasmSedimentreeId,
         store_name: &str,
-    ) -> Result<Vec<WasmDigest>, WasmListDigestsError> {
+    ) -> Result<Vec<WasmCommitId>, WasmListDigestsError> {
         let tx = self
             .0
             .transaction_with_str_and_mode(store_name, IdbTransactionMode::Readonly)
@@ -789,7 +795,44 @@ impl WasmIndexedDbStorage {
             let digest_str = js_sys::Reflect::get(&js_val, &RECORD_FIELD_DIGEST.into())
                 .map_err(WasmListDigestsError::ReflectError)?;
             if let Some(s) = digest_str.as_string() {
-                out.push(WasmDigest::from_hex_string(&s)?);
+                out.push(WasmCommitId::from_hex_string(&s)?);
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// Helper to list fragment IDs for a given store.
+    async fn list_fragment_ids_for_store(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        store_name: &str,
+    ) -> Result<Vec<WasmCommitId>, WasmListDigestsError> {
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(store_name, IdbTransactionMode::Readonly)
+            .map_err(WasmListDigestsError::TransactionError)?;
+        let store = tx
+            .object_store(store_name)
+            .map_err(WasmListDigestsError::ObjectStoreError)?;
+        let idx = store
+            .index(INDEX_BY_SEDIMENTREE_ID)
+            .map_err(WasmListDigestsError::ObjectStoreError)?;
+
+        let key = JsValue::from_str(&sedimentree_id.to_string());
+        let req = idx
+            .get_all_with_key(&key)
+            .map_err(WasmListDigestsError::UnableToGet)?;
+
+        let vals = await_idb(&req).await?;
+        let arr = js_sys::Array::from(&vals);
+        let mut out = Vec::new();
+
+        for js_val in arr.iter() {
+            let digest_str = js_sys::Reflect::get(&js_val, &RECORD_FIELD_DIGEST.into())
+                .map_err(WasmListDigestsError::ReflectError)?;
+            if let Some(s) = digest_str.as_string() {
+                out.push(WasmCommitId::from_hex_string(&s)?);
             }
         }
 
@@ -920,14 +963,14 @@ impl From<AwaitIdbError> for JsValue {
 // ── Batch helpers ───────────────────────────────────────────────────────
 
 /// Extract a commit `Record` from a JS object shaped
-/// `{digest: Digest, signedCommit: SignedLooseCommit, blob: Uint8Array}`.
+/// `{commitId: CommitId, signedCommit: SignedLooseCommit, blob: Uint8Array}`.
 fn extract_commit_record(
     obj: &JsValue,
     sedimentree_id: SedimentreeId,
 ) -> Result<Record, WasmSaveBatchAllError> {
-    let digest_val = js_sys::Reflect::get(obj, &JsValue::from_str("digest"))
+    let commit_id_val = js_sys::Reflect::get(obj, &JsValue::from_str("commitId"))
         .map_err(WasmSaveBatchAllError::ReflectError)?;
-    let digest = WasmDigest::try_from_js_value(digest_val)
+    let commit_id = WasmCommitId::try_from_js_value(commit_id_val)
         .map_err(WasmSaveBatchAllError::ConversionError)?;
 
     let signed_val = js_sys::Reflect::get(obj, &JsValue::from_str("signedCommit"))
@@ -941,21 +984,21 @@ fn extract_commit_record(
 
     Ok(Record {
         sedimentree_id,
-        digest: digest.to_hex_string(),
+        digest: commit_id.to_hex_string(),
         signed: signed.as_bytes().to_vec(),
         blob: blob.to_vec(),
     })
 }
 
 /// Extract a fragment `Record` from a JS object shaped
-/// `{digest: Digest, signedFragment: SignedFragment, blob: Uint8Array}`.
+/// `{fragmentHead: CommitId, signedFragment: SignedFragment, blob: Uint8Array}`.
 fn extract_fragment_record(
     obj: &JsValue,
     sedimentree_id: SedimentreeId,
 ) -> Result<Record, WasmSaveBatchAllError> {
-    let digest_val = js_sys::Reflect::get(obj, &JsValue::from_str("digest"))
+    let fragment_head_val = js_sys::Reflect::get(obj, &JsValue::from_str("fragmentHead"))
         .map_err(WasmSaveBatchAllError::ReflectError)?;
-    let digest = WasmDigest::try_from_js_value(digest_val)
+    let fragment_head = WasmCommitId::try_from_js_value(fragment_head_val)
         .map_err(WasmSaveBatchAllError::ConversionError)?;
 
     let signed_val = js_sys::Reflect::get(obj, &JsValue::from_str("signedFragment"))
@@ -969,7 +1012,7 @@ fn extract_fragment_record(
 
     Ok(Record {
         sedimentree_id,
-        digest: digest.to_hex_string(),
+        digest: fragment_head.to_hex_string(),
         signed: signed.as_bytes().to_vec(),
         blob: blob.to_vec(),
     })
@@ -1175,7 +1218,7 @@ impl From<WasmLoadCommitError> for JsValue {
     }
 }
 
-/// Error types for `listCommitDigests` and `listFragmentDigests`.
+/// Error types for `listCommitIds` and `listFragmentIds` (fragment head `CommitId`).
 #[derive(Debug, Error)]
 pub enum WasmListDigestsError {
     /// Failed to begin `IndexedDB` transaction.
@@ -1197,6 +1240,10 @@ pub enum WasmListDigestsError {
     /// Invalid digest format.
     #[error(transparent)]
     InvalidDigest(#[from] WasmInvalidDigest),
+
+    /// Invalid commit ID format.
+    #[error(transparent)]
+    InvalidCommitId(#[from] crate::commit_id::WasmInvalidCommitId),
 
     /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]

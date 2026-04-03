@@ -7,7 +7,9 @@
 
 use core::time::Duration;
 use future_form::Sendable;
-use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
+use sedimentree_core::{
+    blob::Blob, crypto::digest::Digest, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
     connection::{
@@ -45,7 +47,9 @@ async fn add_single_commit_is_stored() -> TestResult {
     let blob = make_unique_blob(1);
 
     // Add a commit
-    subduction.add_commit(sed_id, BTreeSet::new(), blob).await?;
+    subduction
+        .add_commit(sed_id, CommitId::new([0xA1; 32]), BTreeSet::new(), blob)
+        .await?;
 
     // Check in-memory state
     let commits = subduction.get_commits(sed_id).await;
@@ -73,7 +77,9 @@ async fn add_multiple_commits_all_stored() -> TestResult {
     // Add 5 commits with unique blobs
     for i in 0..5u8 {
         let blob = make_unique_blob(i);
-        subduction.add_commit(sed_id, BTreeSet::new(), blob).await?;
+        subduction
+            .add_commit(sed_id, CommitId::new([i + 100; 32]), BTreeSet::new(), blob)
+            .await?;
     }
 
     // Check in-memory state
@@ -104,7 +110,12 @@ async fn commits_retrievable_after_add() -> TestResult {
     for i in 0..5u8 {
         let blob = make_unique_blob(i);
         subduction
-            .add_commit(sed_id, BTreeSet::new(), blob.clone())
+            .add_commit(
+                sed_id,
+                CommitId::new([i + 110; 32]),
+                BTreeSet::new(),
+                blob.clone(),
+            )
             .await?;
     }
 
@@ -149,7 +160,9 @@ async fn fingerprint_summary_includes_all_commits() -> TestResult {
     // Add 5 commits with unique blobs
     for i in 0..5u8 {
         let blob = make_unique_blob(i);
-        subduction.add_commit(sed_id, BTreeSet::new(), blob).await?;
+        subduction
+            .add_commit(sed_id, CommitId::new([i + 120; 32]), BTreeSet::new(), blob)
+            .await?;
     }
 
     // Wait for commits to be processed
@@ -208,7 +221,9 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
     // Add 5 commits locally
     for i in 0..5u8 {
         let blob = make_unique_blob(i);
-        subduction.add_commit(sed_id, BTreeSet::new(), blob).await?;
+        subduction
+            .add_commit(sed_id, CommitId::new([i + 130; 32]), BTreeSet::new(), blob)
+            .await?;
     }
 
     // Wait for commits to be processed
@@ -294,7 +309,9 @@ async fn full_sync_sends_all_commits() -> TestResult {
     let mut expected_digests = Vec::new();
     for i in 0..5u8 {
         let blob = make_unique_blob(i);
-        client.add_commit(sed_id, BTreeSet::new(), blob).await?;
+        client
+            .add_commit(sed_id, CommitId::new([i + 140; 32]), BTreeSet::new(), blob)
+            .await?;
     }
 
     // Wait for commits to be stored

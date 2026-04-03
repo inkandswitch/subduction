@@ -24,8 +24,10 @@ use crate::{
 /// The `sedimentree_id` field cryptographically binds the commit to a specific
 /// document, preventing replay attacks across documents.
 ///
-/// The commit's digest is computed via [`Digest::hash`] and not stored in the struct.
-/// Use [`Sedimentree`](crate::sedimentree::Sedimentree) to store commits with their digests.
+/// The `head` field is a user-supplied opaque identifier for this commit.
+/// It is _not_ computed by Sedimentree — the caller provides it at construction
+/// time (e.g., from an Automerge `ChangeHash`). This is the identity used for
+/// DAG traversal, fragment boundaries, and sync.
 ///
 /// # Wire Format Limits
 ///
@@ -38,29 +40,32 @@ use crate::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
     sedimentree_id: SedimentreeId,
-    parents: BTreeSet<Digest<LooseCommit>>,
+    head: CommitId,
+    parents: BTreeSet<CommitId>,
     blob_meta: BlobMeta,
 }
 
 impl LooseCommit {
-    /// Extract the causal identity of this commit.
-    #[must_use]
-    pub fn commit_id(&self) -> CommitId {
-        CommitId::new(Digest::hash(self))
-    }
-
     /// Constructor for a [`LooseCommit`].
     #[must_use]
     pub const fn new(
         sedimentree_id: SedimentreeId,
-        parents: BTreeSet<Digest<LooseCommit>>,
+        head: CommitId,
+        parents: BTreeSet<CommitId>,
         blob_meta: BlobMeta,
     ) -> Self {
         Self {
             sedimentree_id,
+            head,
             parents,
             blob_meta,
         }
+    }
+
+    /// The user-supplied identifier for this commit.
+    #[must_use]
+    pub const fn head(&self) -> CommitId {
+        self.head
     }
 
     /// The [`SedimentreeId`] this commit belongs to.
@@ -71,7 +76,7 @@ impl LooseCommit {
 
     /// The (possibly empty) set of parent commits.
     #[must_use]
-    pub const fn parents(&self) -> &BTreeSet<Digest<LooseCommit>> {
+    pub const fn parents(&self) -> &BTreeSet<CommitId> {
         &self.parents
     }
 
@@ -83,25 +88,25 @@ impl LooseCommit {
 }
 
 impl HasBlobMeta for LooseCommit {
-    type Args = (SedimentreeId, BTreeSet<Digest<LooseCommit>>);
+    type Args = (SedimentreeId, CommitId, BTreeSet<CommitId>);
 
     fn blob_meta(&self) -> BlobMeta {
         self.blob_meta
     }
 
-    fn from_args((sedimentree_id, parents): Self::Args, blob_meta: BlobMeta) -> Self {
-        Self::new(sedimentree_id, parents, blob_meta)
+    fn from_args((sedimentree_id, head, parents): Self::Args, blob_meta: BlobMeta) -> Self {
+        Self::new(sedimentree_id, head, parents, blob_meta)
     }
 }
 
 /// Fixed fields size _excluding_ the variable-length blob size:
-/// SedimentreeId(32) + Digest<Blob>(32) + |Parents|(1).
-const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 1;
+/// SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Parents|(1).
+const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1;
 
 /// Minimum fields size: fixed fields + smallest bijou64 (1 byte for values 0–247).
 const CODEC_MIN_FIELDS_SIZE: usize = CODEC_FIXED_FIELDS_SIZE + 1;
 
-/// Minimum signed message size: Schema(4) + IssuerVK(32) + MinFields(66) + Signature(64).
+/// Minimum signed message size: `Schema(4) + IssuerVK(32) + MinFields + Signature(64)`.
 const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_MIN_FIELDS_SIZE + 64;
 
 impl Schema for LooseCommit {
@@ -113,6 +118,7 @@ impl Schema for LooseCommit {
 impl EncodeFields for LooseCommit {
     fn encode_fields(&self, buf: &mut Vec<u8>) {
         encode::array(self.sedimentree_id.as_bytes(), buf);
+        encode::array(self.head.as_bytes(), buf);
         encode::array(self.blob_meta().digest().as_bytes(), buf);
 
         #[allow(clippy::cast_possible_truncation)]
@@ -150,6 +156,10 @@ impl DecodeFields for LooseCommit {
         let sedimentree_id = SedimentreeId::new(sedimentree_id_bytes);
         offset += 32;
 
+        let head_bytes: [u8; 32] = decode::array(buf, offset)?;
+        let head = CommitId::new(head_bytes);
+        offset += 32;
+
         let blob_digest_bytes: [u8; 32] = decode::array(buf, offset)?;
         let blob_digest = Digest::<Blob>::force_from_bytes(blob_digest_bytes);
         offset += 32;
@@ -181,14 +191,14 @@ impl DecodeFields for LooseCommit {
 
         decode::verify_sorted(&parent_arrays)?;
 
-        let parents: BTreeSet<Digest<LooseCommit>> = parent_arrays
-            .into_iter()
-            .map(Digest::force_from_bytes)
-            .collect();
+        let parents: BTreeSet<CommitId> = parent_arrays.into_iter().map(CommitId::new).collect();
 
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        Ok((LooseCommit::new(sedimentree_id, parents, blob_meta), offset))
+        Ok((
+            LooseCommit::new(sedimentree_id, head, parents, blob_meta),
+            offset,
+        ))
     }
 }
 
@@ -207,6 +217,7 @@ mod tests {
 
         let mut buf = Vec::new();
         encode::array(id.as_bytes(), &mut buf);
+        encode::array(&[0x10; 32], &mut buf); // head
         encode::array(&[0x20; 32], &mut buf); // blob digest
         encode::u8(2, &mut buf);
         bijou64::encode(1024, &mut buf);
@@ -232,8 +243,8 @@ mod tests {
 
     #[test]
     fn codec_min_size_is_correct() {
-        // Schema(4) + IssuerVK(32) + SedimentreeId(32) + BlobDigest(32) + ParentCnt(1) + BlobSize(bijou64 min=1) + Signature(64)
-        assert_eq!(LooseCommit::MIN_SIGNED_SIZE, 166);
+        // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + ParentCnt(1) + BlobSize(bijou64 min=1) + Signature(64)
+        assert_eq!(LooseCommit::MIN_SIGNED_SIZE, 198);
     }
 }
 
@@ -267,7 +278,6 @@ mod proptests {
         bolero::check!()
             .with_arbitrary::<Vec<u8>>()
             .for_each(|bytes| {
-                // We don't care about the result, just that it doesn't panic
                 let _result = LooseCommit::try_decode_fields(bytes);
             });
     }

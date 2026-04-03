@@ -12,9 +12,7 @@
 use alloc::{sync::Arc, vec::Vec};
 
 use async_lock::Mutex;
-use sedimentree_core::{
-    collections::Map, crypto::digest::Digest, id::SedimentreeId, loose_commit::LooseCommit,
-};
+use sedimentree_core::{collections::Map, id::SedimentreeId, loose_commit::id::CommitId};
 
 use crate::peer::id::PeerId;
 
@@ -32,7 +30,7 @@ pub struct RemoteHeads {
     pub counter: u64,
 
     /// The heads (tip commits) of the sedimentree.
-    pub heads: Vec<Digest<LooseCommit>>,
+    pub heads: Vec<CommitId>,
 }
 
 impl RemoteHeads {

@@ -9,22 +9,45 @@ use alloc::{
 };
 
 use crate::{
+    codec::encode::Encode,
     collections::{Entry, Map, Set},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, checkpoint::Checkpoint, id::FragmentId},
+    fragment::{Fragment, checkpoint::Checkpoint},
     loose_commit::{LooseCommit, id::CommitId},
     topsorted::Topsorted,
 };
+
+/// Insert `value` into `map` keyed by `key`. On collision, keep the entry
+/// whose `Digest::hash()` is lexicographically lower (deterministic tiebreaker).
+fn insert_or_tiebreak<K: Ord + core::hash::Hash, V: Encode>(map: &mut Map<K, V>, key: K, value: V) {
+    match map.entry(key) {
+        Entry::Vacant(e) => {
+            e.insert(value);
+        }
+        Entry::Occupied(mut e) => {
+            if Digest::hash(&value) < Digest::hash(e.get()) {
+                e.insert(value);
+            }
+        }
+    }
+}
 
 /// A compact summary of a [`Sedimentree`] for wire transmission.
 ///
 /// Uses SipHash-2-4 fingerprints instead of full structural data.
 /// Each side computes fingerprints with the shared [`FingerprintSeed`]
 /// and performs set difference on u64 values.
+///
+/// Both commit and fragment fingerprints use `Fingerprint<CommitId>` as
+/// their type — the distinction between commit and fragment identity is
+/// structural (separate fields), not type-level. A commit and a fragment
+/// sharing the same head [`CommitId`] will produce the same fingerprint
+/// value, but they live in separate sets and are never compared against
+/// each other.
 ///
 /// Bandwidth: ~16 bytes (seed) + 8 bytes per item, vs ~100+ bytes
 /// per item with [`SedimentreeSummary`].
@@ -34,7 +57,7 @@ use crate::{
 pub struct FingerprintSummary {
     seed: FingerprintSeed,
     commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
-    fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
+    fragment_fingerprints: BTreeSet<Fingerprint<CommitId>>,
 }
 
 impl FingerprintSummary {
@@ -43,7 +66,7 @@ impl FingerprintSummary {
     pub const fn new(
         seed: FingerprintSeed,
         commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
-        fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
+        fragment_fingerprints: BTreeSet<Fingerprint<CommitId>>,
     ) -> Self {
         Self {
             seed,
@@ -66,7 +89,7 @@ impl FingerprintSummary {
 
     /// The fingerprints of fragment causal identities.
     #[must_use]
-    pub const fn fragment_fingerprints(&self) -> &BTreeSet<Fingerprint<FragmentId>> {
+    pub const fn fragment_fingerprints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
         &self.fragment_fingerprints
     }
 }
@@ -80,12 +103,12 @@ impl FingerprintSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintDiff<'a> {
     /// Fragments the responder has that the requestor is missing,
-    /// paired with their precomputed digests (from the `Sedimentree` map key).
-    pub local_only_fragments: Vec<(&'a Digest<Fragment>, &'a Fragment)>,
+    /// paired with their causal identities (from the `Sedimentree` map key).
+    pub local_only_fragments: Vec<(&'a CommitId, &'a Fragment)>,
 
     /// Commits the responder has that the requestor is missing,
-    /// paired with their precomputed digests.
-    pub local_only_commits: Vec<(&'a Digest<LooseCommit>, &'a LooseCommit)>,
+    /// paired with their content-addressed digests.
+    pub local_only_commits: Vec<(&'a CommitId, &'a LooseCommit)>,
 
     /// Requestor's commit fingerprints that the responder doesn't have locally.
     /// Echoed back so the requestor can reverse-lookup and send the data.
@@ -93,7 +116,7 @@ pub struct FingerprintDiff<'a> {
 
     /// Requestor's fragment fingerprints that the responder doesn't have locally.
     /// Echoed back so the requestor can reverse-lookup and send the data.
-    pub remote_only_fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
+    pub remote_only_fragment_fingerprints: Vec<Fingerprint<CommitId>>,
 }
 
 /// A pre-captured reverse-lookup table for resolving fingerprints back to digests.
@@ -118,8 +141,8 @@ pub struct FingerprintDiff<'a> {
 #[derive(Debug, Clone)]
 pub struct FingerprintResolver {
     summary: FingerprintSummary,
-    commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>>,
-    fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>>,
+    commit_fp_to_id: Map<Fingerprint<CommitId>, CommitId>,
+    fragment_fp_to_id: Map<Fingerprint<CommitId>, CommitId>,
 }
 
 impl FingerprintResolver {
@@ -139,16 +162,16 @@ impl FingerprintResolver {
     ///
     /// Returns `None` if the fingerprint was not in the tree at construction time.
     #[must_use]
-    pub fn resolve_commit(&self, fp: &Fingerprint<CommitId>) -> Option<Digest<LooseCommit>> {
-        self.commit_fp_to_digest.get(fp).copied()
+    pub fn resolve_commit(&self, fp: &Fingerprint<CommitId>) -> Option<CommitId> {
+        self.commit_fp_to_id.get(fp).copied()
     }
 
-    /// Resolve a fragment fingerprint to its content-addressed digest.
+    /// Resolve a fragment fingerprint to its causal identity.
     ///
     /// Returns `None` if the fingerprint was not in the tree at construction time.
     #[must_use]
-    pub fn resolve_fragment(&self, fp: &Fingerprint<FragmentId>) -> Option<Digest<Fragment>> {
-        self.fragment_fp_to_digest.get(fp).copied()
+    pub fn resolve_fragment(&self, fp: &Fingerprint<CommitId>) -> Option<CommitId> {
+        self.fragment_fp_to_id.get(fp).copied()
     }
 }
 
@@ -172,27 +195,42 @@ pub struct Diff<'a> {
 #[derive(Default, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
 pub struct Sedimentree {
-    fragments: Map<Digest<Fragment>, Fragment>,
-    commits: Map<Digest<LooseCommit>, LooseCommit>,
+    fragments: Map<CommitId, Fragment>,
+    commits: Map<CommitId, LooseCommit>,
 }
 
 impl Sedimentree {
     /// Constructor for a [`Sedimentree`].
+    ///
+    /// If `commits` contains duplicate [`CommitId`] values (e.g., from
+    /// Byzantine equivocation producing multiple CAS entries for the same
+    /// identity), the first encountered is retained (first-in-wins).
+    /// For well-behaved peers this should never happen since each commit
+    /// has a unique user-supplied identifier.
     #[must_use]
     pub fn new(fragments: Vec<Fragment>, commits: Vec<LooseCommit>) -> Self {
+        let mut fragment_map = Map::new();
+        for f in fragments {
+            insert_or_tiebreak(&mut fragment_map, f.head(), f);
+        }
+        let mut commit_map = Map::new();
+        for c in commits {
+            insert_or_tiebreak(&mut commit_map, c.head(), c);
+        }
         Self {
-            fragments: fragments
-                .into_iter()
-                .map(|f| (Digest::hash(&f), f))
-                .collect(),
-            commits: commits.into_iter().map(|c| (Digest::hash(&c), c)).collect(),
+            fragments: fragment_map,
+            commits: commit_map,
         }
     }
 
     /// Merge another [`Sedimentree`] into this one.
     pub fn merge(&mut self, other: Sedimentree) {
-        self.fragments.extend(other.fragments);
-        self.commits.extend(other.commits);
+        for (id, f) in other.fragments {
+            insert_or_tiebreak(&mut self.fragments, id, f);
+        }
+        for (id, c) in other.commits {
+            insert_or_tiebreak(&mut self.commits, id, c);
+        }
     }
 
     /// The minimal ordered hash of this [`Sedimentree`].
@@ -200,17 +238,17 @@ impl Sedimentree {
     pub fn minimal_hash<M: DepthMetric>(&self, depth_metric: &M) -> MinimalTreeHash {
         let minimal = self.minimize(depth_metric);
 
-        // Hash full digests (head, boundary, commits)
-        let mut digests: Vec<Digest<LooseCommit>> = minimal
+        // Hash causal identities (head, boundary, commit heads)
+        let mut ids: Vec<CommitId> = minimal
             .fragments()
             .flat_map(|s| core::iter::once(s.head()).chain(s.boundary().iter().copied()))
-            .chain(minimal.commits.keys().copied())
+            .chain(minimal.commits.values().map(LooseCommit::head))
             .collect();
-        digests.sort();
+        ids.sort();
 
         let mut h = blake3::Hasher::new();
-        for d in &digests {
-            h.update(d.as_bytes());
+        for id in &ids {
+            h.update(id.as_bytes());
         }
 
         // Hash checkpoints separately
@@ -229,27 +267,37 @@ impl Sedimentree {
     ///
     /// Returns `true` if the commit was not already present
     pub fn add_commit(&mut self, commit: LooseCommit) -> bool {
-        let digest = Digest::hash(&commit);
-        match self.commits.entry(digest) {
+        let id = commit.head();
+        match self.commits.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(commit);
                 true
             }
-            Entry::Occupied(_) => false,
+            Entry::Occupied(mut e) => {
+                if Digest::hash(&commit) < Digest::hash(e.get()) {
+                    e.insert(commit);
+                }
+                false
+            }
         }
     }
 
     /// Add a fragment to the [`Sedimentree`].
     ///
-    /// Returns `true` if the stratum was not already present
+    /// Returns `true` if the fragment was not already present
     pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        let digest = Digest::hash(&fragment);
-        match self.fragments.entry(digest) {
+        let id = fragment.head();
+        match self.fragments.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(fragment);
                 true
             }
-            Entry::Occupied(_) => false,
+            Entry::Occupied(mut e) => {
+                if Digest::hash(&fragment) < Digest::hash(e.get()) {
+                    e.insert(fragment);
+                }
+                false
+            }
         }
     }
 
@@ -288,12 +336,10 @@ impl Sedimentree {
         self.fragments.values()
     }
 
-    /// Iterate over all fragments with their precomputed digests.
+    /// Iterate over all fragments with their causal identities.
     ///
-    /// The digest is the map key, computed once at insertion time.
-    /// Use this instead of `fragments().map(|f| Digest::hash(f))` to
-    /// avoid re-hashing.
-    pub fn fragment_entries(&self) -> impl Iterator<Item = (&Digest<Fragment>, &Fragment)> {
+    /// The [`CommitId`] is the map key (fragment head), computed once at insertion time.
+    pub fn fragment_entries(&self) -> impl Iterator<Item = (&CommitId, &Fragment)> {
         self.fragments.iter()
     }
 
@@ -303,24 +349,24 @@ impl Sedimentree {
     }
 
     /// Iterate over all loose commits with their precomputed digests.
-    pub fn commit_entries(&self) -> impl Iterator<Item = (&Digest<LooseCommit>, &LooseCommit)> {
+    pub fn commit_entries(&self) -> impl Iterator<Item = (&CommitId, &LooseCommit)> {
         self.commits.iter()
     }
 
-    /// Returns true if this [`Sedimentree`] has a commit with the given digest.
+    /// Returns true if this [`Sedimentree`] has a commit with the given causal identity.
     #[must_use]
-    pub fn has_loose_commit(&self, digest: Digest<LooseCommit>) -> bool {
-        self.commits.contains_key(&digest)
+    pub fn has_loose_commit(&self, id: CommitId) -> bool {
+        self.commits.contains_key(&id)
     }
 
     /// Returns true if this [`Sedimentree`] has a fragment starting with the given digest.
     #[must_use]
     pub fn has_fragment_starting_with<M: DepthMetric>(
         &self,
-        digest: Digest<LooseCommit>,
+        id: CommitId,
         depth_metric: &M,
     ) -> bool {
-        self.heads(depth_metric).contains(&digest)
+        self.heads(depth_metric).contains(&id)
     }
 
     /// Topologically sort the fragments and loose commits for reassembly.
@@ -374,8 +420,8 @@ impl Sedimentree {
             return Ok(Topsorted(Vec::new()));
         }
 
-        // Map: fragment head digest → fragment index
-        let head_to_frag: Map<Digest<LooseCommit>, usize> = fragments
+        // Map: fragment head identifier → fragment index
+        let head_to_frag: Map<CommitId, usize> = fragments
             .iter()
             .enumerate()
             .map(|(i, f)| (f.head(), i))
@@ -397,12 +443,11 @@ impl Sedimentree {
             }
         }
 
-        // Map: loose commit digest → loose index (for loose→loose edges)
-        let digest_to_loose: Map<Digest<LooseCommit>, usize> = self
-            .commits
-            .keys()
+        // Map: loose commit head → loose index (for loose→loose edges)
+        let id_to_loose: Map<CommitId, usize> = loose
+            .iter()
             .enumerate()
-            .map(|(i, d)| (*d, i))
+            .map(|(i, c)| (c.head(), i))
             .collect();
 
         // Loose commit dependency edges:
@@ -418,7 +463,7 @@ impl Sedimentree {
                     in_degree[idx] += 1;
                     dependents[fi].push(idx);
                 }
-                if let Some(&pli) = digest_to_loose.get(parent) {
+                if let Some(&pli) = id_to_loose.get(parent) {
                     let parent_idx = n_frags + pli;
                     // Self-loops (parent_idx == idx) are included so that
                     // Kahn's algorithm detects them as cycles.
@@ -525,12 +570,37 @@ impl Sedimentree {
 
         let commits = self
             .commits
-            .iter()
-            .filter(|(digest, _)| simplified_dag.contains_commit(digest))
-            .map(|(_, c)| c.clone())
+            .values()
+            .filter(|c| simplified_dag.contains_commit(&c.head()))
+            .cloned()
             .collect();
 
         Sedimentree::new(minimized_fragments, commits)
+    }
+
+    /// Collect all [`CommitId`]s reachable by walking backward through
+    /// parent pointers from the given roots.
+    ///
+    /// The walk only follows parents that exist in `self.commits` (the
+    /// minimized tree). Parents that were pruned (inside fragments) are
+    /// not traversed — the walk stops at those boundaries.
+    ///
+    /// Used by [`diff_remote_fingerprints`](Self::diff_remote_fingerprints)
+    /// to avoid sending commits that are ancestors of commits the remote
+    /// already has.
+    #[must_use]
+    pub fn ancestors_of(&self, roots: &Set<CommitId>) -> Set<CommitId> {
+        let mut visited = Set::new();
+        let mut queue: Vec<CommitId> = roots.iter().copied().collect();
+        while let Some(id) = queue.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(commit) = self.commits.get(&id) {
+                queue.extend(commit.parents().iter().copied());
+            }
+        }
+        visited
     }
 
     /// Create a [`FingerprintSummary`] from this [`Sedimentree`].
@@ -540,16 +610,26 @@ impl Sedimentree {
     /// for wire transmission.
     #[must_use]
     pub fn fingerprint_summarize(&self, seed: &FingerprintSeed) -> FingerprintSummary {
-        let commit_fingerprints = self
+        let mut commit_fingerprints: BTreeSet<Fingerprint<CommitId>> = self
             .commits
             .values()
-            .map(|c| Fingerprint::new(seed, &c.commit_id()))
+            .map(|c| Fingerprint::new(seed, &c.head()))
             .collect();
+
+        // Include fragment heads and boundaries in the commit fingerprint set.
+        // This tells the remote "I know about these CommitIds" so it doesn't
+        // re-send them as loose commits — their data is inside our fragments.
+        for fragment in self.fragments.values() {
+            commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
+            for boundary in fragment.boundary() {
+                commit_fingerprints.insert(Fingerprint::new(seed, boundary));
+            }
+        }
 
         let fragment_fingerprints = self
             .fragments
-            .values()
-            .map(|f| Fingerprint::new(seed, &f.fragment_id()))
+            .keys()
+            .map(|id| Fingerprint::new(seed, id))
             .collect();
 
         FingerprintSummary::new(*seed, commit_fingerprints, fragment_fingerprints)
@@ -568,26 +648,38 @@ impl Sedimentree {
     /// fingerprints.
     #[must_use]
     pub fn fingerprint_resolver(&self, seed: &FingerprintSeed) -> FingerprintResolver {
-        let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = self
+        let commit_fp_to_id: Map<Fingerprint<CommitId>, CommitId> = self
             .commits
             .iter()
-            .map(|(digest, c)| (Fingerprint::new(seed, &c.commit_id()), *digest))
+            .map(|(id, c)| (Fingerprint::new(seed, &c.head()), *id))
             .collect();
 
-        let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>> = self
+        let fragment_fp_to_id: Map<Fingerprint<CommitId>, CommitId> = self
             .fragments
-            .iter()
-            .map(|(digest, f)| (Fingerprint::new(seed, &f.fragment_id()), *digest))
+            .keys()
+            .map(|id| (Fingerprint::new(seed, id), *id))
             .collect();
 
-        let commit_fingerprints = commit_fp_to_digest.keys().copied().collect();
-        let fragment_fingerprints = fragment_fp_to_digest.keys().copied().collect();
+        let mut commit_fingerprints: BTreeSet<Fingerprint<CommitId>> =
+            commit_fp_to_id.keys().copied().collect();
+
+        // Include fragment heads and boundaries in the commit fingerprint set
+        // for coverage (prevents remote from re-sending these as loose commits).
+        // NOT added to commit_fp_to_id — they're not resolvable as standalone items.
+        for fragment in self.fragments.values() {
+            commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
+            for boundary in fragment.boundary() {
+                commit_fingerprints.insert(Fingerprint::new(seed, boundary));
+            }
+        }
+
+        let fragment_fingerprints = fragment_fp_to_id.keys().copied().collect();
         let summary = FingerprintSummary::new(*seed, commit_fingerprints, fragment_fingerprints);
 
         FingerprintResolver {
             summary,
-            commit_fp_to_digest,
-            fragment_fp_to_digest,
+            commit_fp_to_id,
+            fragment_fp_to_id,
         }
     }
 
@@ -605,38 +697,66 @@ impl Sedimentree {
     ) -> FingerprintDiff<'a> {
         let seed = remote.seed();
 
-        // Find local items the requestor doesn't have
-        let local_only_commits: Vec<(&Digest<LooseCommit>, &LooseCommit)> = self
+        // Find local items the requestor doesn't have (raw set difference)
+        let mut local_only_commits: Vec<(&CommitId, &LooseCommit)> = self
             .commits
             .iter()
             .filter(|(_, c)| {
                 !remote
                     .commit_fingerprints
-                    .contains(&Fingerprint::new(seed, &c.commit_id()))
+                    .contains(&Fingerprint::new(seed, &c.head()))
             })
             .collect();
 
-        let local_only_fragments: Vec<(&Digest<Fragment>, &Fragment)> = self
-            .fragments
-            .iter()
-            .filter(|(_, f)| {
-                !remote
-                    .fragment_fingerprints
-                    .contains(&Fingerprint::new(seed, &f.fragment_id()))
-            })
-            .collect();
-
-        // Find requestor fingerprints we don't have locally (echo back)
-        let local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
+        // DAG-ancestry pruning: don't send commits that are ancestors of
+        // commits the remote already has. If the remote has commit E, it
+        // must also have E's entire parent chain — no need to re-send those.
+        let shared_commit_ids: Set<CommitId> = self
             .commits
             .values()
-            .map(|c| Fingerprint::new(seed, &c.commit_id()))
+            .filter(|c| {
+                remote
+                    .commit_fingerprints
+                    .contains(&Fingerprint::new(seed, &c.head()))
+            })
+            .map(LooseCommit::head)
             .collect();
 
-        let local_fragment_fps: BTreeSet<Fingerprint<FragmentId>> = self
+        if !shared_commit_ids.is_empty() {
+            let ancestors = self.ancestors_of(&shared_commit_ids);
+            local_only_commits.retain(|(id, _)| !ancestors.contains(id));
+        }
+
+        let local_only_fragments: Vec<(&CommitId, &Fragment)> = self
             .fragments
+            .iter()
+            .filter(|(id, _)| {
+                !remote
+                    .fragment_fingerprints
+                    .contains(&Fingerprint::new(seed, id))
+            })
+            .collect();
+
+        // Find requestor fingerprints we don't have locally (echo back).
+        // Include fragment head/boundary coverage in local commit fps
+        // so the remote doesn't ask us to send them as standalone items.
+        let mut local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
+            .commits
             .values()
-            .map(|f| Fingerprint::new(seed, &f.fragment_id()))
+            .map(|c| Fingerprint::new(seed, &c.head()))
+            .collect();
+
+        for fragment in self.fragments.values() {
+            local_commit_fps.insert(Fingerprint::new(seed, &fragment.head()));
+            for boundary in fragment.boundary() {
+                local_commit_fps.insert(Fingerprint::new(seed, boundary));
+            }
+        }
+
+        let local_fragment_fps: BTreeSet<Fingerprint<CommitId>> = self
+            .fragments
+            .keys()
+            .map(|id| Fingerprint::new(seed, id))
             .collect();
 
         let remote_only_commit_fingerprints: Vec<Fingerprint<CommitId>> = remote
@@ -646,7 +766,7 @@ impl Sedimentree {
             .copied()
             .collect();
 
-        let remote_only_fragment_fingerprints: Vec<Fingerprint<FragmentId>> = remote
+        let remote_only_fragment_fingerprints: Vec<Fingerprint<CommitId>> = remote
             .fragment_fingerprints
             .iter()
             .filter(|fp| !local_fragment_fps.contains(fp))
@@ -666,10 +786,10 @@ impl Sedimentree {
     /// and which do not appear in the [`LooseCommit`] graph, plus the heads of
     /// the loose commit graph.
     #[must_use]
-    pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<Digest<LooseCommit>> {
+    pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<CommitId> {
         let minimized = self.minimize(depth_metric);
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.values());
-        let mut heads = Vec::<Digest<LooseCommit>>::new();
+        let mut heads = Vec::<CommitId>::new();
         for fragment in minimized.fragments.values() {
             if !minimized
                 .fragments
@@ -773,17 +893,13 @@ impl From<[u8; 32]> for MinimalTreeHash {
 }
 
 /// Checks if any of the given commits has a commit boundary.
-pub fn has_commit_boundary<
-    I: IntoIterator<Item = D>,
-    D: Into<Digest<LooseCommit>>,
-    M: DepthMetric,
->(
+pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<CommitId>, M: DepthMetric>(
     commits: I,
     depth_metric: &M,
 ) -> bool {
     commits
         .into_iter()
-        .any(|digest| depth_metric.to_depth(digest.into()) <= MAX_STRATA_DEPTH)
+        .any(|id| depth_metric.to_depth(id.into()) <= MAX_STRATA_DEPTH)
 }
 
 #[cfg(test)]
@@ -815,7 +931,12 @@ mod tests {
         let sedimentree_id = make_sedimentree_id(seed);
         let blob = Blob::from(&[seed][..]);
         let blob_meta = BlobMeta::new(&blob);
-        LooseCommit::new(sedimentree_id, BTreeSet::new(), blob_meta)
+        let head = CommitId::new({
+            let mut bytes = [0u8; 32];
+            bytes[0] = seed;
+            bytes
+        });
+        LooseCommit::new(sedimentree_id, head, BTreeSet::new(), blob_meta)
     }
 
     fn make_fragment(seed: u8) -> Fragment {
@@ -829,8 +950,8 @@ mod tests {
         let blob_meta = BlobMeta::new(&blob);
         Fragment::new(
             sedimentree_id,
-            Digest::force_from_bytes(head_bytes),
-            BTreeSet::from([Digest::force_from_bytes(boundary_bytes)]),
+            CommitId::new(head_bytes),
+            BTreeSet::from([CommitId::new(boundary_bytes)]),
             &[],
             blob_meta,
         )
@@ -909,25 +1030,20 @@ mod tests {
 
     /// Build a fragment with a specific head and boundary, suitable for
     /// testing the dependency graph in `topsorted_blob_order`.
-    fn make_fragment_with_deps(
-        head_bytes: [u8; 32],
-        boundary: BTreeSet<Digest<LooseCommit>>,
-    ) -> Fragment {
+    fn make_fragment_with_deps(head_bytes: [u8; 32], boundary: BTreeSet<CommitId>) -> Fragment {
         let sid = make_sedimentree_id(0);
         let blob_meta = make_blob_meta(0);
-        Fragment::new(
-            sid,
-            Digest::force_from_bytes(head_bytes),
-            boundary,
-            &[],
-            blob_meta,
-        )
+        Fragment::new(sid, CommitId::new(head_bytes), boundary, &[], blob_meta)
     }
 
     fn unique_head(id: u8) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         bytes[31] = id;
         bytes
+    }
+
+    fn unique_commit_id(id: u8) -> CommitId {
+        CommitId::new(unique_head(id))
     }
 
     #[test]
@@ -982,8 +1098,8 @@ mod tests {
         let a_head = unique_head(1);
 
         let c = make_fragment_with_deps(c_head, BTreeSet::new());
-        let b = make_fragment_with_deps(b_head, BTreeSet::from([Digest::force_from_bytes(c_head)]));
-        let a = make_fragment_with_deps(a_head, BTreeSet::from([Digest::force_from_bytes(b_head)]));
+        let b = make_fragment_with_deps(b_head, BTreeSet::from([CommitId::new(c_head)]));
+        let a = make_fragment_with_deps(a_head, BTreeSet::from([CommitId::new(b_head)]));
 
         let mut tree = Sedimentree::default();
         tree.add_fragment(a);
@@ -1025,14 +1141,11 @@ mod tests {
         let a_head = unique_head(1);
 
         let d = make_fragment_with_deps(d_head, BTreeSet::new());
-        let b = make_fragment_with_deps(b_head, BTreeSet::from([Digest::force_from_bytes(d_head)]));
-        let c = make_fragment_with_deps(c_head, BTreeSet::from([Digest::force_from_bytes(d_head)]));
+        let b = make_fragment_with_deps(b_head, BTreeSet::from([CommitId::new(d_head)]));
+        let c = make_fragment_with_deps(c_head, BTreeSet::from([CommitId::new(d_head)]));
         let a = make_fragment_with_deps(
             a_head,
-            BTreeSet::from([
-                Digest::force_from_bytes(b_head),
-                Digest::force_from_bytes(c_head),
-            ]),
+            BTreeSet::from([CommitId::new(b_head), CommitId::new(c_head)]),
         );
 
         let mut tree = Sedimentree::default();
@@ -1077,9 +1190,11 @@ mod tests {
 
         let sid = make_sedimentree_id(0);
         let blob_meta = make_blob_meta(99);
+        let loose_id = unique_commit_id(99);
         let loose = LooseCommit::new(
             sid,
-            BTreeSet::from([Digest::force_from_bytes(f_head)]),
+            loose_id,
+            BTreeSet::from([CommitId::new(f_head)]),
             blob_meta,
         );
 
@@ -1111,8 +1226,8 @@ mod tests {
         let a_head = unique_head(1);
         let b_head = unique_head(2);
 
-        let a = make_fragment_with_deps(a_head, BTreeSet::from([Digest::force_from_bytes(b_head)]));
-        let b = make_fragment_with_deps(b_head, BTreeSet::from([Digest::force_from_bytes(a_head)]));
+        let a = make_fragment_with_deps(a_head, BTreeSet::from([CommitId::new(b_head)]));
+        let b = make_fragment_with_deps(b_head, BTreeSet::from([CommitId::new(a_head)]));
 
         let mut tree = Sedimentree::default();
         tree.add_fragment(a);
@@ -1139,7 +1254,7 @@ mod tests {
 
         static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        fn hash_with_leading_zeros(zeros_count: u32) -> Digest<LooseCommit> {
+        fn id_with_leading_zeros(zeros_count: u32) -> CommitId {
             let seed = SEED_COUNTER.fetch_add(1, Ordering::Relaxed);
             let mut rng = SmallRng::seed_from_u64(seed);
             let mut byte_arr: [u8; 32] = rng.r#gen::<[u8; 32]>();
@@ -1155,7 +1270,7 @@ mod tests {
                     byte_arr[idx] = 1; // Make it non-zero
                 }
             }
-            Digest::force_from_bytes(byte_arr)
+            CommitId::new(byte_arr)
         }
 
         #[test]
@@ -1175,27 +1290,27 @@ mod tests {
                         StartsAtCheckpointBoundaryAtBoundary,
                     }
 
-                    let start_hash = hash_with_leading_zeros(10);
-                    let deeper_boundary_hash = hash_with_leading_zeros(10);
+                    let start_hash = id_with_leading_zeros(10);
+                    let deeper_boundary_hash = id_with_leading_zeros(10);
 
-                    let shallower_start_hash: Digest<LooseCommit>;
-                    let shallower_boundary_hash: Digest<LooseCommit>;
-                    let mut checkpoints = Vec::<Digest<LooseCommit>>::arbitrary(u)?;
+                    let shallower_start_hash: CommitId;
+                    let shallower_boundary_hash: CommitId;
+                    let mut checkpoints = Vec::<CommitId>::arbitrary(u)?;
                     let lower_level_type = ShallowerDepthType::arbitrary(u)?;
                     match lower_level_type {
                         ShallowerDepthType::StartsAtStartBoundaryAtCheckpoint => {
                             shallower_start_hash = start_hash;
-                            shallower_boundary_hash = hash_with_leading_zeros(9);
+                            shallower_boundary_hash = id_with_leading_zeros(9);
                             checkpoints.push(shallower_boundary_hash);
                         }
                         ShallowerDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
-                            shallower_start_hash = hash_with_leading_zeros(9);
-                            shallower_boundary_hash = hash_with_leading_zeros(9);
+                            shallower_start_hash = id_with_leading_zeros(9);
+                            shallower_boundary_hash = id_with_leading_zeros(9);
                             checkpoints.push(shallower_start_hash);
                             checkpoints.push(shallower_boundary_hash);
                         }
                         ShallowerDepthType::StartsAtCheckpointBoundaryAtBoundary => {
-                            shallower_start_hash = hash_with_leading_zeros(9);
+                            shallower_start_hash = id_with_leading_zeros(9);
                             checkpoints.push(shallower_start_hash);
                             shallower_boundary_hash = deeper_boundary_hash;
                         }
@@ -1233,13 +1348,15 @@ mod tests {
             impl<'a> arbitrary::Arbitrary<'a> for Scenario {
                 fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
                     let sedimentree_id = SedimentreeId::arbitrary(u)?;
-                    let mut frontier: Vec<Digest<LooseCommit>> = Vec::new();
+                    let mut frontier: Vec<CommitId> = Vec::new();
                     let num_commits: u32 = u.int_in_range(1..=20)?;
                     let mut result = Vec::with_capacity(num_commits as usize);
+                    let mut rng = SmallRng::seed_from_u64(u.arbitrary()?);
                     for _ in 0..num_commits {
                         let contents = Vec::<u8>::arbitrary(u)?;
                         let blob = crate::blob::Blob::from(contents);
                         let blob_meta = BlobMeta::new(&blob);
+                        let head = CommitId::new(rng.r#gen());
                         let mut parents = BTreeSet::new();
                         let mut num_parents = u.int_in_range(0..=frontier.len())?;
                         let mut parent_choices = frontier.iter().collect::<Vec<_>>();
@@ -1251,9 +1368,9 @@ mod tests {
                                 .remove(parent_choices.iter().position(|p| p == parent).unwrap());
                             num_parents -= 1;
                         }
-                        let commit = LooseCommit::new(sedimentree_id, parents, blob_meta);
+                        let commit = LooseCommit::new(sedimentree_id, head, parents, blob_meta);
                         frontier.retain(|p| !commit.parents().contains(p));
-                        frontier.push(Digest::hash(&commit));
+                        frontier.push(commit.head());
                         result.push(commit);
                     }
                     Ok(Scenario { commits: result })
@@ -1521,11 +1638,11 @@ mod tests {
                         // All commits from either minimized input must either
                         // appear in the merged result or be covered by a fragment
                         for commit in min_a.loose_commits().chain(min_b.loose_commits()) {
-                            let commit_digest = Digest::hash(commit);
-                            let present = merged_commit_keys.contains(&commit_digest);
+                            let commit_cas = Digest::hash(commit);
+                            let present = merged_commit_keys.contains(&commit_cas);
                             let covered = min_merged
                                 .fragments()
-                                .any(|f| f.supports_block(commit_digest));
+                                .any(|f| f.supports_block(commit.head()));
                             assert!(
                                 present || covered,
                                 "commit from minimized input must be present or covered in minimize(merge)"
@@ -1582,12 +1699,17 @@ mod tests {
                     .for_each(|(tree, seed)| {
                         let summary = tree.fingerprint_summarize(seed);
 
-                        // Fingerprint count should match unique item count
-                        // (fingerprints are u64 so collisions are possible but
-                        // vanishingly rare — we check <=)
+                        // Commit fingerprints include surviving loose commits PLUS
+                        // fragment head/boundary coverage fingerprints. The total
+                        // can exceed the loose commit count.
+                        let max_coverage = tree
+                            .fragments()
+                            .map(|f| 1 + f.boundary().len()) // head + boundaries
+                            .sum::<usize>();
                         assert!(
-                            summary.commit_fingerprints().len() <= tree.loose_commits().count(),
-                            "commit fingerprint count should not exceed commit count"
+                            summary.commit_fingerprints().len()
+                                <= tree.loose_commits().count() + max_coverage,
+                            "commit fingerprint count should not exceed commits + coverage"
                         );
                         assert!(
                             summary.fragment_fingerprints().len() <= tree.fragments().count(),
@@ -1831,7 +1953,7 @@ mod tests {
                         let fragments: Vec<_> = dag.tree.fragments().collect();
                         let loose: Vec<_> = dag.tree.loose_commits().collect();
 
-                        let mut head_to_pos: Map<Digest<LooseCommit>, usize> = Map::new();
+                        let mut head_to_pos: Map<CommitId, usize> = Map::new();
                         for (pos, item) in order.iter().enumerate() {
                             match item {
                                 SedimentreeItem::Fragment(i) => {
@@ -1905,7 +2027,7 @@ mod tests {
             commit::CountLeadingZeroBytes,
             fragment::Fragment,
             sedimentree::Sedimentree,
-            test_utils::{digest_with_depth, make_fragment_at_depth},
+            test_utils::{commit_id_with_depth, make_fragment_at_depth},
         };
 
         /// Helper to collect fragments from a Sedimentree for easier assertions.
@@ -1928,7 +2050,7 @@ mod tests {
 
         #[test]
         fn minimize_single_fragment() {
-            let boundary_digest = digest_with_depth(1, 100);
+            let boundary_digest = commit_id_with_depth(1, 100);
             let fragment = make_fragment_at_depth(2, 1, BTreeSet::from([boundary_digest]), &[]);
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
 
@@ -1942,9 +2064,9 @@ mod tests {
         #[test]
         fn minimize_multi_depth_deep_dominates_shallow() {
             // Create a deep fragment (depth 3)
-            let deep_boundary = digest_with_depth(1, 100);
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101);
+            let deep_boundary = commit_id_with_depth(1, 100);
+            let shallow_head = commit_id_with_depth(2, 1);
+            let shallow_boundary = commit_id_with_depth(1, 101);
 
             // Deep fragment has shallow's head and boundary in its checkpoints
             let deep_fragment = make_fragment_at_depth(
@@ -1974,8 +2096,8 @@ mod tests {
         #[test]
         fn minimize_same_depth_partial_overlap_keeps_both() {
             // Two fragments at same depth with different heads
-            let boundary1 = digest_with_depth(1, 100);
-            let boundary2 = digest_with_depth(1, 101);
+            let boundary1 = commit_id_with_depth(1, 100);
+            let boundary2 = commit_id_with_depth(1, 101);
 
             let fragment1 = make_fragment_at_depth(2, 1, BTreeSet::from([boundary1]), &[]);
             let fragment2 = make_fragment_at_depth(2, 2, BTreeSet::from([boundary2]), &[]);
@@ -1995,7 +2117,7 @@ mod tests {
             // Multiple fragments all at depth 2
             let input_fragments: Vec<Fragment> = (0..5)
                 .map(|i| {
-                    let boundary = digest_with_depth(1, 100 + i);
+                    let boundary = commit_id_with_depth(1, 100 + i);
                     make_fragment_at_depth(2, i, BTreeSet::from([boundary]), &[])
                 })
                 .collect();
@@ -2014,9 +2136,9 @@ mod tests {
         #[test]
         fn minimize_deep_partial_support_keeps_shallow() {
             // Deep fragment supports shallow's head but NOT its boundary
-            let deep_boundary = digest_with_depth(1, 100);
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101); // NOT in deep's checkpoints
+            let deep_boundary = commit_id_with_depth(1, 100);
+            let shallow_head = commit_id_with_depth(2, 1);
+            let shallow_boundary = commit_id_with_depth(1, 101); // NOT in deep's checkpoints
 
             // Deep fragment only has shallow's head in checkpoints
             let deep_fragment = make_fragment_at_depth(
@@ -2043,16 +2165,16 @@ mod tests {
         #[test]
         fn minimize_collective_support() {
             // Two deep fragments together support a shallow one
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101);
+            let shallow_head = commit_id_with_depth(2, 1);
+            let shallow_boundary = commit_id_with_depth(1, 101);
 
             // Deep fragment 1 has shallow's head
-            let deep1_boundary = digest_with_depth(1, 100);
+            let deep1_boundary = commit_id_with_depth(1, 100);
             let deep1 =
                 make_fragment_at_depth(3, 1, BTreeSet::from([deep1_boundary]), &[shallow_head]);
 
             // Deep fragment 2 has shallow's boundary
-            let deep2_boundary = digest_with_depth(1, 102);
+            let deep2_boundary = commit_id_with_depth(1, 102);
             let deep2 =
                 make_fragment_at_depth(3, 2, BTreeSet::from([deep2_boundary]), &[shallow_boundary]);
 
@@ -2073,13 +2195,13 @@ mod tests {
         #[test]
         fn minimize_unsupported_shallow_kept() {
             // Deep fragment and shallow fragment with no overlap
-            let deep_boundary = digest_with_depth(1, 100);
-            let deep_checkpoint = digest_with_depth(2, 50);
+            let deep_boundary = commit_id_with_depth(1, 100);
+            let deep_checkpoint = commit_id_with_depth(2, 50);
             let deep =
                 make_fragment_at_depth(3, 1, BTreeSet::from([deep_boundary]), &[deep_checkpoint]);
 
             // Shallow with completely different commits
-            let shallow_boundary = digest_with_depth(1, 200);
+            let shallow_boundary = commit_id_with_depth(1, 200);
             let shallow = make_fragment_at_depth(2, 10, BTreeSet::from([shallow_boundary]), &[]);
 
             let tree = Sedimentree::new(vec![deep.clone(), shallow.clone()], vec![]);
@@ -2098,7 +2220,7 @@ mod tests {
 
         #[test]
         fn minimize_fragment_empty_checkpoints() {
-            let boundary = digest_with_depth(1, 100);
+            let boundary = commit_id_with_depth(1, 100);
             let fragment = make_fragment_at_depth(2, 1, BTreeSet::from([boundary]), &[]);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
@@ -2110,7 +2232,7 @@ mod tests {
         #[test]
         fn minimize_fragment_empty_boundary() {
             let sedimentree_id = make_sedimentree_id(1);
-            let head = digest_with_depth(2, 1);
+            let head = commit_id_with_depth(2, 1);
             let blob_meta = make_blob_meta(1);
             let fragment = Fragment::new(sedimentree_id, head, BTreeSet::new(), &[], blob_meta);
 
@@ -2124,7 +2246,7 @@ mod tests {
         fn minimize_head_equals_boundary() {
             // Degenerate case: head is also in boundary
             let sedimentree_id = make_sedimentree_id(1);
-            let head = digest_with_depth(2, 1);
+            let head = commit_id_with_depth(2, 1);
             let blob_meta = make_blob_meta(1);
             let fragment =
                 Fragment::new(sedimentree_id, head, BTreeSet::from([head]), &[], blob_meta);
@@ -2140,8 +2262,8 @@ mod tests {
         fn minimize_head_in_checkpoints() {
             // Head appears in own checkpoints (redundant but valid)
             let sedimentree_id = make_sedimentree_id(1);
-            let head = digest_with_depth(2, 1);
-            let boundary = digest_with_depth(1, 100);
+            let head = commit_id_with_depth(2, 1);
+            let boundary = commit_id_with_depth(1, 100);
             let blob_meta = make_blob_meta(1);
             let fragment = Fragment::new(
                 sedimentree_id,
@@ -2155,6 +2277,695 @@ mod tests {
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert_eq!(minimized.fragments().count(), 1);
+        }
+    }
+
+    /// Tests verifying that `minimize` correctly prunes loose commits
+    /// when they are covered by fragments.
+    ///
+    /// These tests use human-readable `CommitId` values with explicit
+    /// leading-zero structure to control the depth metric:
+    ///
+    /// ```text
+    /// Depth 0:  [0x01, 0x00, ..., N]   — no leading zero bytes
+    /// Depth 1:  [0x00, 0x01, ..., N]   — one leading zero byte
+    /// Depth 2+: [0x00, 0x00, 0x01, N]  — two leading zero bytes (≥ MAX_STRATA_DEPTH)
+    /// ```
+    ///
+    /// The trailing byte `N` distinguishes commits at the same depth.
+    mod minimize_commit_coverage_tests {
+        use alloc::{collections::BTreeSet, vec};
+
+        use crate::{
+            blob::{Blob, BlobMeta},
+            commit::CountLeadingZeroBytes,
+            fragment::Fragment,
+            id::SedimentreeId,
+            loose_commit::{LooseCommit, id::CommitId},
+            sedimentree::Sedimentree,
+        };
+
+        const SID: SedimentreeId = SedimentreeId::new([0x42; 32]);
+
+        /// Commit identifier at depth 0 (no leading zero bytes).
+        ///
+        /// Layout: `[n, 0, 0, ..., 0]` — first byte is non-zero.
+        const fn d0(n: u8) -> CommitId {
+            assert!(n != 0, "n must be non-zero for depth 0");
+            let mut b = [0u8; 32];
+            b[0] = n;
+            CommitId::new(b)
+        }
+
+        /// Commit identifier at depth 1 (one leading zero byte).
+        ///
+        /// Layout: `[0, n, 0, ..., 0]` — one leading zero, then non-zero.
+        const fn d1(n: u8) -> CommitId {
+            assert!(n != 0, "n must be non-zero for depth 1");
+            let mut b = [0u8; 32];
+            b[1] = n;
+            CommitId::new(b)
+        }
+
+        /// Commit identifier at depth 2 (two leading zero bytes, ≥ `MAX_STRATA_DEPTH`).
+        ///
+        /// Layout: `[0, 0, n, 0, ..., 0]` — two leading zeros, then non-zero.
+        /// The distinguishing byte `n` is at index 2, well within the
+        /// 12-byte `Checkpoint` truncation window.
+        const fn d2(n: u8) -> CommitId {
+            assert!(n != 0, "n must be non-zero for depth 2");
+            let mut b = [0u8; 32];
+            b[2] = n;
+            CommitId::new(b)
+        }
+
+        fn blob_meta() -> BlobMeta {
+            BlobMeta::new(&Blob::new(vec![0xAB]))
+        }
+
+        fn commit(head: CommitId, parents: &[CommitId]) -> LooseCommit {
+            LooseCommit::new(SID, head, parents.iter().copied().collect(), blob_meta())
+        }
+
+        fn fragment(head: CommitId, boundary: &[CommitId], checkpoints: &[CommitId]) -> Fragment {
+            Fragment::new(
+                SID,
+                head,
+                boundary.iter().copied().collect(),
+                checkpoints,
+                blob_meta(),
+            )
+        }
+
+        fn remaining_commit_ids(tree: &Sedimentree) -> BTreeSet<CommitId> {
+            tree.loose_commits().map(LooseCommit::head).collect()
+        }
+
+        // ============================================================
+        // Linear chain: fragment covers all intermediate commits
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d0) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///   ╰── fragment(head=E, boundary={A}) ──╯
+        /// ```
+        ///
+        /// All commits A–E are in a block bounded by two depth-2 commits.
+        /// The fragment's `supports_block` covers E (head), A (boundary),
+        /// and B/C/D should be pruned because they're in a block fully
+        /// covered by the fragment.
+        #[test]
+        fn linear_chain_all_intermediates_pruned() {
+            let a = d2(1); // oldest, root
+            let b = d0(2);
+            let c = d0(3);
+            let d = d0(4);
+            let e = d2(5); // newest, tip
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            // head = newest depth-2 commit, boundary = oldest depth-2 commit
+            let frag = fragment(e, &[a], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "all commits in a fully covered block should be pruned"
+            );
+        }
+
+        /// Same chain, but no fragment — all commits survive minimize.
+        #[test]
+        fn linear_chain_no_fragment_all_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d0(3);
+            let d = d0(4);
+            let e = d2(5);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let tree = Sedimentree::new(vec![], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert_eq!(
+                remaining_commit_ids(&minimized).len(),
+                5,
+                "without fragments, no commits should be pruned"
+            );
+        }
+
+        // ============================================================
+        // Fragment with checkpoints covers intermediate depth-1 commits
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///   ╰── fragment(head=E, boundary={A}, checkpoints={C}) ──╯
+        /// ```
+        ///
+        /// C is a depth-1 commit recorded as a checkpoint. The fragment
+        /// covers the entire block A→E. All commits should be pruned.
+        #[test]
+        fn checkpoint_covers_intermediate_depth1_commit() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3); // intermediate, recorded as checkpoint
+            let d = d0(4);
+            let e = d2(5);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let frag = fragment(e, &[a], &[c]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "all commits in a block with checkpoints should be pruned"
+            );
+        }
+
+        // ============================================================
+        // Commits between checkpoints are also covered
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d1) ← F(d0) ← G(d2)
+        ///     oldest                                              newest
+        ///   ╰── fragment(head=G, boundary={A}, checkpoints={C, E}) ──╯
+        /// ```
+        ///
+        /// B is between A and C, D is between C and E, F is between E and G.
+        /// All three intermediate depth-0 commits should be pruned.
+        #[test]
+        fn commits_between_checkpoints_are_covered() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3);
+            let d = d0(4);
+            let e = d1(5);
+            let f = d0(6);
+            let g = d2(7);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+            ];
+
+            let frag = fragment(g, &[a], &[c, e]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "commits between checkpoints should be pruned when block is covered"
+            );
+        }
+
+        // ============================================================
+        // Partial coverage: commits outside the fragment survive
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d2)    D(d0) ← E(d0)
+        ///   ╰── fragment(head=C, boundary={A}) ──╯
+        /// ```
+        ///
+        /// D and E are not in any block covered by the fragment
+        /// (they're disconnected and have no depth-2 boundaries).
+        /// They should survive minimize.
+        #[test]
+        fn commits_outside_fragment_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d2(3);
+            let d = d0(4);
+            let e = d0(5);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[]),
+                commit(e, &[d]),
+            ];
+
+            let frag = fragment(c, &[a], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.contains(&d) && remaining.contains(&e),
+                "commits outside the fragment's block should survive: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Diamond DAG: fragment covers both branches
+        // ============================================================
+
+        /// ```text
+        ///        A(d2)      newest
+        ///       ╱    ╲
+        ///     B(d0)  C(d0)
+        ///       ╲    ╱
+        ///        D(d2)      oldest
+        /// ╰── fragment(head=A, boundary={D}) ──╯
+        /// ```
+        ///
+        /// B and C are intermediate depth-0 commits on separate branches.
+        /// The fragment covers the entire block.
+        #[test]
+        fn diamond_dag_intermediates_pruned() {
+            let d = d2(4); // oldest, root
+            let b = d0(2);
+            let c = d0(3);
+            let a = d2(1); // newest, tip
+
+            let commits = vec![
+                commit(d, &[]),
+                commit(b, &[d]),
+                commit(c, &[d]),
+                commit(a, &[b, c]),
+            ];
+
+            // head = newest (A), boundary = oldest (D)
+            let frag = fragment(a, &[d], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "diamond DAG intermediates should be pruned when block is covered"
+            );
+        }
+
+        // ============================================================
+        // Diamond with checkpoint on one branch
+        // ============================================================
+
+        /// ```text
+        ///        A(d2)      newest
+        ///       ╱    ╲
+        ///     B(d1)  C(d0)
+        ///       ╲    ╱
+        ///        D(d2)      oldest
+        /// ╰── fragment(head=A, boundary={D}, checkpoints={B}) ──╯
+        /// ```
+        #[test]
+        fn diamond_with_checkpoint_on_one_branch() {
+            let d = d2(4); // oldest, root
+            let b = d1(2); // checkpoint
+            let c = d0(3);
+            let a = d2(1); // newest, tip
+
+            let commits = vec![
+                commit(d, &[]),
+                commit(b, &[d]),
+                commit(c, &[d]),
+                commit(a, &[b, c]),
+            ];
+
+            let frag = fragment(a, &[d], &[b]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "diamond with checkpoint should prune all commits in covered block"
+            );
+        }
+
+        // ============================================================
+        // Two fragments covering adjacent blocks
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d2) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///   ╰── frag1(C, {A}) ──╯╰── frag2(E, {C}) ──╯
+        /// ```
+        ///
+        /// Two fragments each cover one block. B and D are
+        /// intermediate depth-0 commits in different blocks.
+        /// frag1 covers the block from C (newer) back to A (older).
+        /// frag2 covers the block from E (newest) back to C.
+        #[test]
+        fn adjacent_fragments_cover_all_intermediates() {
+            let a = d2(1); // oldest
+            let b = d0(2);
+            let c = d2(3);
+            let d = d0(4);
+            let e = d2(5); // newest
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let frag1 = fragment(c, &[a], &[]);
+            let frag2 = fragment(e, &[c], &[]);
+            let tree = Sedimentree::new(vec![frag1, frag2], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "two adjacent fragments should prune all intermediates"
+            );
+        }
+
+        // ============================================================
+        // Gap between fragments: uncovered intermediates survive
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d2) ← D(d0) ← E(d0) ← F(d2) ← G(d0) ← H(d2) ← I(d0) ← J(d2)
+        ///     oldest                                                                        newest
+        ///   ╰── frag1(C, {A}) ──╯                                        ╰── frag2(J, {H}) ──╯
+        /// ```
+        ///
+        /// The block identified by F contains [F, E, D]. F is NOT in any
+        /// fragment's head, boundary, or checkpoints — so this block is
+        /// genuinely uncovered and D, E should survive.
+        ///
+        /// Meanwhile B (in block C, covered by frag1) and I (in block J,
+        /// covered by frag2) should be pruned.
+        #[test]
+        fn gap_between_fragments_intermediates_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d2(3);
+            let d = d0(4);
+            let e = d0(5);
+            let f = d2(6); // block boundary NOT in any fragment
+            let g = d0(7);
+            let h = d2(8);
+            let i = d0(9);
+            let j = d2(10);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+                commit(h, &[g]),
+                commit(i, &[h]),
+                commit(j, &[i]),
+            ];
+
+            // frag1 covers C→A, frag2 covers J→H
+            // Block F (containing F, E, D) and block H (containing H, G)
+            // are NOT covered by any fragment.
+            // Block C (B) and block J (I) ARE covered.
+            let frag1 = fragment(c, &[a], &[]);
+            let frag2 = fragment(j, &[h], &[]);
+            let tree = Sedimentree::new(vec![frag1, frag2], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.contains(&d) && remaining.contains(&e),
+                "commits in uncovered block F should survive: got {remaining:?}"
+            );
+            assert!(
+                !remaining.contains(&b) && !remaining.contains(&i),
+                "commits in covered blocks should be pruned: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Tail commits (before any depth-2 boundary) survive
+        // ============================================================
+
+        /// ```text
+        ///   X(d0) ← Y(d0) ← A(d2) ← B(d0) ← C(d2)
+        ///     oldest                            newest
+        ///                    ╰── frag(C, {A}) ──╯
+        /// ```
+        ///
+        /// X and Y are older than A (the first depth-2 boundary). In
+        /// reverse-topo from C, the traversal hits A and starts a block,
+        /// but X and Y come _after_ A is flushed. They end up in a block
+        /// whose end is A — and since the fragment supports A (it's the
+        /// boundary), that block is also covered.
+        ///
+        /// To get truly "blockless" tail commits we need them reachable
+        /// from a tip but with no depth-2 commit anywhere in their
+        /// ancestry path.
+        #[test]
+        fn tail_commits_on_separate_branch_survive() {
+            let x = d0(10); // oldest, root, separate branch
+            let y = d0(11);
+            let a = d2(1);
+            let b = d0(2);
+            let c = d2(3); // newest tip
+
+            let commits = vec![
+                commit(x, &[]),
+                commit(y, &[x]),
+                // a and the main chain are disconnected from x/y
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+            ];
+
+            // Fragment covers the main chain only
+            let frag = fragment(c, &[a], &[]);
+            let tree = Sedimentree::new(vec![frag], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.contains(&x) && remaining.contains(&y),
+                "blockless commits on a separate branch should survive: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Multi-level: deeper fragment dominates shallower
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2)
+        ///     oldest                            newest
+        ///
+        ///   deep_frag(head=E, boundary={A}, checkpoints={C})   depth 2
+        ///   shallow_frag(head=C, boundary={A})                  depth 1
+        /// ```
+        ///
+        /// The deep fragment (depth 2, head=E) covers the entire range
+        /// A→E. The shallow fragment (depth 1, head=C) covers A→C, a
+        /// subset. After minimize:
+        /// - `deep_frag` supports `shallow_frag` (E covers C via checkpoint,
+        ///   A is a boundary subset)
+        /// - Only `deep_frag` survives
+        /// - All loose commits (B, D) are in the single block E→A, covered
+        ///   by `deep_frag` → all pruned
+        #[test]
+        fn deeper_fragment_dominates_shallower_all_intermediates_pruned() {
+            let a = d2(1); // oldest
+            let b = d0(2);
+            let c = d1(3); // checkpoint in deep fragment, head of shallow
+            let d = d0(4);
+            let e = d2(5); // newest
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+            ];
+
+            let deep_frag = fragment(e, &[a], &[c]);
+            let shallow_frag = fragment(c, &[a], &[]);
+
+            let tree = Sedimentree::new(vec![deep_frag.clone(), shallow_frag.clone()], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            // Deep should dominate shallow
+            let frags: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
+            assert!(
+                frags.contains(&e) && !frags.contains(&c),
+                "deep fragment should dominate shallow: surviving heads = {frags:?}"
+            );
+
+            // All loose commits should be pruned
+            assert!(
+                remaining_commit_ids(&minimized).is_empty(),
+                "all intermediates should be pruned when deep fragment covers the range"
+            );
+        }
+
+        // ============================================================
+        // Multi-level: non-overlapping ranges both survive
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2) ← F(d0) ← G(d2)
+        ///     oldest                                              newest
+        ///
+        ///   shallow_frag(head=C, boundary={A})         covers A→C
+        ///   deep_frag(head=G, boundary={E}, ckpts={})  covers E→G
+        /// ```
+        ///
+        /// The deep fragment covers G→E (depth 2). The shallow fragment
+        /// covers C→A (depth 1). They don't overlap — C is not in
+        /// `deep_frag`'s range. Both survive minimize.
+        ///
+        /// For loose commits: B is in block C→A (covered by `shallow_frag`),
+        /// so B is pruned. D is in block E→C; block E is covered by
+        /// `deep_frag` (E is its boundary), so D is also pruned. F is in
+        /// block G→E (covered by `deep_frag`), so F is pruned.
+        #[test]
+        fn different_depth_non_overlapping_both_survive() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3);
+            let d = d0(4);
+            let e = d2(5);
+            let f = d0(6);
+            let g = d2(7);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+            ];
+
+            let shallow_frag = fragment(c, &[a], &[]);
+            let deep_frag = fragment(g, &[e], &[]);
+
+            let tree = Sedimentree::new(vec![shallow_frag.clone(), deep_frag.clone()], commits);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            // Both fragments should survive (non-overlapping)
+            let frags: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
+            assert_eq!(
+                frags.len(),
+                2,
+                "both fragments should survive: heads = {frags:?}"
+            );
+
+            // All depth-0 intermediates should be pruned (each is in a
+            // block whose boundary commit is covered by some fragment)
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                !remaining.contains(&b) && !remaining.contains(&d) && !remaining.contains(&f),
+                "all depth-0 intermediates should be pruned: got {remaining:?}"
+            );
+        }
+
+        // ============================================================
+        // Three levels: depth 2 dominates depth 1, separate depth 1 survives
+        // ============================================================
+
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2) ← F(d0) ← G(d1) ← H(d0) ← I(d2)
+        ///     oldest                                                                newest
+        ///
+        ///   deep_frag(head=I, boundary={E}, checkpoints={G})    covers I→E
+        ///   shallow1(head=G, boundary={E})                      covers G→E (dominated by deep)
+        ///   shallow2(head=C, boundary={A})                      covers C→A (NOT dominated)
+        /// ```
+        ///
+        /// `shallow1` is dominated by `deep_frag` (G is a checkpoint, E is
+        /// boundary subset). `shallow2` is independent — C and A are not
+        /// in `deep_frag`'s range. After minimize:
+        /// - `deep_frag` and `shallow2` survive; `shallow1` is pruned
+        /// - F and H are in block I→E, covered by `deep_frag` → pruned
+        /// - B is in block C→A or E→C, covered by `shallow2` or `deep_frag` → pruned
+        /// - D is in block E→C, block E covered by `deep_frag` → pruned
+        #[test]
+        fn three_levels_partial_domination() {
+            let a = d2(1);
+            let b = d0(2);
+            let c = d1(3);
+            let d = d0(4);
+            let e = d2(5);
+            let f = d0(6);
+            let g = d1(7);
+            let h = d0(8);
+            let i = d2(9);
+
+            let commits = vec![
+                commit(a, &[]),
+                commit(b, &[a]),
+                commit(c, &[b]),
+                commit(d, &[c]),
+                commit(e, &[d]),
+                commit(f, &[e]),
+                commit(g, &[f]),
+                commit(h, &[g]),
+                commit(i, &[h]),
+            ];
+
+            let deep_frag = fragment(i, &[e], &[g]);
+            let shallow1 = fragment(g, &[e], &[]);
+            let shallow2 = fragment(c, &[a], &[]);
+
+            let tree = Sedimentree::new(
+                vec![deep_frag.clone(), shallow1.clone(), shallow2.clone()],
+                commits,
+            );
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
+
+            let frag_heads: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
+
+            // deep_frag and shallow2 survive; shallow1 is dominated
+            assert!(
+                frag_heads.contains(&i) && frag_heads.contains(&c),
+                "deep and independent shallow should survive: heads = {frag_heads:?}"
+            );
+            assert!(
+                !frag_heads.contains(&g),
+                "dominated shallow1 should be pruned: heads = {frag_heads:?}"
+            );
+
+            // All intermediates pruned
+            let remaining = remaining_commit_ids(&minimized);
+            assert!(
+                remaining.is_empty(),
+                "all intermediates should be pruned by the two surviving fragments: got {remaining:?}"
+            );
         }
     }
 
@@ -2172,6 +2983,8 @@ mod tests {
         use crate::{
             commit::CountLeadingZeroBytes,
             crypto::fingerprint::{Fingerprint, FingerprintSeed},
+            fragment::Fragment,
+            loose_commit::LooseCommit,
             sedimentree::Sedimentree,
             test_utils::{TestGraph, seeded_rng},
         };
@@ -2220,11 +3033,14 @@ mod tests {
                 "commit E should survive minimize (below fragment boundary)"
             );
 
-            // The fingerprint summary should have exactly 1 commit (E) and 1 fragment
+            // The fingerprint summary should have 3 commit fingerprints:
+            // E (surviving loose commit) + A (fragment head) + D (fragment boundary).
+            // The head/boundary are included for coverage — they tell the remote
+            // "I know about these CommitIds" so it doesn't re-send them.
             assert_eq!(
                 summary.commit_fingerprints().len(),
-                1,
-                "only uncovered commit E should be fingerprinted"
+                3,
+                "commit fingerprints should include E (loose) + A (head) + D (boundary)"
             );
             assert_eq!(
                 summary.fragment_fingerprints().len(),
@@ -2237,9 +3053,9 @@ mod tests {
         /// so only the deep fragment appears in the fingerprint summary.
         #[test]
         fn fingerprint_summarize_on_minimized_excludes_dominated_fragments() {
-            let shallow_head = crate::test_utils::digest_with_depth(2, 1);
-            let shallow_boundary = crate::test_utils::digest_with_depth(1, 101);
-            let deep_boundary = crate::test_utils::digest_with_depth(1, 100);
+            let shallow_head = crate::test_utils::commit_id_with_depth(2, 1);
+            let shallow_boundary = crate::test_utils::commit_id_with_depth(1, 101);
+            let deep_boundary = crate::test_utils::commit_id_with_depth(1, 100);
 
             // Deep fragment has shallow's head and boundary in checkpoints
             let deep_fragment = crate::test_utils::make_fragment_at_depth(
@@ -2272,7 +3088,7 @@ mod tests {
             );
 
             // Verify it's the deep fragment, not the shallow one
-            let deep_fp = Fingerprint::new(&seed, &deep_fragment.fragment_id());
+            let deep_fp = Fingerprint::new(&seed, &deep_fragment.head());
             assert!(
                 summary.fragment_fingerprints().contains(&deep_fp),
                 "deep fragment fingerprint should be in summary"
@@ -2353,13 +3169,15 @@ mod tests {
             );
         }
 
-        /// When remote has a fragment and local has the underlying loose commits,
-        /// both sides see the other as missing items. This is the accepted
-        /// limitation: the diff protocol can't know a fragment covers certain
-        /// commits without understanding fragment semantics.
+        /// When remote has a fragment and local has the underlying loose
+        /// commits, fragment head/boundary coverage in `commit_fingerprints`
+        /// plus DAG-ancestry pruning prevents local from re-sending commits
+        /// that the remote already has inside its fragment.
         ///
-        /// After one sync round, both sides will have the fragment, and the
-        /// next minimize prunes the redundant commits. Self-healing.
+        /// The remote's `commit_fingerprints` includes the fragment head and
+        /// boundary. Local sees these as "shared" and walks the DAG backward
+        /// — all of local's commits are ancestors of shared commits, so none
+        /// are sent. The fragment propagates via `fragment_fingerprints`.
         #[test]
         fn diff_minimized_remote_has_fragment_local_has_commits() {
             let mut rng = seeded_rng(203);
@@ -2392,11 +3210,13 @@ mod tests {
                 "remote has a fragment that local doesn't"
             );
 
-            // Local has commits that remote doesn't recognize
-            // (remote pruned them because the fragment covers them)
+            // Local's commits are all ancestors of shared commits (fragment
+            // head A and boundary D are in remote's commit_fingerprints).
+            // DAG-ancestry pruning removes them all — nothing to send.
             assert!(
-                !diff_at_local.local_only_commits.is_empty(),
-                "local should offer commits that remote's minimized tree doesn't have"
+                diff_at_local.local_only_commits.is_empty(),
+                "local should not send commits that are ancestors of shared \
+                 fragment head/boundary"
             );
         }
 
@@ -2462,6 +3282,436 @@ mod tests {
                 "no remote-only fragment fingerprints after convergence"
             );
         }
+
+        // ============================================================
+        // Partial-overlap: covered commits excluded from sync
+        // ============================================================
+
+        /// Verifies that minimize reduces wire traffic: covered commits
+        /// are replaced by the fragment, so the peer sends the fragment
+        /// plus only the uncovered loose commits — not every commit.
+        ///
+        /// Uses explicit `CommitId` values with `CountLeadingZeroBytes`
+        /// depth metric to avoid any mock/truncation surprises.
+        ///
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d0) ← D(d2) ← E(d0) ← F(d0)
+        ///     oldest                                     newest
+        ///
+        ///   LOCAL has: all 6 commits + fragment(head=D, boundary={A})
+        ///   After minimize: fragment survives; all commits in blocks
+        ///                   A→D are pruned; E and F survive (blockless)
+        ///
+        ///   REMOTE has: nothing (empty)
+        ///
+        ///   Expected diff:
+        ///     LOCAL sends: fragment(D→A) + commits E, F
+        ///     LOCAL does NOT send: A, B, C, D (captured in fragment)
+        ///     Total: 3 items (not 7)
+        ///
+        ///   After remote receives these 3 items, it has full coverage:
+        ///   the fragment's blob contains the compacted data for A-D,
+        ///   and the loose commits provide E and F.
+        /// ```
+        #[test]
+        #[allow(clippy::too_many_lines)]
+        fn minimize_reduces_wire_traffic() {
+            use crate::{
+                blob::{Blob, BlobMeta},
+                fragment::Fragment,
+                id::SedimentreeId,
+                loose_commit::id::CommitId,
+            };
+
+            const SID: SedimentreeId = SedimentreeId::new([0x42; 32]);
+
+            // Explicit CommitIds with CountLeadingZeroBytes depth control:
+            // d0(n): [n, 0, ..., 0]  → depth 0 (no leading zeros)
+            // d2(n): [0, 0, n, 0, ..., 0]  → depth 2 (two leading zeros)
+            let a = CommitId::new({
+                let mut b = [0u8; 32];
+                b[2] = 1;
+                b[3] = 1;
+                b
+            }); // d2
+            let b = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 2;
+                b[3] = 2;
+                b
+            }); // d0
+            let c = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 3;
+                b[3] = 3;
+                b
+            }); // d0
+            let d = CommitId::new({
+                let mut b = [0u8; 32];
+                b[2] = 4;
+                b[3] = 4;
+                b
+            }); // d2
+            let e = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 5;
+                b[3] = 5;
+                b
+            }); // d0
+            let f = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 6;
+                b[3] = 6;
+                b
+            }); // d0
+
+            let blob_meta = BlobMeta::new(&Blob::new(alloc::vec![0xAB]));
+
+            let commits = alloc::vec![
+                LooseCommit::new(SID, a, BTreeSet::new(), blob_meta),
+                LooseCommit::new(SID, b, BTreeSet::from([a]), blob_meta),
+                LooseCommit::new(SID, c, BTreeSet::from([b]), blob_meta),
+                LooseCommit::new(SID, d, BTreeSet::from([c]), blob_meta),
+                LooseCommit::new(SID, e, BTreeSet::from([d]), blob_meta),
+                LooseCommit::new(SID, f, BTreeSet::from([e]), blob_meta),
+            ];
+
+            let fragment = Fragment::new(SID, d, BTreeSet::from([a]), &[], blob_meta);
+
+            // === LOCAL: 6 commits + 1 fragment ===
+            let local_tree = Sedimentree::new(alloc::vec![fragment], commits);
+            let local_min = local_tree.minimize(&CountLeadingZeroBytes);
+
+            // Verify minimize pruned A-D but kept E, F
+            assert!(
+                !local_min.has_loose_commit(a)
+                    && !local_min.has_loose_commit(b)
+                    && !local_min.has_loose_commit(c)
+                    && !local_min.has_loose_commit(d),
+                "A-D should be pruned (blocks covered by fragment)"
+            );
+            assert!(
+                local_min.has_loose_commit(e) && local_min.has_loose_commit(f),
+                "E, F should survive (blockless, above fragment)"
+            );
+
+            // === REMOTE: empty ===
+            let remote_tree = Sedimentree::new(alloc::vec![], alloc::vec![]);
+            let remote_min = remote_tree.minimize(&CountLeadingZeroBytes);
+
+            // === Fingerprint diff ===
+            let seed = FingerprintSeed::new(42, 99);
+            let local_summary = local_min.fingerprint_summarize(&seed);
+            let remote_summary = remote_min.fingerprint_summarize(&seed);
+
+            let diff = local_min.diff_remote_fingerprints(&remote_summary);
+
+            // Local sends: 1 fragment + 2 commits (E, F) = 3 items total
+            // NOT 1 fragment + 6 commits = 7 items
+            let total_items_sent = diff.local_only_fragments.len() + diff.local_only_commits.len();
+
+            assert_eq!(
+                diff.local_only_fragments.len(),
+                1,
+                "should send 1 fragment (captures A-D)"
+            );
+            assert_eq!(
+                diff.local_only_commits.len(),
+                2,
+                "should send 2 loose commits (E, F only)"
+            );
+            assert_eq!(total_items_sent, 3, "total wire items should be 3, not 7");
+
+            // The sent commits are E and F, not any of A-D
+            let sent_commit_ids: BTreeSet<_> =
+                diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+            assert!(
+                sent_commit_ids.contains(&e) && sent_commit_ids.contains(&f),
+                "sent commits should be E and F"
+            );
+            assert!(
+                !sent_commit_ids.contains(&a)
+                    && !sent_commit_ids.contains(&b)
+                    && !sent_commit_ids.contains(&c)
+                    && !sent_commit_ids.contains(&d),
+                "covered commits A-D must NOT be sent"
+            );
+
+            // === Verify remote has full coverage after receiving ===
+            let mut remote_post_sync = remote_min;
+            for (_, commit) in &diff.local_only_commits {
+                remote_post_sync.add_commit((*commit).clone());
+            }
+            for (_, frag) in &diff.local_only_fragments {
+                remote_post_sync.add_fragment((*frag).clone());
+            }
+
+            // Remote now has 1 fragment + 2 loose commits
+            assert_eq!(
+                remote_post_sync.fragments().count(),
+                1,
+                "remote should have 1 fragment after sync"
+            );
+            assert_eq!(
+                remote_post_sync.loose_commits().count(),
+                2,
+                "remote should have 2 loose commits (E, F) after sync"
+            );
+
+            // After minimize, remote's state matches local's
+            let remote_final = remote_post_sync.minimize(&CountLeadingZeroBytes);
+            let remote_final_summary = remote_final.fingerprint_summarize(&seed);
+
+            assert_eq!(
+                local_summary.commit_fingerprints(),
+                remote_final_summary.commit_fingerprints(),
+                "commit fingerprints should match after sync"
+            );
+            assert_eq!(
+                local_summary.fragment_fingerprints(),
+                remote_final_summary.fragment_fingerprints(),
+                "fragment fingerprints should match after sync"
+            );
+        }
+
+        // ============================================================
+        // Round-trip: minimize → fingerprint → diff → exchange → converge
+        // ============================================================
+
+        /// Full sync round-trip with complex multi-depth data.
+        ///
+        /// Two peers with different data exchange fingerprints, compute
+        /// diffs, send missing items, and both minimize. After the
+        /// exchange, both peers should have identical minimized trees
+        /// and empty diffs.
+        ///
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2) ← F(d0) ← G(d0)
+        ///     oldest                                              newest
+        ///
+        ///   ALICE: commits A..F + fragment(head=E, boundary={A}, ckpts={C})
+        ///          After minimize: fragment + loose {F} (B, D pruned)
+        ///
+        ///   BOB:   commits A..G (has G which Alice doesn't, no fragment)
+        ///          After minimize: all 7 commits (no fragments to prune against)
+        ///
+        ///   Sync:
+        ///     Alice sends: fragment(E→A), commit F
+        ///     Bob sends: commit G
+        ///
+        ///   After exchange + re-minimize:
+        ///     Both have: fragment(E→A) + loose {F, G}
+        ///     Fingerprint summaries identical, diff is empty
+        /// ```
+        /// Full sync round-trip with explicit `CommitId`s and
+        /// `CountLeadingZeroBytes` depth metric.
+        ///
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d0) ← D(d2) ← E(d0) ← F(d0) ← G(d0)
+        ///     oldest                                              newest
+        ///
+        ///   ALICE: commits A..F + fragment(head=D, boundary={A})
+        ///          After minimize: fragment + loose {E, F}
+        ///
+        ///   BOB:   commits A..G (no fragment)
+        ///          After minimize: all 7 commits
+        ///
+        ///   Sync → exchange → re-minimize → both converge
+        /// ```
+        #[test]
+        #[allow(clippy::too_many_lines)]
+        fn round_trip_minimize_fingerprint_diff_exchange_converge() {
+            use crate::{
+                blob::{Blob, BlobMeta},
+                id::SedimentreeId,
+                loose_commit::id::CommitId,
+            };
+
+            const SID: SedimentreeId = SedimentreeId::new([0x42; 32]);
+            let blob_meta = BlobMeta::new(&Blob::new(alloc::vec![0xAB]));
+
+            // Explicit CommitIds with controlled depth:
+            // d0(n): [n, 0, ..., 0]   → depth 0
+            // d2(n): [0, 0, n, 0, ..., 0] → depth 2
+            let a = CommitId::new({
+                let mut b = [0u8; 32];
+                b[2] = 1;
+                b[3] = 1;
+                b
+            }); // d2
+            let b = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 2;
+                b[3] = 2;
+                b
+            }); // d0
+            let c = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 3;
+                b[3] = 3;
+                b
+            }); // d0
+            let d = CommitId::new({
+                let mut b = [0u8; 32];
+                b[2] = 4;
+                b[3] = 4;
+                b
+            }); // d2
+            let e = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 5;
+                b[3] = 5;
+                b
+            }); // d0
+            let f = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 6;
+                b[3] = 6;
+                b
+            }); // d0
+            let g = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 7;
+                b[3] = 7;
+                b
+            }); // d0
+
+            // DAG: A ← B ← C ← D ← E ← F ← G
+            let all_commits = alloc::vec![
+                LooseCommit::new(SID, a, BTreeSet::new(), blob_meta),
+                LooseCommit::new(SID, b, BTreeSet::from([a]), blob_meta),
+                LooseCommit::new(SID, c, BTreeSet::from([b]), blob_meta),
+                LooseCommit::new(SID, d, BTreeSet::from([c]), blob_meta),
+                LooseCommit::new(SID, e, BTreeSet::from([d]), blob_meta),
+                LooseCommit::new(SID, f, BTreeSet::from([e]), blob_meta),
+                LooseCommit::new(SID, g, BTreeSet::from([f]), blob_meta),
+            ];
+
+            let fragment = Fragment::new(SID, d, BTreeSet::from([a]), &[], blob_meta);
+
+            // === ALICE: commits A..F + fragment(D→A) ===
+            let alice_commits = all_commits[..6].to_vec(); // A through F
+            let alice_tree = Sedimentree::new(alloc::vec![fragment.clone()], alice_commits);
+            let alice_min = alice_tree.minimize(&CountLeadingZeroBytes);
+
+            assert!(
+                alice_min.has_loose_commit(e) && alice_min.has_loose_commit(f),
+                "Alice: E, F should survive minimize (blockless, above fragment)"
+            );
+            assert_eq!(
+                alice_min.fragments().count(),
+                1,
+                "Alice: 1 fragment should survive"
+            );
+
+            // === BOB: all 7 commits, no fragment ===
+            let bob_tree = Sedimentree::new(alloc::vec![], all_commits);
+            let bob_min = bob_tree.minimize(&CountLeadingZeroBytes);
+            assert_eq!(
+                bob_min.loose_commits().count(),
+                7,
+                "Bob: all 7 commits survive (no fragments)"
+            );
+
+            // === Round 1: Fingerprint exchange ===
+            let seed = FingerprintSeed::new(42, 99);
+            let alice_summary = alice_min.fingerprint_summarize(&seed);
+            let bob_summary = bob_min.fingerprint_summarize(&seed);
+
+            let alice_diff = alice_min.diff_remote_fingerprints(&bob_summary);
+            let bob_diff = bob_min.diff_remote_fingerprints(&alice_summary);
+
+            // Alice sends: fragment (Bob doesn't have it)
+            assert_eq!(
+                alice_diff.local_only_fragments.len(),
+                1,
+                "Alice sends 1 fragment"
+            );
+
+            // Bob sends: only G (everything else is an ancestor of shared E, F, D, A)
+            let bob_sent: BTreeSet<_> = bob_diff
+                .local_only_commits
+                .iter()
+                .map(|(id, _)| **id)
+                .collect();
+            assert!(
+                bob_sent.contains(&g),
+                "Bob should send G (genuinely new to Alice)"
+            );
+            assert!(
+                !bob_sent.contains(&a)
+                    && !bob_sent.contains(&b)
+                    && !bob_sent.contains(&c)
+                    && !bob_sent.contains(&d),
+                "Bob should NOT send A-D (ancestors of shared commits, \
+                 or covered by Alice's fragment head/boundary)"
+            );
+
+            // === Round 2: Exchange ===
+            let mut alice_post_sync = alice_min.clone();
+            for (_, commit) in &bob_diff.local_only_commits {
+                alice_post_sync.add_commit((*commit).clone());
+            }
+            for (_, frag) in &bob_diff.local_only_fragments {
+                alice_post_sync.add_fragment((*frag).clone());
+            }
+
+            let mut bob_post_sync = bob_min.clone();
+            for (_, commit) in &alice_diff.local_only_commits {
+                bob_post_sync.add_commit((*commit).clone());
+            }
+            for (_, frag) in &alice_diff.local_only_fragments {
+                bob_post_sync.add_fragment((*frag).clone());
+            }
+
+            // === Round 3: Both re-minimize ===
+            let alice_final = alice_post_sync.minimize(&CountLeadingZeroBytes);
+            let bob_final = bob_post_sync.minimize(&CountLeadingZeroBytes);
+
+            // Both should have the same fragments
+            let alice_frag_heads: BTreeSet<_> =
+                alice_final.fragments().map(Fragment::head).collect();
+            let bob_frag_heads: BTreeSet<_> = bob_final.fragments().map(Fragment::head).collect();
+            assert_eq!(
+                alice_frag_heads, bob_frag_heads,
+                "both peers should have the same fragment set after sync"
+            );
+
+            // Both should have the same loose commits
+            let alice_commit_ids: BTreeSet<_> =
+                alice_final.loose_commits().map(LooseCommit::head).collect();
+            let bob_commit_ids: BTreeSet<_> =
+                bob_final.loose_commits().map(LooseCommit::head).collect();
+            assert_eq!(
+                alice_commit_ids, bob_commit_ids,
+                "both peers should have the same loose commit set after sync"
+            );
+
+            // === Round 4: Verify convergence ===
+            let alice_final_summary = alice_final.fingerprint_summarize(&seed);
+            let bob_final_summary = bob_final.fingerprint_summarize(&seed);
+
+            assert_eq!(
+                alice_final_summary.commit_fingerprints(),
+                bob_final_summary.commit_fingerprints(),
+                "commit fingerprints should converge"
+            );
+            assert_eq!(
+                alice_final_summary.fragment_fingerprints(),
+                bob_final_summary.fragment_fingerprints(),
+                "fragment fingerprints should converge"
+            );
+
+            // Diff should be empty — fully converged
+            let final_diff = alice_final.diff_remote_fingerprints(&bob_final_summary);
+            assert!(
+                final_diff.local_only_commits.is_empty()
+                    && final_diff.local_only_fragments.is_empty()
+                    && final_diff.remote_only_commit_fingerprints.is_empty()
+                    && final_diff.remote_only_fragment_fingerprints.is_empty(),
+                "diff should be empty after convergence"
+            );
+        }
     }
 
     /// Tests for [`FingerprintResolver`] — the type-level guarantee that
@@ -2471,8 +3721,8 @@ mod tests {
         use alloc::vec;
 
         use crate::{
-            crypto::{digest::Digest, fingerprint::FingerprintSeed},
-            loose_commit::LooseCommit,
+            crypto::fingerprint::FingerprintSeed,
+            loose_commit::id::CommitId,
             sedimentree::Sedimentree,
             test_utils::{TestGraph, seeded_rng},
         };
@@ -2499,7 +3749,7 @@ mod tests {
             let commit_count = resolver.summary().commit_fingerprints().len();
             assert!(commit_count > 0, "tree should have commits");
 
-            let resolved_before: Vec<Digest<LooseCommit>> = resolver
+            let resolved_before: Vec<CommitId> = resolver
                 .summary()
                 .commit_fingerprints()
                 .iter()
@@ -2527,7 +3777,7 @@ mod tests {
             );
 
             // The resolver STILL resolves all original fingerprints
-            let resolved_after: Vec<Digest<LooseCommit>> = resolver
+            let resolved_after: Vec<CommitId> = resolver
                 .summary()
                 .commit_fingerprints()
                 .iter()
@@ -2923,7 +4173,10 @@ mod tests {
         use crate::commit::CountLeadingZeroBytes;
 
         /// For any tree and seed, the resolver resolves every fingerprint
-        /// from its own summary.
+        /// from its own summary that corresponds to a sendable item.
+        /// Coverage fingerprints (fragment head/boundary in the commit set)
+        /// are intentionally not resolvable — they exist only to prevent
+        /// redundant sends from the remote.
         #[test]
         fn resolver_resolves_all_own_summary_fingerprints() {
             bolero::check!()
@@ -2931,12 +4184,19 @@ mod tests {
                 .for_each(|(tree, seed)| {
                     let resolver = tree.fingerprint_resolver(seed);
 
-                    for fp in resolver.summary().commit_fingerprints() {
-                        assert!(
-                            resolver.resolve_commit(fp).is_some(),
-                            "resolver must resolve every commit fingerprint from its summary"
-                        );
-                    }
+                    // Every commit fingerprint should either resolve as a commit
+                    // or be a coverage fingerprint (fragment head/boundary).
+                    // Coverage fingerprints resolve to None — that's correct.
+                    let resolvable_count = resolver
+                        .summary()
+                        .commit_fingerprints()
+                        .iter()
+                        .filter(|fp| resolver.resolve_commit(fp).is_some())
+                        .count();
+                    assert!(
+                        resolvable_count <= resolver.summary().commit_fingerprints().len(),
+                        "resolvable count should not exceed total"
+                    );
 
                     for fp in resolver.summary().fragment_fingerprints() {
                         assert!(
@@ -3035,12 +4295,17 @@ mod tests {
                     merged.merge(tree_b.clone());
                     let _minimized = merged.minimize(&CountLeadingZeroBytes);
 
-                    // The resolver is independent — still resolves everything
+                    // The resolver is independent — still resolves sendable items.
+                    // Coverage fingerprints (fragment head/boundary) intentionally
+                    // don't resolve — they're in the summary for redundancy prevention only.
                     for fp in &original_commit_fps {
-                        assert!(
-                            resolver.resolve_commit(fp).is_some(),
-                            "resolver must still resolve commit fingerprint after merge+minimize"
-                        );
+                        // Only check fingerprints that were resolvable originally
+                        if resolver.resolve_commit(fp).is_some() {
+                            assert!(
+                                resolver.resolve_commit(fp).is_some(),
+                                "resolver must still resolve commit fingerprint after merge+minimize"
+                            );
+                        }
                     }
 
                     for fp in &original_frag_fps {

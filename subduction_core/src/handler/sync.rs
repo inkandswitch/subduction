@@ -26,7 +26,7 @@ use sedimentree_core::{
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
@@ -702,19 +702,18 @@ impl<
             .map_err(IoError::Storage)?;
         let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
 
-        let commit_by_digest: Map<Digest<LooseCommit>, VerifiedMeta<LooseCommit>> =
-            verified_commits
-                .into_iter()
-                .map(|vm| (Digest::hash(vm.payload()), vm))
-                .collect();
-        let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> = verified_fragments
+        let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
+        for vm in verified_commits {
+            commit_by_id.entry(vm.payload().head()).or_insert(vm);
+        }
+        let fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = verified_fragments
             .into_iter()
-            .map(|vm| (Digest::hash(vm.payload()), vm))
+            .map(|vm| (vm.payload().head(), vm))
             .collect();
 
         let (
-            local_commit_digests,
-            local_fragment_digests,
+            local_commit_ids,
+            local_fragment_ids,
             our_missing_commit_fingerprints,
             our_missing_fragment_fingerprints,
             raw_heads,
@@ -722,11 +721,11 @@ impl<
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
             if let Entry::Vacant(entry) = locked.entry(id) {
-                let loose_commits: Vec<_> = commit_by_digest
+                let loose_commits: Vec<_> = commit_by_id
                     .values()
                     .map(|vm| vm.payload().clone())
                     .collect();
-                let fragments: Vec<_> = fragment_by_digest
+                let fragments: Vec<_> = fragment_by_id
                     .values()
                     .map(|vm| vm.payload().clone())
                     .collect();
@@ -751,11 +750,11 @@ impl<
             (
                 diff.local_only_commits
                     .iter()
-                    .map(|(digest, _)| **digest)
+                    .map(|(id, _)| **id)
                     .collect::<Vec<_>>(),
                 diff.local_only_fragments
                     .iter()
-                    .map(|(digest, _)| **digest)
+                    .map(|(id, _)| **id)
                     .collect::<Vec<_>>(),
                 diff.remote_only_commit_fingerprints,
                 diff.remote_only_fragment_fingerprints,
@@ -768,14 +767,14 @@ impl<
             heads: raw_heads,
         };
 
-        for digest in local_commit_digests {
-            if let Some(verified) = commit_by_digest.get(&digest) {
+        for commit_id in local_commit_ids {
+            if let Some(verified) = commit_by_id.get(&commit_id) {
                 their_missing_commits.push((verified.signed().clone(), verified.blob().clone()));
             }
         }
 
-        for digest in local_fragment_digests {
-            if let Some(verified) = fragment_by_digest.get(&digest) {
+        for frag_id in local_fragment_ids {
+            if let Some(verified) = fragment_by_id.get(&frag_id) {
                 their_missing_fragments.push((verified.signed().clone(), verified.blob().clone()));
             }
         }
@@ -882,7 +881,7 @@ impl<
     }
 
     /// Compute the current heads for a sedimentree (without a counter).
-    async fn heads_for(&self, id: SedimentreeId) -> Vec<Digest<LooseCommit>> {
+    async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
         let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
         locked
             .get(&id)

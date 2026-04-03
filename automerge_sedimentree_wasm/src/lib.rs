@@ -20,9 +20,11 @@ use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
 use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
 use sedimentree_core::{
-    commit::CommitStore, crypto::digest::Digest, hex::decode_hex, loose_commit::LooseCommit,
+    commit::{CommitStore, Parents},
+    hex::decode_hex,
+    loose_commit::id::CommitId,
 };
-use sedimentree_wasm::digest::{JsDigest, WasmDigest};
+use sedimentree_wasm::commit_id::{JsCommitId, WasmCommitId};
 use subduction_wasm::subduction::WasmHashMetric;
 use wasm_bindgen::prelude::*;
 
@@ -50,12 +52,13 @@ impl WasmSedimentreeAutomerge {
     #[wasm_bindgen(js_name = fragment)]
     pub fn js_fragment(
         &self,
-        head: &WasmDigest,
+        head: &WasmCommitId,
         known_states: &WasmFragmentStateStore,
         hash_metric: &WasmHashMetric,
     ) -> Result<WasmFragmentState, WasmFragmentError> {
+        let head_id = CommitId::from(head);
         Ok(self
-            .fragment(head.clone().into(), &known_states.0.borrow(), hash_metric)
+            .fragment(head_id, &known_states.0.borrow(), hash_metric)
             .map(WasmFragmentState)?)
     }
 
@@ -68,13 +71,13 @@ impl WasmSedimentreeAutomerge {
     #[wasm_bindgen(js_name = buildFragmentStore)]
     pub fn js_build_fragment_store(
         &self,
-        head_digests: Vec<JsDigest>,
+        head_ids: Vec<JsCommitId>,
         known_fragment_states: &WasmFragmentStateStore,
         strategy: &WasmHashMetric,
     ) -> Result<Vec<WasmFragmentState>, WasmFragmentError> {
-        let heads: Vec<Digest<LooseCommit>> = head_digests
+        let heads: Vec<CommitId> = head_ids
             .into_iter()
-            .map(|js_digest| WasmDigest::from(&js_digest).into())
+            .map(|js_id| CommitId::from(WasmCommitId::from(&js_id)))
             .collect();
 
         let fresh = self
@@ -94,13 +97,23 @@ impl core::fmt::Debug for WasmSedimentreeAutomerge {
     }
 }
 
+/// A Wasm-compatible [`Parents`] wrapper around a set of [`CommitId`]s.
+#[derive(Debug, Clone)]
+pub struct WasmParents(Set<CommitId>);
+
+impl Parents for WasmParents {
+    fn parents(&self) -> Set<CommitId> {
+        self.0.clone()
+    }
+}
+
 impl CommitStore<'static> for WasmSedimentreeAutomerge {
-    type Node = Set<Digest<LooseCommit>>;
+    type Node = WasmParents;
     type LookupError = WasmLookupError;
 
-    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
+    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
         let mut hexes = Vec::with_capacity(32);
-        for byte in digest.as_bytes() {
+        for byte in id.as_bytes() {
             hexes.push(alloc::format!("{byte:02x}"));
         }
         let hash_hex = hexes.join("");
@@ -168,24 +181,22 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
             deps.push(automerge::ChangeHash(arr32));
         }
 
-        Ok(Some(
-            deps.into_iter()
-                .map(|h| Digest::force_from_bytes(h.0))
-                .collect(),
-        ))
+        Ok(Some(WasmParents(
+            deps.into_iter().map(|h| CommitId::new(h.0)).collect(),
+        )))
     }
 }
 
-/// Compute the digest of a base58-encoded ID string.
+/// Compute the commit ID of a base58-encoded ID string.
 ///
 /// # Errors
 ///
 /// Returns a `WasmFromBase58Error` if the input string is not valid base58.
-#[wasm_bindgen(js_name = digestOfBase58Id)]
-pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, WasmFromBase58Error> {
+#[wasm_bindgen(js_name = commitIdOfBase58Id)]
+pub fn commit_id_of_base58_id(b58_str: &str) -> Result<WasmCommitId, WasmFromBase58Error> {
     let decoded = b58_str.from_base58()?;
     let raw: [u8; 32] = blake3::hash(&decoded).into();
-    Ok(Digest::<LooseCommit>::force_from_bytes(raw).into())
+    Ok(WasmCommitId::from(CommitId::new(raw)))
 }
 
 #[wasm_bindgen]

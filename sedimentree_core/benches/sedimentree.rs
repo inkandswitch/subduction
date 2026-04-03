@@ -25,16 +25,16 @@ mod generators {
         crypto::digest::Digest,
         fragment::Fragment,
         id::SedimentreeId,
-        loose_commit::LooseCommit,
+        loose_commit::{LooseCommit, id::CommitId},
         sedimentree::Sedimentree,
     };
 
-    /// Generate a deterministic commit digest from a seed.
-    pub(super) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
+    /// Generate a deterministic commit identifier from a seed.
+    pub(super) fn commit_id_from_seed(seed: u64) -> CommitId {
         let mut bytes = [0u8; 32];
         let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
-        Digest::force_from_bytes(bytes)
+        CommitId::new(bytes)
     }
 
     /// Generate a deterministic blob digest from a seed.
@@ -45,10 +45,10 @@ mod generators {
         Digest::force_from_bytes(bytes)
     }
 
-    /// Generate a commit digest with a specific number of leading zero bytes.
+    /// Generate a commit identifier with a specific number of leading zero bytes.
     /// The byte immediately after the zeros is guaranteed to be non-zero
     /// to ensure exact depth control.
-    pub(super) fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest<LooseCommit> {
+    pub(super) fn commit_id_with_leading_zeros(zeros: usize, seed: u64) -> CommitId {
         let mut bytes = [0u8; 32];
         let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(
@@ -62,7 +62,7 @@ mod generators {
         if zeros < 32 && bytes[zeros] == 0 {
             bytes[zeros] = 1;
         }
-        Digest::force_from_bytes(bytes)
+        CommitId::new(bytes)
     }
 
     /// Generate synthetic blob metadata.
@@ -79,13 +79,11 @@ mod generators {
     }
 
     /// Generate a synthetic loose commit with the given number of parents.
-    pub(super) fn synthetic_commit(
-        seed: u64,
-        parents: BTreeSet<Digest<LooseCommit>>,
-    ) -> LooseCommit {
+    pub(super) fn synthetic_commit(seed: u64, parents: BTreeSet<CommitId>) -> LooseCommit {
         let sedimentree_id = sedimentree_id_from_seed(seed);
+        let head = commit_id_from_seed(seed.wrapping_add(500_000));
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
-        LooseCommit::new(sedimentree_id, parents, blob_meta)
+        LooseCommit::new(sedimentree_id, head, parents, blob_meta)
     }
 
     /// Generate a synthetic fragment with configurable complexity.
@@ -96,12 +94,12 @@ mod generators {
         leading_zeros: usize,
     ) -> Fragment {
         let sedimentree_id = sedimentree_id_from_seed(head_seed);
-        let head = digest_with_leading_zeros(leading_zeros, head_seed);
-        let boundary: BTreeSet<Digest<LooseCommit>> = (0..boundary_count)
-            .map(|i| digest_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
+        let head = commit_id_with_leading_zeros(leading_zeros, head_seed);
+        let boundary: BTreeSet<CommitId> = (0..boundary_count)
+            .map(|i| commit_id_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
             .collect();
-        let checkpoints: Vec<Digest<LooseCommit>> = (0..checkpoint_count)
-            .map(|i| digest_from_seed(head_seed + 200 + i as u64))
+        let checkpoints: Vec<CommitId> = (0..checkpoint_count)
+            .map(|i| commit_id_from_seed(head_seed + 200 + i as u64))
             .collect();
         let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
         Fragment::new(sedimentree_id, head, boundary, &checkpoints, blob_meta)
@@ -110,12 +108,12 @@ mod generators {
     /// Generate a linear chain of commits (each has one parent).
     pub(super) fn linear_commit_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {
         let mut commits = Vec::with_capacity(count);
-        let mut prev_digest = None;
+        let mut prev_id = None;
 
         for i in 0..count {
-            let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
+            let parents = prev_id.map(|d| BTreeSet::from([d])).unwrap_or_default();
             let commit = synthetic_commit(base_seed + i as u64, parents);
-            prev_digest = Some(Digest::hash(&commit));
+            prev_id = Some(commit.head());
             commits.push(commit);
         }
         commits
@@ -129,26 +127,26 @@ mod generators {
         base_seed: u64,
     ) -> Vec<LooseCommit> {
         let mut commits = Vec::with_capacity(count);
-        let mut recent_digests: Vec<Digest<LooseCommit>> = Vec::new();
+        let mut recent_ids: Vec<CommitId> = Vec::new();
 
         for i in 0..count {
             let parents: BTreeSet<_> = if i == 0 {
                 BTreeSet::new()
-            } else if i % merge_frequency == 0 && recent_digests.len() >= 2 {
+            } else if i % merge_frequency == 0 && recent_ids.len() >= 2 {
                 BTreeSet::from([
-                    recent_digests[recent_digests.len() - 1],
-                    recent_digests[recent_digests.len() - 2],
+                    recent_ids[recent_ids.len() - 1],
+                    recent_ids[recent_ids.len() - 2],
                 ])
-            } else if !recent_digests.is_empty() {
-                BTreeSet::from([recent_digests[recent_digests.len() - 1]])
+            } else if !recent_ids.is_empty() {
+                BTreeSet::from([recent_ids[recent_ids.len() - 1]])
             } else {
                 BTreeSet::new()
             };
 
             let commit = synthetic_commit(base_seed + i as u64, parents);
-            recent_digests.push(Digest::hash(&commit));
-            if recent_digests.len() > 10 {
-                recent_digests.remove(0);
+            recent_ids.push(commit.head());
+            if recent_ids.len() > 10 {
+                recent_ids.remove(0);
             }
             commits.push(commit);
         }
@@ -165,12 +163,12 @@ mod generators {
 
         for branch in 0..width {
             let branch_seed = base_seed + (branch as u64 * 10_000);
-            let mut prev_digest = None;
+            let mut prev_id = None;
 
             for i in 0..depth_per_branch {
-                let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
+                let parents = prev_id.map(|d| BTreeSet::from([d])).unwrap_or_default();
                 let commit = synthetic_commit(branch_seed + i as u64, parents);
-                prev_digest = Some(Digest::hash(&commit));
+                prev_id = Some(commit.head());
                 commits.push(commit);
             }
         }
@@ -244,7 +242,7 @@ mod digest {
     use criterion::{BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric};
 
-    use super::generators::{digest_from_seed, digest_with_leading_zeros};
+    use super::generators::{commit_id_from_seed, commit_id_with_leading_zeros};
 
     /// Benchmark BLAKE3 digest hashing.
     ///
@@ -280,20 +278,16 @@ mod digest {
 
         // Test with various leading zero counts including worst-case
         for zeros in [0, 1, 2, 4, 8, 16] {
-            let digest = digest_with_leading_zeros(zeros.min(31), 12345);
-            group.bench_with_input(
-                BenchmarkId::new("leading_zeros", zeros),
-                &digest,
-                |b, digest| {
-                    b.iter(|| metric.to_depth(black_box(*digest)));
-                },
-            );
+            let id = commit_id_with_leading_zeros(zeros.min(31), 12345);
+            group.bench_with_input(BenchmarkId::new("leading_zeros", zeros), &id, |b, id| {
+                b.iter(|| metric.to_depth(black_box(*id)));
+            });
         }
 
-        // Random digest for average-case
-        group.bench_function("random_digest", |b| {
-            let digest = digest_from_seed(99999);
-            b.iter(|| metric.to_depth(black_box(digest)));
+        // Random commit id for average-case
+        group.bench_function("random_commit_id", |b| {
+            let id = commit_id_from_seed(99999);
+            b.iter(|| metric.to_depth(black_box(id)));
         });
 
         group.finish();
