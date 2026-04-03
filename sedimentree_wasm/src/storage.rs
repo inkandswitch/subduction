@@ -455,13 +455,12 @@ impl Storage<Local> for JsStorage {
             let mut result = Set::new();
             for i in 0..array.length() {
                 let item = array.get(i);
-                let wasm_commit_id =
-                    WasmCommitId::try_from_js_value(&item).ok_or_else(|| {
-                        JsStorageError::UnexpectedJsType {
-                            expected: "CommitId",
-                            value: item,
-                        }
-                    })?;
+                let wasm_commit_id = WasmCommitId::try_from_js_value(&item).ok_or_else(|| {
+                    JsStorageError::UnexpectedJsType {
+                        expected: "CommitId",
+                        value: item,
+                    }
+                })?;
                 result.insert(CommitId::from(wasm_commit_id));
             }
             Ok(result)
@@ -507,7 +506,11 @@ impl Storage<Local> for JsStorage {
         fragment_head: CommitId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?fragment_head, "JsStorage::delete_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?fragment_head,
+                "JsStorage::delete_fragment"
+            );
             let wasm_commit_id = WasmCommitId::from(fragment_head);
             let js_promise = self.js_delete_fragment(
                 &WasmSedimentreeId::from(sedimentree_id).into(),

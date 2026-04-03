@@ -32,7 +32,7 @@ use sedimentree_core::{
     },
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;

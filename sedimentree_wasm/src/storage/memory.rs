@@ -7,7 +7,7 @@ use sedimentree_core::{
     blob::Blob,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};

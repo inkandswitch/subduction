@@ -22,14 +22,14 @@ use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
-        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 
 use sedimentree_core::{
@@ -38,7 +38,7 @@ use sedimentree_core::{
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     fragment::{Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
