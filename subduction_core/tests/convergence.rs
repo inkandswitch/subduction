@@ -546,11 +546,14 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
 
     // ── Verify the resolver worked ──
 
-    // Alice sent 3 commits — proves the resolver resolved all 3 fingerprints
-    // after minimize pruned the in-memory tree.
+    // Alice sends only the commits that aren't covered by Bob's fragment
+    // head/boundary in the commit fingerprint set. Bob's fragment has
+    // head=d0 and boundary={d2}, so fp(d0) and fp(d2) are in Bob's
+    // commit_fingerprints. Alice only sends d1 (the checkpoint, which
+    // is truncated and can't be fingerprinted — accepted one-time redundancy).
     assert_eq!(
-        stats.commits_sent, 3,
-        "Alice should have sent 3 commits via send_requested_data"
+        stats.commits_sent, 1,
+        "Alice should send 1 commit (d1 only; d0/d2 covered by fragment head/boundary)"
     );
 
     // Alice received Bob's covering fragment.
@@ -573,10 +576,12 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
         .expect("bob should have blobs")
         .len();
 
-    // Bob should have: 1 fragment blob (his own) + 3 commit blobs (Alice's)
+    // Bob should have: 1 fragment blob (his own) + 1 commit blob (d1 from Alice).
+    // Alice didn't send d0 or d2 because they're covered by Bob's fragment
+    // head/boundary in the commit fingerprint set.
     assert_eq!(
-        bob_blob_count, 4,
-        "Bob should have 4 blobs (3 commits + 1 fragment), got {bob_blob_count}"
+        bob_blob_count, 2,
+        "Bob should have 2 blobs (1 commit + 1 fragment), got {bob_blob_count}"
     );
 
     Ok(())
