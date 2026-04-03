@@ -119,7 +119,7 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     depth::{Depth, DepthMetric},
-    fragment::Fragment,
+    fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintResolver, Sedimentree},
@@ -2342,15 +2342,15 @@ where
             })
             .collect();
 
-        let requested_fragment_digests: Vec<Digest<Fragment>> = requesting
+        let requested_fragment_ids: Vec<FragmentId> = requesting
             .fragment_fingerprints
             .iter()
             .filter_map(|fp| {
-                let digest = resolver.resolve_fragment(fp);
-                if digest.is_none() {
+                let id = resolver.resolve_fragment(fp);
+                if id.is_none() {
                     tracing::warn!("requested fragment fingerprint {fp} not found in resolver");
                 }
-                digest
+                id
             })
             .collect();
 
@@ -2361,17 +2361,19 @@ where
                 if requested_commit_ids.is_empty() {
                     Map::default()
                 } else {
-                    fetcher
+                    let mut map = Map::new();
+                    for vm in fetcher
                         .load_loose_commits()
                         .await
                         .map_err(IoError::Storage)?
-                        .into_iter()
-                        .map(|vm| (vm.payload().head(), vm))
-                        .collect()
+                    {
+                        map.entry(vm.payload().head()).or_insert(vm);
+                    }
+                    map
                 };
 
-            let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> =
-                if requested_fragment_digests.is_empty() {
+            let fragment_by_id: Map<FragmentId, VerifiedMeta<Fragment>> =
+                if requested_fragment_ids.is_empty() {
                     Map::default()
                 } else {
                     fetcher
@@ -2379,7 +2381,7 @@ where
                         .await
                         .map_err(IoError::Storage)?
                         .into_iter()
-                        .map(|vm| (Digest::hash(vm.payload()), vm))
+                        .map(|vm| (vm.payload().fragment_id(), vm))
                         .collect()
                 };
 
@@ -2401,8 +2403,8 @@ where
             }
 
             let mut fragment_msgs = Vec::new();
-            for fragment_digest in &requested_fragment_digests {
-                if let Some(verified) = fragment_by_digest.get(fragment_digest) {
+            for frag_id in &requested_fragment_ids {
+                if let Some(verified) = fragment_by_id.get(frag_id) {
                     let msg: H::Message = SyncMessage::Fragment {
                         id,
                         fragment: verified.signed().clone(),

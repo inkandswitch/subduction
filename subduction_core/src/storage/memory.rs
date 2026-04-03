@@ -9,7 +9,7 @@ use sedimentree_core::{
     codec::error::DecodeError,
     collections::{Map, Set},
     crypto::digest::Digest,
-    fragment::Fragment,
+    fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -20,18 +20,16 @@ use super::traits::Storage;
 
 /// An in-memory storage backend.
 ///
-/// Commits are keyed by user-supplied [`CommitId`] with first-write-wins
-/// semantics: if a commit with the same [`CommitId`] is saved twice, the
-/// first payload is retained and subsequent saves are no-ops.
-///
-/// Fragments remain content-addressed, keyed by [`Digest<Fragment>`].
+/// Both commits and fragments are content-addressed, keyed by
+/// [`Digest<LooseCommit>`] and [`Digest<Fragment>`] respectively.
+/// Saving the same content twice is a no-op (CAS semantics).
 #[derive(Debug, Clone, Default)]
 #[allow(clippy::type_complexity)]
 pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
-    /// Commits stored as (Signed<LooseCommit>, Blob) pairs, keyed by [`CommitId`].
-    commits: Arc<Mutex<Map<SedimentreeId, Map<CommitId, (Signed<LooseCommit>, Blob)>>>>,
-    /// Fragments stored as (Signed<Fragment>, Blob) pairs.
+    /// Commits stored as (Signed<LooseCommit>, Blob) pairs, keyed by [`Digest<LooseCommit>`].
+    commits: Arc<Mutex<Map<SedimentreeId, Map<Digest<LooseCommit>, (Signed<LooseCommit>, Blob)>>>>,
+    /// Fragments stored as (Signed<Fragment>, Blob) pairs, keyed by [`Digest<Fragment>`].
     fragments: Arc<Mutex<Map<SedimentreeId, Map<Digest<Fragment>, (Signed<Fragment>, Blob)>>>>,
 }
 
@@ -96,12 +94,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         verified: VerifiedMeta<LooseCommit>,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            let commit_id = verified.payload().head();
-            tracing::debug!(
-                ?sedimentree_id,
-                ?commit_id,
-                "MemoryStorage::save_loose_commit"
-            );
+            let digest = Digest::hash(verified.payload());
+            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
 
             let (signed, _payload, blob) = verified.into_full_parts();
             self.commits
@@ -109,30 +103,9 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 .await
                 .entry(sedimentree_id)
                 .or_default()
-                .entry(commit_id)
+                .entry(digest)
                 .or_insert((signed, blob));
             Ok(())
-        })
-    }
-
-    fn load_loose_commit(
-        &self,
-        sedimentree_id: SedimentreeId,
-        commit_id: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
-        K::from_future(async move {
-            tracing::debug!(
-                ?sedimentree_id,
-                ?commit_id,
-                "MemoryStorage::load_loose_commit"
-            );
-            let locked = self.commits.lock().await;
-            locked
-                .get(&sedimentree_id)
-                .and_then(|map| map.get(&commit_id))
-                .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed.clone(), blob.clone()))
-                .transpose()
-                .map_err(MemoryStorageError::from)
         })
     }
 
@@ -143,10 +116,19 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::list_commit_ids");
             let locked = self.commits.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
-                .map(|map| map.keys().copied().collect())
-                .unwrap_or_default())
+                .map(|map| {
+                    map.values()
+                        .map(|(signed, blob)| {
+                            VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                                .map(|v| v.payload().head())
+                        })
+                        .collect::<Result<Set<_>, _>>()
+                })
+                .transpose()
+                .map_err(MemoryStorageError::from)
+                .map(Option::unwrap_or_default)
         })
     }
 
@@ -172,6 +154,32 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
+    fn load_loose_commit(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit_id: CommitId,
+    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
+        K::from_future(async move {
+            tracing::debug!(
+                ?sedimentree_id,
+                ?commit_id,
+                "MemoryStorage::load_loose_commit"
+            );
+            let locked = self.commits.lock().await;
+            let Some(map) = locked.get(&sedimentree_id) else {
+                return Ok(None);
+            };
+            for (signed, blob) in map.values() {
+                let verified = VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                    .map_err(MemoryStorageError::from)?;
+                if verified.payload().head() == commit_id {
+                    return Ok(Some(verified));
+                }
+            }
+            Ok(None)
+        })
+    }
+
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -184,7 +192,11 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 "MemoryStorage::delete_loose_commit"
             );
             if let Some(map) = self.commits.lock().await.get_mut(&sedimentree_id) {
-                map.remove(&commit_id);
+                map.retain(|_, (signed, blob)| {
+                    VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                        .map(|v| v.payload().head() != commit_id)
+                        .unwrap_or(true)
+                });
             }
             Ok(())
         })
@@ -226,31 +238,49 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<Fragment>,
+        fragment_id: FragmentId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::load_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?fragment_id,
+                "MemoryStorage::load_fragment"
+            );
             let locked = self.fragments.lock().await;
-            locked
-                .get(&sedimentree_id)
-                .and_then(|map| map.get(&digest))
-                .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed.clone(), blob.clone()))
-                .transpose()
-                .map_err(MemoryStorageError::from)
+            let Some(map) = locked.get(&sedimentree_id) else {
+                return Ok(None);
+            };
+            for (signed, blob) in map.values() {
+                let verified = VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                    .map_err(MemoryStorageError::from)?;
+                if verified.payload().fragment_id() == fragment_id {
+                    return Ok(Some(verified));
+                }
+            }
+            Ok(None)
         })
     }
 
-    fn list_fragment_digests(
+    fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<Digest<Fragment>>, Self::Error>> {
+    ) -> K::Future<'_, Result<Set<FragmentId>, Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::list_fragment_digests");
+            tracing::debug!(?sedimentree_id, "MemoryStorage::list_fragment_ids");
             let locked = self.fragments.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
-                .map(|map| map.keys().copied().collect())
-                .unwrap_or_default())
+                .map(|map| {
+                    map.values()
+                        .map(|(signed, blob)| {
+                            VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                                .map(|v| v.payload().fragment_id())
+                        })
+                        .collect::<Result<Set<_>, _>>()
+                })
+                .transpose()
+                .map_err(MemoryStorageError::from)
+                .map(Option::unwrap_or_default)
         })
     }
 
@@ -279,12 +309,20 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<Fragment>,
+        fragment_id: FragmentId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::delete_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?fragment_id,
+                "MemoryStorage::delete_fragment"
+            );
             if let Some(map) = self.fragments.lock().await.get_mut(&sedimentree_id) {
-                map.remove(&digest);
+                map.retain(|_, (signed, blob)| {
+                    VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                        .map(|v| v.payload().fragment_id() != fragment_id)
+                        .unwrap_or(true)
+                });
             }
             Ok(())
         })
@@ -322,14 +360,14 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             self.ids.lock().await.insert(sedimentree_id);
 
             for verified in commits {
-                let commit_id = verified.payload().head();
+                let digest = Digest::hash(verified.payload());
                 let (signed, _payload, blob) = verified.into_full_parts();
                 self.commits
                     .lock()
                     .await
                     .entry(sedimentree_id)
                     .or_default()
-                    .entry(commit_id)
+                    .entry(digest)
                     .or_insert((signed, blob));
             }
 

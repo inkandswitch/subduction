@@ -6,7 +6,7 @@ use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
     crypto::digest::Digest,
-    fragment::Fragment,
+    fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -129,31 +129,6 @@ impl MemoryStorage {
         })
     }
 
-    /// Load a commit by its commit ID, returning `CommitWithBlob` or null.
-    #[wasm_bindgen(js_name = loadCommit)]
-    pub fn load_commit(
-        &self,
-        sedimentree_id: &WasmSedimentreeId,
-        commit_id: &WasmCommitId,
-    ) -> Promise {
-        let inner = self.inner.clone();
-        let id: SedimentreeId = sedimentree_id.clone().into();
-        let commit_id: CommitId = commit_id.into();
-        future_to_promise(async move {
-            let result = Storage::<Local>::load_loose_commit(&inner, id, commit_id)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            match result {
-                Some(verified) => {
-                    let signed = WasmSignedLooseCommit::from(verified.signed().clone());
-                    let blob = Uint8Array::from(verified.blob().contents().as_slice());
-                    Ok(WasmCommitWithBlob::new(signed, blob).into())
-                }
-                None => Ok(JsValue::NULL),
-            }
-        })
-    }
-
     /// List all commit IDs for a sedimentree.
     #[wasm_bindgen(js_name = listCommitIds)]
     pub fn list_commit_ids(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
@@ -187,24 +162,6 @@ impl MemoryStorage {
                 result.push(&WasmCommitWithBlob::new(signed, blob).into());
             }
             Ok(result.into())
-        })
-    }
-
-    /// Delete a commit by its commit ID.
-    #[wasm_bindgen(js_name = deleteCommit)]
-    pub fn delete_commit(
-        &self,
-        sedimentree_id: &WasmSedimentreeId,
-        commit_id: &WasmCommitId,
-    ) -> Promise {
-        let inner = self.inner.clone();
-        let id: SedimentreeId = sedimentree_id.clone().into();
-        let commit_id: CommitId = commit_id.into();
-        future_to_promise(async move {
-            Storage::<Local>::delete_loose_commit(&inner, id, commit_id)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            Ok(JsValue::UNDEFINED)
         })
     }
 
@@ -256,9 +213,10 @@ impl MemoryStorage {
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<Fragment> = digest.clone().into();
+        let d: Digest<Fragment> = digest.clone().into();
+        let fragment_id = FragmentId::new(CommitId::new(*d.as_bytes()));
         future_to_promise(async move {
-            let result = Storage::<Local>::load_fragment(&inner, id, digest)
+            let result = Storage::<Local>::load_fragment(&inner, id, fragment_id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
@@ -278,12 +236,13 @@ impl MemoryStorage {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         future_to_promise(async move {
-            let digests = Storage::<Local>::list_fragment_digests(&inner, id)
+            let fragment_ids = Storage::<Local>::list_fragment_ids(&inner, id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
-            for d in digests {
-                result.push(&JsDigest::from(WasmDigest::from(d)));
+            for fid in fragment_ids {
+                let digest = Digest::<Fragment>::force_from_bytes(*fid.head().as_bytes());
+                result.push(&JsDigest::from(WasmDigest::from(digest)));
             }
             Ok(result.into())
         })
@@ -317,9 +276,10 @@ impl MemoryStorage {
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest<Fragment> = digest.clone().into();
+        let d: Digest<Fragment> = digest.clone().into();
+        let fragment_id = FragmentId::new(CommitId::new(*d.as_bytes()));
         future_to_promise(async move {
-            Storage::<Local>::delete_fragment(&inner, id, digest)
+            Storage::<Local>::delete_fragment(&inner, id, fragment_id)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

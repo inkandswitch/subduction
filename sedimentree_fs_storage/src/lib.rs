@@ -3,10 +3,9 @@
 //! This crate provides [`FsStorage`], a filesystem storage implementation
 //! that implements the [`Storage`] trait from `subduction_core`.
 //!
-//! Commits are keyed by user-supplied [`CommitId`] with first-write-wins
-//! semantics: if a file for the same [`CommitId`] already exists, the save
-//! is a no-op. Fragments remain content-addressed, keyed by
-//! [`Digest<Fragment>`].
+//! Both commits and fragments are content-addressed internally: the CAS
+//! digest is used for file naming within identity subdirectories. The
+//! trait surface uses [`CommitId`] and [`FragmentId`] for lookup.
 //!
 //! # Storage Layout
 //!
@@ -17,11 +16,13 @@
 //! └── trees/
 //!     └── {sedimentree_id_hex}/
 //!         ├── commits/
-//!         │   ├── {commit_id_hex}.meta   ← Signed<LooseCommit> bytes
-//!         │   └── {commit_id_hex}.blob   ← Blob bytes
+//!         │   └── {commit_id_hex}/
+//!         │       ├── {digest_hex}.meta   ← Signed<LooseCommit> bytes
+//!         │       └── {digest_hex}.blob   ← Blob bytes
 //!         └── fragments/
-//!             ├── {digest_hex}.meta      ← Signed<Fragment> bytes
-//!             └── {digest_hex}.blob      ← Blob bytes
+//!             └── {fragment_id_hex}/
+//!                 ├── {digest_hex}.meta   ← Signed<Fragment> bytes
+//!                 └── {digest_hex}.blob   ← Blob bytes
 //! ```
 //!
 //! # Example
@@ -42,7 +43,7 @@ use sedimentree_core::{
     codec::error::DecodeError,
     collections::Set,
     crypto::digest::Digest,
-    fragment::Fragment,
+    fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -83,11 +84,13 @@ pub enum FsStorageError {
 /// └── trees/
 ///     └── {sedimentree_id_hex}/
 ///         ├── commits/
-///         │   ├── {commit_id_hex}.meta   ← Signed<LooseCommit>
-///         │   └── {commit_id_hex}.blob   ← Blob
+///         │   └── {commit_id_hex}/
+///         │       ├── {digest_hex}.meta   ← Signed<LooseCommit>
+///         │       └── {digest_hex}.blob   ← Blob
 ///         └── fragments/
-///             ├── {digest_hex}.meta      ← Signed<Fragment>
-///             └── {digest_hex}.blob      ← Blob
+///             └── {fragment_id_hex}/
+///                 ├── {digest_hex}.meta   ← Signed<Fragment>
+///                 └── {digest_hex}.blob   ← Blob
 /// ```
 #[derive(Debug, Clone)]
 pub struct FsStorage {
@@ -149,29 +152,57 @@ impl FsStorage {
         self.tree_path(id).join("fragments")
     }
 
-    fn commit_meta_path(&self, id: SedimentreeId, commit_id: CommitId) -> PathBuf {
-        self.commits_dir(id)
-            .join(format!("{}.meta", hex::encode(commit_id.as_bytes())))
+    fn commit_id_dir(&self, id: SedimentreeId, commit_id: CommitId) -> PathBuf {
+        self.commits_dir(id).join(hex::encode(commit_id.as_bytes()))
     }
 
-    fn commit_blob_path(&self, id: SedimentreeId, commit_id: CommitId) -> PathBuf {
-        self.commits_dir(id)
-            .join(format!("{}.blob", hex::encode(commit_id.as_bytes())))
-    }
-
-    fn fragment_meta_path(&self, id: SedimentreeId, digest: Digest<Fragment>) -> PathBuf {
+    fn fragment_id_dir(&self, id: SedimentreeId, fragment_id: FragmentId) -> PathBuf {
         self.fragments_dir(id)
+            .join(hex::encode(fragment_id.head().as_bytes()))
+    }
+
+    fn commit_meta_path(
+        &self,
+        id: SedimentreeId,
+        commit_id: CommitId,
+        digest: Digest<LooseCommit>,
+    ) -> PathBuf {
+        self.commit_id_dir(id, commit_id)
             .join(format!("{}.meta", hex::encode(digest.as_bytes())))
     }
 
-    fn fragment_blob_path(&self, id: SedimentreeId, digest: Digest<Fragment>) -> PathBuf {
-        self.fragments_dir(id)
+    fn commit_blob_path(
+        &self,
+        id: SedimentreeId,
+        commit_id: CommitId,
+        digest: Digest<LooseCommit>,
+    ) -> PathBuf {
+        self.commit_id_dir(id, commit_id)
             .join(format!("{}.blob", hex::encode(digest.as_bytes())))
     }
 
-    fn parse_commit_id_from_filename(name: &str) -> Option<CommitId> {
-        let hex_str = name.strip_suffix(".meta")?;
-        let bytes = hex::decode(hex_str).ok()?;
+    fn fragment_meta_path(
+        &self,
+        id: SedimentreeId,
+        fragment_id: FragmentId,
+        digest: Digest<Fragment>,
+    ) -> PathBuf {
+        self.fragment_id_dir(id, fragment_id)
+            .join(format!("{}.meta", hex::encode(digest.as_bytes())))
+    }
+
+    fn fragment_blob_path(
+        &self,
+        id: SedimentreeId,
+        fragment_id: FragmentId,
+        digest: Digest<Fragment>,
+    ) -> PathBuf {
+        self.fragment_id_dir(id, fragment_id)
+            .join(format!("{}.blob", hex::encode(digest.as_bytes())))
+    }
+
+    fn parse_commit_id_from_dirname(name: &str) -> Option<CommitId> {
+        let bytes = hex::decode(name).ok()?;
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
@@ -181,16 +212,52 @@ impl FsStorage {
         }
     }
 
-    fn parse_fragment_digest_from_filename(name: &str) -> Option<Digest<Fragment>> {
-        let hex_str = name.strip_suffix(".meta")?;
-        let bytes = hex::decode(hex_str).ok()?;
+    fn parse_fragment_id_from_dirname(name: &str) -> Option<FragmentId> {
+        let bytes = hex::decode(name).ok()?;
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
-            Some(Digest::force_from_bytes(arr))
+            Some(FragmentId::new(CommitId::new(arr)))
         } else {
             None
         }
+    }
+
+    /// Read the first `.meta` + `.blob` pair from a directory as a `Signed<T>` + `Blob`.
+    async fn read_first_meta_blob_pair(
+        dir: &Path,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, FsStorageError> {
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            if let Ok(name) = entry.file_name().into_string()
+                && let Some(stem) = name.strip_suffix(".meta")
+            {
+                let meta_path = dir.join(&name);
+                let blob_name = format!("{stem}.blob");
+                let blob_path = dir.join(&blob_name);
+
+                let signed_data = match tokio::fs::read(&meta_path).await {
+                    Ok(data) => data,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e.into()),
+                };
+
+                let blob_data = match tokio::fs::read(&blob_path).await {
+                    Ok(data) => data,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e.into()),
+                };
+
+                return Ok(Some((signed_data, blob_data)));
+            }
+        }
+
+        Ok(None)
     }
 }
 
@@ -255,17 +322,24 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             let commit_id = verified.payload().head();
-            tracing::debug!(?sedimentree_id, ?commit_id, "FsStorage::save_loose_commit");
+            let digest = Digest::hash(verified.payload());
+            tracing::debug!(
+                ?sedimentree_id,
+                ?commit_id,
+                ?digest,
+                "FsStorage::save_loose_commit"
+            );
 
-            let meta_path = self.commit_meta_path(sedimentree_id, commit_id);
-            let blob_path = self.commit_blob_path(sedimentree_id, commit_id);
+            let id_dir = self.commit_id_dir(sedimentree_id, commit_id);
+            let meta_path = self.commit_meta_path(sedimentree_id, commit_id, digest);
+            let blob_path = self.commit_blob_path(sedimentree_id, commit_id, digest);
 
-            // First-write-wins: skip if already exists
+            // CAS: skip if already exists
             if tokio::fs::try_exists(&meta_path).await.unwrap_or(false) {
                 return Ok(());
             }
 
-            tokio::fs::create_dir_all(self.commits_dir(sedimentree_id)).await?;
+            tokio::fs::create_dir_all(&id_dir).await?;
 
             // Validate signed data before writing
             let signed_data = verified.signed().as_bytes().to_vec();
@@ -274,7 +348,7 @@ impl Storage<Sendable> for FsStorage {
             if signed_data.len() < min_size {
                 tracing::error!(
                     ?sedimentree_id,
-                    ?commit_id,
+                    ?digest,
                     have = signed_data.len(),
                     need = min_size,
                     "refusing to write undersized LooseCommit .meta file"
@@ -285,11 +359,6 @@ impl Storage<Sendable> for FsStorage {
                 });
             }
 
-            // Write both temp files first, then rename both.
-            // The `.meta` rename is last — it's the existence marker.
-            // A crash before the final rename leaves either:
-            //   - orphaned .tmp files (harmless, overwritten on re-save)
-            //   - .blob committed but no .meta (allows re-save)
             let blob_data = verified.blob().contents().clone();
             let blob_temp = blob_path.with_extension("blob.tmp");
             let meta_temp = meta_path.with_extension("meta.tmp");
@@ -300,53 +369,6 @@ impl Storage<Sendable> for FsStorage {
             tokio::fs::rename(&meta_temp, &meta_path).await?;
 
             Ok(())
-        })
-    }
-
-    fn load_loose_commit(
-        &self,
-        sedimentree_id: SedimentreeId,
-        commit_id: CommitId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>
-    {
-        Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?commit_id, "FsStorage::load_loose_commit");
-
-            let meta_path = self.commit_meta_path(sedimentree_id, commit_id);
-            let blob_path = self.commit_blob_path(sedimentree_id, commit_id);
-
-            // Load signed data
-            let signed_data = match tokio::fs::read(&meta_path).await {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
-
-            // Load blob data
-            let blob_data = match tokio::fs::read(&blob_path).await {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
-
-            let signed = match Signed::try_decode(signed_data) {
-                Ok(s) => s,
-                Err(e) => {
-                    let raw = tokio::fs::read(&meta_path).await.unwrap_or_default();
-                    let hex_prefix: Vec<u8> = raw.iter().take(36).copied().collect();
-                    tracing::error!(
-                        path = %meta_path.display(),
-                        file_size = raw.len(),
-                        hex_prefix = hex::encode(&hex_prefix),
-                        "corrupt .meta file for LooseCommit: {e}"
-                    );
-                    return Err(FsStorageError::from(e));
-                }
-            };
-            let blob = Blob::new(blob_data);
-
-            // Reconstruct from trusted storage without re-verification
-            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
         })
     }
 
@@ -368,13 +390,58 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
-                    && let Some(commit_id) = Self::parse_commit_id_from_filename(&name)
+                    && let Some(commit_id) = Self::parse_commit_id_from_dirname(&name)
                 {
                     ids.insert(commit_id);
                 }
             }
 
             Ok(ids)
+        })
+    }
+
+    fn load_loose_commit(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit_id: CommitId,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>
+    {
+        Sendable::from_future(async move {
+            tracing::debug!(?sedimentree_id, ?commit_id, "FsStorage::load_loose_commit");
+
+            let id_dir = self.commit_id_dir(sedimentree_id, commit_id);
+
+            match Self::read_first_meta_blob_pair(&id_dir).await? {
+                Some((signed_data, blob_data)) => {
+                    let signed = Signed::try_decode(signed_data)?;
+                    let blob = Blob::new(blob_data);
+                    Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn delete_loose_commit(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit_id: CommitId,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
+        Sendable::from_future(async move {
+            tracing::debug!(
+                ?sedimentree_id,
+                ?commit_id,
+                "FsStorage::delete_loose_commit"
+            );
+
+            let id_dir = self.commit_id_dir(sedimentree_id, commit_id);
+            if let Err(e) = tokio::fs::remove_dir_all(&id_dir).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e.into());
+            }
+
+            Ok(())
         })
     }
 
@@ -397,18 +464,40 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
-                    && let Some(commit_id) = Self::parse_commit_id_from_filename(&name)
+                    && Self::parse_commit_id_from_dirname(&name).is_some()
                 {
-                    match Storage::<Sendable>::load_loose_commit(self, sedimentree_id, commit_id)
-                        .await
-                    {
-                        Ok(Some(verified)) => results.push(verified),
+                    let subdir = commits_dir.join(&name);
+                    match Self::read_first_meta_blob_pair(&subdir).await {
+                        Ok(Some((signed_data, blob_data))) => {
+                            let signed = match Signed::try_decode(signed_data) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        ?sedimentree_id,
+                                        dir = %name,
+                                        "skipping corrupt loose commit dir: {e}"
+                                    );
+                                    continue;
+                                }
+                            };
+                            let blob = Blob::new(blob_data);
+                            match VerifiedMeta::try_from_trusted(signed, blob) {
+                                Ok(verified) => results.push(verified),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        ?sedimentree_id,
+                                        dir = %name,
+                                        "skipping corrupt loose commit dir: {e}"
+                                    );
+                                }
+                            }
+                        }
                         Ok(None) => {}
                         Err(FsStorageError::Decode(e)) => {
                             tracing::warn!(
                                 ?sedimentree_id,
-                                ?commit_id,
-                                "skipping corrupt loose commit file: {e}"
+                                dir = %name,
+                                "skipping corrupt loose commit dir: {e}"
                             );
                         }
                         Err(e) => return Err(e),
@@ -417,38 +506,6 @@ impl Storage<Sendable> for FsStorage {
             }
 
             Ok(results)
-        })
-    }
-
-    fn delete_loose_commit(
-        &self,
-        sedimentree_id: SedimentreeId,
-        commit_id: CommitId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
-        Sendable::from_future(async move {
-            tracing::debug!(
-                ?sedimentree_id,
-                ?commit_id,
-                "FsStorage::delete_loose_commit"
-            );
-
-            let meta_path = self.commit_meta_path(sedimentree_id, commit_id);
-            let blob_path = self.commit_blob_path(sedimentree_id, commit_id);
-
-            // Delete both files (compound deletion)
-            if let Err(e) = tokio::fs::remove_file(&meta_path).await
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                return Err(e.into());
-            }
-
-            if let Err(e) = tokio::fs::remove_file(&blob_path).await
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                return Err(e.into());
-            }
-
-            Ok(())
         })
     }
 
@@ -481,18 +538,25 @@ impl Storage<Sendable> for FsStorage {
         verified: VerifiedMeta<Fragment>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
+            let fragment_id = verified.payload().fragment_id();
             let digest = Digest::hash(verified.payload());
-            tracing::debug!(?sedimentree_id, ?digest, "FsStorage::save_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?fragment_id,
+                ?digest,
+                "FsStorage::save_fragment"
+            );
 
-            let meta_path = self.fragment_meta_path(sedimentree_id, digest);
-            let blob_path = self.fragment_blob_path(sedimentree_id, digest);
+            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_id);
+            let meta_path = self.fragment_meta_path(sedimentree_id, fragment_id, digest);
+            let blob_path = self.fragment_blob_path(sedimentree_id, fragment_id, digest);
 
             // Skip if already exists (CAS)
             if tokio::fs::try_exists(&meta_path).await.unwrap_or(false) {
                 return Ok(());
             }
 
-            tokio::fs::create_dir_all(self.fragments_dir(sedimentree_id)).await?;
+            tokio::fs::create_dir_all(&id_dir).await?;
 
             // Validate signed data before writing
             let signed_data = verified.signed().as_bytes().to_vec();
@@ -512,8 +576,6 @@ impl Storage<Sendable> for FsStorage {
                 });
             }
 
-            // Write both temp files first, then rename both.
-            // The `.meta` rename is last — it's the existence marker.
             let blob_data = verified.blob().contents().clone();
             let blob_temp = blob_path.with_extension("blob.tmp");
             let meta_temp = meta_path.with_extension("meta.tmp");
@@ -530,75 +592,60 @@ impl Storage<Sendable> for FsStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<Fragment>,
+        fragment_id: FragmentId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>
     {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "FsStorage::load_fragment");
+            tracing::debug!(?sedimentree_id, ?fragment_id, "FsStorage::load_fragment");
 
-            let meta_path = self.fragment_meta_path(sedimentree_id, digest);
-            let blob_path = self.fragment_blob_path(sedimentree_id, digest);
+            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_id);
 
-            // Load signed data
-            let signed_data = match tokio::fs::read(&meta_path).await {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
-
-            // Load blob data
-            let blob_data = match tokio::fs::read(&blob_path).await {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
-
-            let signed = match Signed::try_decode(signed_data) {
-                Ok(s) => s,
-                Err(e) => {
-                    let raw = tokio::fs::read(&meta_path).await.unwrap_or_default();
-                    let hex_prefix: Vec<u8> = raw.iter().take(36).copied().collect();
-                    tracing::error!(
-                        path = %meta_path.display(),
-                        file_size = raw.len(),
-                        hex_prefix = hex::encode(&hex_prefix),
-                        "corrupt .meta file for Fragment: {e}"
-                    );
-                    return Err(FsStorageError::from(e));
+            match Self::read_first_meta_blob_pair(&id_dir).await? {
+                Some((signed_data, blob_data)) => {
+                    let signed = match Signed::try_decode(signed_data) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!(
+                                ?sedimentree_id,
+                                ?fragment_id,
+                                "corrupt .meta file for Fragment: {e}"
+                            );
+                            return Err(FsStorageError::from(e));
+                        }
+                    };
+                    let blob = Blob::new(blob_data);
+                    Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
                 }
-            };
-            let blob = Blob::new(blob_data);
-
-            // Reconstruct from trusted storage without re-verification
-            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
+                None => Ok(None),
+            }
         })
     }
 
-    fn list_fragment_digests(
+    fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<Digest<Fragment>>, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<FragmentId>, Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::list_fragment_digests");
+            tracing::debug!(?sedimentree_id, "FsStorage::list_fragment_ids");
 
             let fragments_dir = self.fragments_dir(sedimentree_id);
-            let mut digests = Set::new();
+            let mut ids = Set::new();
 
             let mut entries = match tokio::fs::read_dir(&fragments_dir).await {
                 Ok(e) => e,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(digests),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
                 Err(e) => return Err(e.into()),
             };
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
-                    && let Some(digest) = Self::parse_fragment_digest_from_filename(&name)
+                    && let Some(fragment_id) = Self::parse_fragment_id_from_dirname(&name)
                 {
-                    digests.insert(digest);
+                    ids.insert(fragment_id);
                 }
             }
 
-            Ok(digests)
+            Ok(ids)
         })
     }
 
@@ -621,16 +668,18 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
-                    && let Some(digest) = Self::parse_fragment_digest_from_filename(&name)
+                    && let Some(fragment_id) = Self::parse_fragment_id_from_dirname(&name)
                 {
-                    match Storage::<Sendable>::load_fragment(self, sedimentree_id, digest).await {
+                    match Storage::<Sendable>::load_fragment(self, sedimentree_id, fragment_id)
+                        .await
+                    {
                         Ok(Some(verified)) => results.push(verified),
                         Ok(None) => {}
                         Err(FsStorageError::Decode(e)) => {
                             tracing::warn!(
                                 ?sedimentree_id,
-                                ?digest,
-                                "skipping corrupt fragment file: {e}"
+                                ?fragment_id,
+                                "skipping corrupt fragment dir: {e}"
                             );
                         }
                         Err(e) => return Err(e),
@@ -645,22 +694,13 @@ impl Storage<Sendable> for FsStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<Fragment>,
+        fragment_id: FragmentId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "FsStorage::delete_fragment");
+            tracing::debug!(?sedimentree_id, ?fragment_id, "FsStorage::delete_fragment");
 
-            let meta_path = self.fragment_meta_path(sedimentree_id, digest);
-            let blob_path = self.fragment_blob_path(sedimentree_id, digest);
-
-            // Delete both files (compound deletion)
-            if let Err(e) = tokio::fs::remove_file(&meta_path).await
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                return Err(e.into());
-            }
-
-            if let Err(e) = tokio::fs::remove_file(&blob_path).await
+            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_id);
+            if let Err(e) = tokio::fs::remove_dir_all(&id_dir).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 return Err(e.into());
@@ -765,6 +805,16 @@ impl Storage<Local> for FsStorage {
         ))
     }
 
+    fn list_commit_ids(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Local as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::list_commit_ids(
+            self,
+            sedimentree_id,
+        ))
+    }
+
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -778,13 +828,15 @@ impl Storage<Local> for FsStorage {
         ))
     }
 
-    fn list_commit_ids(
+    fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::list_commit_ids(
+        commit_id: CommitId,
+    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::delete_loose_commit(
             self,
             sedimentree_id,
+            commit_id,
         ))
     }
 
@@ -796,18 +848,6 @@ impl Storage<Local> for FsStorage {
         Local::from_future(<Self as Storage<Sendable>>::load_loose_commits(
             self,
             sedimentree_id,
-        ))
-    }
-
-    fn delete_loose_commit(
-        &self,
-        sedimentree_id: SedimentreeId,
-        commit_id: CommitId,
-    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::delete_loose_commit(
-            self,
-            sedimentree_id,
-            commit_id,
         ))
     }
 
@@ -836,21 +876,21 @@ impl Storage<Local> for FsStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<Fragment>,
+        fragment_id: FragmentId,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>
     {
         Local::from_future(<Self as Storage<Sendable>>::load_fragment(
             self,
             sedimentree_id,
-            digest,
+            fragment_id,
         ))
     }
 
-    fn list_fragment_digests(
+    fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Set<Digest<Fragment>>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::list_fragment_digests(
+    ) -> <Local as FutureForm>::Future<'_, Result<Set<FragmentId>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::list_fragment_ids(
             self,
             sedimentree_id,
         ))
@@ -869,12 +909,12 @@ impl Storage<Local> for FsStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest<Fragment>,
+        fragment_id: FragmentId,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::delete_fragment(
             self,
             sedimentree_id,
-            digest,
+            fragment_id,
         ))
     }
 

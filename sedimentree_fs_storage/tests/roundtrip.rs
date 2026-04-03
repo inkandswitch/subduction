@@ -3,7 +3,7 @@
 //! These catch storage corruption bugs where a `Signed<T>` written to disk
 //! cannot be decoded on reload (e.g., truncation from `fields_size()`
 //! disagreeing with actual encoded byte count).
-
+#![allow(clippy::indexing_slicing)]
 #![allow(clippy::expect_used, clippy::missing_const_for_fn)]
 
 use std::collections::BTreeSet;
@@ -28,7 +28,7 @@ fn make_sedimentree_id(seed: u8) -> SedimentreeId {
     SedimentreeId::new([seed; 32])
 }
 
-/// Save a `LooseCommit` via `FsStorage`, reload it, and verify byte identity.
+/// Save a `LooseCommit` via `FsStorage`, reload via `load_loose_commits`, and verify byte identity.
 #[tokio::test]
 async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
@@ -45,16 +45,15 @@ async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
     let original_blob_bytes = verified.blob().contents().clone();
-    let commit_id = verified.payload().head();
 
     // Save
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
 
-    // Reload
-    let loaded = Storage::<Sendable>::load_loose_commit(&storage, id, commit_id)
-        .await?
-        .expect("commit should exist after save");
+    // Reload via bulk load
+    let loaded_all = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(loaded_all.len(), 1, "expected exactly one commit");
+    let loaded = &loaded_all[0];
 
     // Verify byte identity
     assert_eq!(
@@ -103,14 +102,13 @@ async fn save_load_loose_commit_with_parents_roundtrip() -> testresult::TestResu
             .await;
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
-    let commit_id = verified.payload().head();
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
 
-    let loaded = Storage::<Sendable>::load_loose_commit(&storage, id, commit_id)
-        .await?
-        .expect("commit should exist after save");
+    let loaded_all = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(loaded_all.len(), 1, "expected exactly one commit");
+    let loaded = &loaded_all[0];
 
     assert_eq!(
         loaded.signed().as_bytes(),
@@ -149,12 +147,12 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
     let original_blob_bytes = verified.blob().contents().clone();
-    let digest = Digest::hash(verified.payload());
+    let fragment_id = verified.payload().fragment_id();
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
 
-    let loaded = Storage::<Sendable>::load_fragment(&storage, id, digest)
+    let loaded = Storage::<Sendable>::load_fragment(&storage, id, fragment_id)
         .await?
         .expect("fragment should exist after save");
 
@@ -193,14 +191,15 @@ async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
     )
     .await;
 
+    let fragment_id = verified.payload().fragment_id();
     let digest_from_hash = Digest::hash(verified.payload());
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
 
-    let loaded = Storage::<Sendable>::load_fragment(&storage, id, digest_from_hash)
+    let loaded = Storage::<Sendable>::load_fragment(&storage, id, fragment_id)
         .await?
-        .expect("fragment must be loadable by Digest::hash");
+        .expect("fragment must be loadable by FragmentId");
 
     assert_eq!(
         Digest::hash(loaded.payload()),

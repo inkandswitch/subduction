@@ -24,7 +24,7 @@ use sedimentree_core::{
     collections::{Entry, Map, Set},
     crypto::digest::Digest,
     depth::DepthMetric,
-    fragment::Fragment,
+    fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
@@ -702,18 +702,18 @@ impl<
             .map_err(IoError::Storage)?;
         let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
 
-        let commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = verified_commits
+        let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
+        for vm in verified_commits {
+            commit_by_id.entry(vm.payload().head()).or_insert(vm);
+        }
+        let fragment_by_id: Map<FragmentId, VerifiedMeta<Fragment>> = verified_fragments
             .into_iter()
-            .map(|vm| (vm.payload().head(), vm))
-            .collect();
-        let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> = verified_fragments
-            .into_iter()
-            .map(|vm| (Digest::hash(vm.payload()), vm))
+            .map(|vm| (vm.payload().fragment_id(), vm))
             .collect();
 
         let (
             local_commit_ids,
-            local_fragment_digests,
+            local_fragment_ids,
             our_missing_commit_fingerprints,
             our_missing_fragment_fingerprints,
             raw_heads,
@@ -725,7 +725,7 @@ impl<
                     .values()
                     .map(|vm| vm.payload().clone())
                     .collect();
-                let fragments: Vec<_> = fragment_by_digest
+                let fragments: Vec<_> = fragment_by_id
                     .values()
                     .map(|vm| vm.payload().clone())
                     .collect();
@@ -754,7 +754,7 @@ impl<
                     .collect::<Vec<_>>(),
                 diff.local_only_fragments
                     .iter()
-                    .map(|(digest, _)| **digest)
+                    .map(|(id, _)| **id)
                     .collect::<Vec<_>>(),
                 diff.remote_only_commit_fingerprints,
                 diff.remote_only_fragment_fingerprints,
@@ -773,8 +773,8 @@ impl<
             }
         }
 
-        for digest in local_fragment_digests {
-            if let Some(verified) = fragment_by_digest.get(&digest) {
+        for frag_id in local_fragment_ids {
+            if let Some(verified) = fragment_by_id.get(&frag_id) {
                 their_missing_fragments.push((verified.signed().clone(), verified.blob().clone()));
             }
         }

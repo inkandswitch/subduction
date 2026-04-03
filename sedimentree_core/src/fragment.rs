@@ -395,9 +395,9 @@ mod tests {
         use super::super::*;
         use crate::{crypto::digest::Digest, sedimentree::Sedimentree};
 
-        /// `Digest::hash(&fragment)` must be deterministic and must match
-        /// the key used by `Sedimentree`'s fragment map and all storage
-        /// backends.
+        /// `Digest::hash(&fragment)` must be deterministic, and the
+        /// `Sedimentree` map key must be the fragment's causal identity
+        /// ([`FragmentId`]).
         #[test]
         fn digest_hash_is_deterministic() -> testresult::TestResult {
             let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
@@ -417,13 +417,17 @@ mod tests {
             let d2: Digest<Fragment> = Digest::hash(&fragment);
             assert_eq!(d1, d2, "Digest::hash must be deterministic");
 
-            // The digest used as a Sedimentree map key must match.
+            // The Sedimentree map key must be the FragmentId.
             let tree = Sedimentree::new(alloc::vec![fragment.clone()], alloc::vec![]);
             let (map_key, _) = tree
                 .fragment_entries()
                 .next()
                 .ok_or("tree should contain one fragment")?;
-            assert_eq!(*map_key, d1, "Sedimentree map key must equal Digest::hash");
+            assert_eq!(
+                *map_key,
+                fragment.fragment_id(),
+                "Sedimentree map key must equal fragment_id()"
+            );
 
             Ok(())
         }

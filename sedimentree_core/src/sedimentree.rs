@@ -9,6 +9,7 @@ use alloc::{
 };
 
 use crate::{
+    codec::encode::Encode,
     collections::{Entry, Map, Set},
     crypto::{
         digest::Digest,
@@ -19,6 +20,21 @@ use crate::{
     loose_commit::{LooseCommit, id::CommitId},
     topsorted::Topsorted,
 };
+
+/// Insert `value` into `map` keyed by `key`. On collision, keep the entry
+/// whose `Digest::hash()` is lexicographically lower (deterministic tiebreaker).
+fn insert_or_tiebreak<K: Ord + core::hash::Hash, V: Encode>(map: &mut Map<K, V>, key: K, value: V) {
+    match map.entry(key) {
+        Entry::Vacant(e) => {
+            e.insert(value);
+        }
+        Entry::Occupied(mut e) => {
+            if Digest::hash(&value) < Digest::hash(e.get()) {
+                e.insert(value);
+            }
+        }
+    }
+}
 
 /// A compact summary of a [`Sedimentree`] for wire transmission.
 ///
@@ -80,8 +96,8 @@ impl FingerprintSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintDiff<'a> {
     /// Fragments the responder has that the requestor is missing,
-    /// paired with their precomputed digests (from the `Sedimentree` map key).
-    pub local_only_fragments: Vec<(&'a Digest<Fragment>, &'a Fragment)>,
+    /// paired with their causal identities (from the `Sedimentree` map key).
+    pub local_only_fragments: Vec<(&'a FragmentId, &'a Fragment)>,
 
     /// Commits the responder has that the requestor is missing,
     /// paired with their content-addressed digests.
@@ -119,7 +135,7 @@ pub struct FingerprintDiff<'a> {
 pub struct FingerprintResolver {
     summary: FingerprintSummary,
     commit_fp_to_id: Map<Fingerprint<CommitId>, CommitId>,
-    fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>>,
+    fragment_fp_to_id: Map<Fingerprint<FragmentId>, FragmentId>,
 }
 
 impl FingerprintResolver {
@@ -143,12 +159,12 @@ impl FingerprintResolver {
         self.commit_fp_to_id.get(fp).copied()
     }
 
-    /// Resolve a fragment fingerprint to its content-addressed digest.
+    /// Resolve a fragment fingerprint to its causal identity.
     ///
     /// Returns `None` if the fingerprint was not in the tree at construction time.
     #[must_use]
-    pub fn resolve_fragment(&self, fp: &Fingerprint<FragmentId>) -> Option<Digest<Fragment>> {
-        self.fragment_fp_to_digest.get(fp).copied()
+    pub fn resolve_fragment(&self, fp: &Fingerprint<FragmentId>) -> Option<FragmentId> {
+        self.fragment_fp_to_id.get(fp).copied()
     }
 }
 
@@ -172,32 +188,42 @@ pub struct Diff<'a> {
 #[derive(Default, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
 pub struct Sedimentree {
-    fragments: Map<Digest<Fragment>, Fragment>,
+    fragments: Map<FragmentId, Fragment>,
     commits: Map<CommitId, LooseCommit>,
 }
 
 impl Sedimentree {
     /// Constructor for a [`Sedimentree`].
     ///
-    /// If `commits` contains duplicate [`CommitId`] values, only one is
-    /// retained (last-in-wins per [`BTreeMap`] collection semantics).
+    /// If `commits` contains duplicate [`CommitId`] values (e.g., from
+    /// Byzantine equivocation producing multiple CAS entries for the same
+    /// identity), the first encountered is retained (first-in-wins).
     /// For well-behaved peers this should never happen since each commit
     /// has a unique user-supplied identifier.
     #[must_use]
     pub fn new(fragments: Vec<Fragment>, commits: Vec<LooseCommit>) -> Self {
+        let mut fragment_map = Map::new();
+        for f in fragments {
+            insert_or_tiebreak(&mut fragment_map, f.fragment_id(), f);
+        }
+        let mut commit_map = Map::new();
+        for c in commits {
+            insert_or_tiebreak(&mut commit_map, c.head(), c);
+        }
         Self {
-            fragments: fragments
-                .into_iter()
-                .map(|f| (Digest::hash(&f), f))
-                .collect(),
-            commits: commits.into_iter().map(|c| (c.head(), c)).collect(),
+            fragments: fragment_map,
+            commits: commit_map,
         }
     }
 
     /// Merge another [`Sedimentree`] into this one.
     pub fn merge(&mut self, other: Sedimentree) {
-        self.fragments.extend(other.fragments);
-        self.commits.extend(other.commits);
+        for (id, f) in other.fragments {
+            insert_or_tiebreak(&mut self.fragments, id, f);
+        }
+        for (id, c) in other.commits {
+            insert_or_tiebreak(&mut self.commits, id, c);
+        }
     }
 
     /// The minimal ordered hash of this [`Sedimentree`].
@@ -240,21 +266,31 @@ impl Sedimentree {
                 e.insert(commit);
                 true
             }
-            Entry::Occupied(_) => false,
+            Entry::Occupied(mut e) => {
+                if Digest::hash(&commit) < Digest::hash(e.get()) {
+                    e.insert(commit);
+                }
+                false
+            }
         }
     }
 
     /// Add a fragment to the [`Sedimentree`].
     ///
-    /// Returns `true` if the stratum was not already present
+    /// Returns `true` if the fragment was not already present
     pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        let digest = Digest::hash(&fragment);
-        match self.fragments.entry(digest) {
+        let id = fragment.fragment_id();
+        match self.fragments.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(fragment);
                 true
             }
-            Entry::Occupied(_) => false,
+            Entry::Occupied(mut e) => {
+                if Digest::hash(&fragment) < Digest::hash(e.get()) {
+                    e.insert(fragment);
+                }
+                false
+            }
         }
     }
 
@@ -293,12 +329,10 @@ impl Sedimentree {
         self.fragments.values()
     }
 
-    /// Iterate over all fragments with their precomputed digests.
+    /// Iterate over all fragments with their causal identities.
     ///
-    /// The digest is the map key, computed once at insertion time.
-    /// Use this instead of `fragments().map(|f| Digest::hash(f))` to
-    /// avoid re-hashing.
-    pub fn fragment_entries(&self) -> impl Iterator<Item = (&Digest<Fragment>, &Fragment)> {
+    /// The [`FragmentId`] is the map key, computed once at insertion time.
+    pub fn fragment_entries(&self) -> impl Iterator<Item = (&FragmentId, &Fragment)> {
         self.fragments.iter()
     }
 
@@ -578,20 +612,20 @@ impl Sedimentree {
             .map(|(id, c)| (Fingerprint::new(seed, &c.head()), *id))
             .collect();
 
-        let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>> = self
+        let fragment_fp_to_id: Map<Fingerprint<FragmentId>, FragmentId> = self
             .fragments
-            .iter()
-            .map(|(digest, f)| (Fingerprint::new(seed, &f.fragment_id()), *digest))
+            .keys()
+            .map(|id| (Fingerprint::new(seed, id), *id))
             .collect();
 
         let commit_fingerprints = commit_fp_to_id.keys().copied().collect();
-        let fragment_fingerprints = fragment_fp_to_digest.keys().copied().collect();
+        let fragment_fingerprints = fragment_fp_to_id.keys().copied().collect();
         let summary = FingerprintSummary::new(*seed, commit_fingerprints, fragment_fingerprints);
 
         FingerprintResolver {
             summary,
             commit_fp_to_id,
-            fragment_fp_to_digest,
+            fragment_fp_to_id,
         }
     }
 
@@ -620,7 +654,7 @@ impl Sedimentree {
             })
             .collect();
 
-        let local_only_fragments: Vec<(&Digest<Fragment>, &Fragment)> = self
+        let local_only_fragments: Vec<(&FragmentId, &Fragment)> = self
             .fragments
             .iter()
             .filter(|(_, f)| {
