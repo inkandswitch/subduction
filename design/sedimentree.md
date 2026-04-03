@@ -66,7 +66,7 @@ struct FragmentSummary {
 }
 
 /// A 12-byte truncation of a commit digest for compact storage.
-struct Checkpoint(Truncated<Digest, 12>);
+struct Checkpoint([u8; 12]);
 ```
 
 Checkpoints use 12-byte truncated digests (96 bits) instead of full 32-byte digests, saving ~62% on wire size while maintaining negligible collision probability (~10⁻¹⁷ at 1M items).
@@ -92,7 +92,7 @@ A compact wire representation for [batch sync](./sync/batch.md) reconciliation:
 struct FingerprintSummary {
     seed: FingerprintSeed,                               // 128-bit SipHash key (random per request)
     commit_fingerprints: Vec<Fingerprint<CommitId>>,     // 8 bytes each
-    fragment_fingerprints: Vec<Fingerprint<FragmentId>>, // 8 bytes each
+    fragment_fingerprints: Vec<Fingerprint<CommitId>>,   // 8 bytes each
 }
 ```
 

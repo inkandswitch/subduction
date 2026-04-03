@@ -363,7 +363,7 @@ Schema: `STF\x00` (Sedimentree Fragment, version 0)
 | CkptCnt       | 2 bytes      | Number of checkpoints (big-endian u16, 0-65535)             |
 | BlobSize      | 1–9 bytes    | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md))     |
 | Boundary      | N × 32 bytes | Boundary commit digests, **sorted ascending**               |
-| Checkpoints   | M × 12 bytes | Truncated checkpoint digests (96-bit), **sorted ascending** |
+| Checkpoints   | M × 12 bytes | Truncated CommitId bytes (96-bit), **sorted ascending** |
 | Signature     | 64 bytes     | Ed25519 signature over bytes `[0..len-64]`                  |
 
 **Minimum size:** 200 bytes (0 boundary, 0 checkpoints)
