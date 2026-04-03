@@ -540,7 +540,7 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
-    /// Load a fragment by digest, returning `FragmentWithBlob` or null.
+    /// Load a fragment by its identifier, returning `FragmentWithBlob` or null.
     ///
     /// # Errors
     ///
@@ -549,11 +549,11 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_load_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Result<Option<WasmFragmentWithBlob>, WasmLoadFragmentError> {
         let key = js_sys::Array::of2(
             &JsValue::from_str(&sedimentree_id.to_string()),
-            &JsValue::from_str(&digest.to_hex_string()),
+            &JsValue::from_str(&fragment_head.to_hex_string()),
         );
         let req = self
             .0
@@ -582,17 +582,17 @@ impl WasmIndexedDbStorage {
         Ok(Some(WasmFragmentWithBlob::new(signed, blob)))
     }
 
-    /// List all fragment digests for a sedimentree.
+    /// List all fragment IDs for a sedimentree.
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmListDigestsError`] if digests could not be listed.
-    #[wasm_bindgen(js_name = listFragmentDigests)]
-    pub async fn wasm_list_fragment_digests(
+    /// Returns a [`WasmListDigestsError`] if fragment IDs could not be listed.
+    #[wasm_bindgen(js_name = listFragmentIds)]
+    pub async fn wasm_list_fragment_ids(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-    ) -> Result<Vec<WasmDigest>, WasmListDigestsError> {
-        self.list_digests_for_store(sedimentree_id, FRAGMENT_STORE_NAME)
+    ) -> Result<Vec<WasmCommitId>, WasmListDigestsError> {
+        self.list_fragment_ids_for_store(sedimentree_id, FRAGMENT_STORE_NAME)
             .await
     }
 
@@ -643,7 +643,7 @@ impl WasmIndexedDbStorage {
         Ok(result)
     }
 
-    /// Delete a fragment by digest.
+    /// Delete a fragment by its identifier.
     ///
     /// # Errors
     ///
@@ -652,11 +652,11 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_delete_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Result<(), WasmDeleteFragmentError> {
         let key = js_sys::Array::of2(
             &JsValue::from_str(&sedimentree_id.to_string()),
-            &JsValue::from_str(&digest.to_hex_string()),
+            &JsValue::from_str(&fragment_head.to_hex_string()),
         );
         let req = self
             .0
@@ -765,12 +765,12 @@ impl WasmIndexedDbStorage {
         Ok(commits.length() + fragments.length())
     }
 
-    /// Helper to list digests for a given store.
-    async fn list_digests_for_store(
+    /// Helper to list commit IDs for a given store.
+    async fn list_commit_ids_for_store(
         &self,
         sedimentree_id: &WasmSedimentreeId,
         store_name: &str,
-    ) -> Result<Vec<WasmDigest>, WasmListDigestsError> {
+    ) -> Result<Vec<WasmCommitId>, WasmListDigestsError> {
         let tx = self
             .0
             .transaction_with_str_and_mode(store_name, IdbTransactionMode::Readonly)
@@ -795,15 +795,15 @@ impl WasmIndexedDbStorage {
             let digest_str = js_sys::Reflect::get(&js_val, &RECORD_FIELD_DIGEST.into())
                 .map_err(WasmListDigestsError::ReflectError)?;
             if let Some(s) = digest_str.as_string() {
-                out.push(WasmDigest::from_hex_string(&s)?);
+                out.push(WasmCommitId::from_hex_string(&s)?);
             }
         }
 
         Ok(out)
     }
 
-    /// Helper to list commit IDs for a given store.
-    async fn list_commit_ids_for_store(
+    /// Helper to list fragment IDs for a given store.
+    async fn list_fragment_ids_for_store(
         &self,
         sedimentree_id: &WasmSedimentreeId,
         store_name: &str,
@@ -1218,7 +1218,7 @@ impl From<WasmLoadCommitError> for JsValue {
     }
 }
 
-/// Error types for `listCommitIds` and `listFragmentDigests`.
+/// Error types for `listCommitIds` and `listFragmentIds` (fragment head `CommitId`).
 #[derive(Debug, Error)]
 pub enum WasmListDigestsError {
     /// Failed to begin `IndexedDB` transaction.

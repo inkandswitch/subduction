@@ -10,11 +10,11 @@ use std::collections::BTreeSet;
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::{Blob, verified::VerifiedBlobMeta},
+    blob::{verified::VerifiedBlobMeta, Blob},
     crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::storage::traits::Storage;
@@ -147,12 +147,12 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
     let original_blob_bytes = verified.blob().contents().clone();
-    let fragment_id = verified.payload().fragment_id();
+    let fragment_head = verified.payload().head();
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
 
-    let loaded = Storage::<Sendable>::load_fragment(&storage, id, fragment_id)
+    let loaded = Storage::<Sendable>::load_fragment(&storage, id, fragment_head)
         .await?
         .expect("fragment should exist after save");
 
@@ -191,15 +191,15 @@ async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
     )
     .await;
 
-    let fragment_id = verified.payload().fragment_id();
+    let fragment_head = verified.payload().head();
     let digest_from_hash = Digest::hash(verified.payload());
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
     Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
 
-    let loaded = Storage::<Sendable>::load_fragment(&storage, id, fragment_id)
+    let loaded = Storage::<Sendable>::load_fragment(&storage, id, fragment_head)
         .await?
-        .expect("fragment must be loadable by FragmentId");
+        .expect("fragment must be loadable by head CommitId");
 
     assert_eq!(
         Digest::hash(loaded.payload()),

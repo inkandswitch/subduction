@@ -22,23 +22,23 @@ use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
-        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
+        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
-    fragment::{Fragment, FragmentSummary, id::FragmentId},
+    fragment::{Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -470,8 +470,8 @@ async fn test_responder_requests_fragments() -> TestResult {
     // Create a fragment that Bob has but Alice doesn't
     let (_fragment, _blob, fragment_summary) =
         make_test_fragment(&sedimentree_id, b"fragment - bob has this").await;
-    let frag_id = FragmentId::new(fragment_summary.head());
-    let frag_fp: Fingerprint<FragmentId> = Fingerprint::new(&TEST_SEED, &frag_id);
+    let frag_id = fragment_summary.head();
+    let frag_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &frag_id);
 
     // Bob sends a BatchSyncRequest claiming to have this fragment (as a fingerprint)
     let request = BatchSyncRequest {

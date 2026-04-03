@@ -119,7 +119,7 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     depth::{Depth, DepthMetric},
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintResolver, Sedimentree},
@@ -2342,7 +2342,7 @@ where
             })
             .collect();
 
-        let requested_fragment_ids: Vec<FragmentId> = requesting
+        let requested_fragment_ids: Vec<CommitId> = requesting
             .fragment_fingerprints
             .iter()
             .filter_map(|fp| {
@@ -2372,7 +2372,7 @@ where
                     map
                 };
 
-            let fragment_by_id: Map<FragmentId, VerifiedMeta<Fragment>> =
+            let fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> =
                 if requested_fragment_ids.is_empty() {
                     Map::default()
                 } else {
@@ -2381,7 +2381,7 @@ where
                         .await
                         .map_err(IoError::Storage)?
                         .into_iter()
-                        .map(|vm| (vm.payload().fragment_id(), vm))
+                        .map(|vm| (vm.payload().head(), vm))
                         .collect()
                 };
 

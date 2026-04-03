@@ -38,7 +38,7 @@ use alloc::vec::Vec;
 use future_form::FutureForm;
 use sedimentree_core::{
     collections::Set,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -56,12 +56,17 @@ use subduction_crypto::verified_meta::VerifiedMeta;
 /// - **Atomicity**: Commit/fragment and blob are always stored together
 /// - **Trust on load**: Data loaded from storage is trusted (was verified before store)
 ///
-/// # Commit Storage
+/// # Commit & Fragment Storage
 ///
-/// Commits are content-addressed by [`Digest<LooseCommit>`] internally, but
-/// the trait surface uses bulk operations keyed by [`SedimentreeId`].
-/// Single-item lookup by [`CommitId`] is not provided because the hot path
-/// always bulk-loads all commits for a tree and re-keys them in memory.
+/// Both commits and fragments are content-addressed by their respective
+/// [`Digest`] internally (CAS), but the trait surface uses causal identity
+/// keys: [`CommitId`] for commits and [`CommitId`] (fragment head) for fragments.
+///
+/// Bulk operations ([`load_loose_commits`](Storage::load_loose_commits),
+/// [`load_fragments`](Storage::load_fragments)) are the primary hydration
+/// path. Single-item operations ([`load_loose_commit`](Storage::load_loose_commit),
+/// [`load_fragment`](Storage::load_fragment)) are available for targeted
+/// lookups (e.g., fetching a specific blob).
 #[allow(clippy::type_complexity)]
 pub trait Storage<K: FutureForm + ?Sized> {
     /// The error type for storage operations.
@@ -156,7 +161,7 @@ pub trait Storage<K: FutureForm + ?Sized> {
         verified: VerifiedMeta<Fragment>,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    /// Load a fragment with its blob by [`FragmentId`].
+    /// Load a fragment with its blob by fragment head [`CommitId`].
     ///
     /// Returns `None` if no fragment exists with the given identity.
     /// The returned `VerifiedMeta` is reconstructed from trusted storage
@@ -164,17 +169,17 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>;
 
-    /// List all [`FragmentId`] values for a sedimentree.
+    /// List all fragment head [`CommitId`] values for a sedimentree.
     ///
     /// This is derived from the stored payloads — each fragment is decoded
-    /// and its `fragment_id()` extracted. Duplicate values are deduplicated.
+    /// and its `head()` extracted. Duplicate values are deduplicated.
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<FragmentId>, Self::Error>>;
+    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>>;
 
     /// Load all fragments with their blobs for a sedimentree.
     ///
@@ -185,11 +190,11 @@ pub trait Storage<K: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>;
 
-    /// Delete a fragment and its blob by [`FragmentId`].
+    /// Delete a fragment and its blob by fragment head [`CommitId`].
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
     /// Delete all fragments and their blobs for a sedimentree.

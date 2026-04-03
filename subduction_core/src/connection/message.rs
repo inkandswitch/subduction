@@ -30,9 +30,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -327,7 +327,7 @@ pub struct RequestedData {
     pub commit_fingerprints: Vec<Fingerprint<CommitId>>,
 
     /// Fingerprints of fragments the responder needs from the requestor.
-    pub fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
+    pub fragment_fingerprints: Vec<Fingerprint<CommitId>>,
 }
 
 impl RequestedData {

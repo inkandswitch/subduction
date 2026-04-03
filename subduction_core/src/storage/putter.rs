@@ -7,7 +7,7 @@ use alloc::{sync::Arc, vec::Vec};
 use future_form::FutureForm;
 use sedimentree_core::{
     collections::Set,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -105,20 +105,21 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
         self.storage.save_fragment(self.sedimentree_id, verified)
     }
 
-    /// Load a fragment with its blob by [`FragmentId`].
+    /// Load a fragment with its blob by fragment head [`CommitId`].
     ///
     /// Returns `None` if no fragment exists with the given identity.
     #[must_use]
     pub fn load_fragment(
         &self,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, S::Error>> {
-        self.storage.load_fragment(self.sedimentree_id, fragment_id)
+        self.storage
+            .load_fragment(self.sedimentree_id, fragment_head)
     }
 
-    /// List all [`FragmentId`] values for this sedimentree.
+    /// List all fragment head [`CommitId`] values for this sedimentree.
     #[must_use]
-    pub fn list_fragment_ids(&self) -> K::Future<'_, Result<Set<FragmentId>, S::Error>> {
+    pub fn list_fragment_ids(&self) -> K::Future<'_, Result<Set<CommitId>, S::Error>> {
         self.storage.list_fragment_ids(self.sedimentree_id)
     }
 

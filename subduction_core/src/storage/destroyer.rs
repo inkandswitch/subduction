@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 use alloc::sync::Arc;
 
 use future_form::FutureForm;
-use sedimentree_core::{fragment::id::FragmentId, id::SedimentreeId, loose_commit::id::CommitId};
+use sedimentree_core::{id::SedimentreeId, loose_commit::id::CommitId};
 
 use super::traits::Storage;
 
@@ -60,11 +60,11 @@ impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
         self.storage.delete_loose_commits(self.sedimentree_id)
     }
 
-    /// Delete a fragment and its blob by [`FragmentId`].
+    /// Delete a fragment and its blob by fragment head [`CommitId`].
     #[must_use]
-    pub fn delete_fragment(&self, fragment_id: FragmentId) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn delete_fragment(&self, fragment_head: CommitId) -> K::Future<'_, Result<(), S::Error>> {
         self.storage
-            .delete_fragment(self.sedimentree_id, fragment_id)
+            .delete_fragment(self.sedimentree_id, fragment_head)
     }
 
     /// Delete all fragments and their blobs for this sedimentree.

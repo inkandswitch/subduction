@@ -8,11 +8,8 @@
 /// the underlying document change (e.g., an Automerge `ChangeHash`).
 ///
 /// Two commits with the same `CommitId` are the same item for
-/// set reconciliation, regardless of blob metadata.
-///
-/// This newtype exists in parallel with [`FragmentId`](crate::fragment::id::FragmentId)
-/// to keep fragment fingerprints (`Fingerprint<FragmentId>`) type-distinct from
-/// commit fingerprints (`Fingerprint<CommitId>`).
+/// set reconciliation, regardless of blob metadata. Fragment maps
+/// also use `CommitId` as their key (the fragment's head commit).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommitId([u8; 32]);

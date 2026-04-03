@@ -11,7 +11,7 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
     collections::Set,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -109,14 +109,15 @@ impl<S: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S> {
         let mut total_fragments = 0;
 
         for sedimentree_id in &sedimentree_ids {
-            // Use list_*_digests for efficient counting (no decoding needed)
-            let commit_digests =
+            // Count items per tree via identity listing.
+            // With subdirectory-based storage, this is a cheap directory scan.
+            let commit_ids =
                 Storage::<Sendable>::list_commit_ids(&self.inner, *sedimentree_id).await?;
-            let fragment_digests =
+            let fragment_ids =
                 Storage::<Sendable>::list_fragment_ids(&self.inner, *sedimentree_id).await?;
 
-            let commit_count = commit_digests.len();
-            let fragment_count = fragment_digests.len();
+            let commit_count = commit_ids.len();
+            let fragment_count = fragment_ids.len();
 
             total_loose_commits += commit_count;
             total_fragments += fragment_count;
@@ -299,11 +300,14 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
-            let result = self.inner.load_fragment(sedimentree_id, fragment_id).await;
+            let result = self
+                .inner
+                .load_fragment(sedimentree_id, fragment_head)
+                .await;
             metrics::storage_operation_duration("load_fragment", start.elapsed().as_secs_f64());
             result
         })
@@ -312,7 +316,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<FragmentId>, Self::Error>> {
+    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.list_fragment_ids(sedimentree_id).await;
@@ -336,13 +340,13 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
-                .delete_fragment(sedimentree_id, fragment_id)
+                .delete_fragment(sedimentree_id, fragment_head)
                 .await;
             metrics::storage_operation_duration("delete_fragment", start.elapsed().as_secs_f64());
             result

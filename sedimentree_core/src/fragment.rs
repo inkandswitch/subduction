@@ -1,12 +1,10 @@
 //! Fragment types for Sedimentree data partitioning.
 
 pub mod checkpoint;
-pub mod id;
 
 use alloc::{collections::BTreeSet, vec::Vec};
 
 use checkpoint::Checkpoint;
-use id::FragmentId;
 
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
@@ -157,12 +155,6 @@ impl Fragment {
     #[must_use]
     pub const fn checkpoints(&self) -> &BTreeSet<Checkpoint> {
         &self.checkpoints
-    }
-
-    /// The causal identity of this fragment (its head commit identifier).
-    #[must_use]
-    pub const fn fragment_id(&self) -> FragmentId {
-        FragmentId::new(self.summary.head)
     }
 
     /// The [`SedimentreeId`] this fragment belongs to.
@@ -396,8 +388,7 @@ mod tests {
         use crate::{crypto::digest::Digest, sedimentree::Sedimentree};
 
         /// `Digest::hash(&fragment)` must be deterministic, and the
-        /// `Sedimentree` map key must be the fragment's causal identity
-        /// ([`FragmentId`]).
+        /// `Sedimentree` map key must be the fragment's head [`CommitId`].
         #[test]
         fn digest_hash_is_deterministic() -> testresult::TestResult {
             let blob = Blob::new(alloc::vec![1, 2, 3, 4, 5]);
@@ -417,7 +408,7 @@ mod tests {
             let d2: Digest<Fragment> = Digest::hash(&fragment);
             assert_eq!(d1, d2, "Digest::hash must be deterministic");
 
-            // The Sedimentree map key must be the FragmentId.
+            // The Sedimentree map key must be the head CommitId.
             let tree = Sedimentree::new(alloc::vec![fragment.clone()], alloc::vec![]);
             let (map_key, _) = tree
                 .fragment_entries()
@@ -425,8 +416,8 @@ mod tests {
                 .ok_or("tree should contain one fragment")?;
             assert_eq!(
                 *map_key,
-                fragment.fragment_id(),
-                "Sedimentree map key must equal fragment_id()"
+                fragment.head(),
+                "Sedimentree map key must equal head()"
             );
 
             Ok(())

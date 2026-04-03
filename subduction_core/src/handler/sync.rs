@@ -24,7 +24,7 @@ use sedimentree_core::{
     collections::{Entry, Map, Set},
     crypto::digest::Digest,
     depth::DepthMetric,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
@@ -706,9 +706,9 @@ impl<
         for vm in verified_commits {
             commit_by_id.entry(vm.payload().head()).or_insert(vm);
         }
-        let fragment_by_id: Map<FragmentId, VerifiedMeta<Fragment>> = verified_fragments
+        let fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = verified_fragments
             .into_iter()
-            .map(|vm| (vm.payload().fragment_id(), vm))
+            .map(|vm| (vm.payload().head(), vm))
             .collect();
 
         let (

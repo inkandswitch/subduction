@@ -13,7 +13,7 @@ use sedimentree_core::{
     blob::Blob,
     codec::error::DecodeError,
     crypto::digest::Digest,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -54,10 +54,10 @@ export interface SedimentreeStorage {
 
     // Compound storage for fragments (signed data + blob stored together)
     saveFragment(sedimentreeId: SedimentreeId, digest: Digest, signedFragment: SignedFragment, blob: Uint8Array): Promise<void>;
-    loadFragment(sedimentreeId: SedimentreeId, digest: Digest): Promise<FragmentWithBlob | null>;
-    listFragmentDigests(sedimentreeId: SedimentreeId): Promise<Digest[]>;
+    loadFragment(sedimentreeId: SedimentreeId, fragmentHead: CommitId): Promise<FragmentWithBlob | null>;
+    listFragmentIds(sedimentreeId: SedimentreeId): Promise<CommitId[]>;
     loadAllFragments(sedimentreeId: SedimentreeId): Promise<FragmentWithBlob[]>;
-    deleteFragment(sedimentreeId: SedimentreeId, digest: Digest): Promise<void>;
+    deleteFragment(sedimentreeId: SedimentreeId, fragmentHead: CommitId): Promise<void>;
     deleteAllFragments(sedimentreeId: SedimentreeId): Promise<void>;
 
     // Batch save: write all commits + fragments in a single storage transaction.
@@ -131,11 +131,11 @@ extern "C" {
     fn js_load_fragment(
         this: &JsStorage,
         sedimentree_id: &JsSedimentreeId,
-        digest: &JsDigest,
+        fragment_head: &JsCommitId,
     ) -> Promise;
 
-    #[wasm_bindgen(method, js_name = listFragmentDigests)]
-    fn js_list_fragment_digests(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
+    #[wasm_bindgen(method, js_name = listFragmentIds)]
+    fn js_list_fragment_ids(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
 
     #[wasm_bindgen(method, js_name = loadAllFragments)]
     fn js_load_all_fragments(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
@@ -144,7 +144,7 @@ extern "C" {
     fn js_delete_fragment(
         this: &JsStorage,
         sedimentree_id: &JsSedimentreeId,
-        digest: &JsDigest,
+        fragment_head: &JsCommitId,
     ) -> Promise;
 
     #[wasm_bindgen(method, js_name = deleteAllFragments)]
@@ -408,17 +408,14 @@ impl Storage<Local> for JsStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> LocalBoxFuture<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?fragment_id, "JsStorage::load_fragment");
-            // Pass fragment_id as a digest-shaped key to JS (same 32 bytes)
-            let wasm_digest = WasmDigest::from(Digest::<Fragment>::force_from_bytes(
-                *fragment_id.head().as_bytes(),
-            ));
+            tracing::debug!(?sedimentree_id, ?fragment_head, "JsStorage::load_fragment");
+            let wasm_commit_id = WasmCommitId::from(fragment_head);
             let js_promise = self.js_load_fragment(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
-                &wasm_digest.into(),
+                &wasm_commit_id.into(),
             );
             let js_value = JsFuture::from(js_promise)
                 .await
@@ -445,11 +442,11 @@ impl Storage<Local> for JsStorage {
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<Set<FragmentId>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<Set<CommitId>, Self::Error>> {
         Local::from_future(async move {
             tracing::debug!(?sedimentree_id, "JsStorage::list_fragment_ids");
             let js_promise =
-                self.js_list_fragment_digests(&WasmSedimentreeId::from(sedimentree_id).into());
+                self.js_list_fragment_ids(&WasmSedimentreeId::from(sedimentree_id).into());
             let js_value = JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::JsError)?;
@@ -458,15 +455,14 @@ impl Storage<Local> for JsStorage {
             let mut result = Set::new();
             for i in 0..array.length() {
                 let item = array.get(i);
-                let wasm_digest = WasmDigest::try_from_js_value(&item).ok_or_else(|| {
-                    JsStorageError::UnexpectedJsType {
-                        expected: "Digest",
-                        value: item,
-                    }
-                })?;
-                let digest: Digest<Fragment> = wasm_digest.into();
-                let bytes = *digest.as_bytes();
-                result.insert(FragmentId::new(CommitId::new(bytes)));
+                let wasm_commit_id =
+                    WasmCommitId::try_from_js_value(&item).ok_or_else(|| {
+                        JsStorageError::UnexpectedJsType {
+                            expected: "CommitId",
+                            value: item,
+                        }
+                    })?;
+                result.insert(CommitId::from(wasm_commit_id));
             }
             Ok(result)
         })
@@ -508,16 +504,14 @@ impl Storage<Local> for JsStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?fragment_id, "JsStorage::delete_fragment");
-            let wasm_digest = WasmDigest::from(Digest::<Fragment>::force_from_bytes(
-                *fragment_id.head().as_bytes(),
-            ));
+            tracing::debug!(?sedimentree_id, ?fragment_head, "JsStorage::delete_fragment");
+            let wasm_commit_id = WasmCommitId::from(fragment_head);
             let js_promise = self.js_delete_fragment(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
-                &wasm_digest.into(),
+                &wasm_commit_id.into(),
             );
             JsFuture::from(js_promise)
                 .await

@@ -9,7 +9,7 @@ use sedimentree_core::{
     codec::error::DecodeError,
     collections::{Map, Set},
     crypto::digest::Digest,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -193,6 +193,9 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             );
             if let Some(map) = self.commits.lock().await.get_mut(&sedimentree_id) {
                 map.retain(|_, (signed, blob)| {
+                    // Safety: data was verified before insertion via `save_loose_commit`.
+                    // Decode failure here would indicate in-process memory corruption,
+                    // not a storage error. Retain undecodable entries defensively.
                     VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
                         .map(|v| v.payload().head() != commit_id)
                         .unwrap_or(true)
@@ -238,12 +241,12 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
-                ?fragment_id,
+                ?fragment_head,
                 "MemoryStorage::load_fragment"
             );
             let locked = self.fragments.lock().await;
@@ -253,7 +256,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             for (signed, blob) in map.values() {
                 let verified = VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
                     .map_err(MemoryStorageError::from)?;
-                if verified.payload().fragment_id() == fragment_id {
+                if verified.payload().head() == fragment_head {
                     return Ok(Some(verified));
                 }
             }
@@ -264,7 +267,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<FragmentId>, Self::Error>> {
+    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::list_fragment_ids");
             let locked = self.fragments.lock().await;
@@ -274,7 +277,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                     map.values()
                         .map(|(signed, blob)| {
                             VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
-                                .map(|v| v.payload().fragment_id())
+                                .map(|v| v.payload().head())
                         })
                         .collect::<Result<Set<_>, _>>()
                 })
@@ -309,18 +312,21 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
-                ?fragment_id,
+                ?fragment_head,
                 "MemoryStorage::delete_fragment"
             );
             if let Some(map) = self.fragments.lock().await.get_mut(&sedimentree_id) {
                 map.retain(|_, (signed, blob)| {
+                    // Safety: data was verified before insertion via `save_fragment`.
+                    // Decode failure here would indicate in-process memory corruption,
+                    // not a storage error. Retain undecodable entries defensively.
                     VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
-                        .map(|v| v.payload().fragment_id() != fragment_id)
+                        .map(|v| v.payload().head() != fragment_head)
                         .unwrap_or(true)
                 });
             }

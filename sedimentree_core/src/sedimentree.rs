@@ -16,7 +16,7 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, checkpoint::Checkpoint, id::FragmentId},
+    fragment::{Fragment, checkpoint::Checkpoint},
     loose_commit::{LooseCommit, id::CommitId},
     topsorted::Topsorted,
 };
@@ -50,7 +50,7 @@ fn insert_or_tiebreak<K: Ord + core::hash::Hash, V: Encode>(map: &mut Map<K, V>,
 pub struct FingerprintSummary {
     seed: FingerprintSeed,
     commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
-    fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
+    fragment_fingerprints: BTreeSet<Fingerprint<CommitId>>,
 }
 
 impl FingerprintSummary {
@@ -59,7 +59,7 @@ impl FingerprintSummary {
     pub const fn new(
         seed: FingerprintSeed,
         commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
-        fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
+        fragment_fingerprints: BTreeSet<Fingerprint<CommitId>>,
     ) -> Self {
         Self {
             seed,
@@ -82,7 +82,7 @@ impl FingerprintSummary {
 
     /// The fingerprints of fragment causal identities.
     #[must_use]
-    pub const fn fragment_fingerprints(&self) -> &BTreeSet<Fingerprint<FragmentId>> {
+    pub const fn fragment_fingerprints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
         &self.fragment_fingerprints
     }
 }
@@ -97,7 +97,7 @@ impl FingerprintSummary {
 pub struct FingerprintDiff<'a> {
     /// Fragments the responder has that the requestor is missing,
     /// paired with their causal identities (from the `Sedimentree` map key).
-    pub local_only_fragments: Vec<(&'a FragmentId, &'a Fragment)>,
+    pub local_only_fragments: Vec<(&'a CommitId, &'a Fragment)>,
 
     /// Commits the responder has that the requestor is missing,
     /// paired with their content-addressed digests.
@@ -109,7 +109,7 @@ pub struct FingerprintDiff<'a> {
 
     /// Requestor's fragment fingerprints that the responder doesn't have locally.
     /// Echoed back so the requestor can reverse-lookup and send the data.
-    pub remote_only_fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
+    pub remote_only_fragment_fingerprints: Vec<Fingerprint<CommitId>>,
 }
 
 /// A pre-captured reverse-lookup table for resolving fingerprints back to digests.
@@ -135,7 +135,7 @@ pub struct FingerprintDiff<'a> {
 pub struct FingerprintResolver {
     summary: FingerprintSummary,
     commit_fp_to_id: Map<Fingerprint<CommitId>, CommitId>,
-    fragment_fp_to_id: Map<Fingerprint<FragmentId>, FragmentId>,
+    fragment_fp_to_id: Map<Fingerprint<CommitId>, CommitId>,
 }
 
 impl FingerprintResolver {
@@ -163,7 +163,7 @@ impl FingerprintResolver {
     ///
     /// Returns `None` if the fingerprint was not in the tree at construction time.
     #[must_use]
-    pub fn resolve_fragment(&self, fp: &Fingerprint<FragmentId>) -> Option<FragmentId> {
+    pub fn resolve_fragment(&self, fp: &Fingerprint<CommitId>) -> Option<CommitId> {
         self.fragment_fp_to_id.get(fp).copied()
     }
 }
@@ -188,7 +188,7 @@ pub struct Diff<'a> {
 #[derive(Default, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
 pub struct Sedimentree {
-    fragments: Map<FragmentId, Fragment>,
+    fragments: Map<CommitId, Fragment>,
     commits: Map<CommitId, LooseCommit>,
 }
 
@@ -204,7 +204,7 @@ impl Sedimentree {
     pub fn new(fragments: Vec<Fragment>, commits: Vec<LooseCommit>) -> Self {
         let mut fragment_map = Map::new();
         for f in fragments {
-            insert_or_tiebreak(&mut fragment_map, f.fragment_id(), f);
+            insert_or_tiebreak(&mut fragment_map, f.head(), f);
         }
         let mut commit_map = Map::new();
         for c in commits {
@@ -279,7 +279,7 @@ impl Sedimentree {
     ///
     /// Returns `true` if the fragment was not already present
     pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        let id = fragment.fragment_id();
+        let id = fragment.head();
         match self.fragments.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(fragment);
@@ -331,8 +331,8 @@ impl Sedimentree {
 
     /// Iterate over all fragments with their causal identities.
     ///
-    /// The [`FragmentId`] is the map key, computed once at insertion time.
-    pub fn fragment_entries(&self) -> impl Iterator<Item = (&FragmentId, &Fragment)> {
+    /// The [`CommitId`] is the map key (fragment head), computed once at insertion time.
+    pub fn fragment_entries(&self) -> impl Iterator<Item = (&CommitId, &Fragment)> {
         self.fragments.iter()
     }
 
@@ -586,8 +586,8 @@ impl Sedimentree {
 
         let fragment_fingerprints = self
             .fragments
-            .values()
-            .map(|f| Fingerprint::new(seed, &f.fragment_id()))
+            .keys()
+            .map(|id| Fingerprint::new(seed, id))
             .collect();
 
         FingerprintSummary::new(*seed, commit_fingerprints, fragment_fingerprints)
@@ -612,7 +612,7 @@ impl Sedimentree {
             .map(|(id, c)| (Fingerprint::new(seed, &c.head()), *id))
             .collect();
 
-        let fragment_fp_to_id: Map<Fingerprint<FragmentId>, FragmentId> = self
+        let fragment_fp_to_id: Map<Fingerprint<CommitId>, CommitId> = self
             .fragments
             .keys()
             .map(|id| (Fingerprint::new(seed, id), *id))
@@ -654,13 +654,13 @@ impl Sedimentree {
             })
             .collect();
 
-        let local_only_fragments: Vec<(&FragmentId, &Fragment)> = self
+        let local_only_fragments: Vec<(&CommitId, &Fragment)> = self
             .fragments
             .iter()
-            .filter(|(_, f)| {
+            .filter(|(id, _)| {
                 !remote
                     .fragment_fingerprints
-                    .contains(&Fingerprint::new(seed, &f.fragment_id()))
+                    .contains(&Fingerprint::new(seed, id))
             })
             .collect();
 
@@ -671,10 +671,10 @@ impl Sedimentree {
             .map(|c| Fingerprint::new(seed, &c.head()))
             .collect();
 
-        let local_fragment_fps: BTreeSet<Fingerprint<FragmentId>> = self
+        let local_fragment_fps: BTreeSet<Fingerprint<CommitId>> = self
             .fragments
-            .values()
-            .map(|f| Fingerprint::new(seed, &f.fragment_id()))
+            .keys()
+            .map(|id| Fingerprint::new(seed, id))
             .collect();
 
         let remote_only_commit_fingerprints: Vec<Fingerprint<CommitId>> = remote
@@ -684,7 +684,7 @@ impl Sedimentree {
             .copied()
             .collect();
 
-        let remote_only_fragment_fingerprints: Vec<Fingerprint<FragmentId>> = remote
+        let remote_only_fragment_fingerprints: Vec<Fingerprint<CommitId>> = remote
             .fragment_fingerprints
             .iter()
             .filter(|fp| !local_fragment_fps.contains(fp))
@@ -2996,7 +2996,7 @@ mod tests {
             );
 
             // Verify it's the deep fragment, not the shallow one
-            let deep_fp = Fingerprint::new(&seed, &deep_fragment.fragment_id());
+            let deep_fp = Fingerprint::new(&seed, &deep_fragment.head());
             assert!(
                 summary.fragment_fingerprints().contains(&deep_fp),
                 "deep fragment fingerprint should be in summary"

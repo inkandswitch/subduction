@@ -5,10 +5,9 @@ use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
-    crypto::digest::Digest,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
@@ -17,7 +16,7 @@ use wasm_bindgen_futures::future_to_promise;
 
 use crate::{
     commit_id::WasmCommitId,
-    digest::{JsDigest, WasmDigest},
+    digest::WasmDigest,
     fragment::WasmFragmentWithBlob,
     loose_commit::WasmCommitWithBlob,
     sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
@@ -204,19 +203,18 @@ impl MemoryStorage {
         })
     }
 
-    /// Load a fragment by digest, returning `FragmentWithBlob` or null.
+    /// Load a fragment by its identifier, returning `FragmentWithBlob` or null.
     #[wasm_bindgen(js_name = loadFragment)]
     pub fn load_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let d: Digest<Fragment> = digest.clone().into();
-        let fragment_id = FragmentId::new(CommitId::new(*d.as_bytes()));
+        let fragment_head = CommitId::from(fragment_head);
         future_to_promise(async move {
-            let result = Storage::<Local>::load_fragment(&inner, id, fragment_id)
+            let result = Storage::<Local>::load_fragment(&inner, id, fragment_head)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
@@ -230,9 +228,9 @@ impl MemoryStorage {
         })
     }
 
-    /// List all fragment digests for a sedimentree.
-    #[wasm_bindgen(js_name = listFragmentDigests)]
-    pub fn list_fragment_digests(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
+    /// List all fragment IDs for a sedimentree.
+    #[wasm_bindgen(js_name = listFragmentIds)]
+    pub fn list_fragment_ids(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         future_to_promise(async move {
@@ -241,8 +239,7 @@ impl MemoryStorage {
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
             for fid in fragment_ids {
-                let digest = Digest::<Fragment>::force_from_bytes(*fid.head().as_bytes());
-                result.push(&JsDigest::from(WasmDigest::from(digest)));
+                result.push(&JsValue::from(WasmCommitId::from(fid)));
             }
             Ok(result.into())
         })
@@ -267,19 +264,18 @@ impl MemoryStorage {
         })
     }
 
-    /// Delete a fragment by digest.
+    /// Delete a fragment by its identifier.
     #[wasm_bindgen(js_name = deleteFragment)]
     pub fn delete_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        digest: &WasmDigest,
+        fragment_head: &WasmCommitId,
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let d: Digest<Fragment> = digest.clone().into();
-        let fragment_id = FragmentId::new(CommitId::new(*d.as_bytes()));
+        let fragment_head = CommitId::from(fragment_head);
         future_to_promise(async move {
-            Storage::<Local>::delete_fragment(&inner, id, fragment_id)
+            Storage::<Local>::delete_fragment(&inner, id, fragment_head)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

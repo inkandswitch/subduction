@@ -5,7 +5,7 @@
 //!
 //! Both commits and fragments are content-addressed internally: the CAS
 //! digest is used for file naming within identity subdirectories. The
-//! trait surface uses [`CommitId`] and [`FragmentId`] for lookup.
+//! trait surface uses [`CommitId`] for lookup.
 //!
 //! # Storage Layout
 //!
@@ -43,7 +43,7 @@ use sedimentree_core::{
     codec::error::DecodeError,
     collections::Set,
     crypto::digest::Digest,
-    fragment::{Fragment, id::FragmentId},
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -156,9 +156,9 @@ impl FsStorage {
         self.commits_dir(id).join(hex::encode(commit_id.as_bytes()))
     }
 
-    fn fragment_id_dir(&self, id: SedimentreeId, fragment_id: FragmentId) -> PathBuf {
+    fn fragment_id_dir(&self, id: SedimentreeId, fragment_head: CommitId) -> PathBuf {
         self.fragments_dir(id)
-            .join(hex::encode(fragment_id.head().as_bytes()))
+            .join(hex::encode(fragment_head.as_bytes()))
     }
 
     fn commit_meta_path(
@@ -184,20 +184,20 @@ impl FsStorage {
     fn fragment_meta_path(
         &self,
         id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
         digest: Digest<Fragment>,
     ) -> PathBuf {
-        self.fragment_id_dir(id, fragment_id)
+        self.fragment_id_dir(id, fragment_head)
             .join(format!("{}.meta", hex::encode(digest.as_bytes())))
     }
 
     fn fragment_blob_path(
         &self,
         id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
         digest: Digest<Fragment>,
     ) -> PathBuf {
-        self.fragment_id_dir(id, fragment_id)
+        self.fragment_id_dir(id, fragment_head)
             .join(format!("{}.blob", hex::encode(digest.as_bytes())))
     }
 
@@ -212,12 +212,12 @@ impl FsStorage {
         }
     }
 
-    fn parse_fragment_id_from_dirname(name: &str) -> Option<FragmentId> {
+    fn parse_fragment_id_from_dirname(name: &str) -> Option<CommitId> {
         let bytes = hex::decode(name).ok()?;
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
-            Some(FragmentId::new(CommitId::new(arr)))
+            Some(CommitId::new(arr))
         } else {
             None
         }
@@ -538,18 +538,18 @@ impl Storage<Sendable> for FsStorage {
         verified: VerifiedMeta<Fragment>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            let fragment_id = verified.payload().fragment_id();
+            let fragment_head = verified.payload().head();
             let digest = Digest::hash(verified.payload());
             tracing::debug!(
                 ?sedimentree_id,
-                ?fragment_id,
+                ?fragment_head,
                 ?digest,
                 "FsStorage::save_fragment"
             );
 
-            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_id);
-            let meta_path = self.fragment_meta_path(sedimentree_id, fragment_id, digest);
-            let blob_path = self.fragment_blob_path(sedimentree_id, fragment_id, digest);
+            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_head);
+            let meta_path = self.fragment_meta_path(sedimentree_id, fragment_head, digest);
+            let blob_path = self.fragment_blob_path(sedimentree_id, fragment_head, digest);
 
             // Skip if already exists (CAS)
             if tokio::fs::try_exists(&meta_path).await.unwrap_or(false) {
@@ -592,13 +592,13 @@ impl Storage<Sendable> for FsStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>
     {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?fragment_id, "FsStorage::load_fragment");
+            tracing::debug!(?sedimentree_id, ?fragment_head, "FsStorage::load_fragment");
 
-            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_id);
+            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_head);
 
             match Self::read_first_meta_blob_pair(&id_dir).await? {
                 Some((signed_data, blob_data)) => {
@@ -607,7 +607,7 @@ impl Storage<Sendable> for FsStorage {
                         Err(e) => {
                             tracing::error!(
                                 ?sedimentree_id,
-                                ?fragment_id,
+                                ?fragment_head,
                                 "corrupt .meta file for Fragment: {e}"
                             );
                             return Err(FsStorageError::from(e));
@@ -624,7 +624,7 @@ impl Storage<Sendable> for FsStorage {
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<FragmentId>, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::list_fragment_ids");
 
@@ -668,9 +668,9 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
-                    && let Some(fragment_id) = Self::parse_fragment_id_from_dirname(&name)
+                    && let Some(fragment_head) = Self::parse_fragment_id_from_dirname(&name)
                 {
-                    match Storage::<Sendable>::load_fragment(self, sedimentree_id, fragment_id)
+                    match Storage::<Sendable>::load_fragment(self, sedimentree_id, fragment_head)
                         .await
                     {
                         Ok(Some(verified)) => results.push(verified),
@@ -678,7 +678,7 @@ impl Storage<Sendable> for FsStorage {
                         Err(FsStorageError::Decode(e)) => {
                             tracing::warn!(
                                 ?sedimentree_id,
-                                ?fragment_id,
+                                ?fragment_head,
                                 "skipping corrupt fragment dir: {e}"
                             );
                         }
@@ -694,12 +694,16 @@ impl Storage<Sendable> for FsStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?fragment_id, "FsStorage::delete_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?fragment_head,
+                "FsStorage::delete_fragment"
+            );
 
-            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_id);
+            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_head);
             if let Err(e) = tokio::fs::remove_dir_all(&id_dir).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
@@ -876,20 +880,20 @@ impl Storage<Local> for FsStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>
     {
         Local::from_future(<Self as Storage<Sendable>>::load_fragment(
             self,
             sedimentree_id,
-            fragment_id,
+            fragment_head,
         ))
     }
 
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Set<FragmentId>, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::list_fragment_ids(
             self,
             sedimentree_id,
@@ -909,12 +913,12 @@ impl Storage<Local> for FsStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment_id: FragmentId,
+        fragment_head: CommitId,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::delete_fragment(
             self,
             sedimentree_id,
-            fragment_id,
+            fragment_head,
         ))
     }
 
