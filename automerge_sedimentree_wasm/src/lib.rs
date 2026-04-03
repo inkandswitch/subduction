@@ -24,7 +24,7 @@ use sedimentree_core::{
     hex::decode_hex,
     loose_commit::id::CommitId,
 };
-use sedimentree_wasm::commit_id::WasmCommitId;
+use sedimentree_wasm::commit_id::{JsCommitId, WasmCommitId};
 use subduction_wasm::subduction::WasmHashMetric;
 use wasm_bindgen::prelude::*;
 
@@ -71,7 +71,7 @@ impl WasmSedimentreeAutomerge {
     #[wasm_bindgen(js_name = buildFragmentStore)]
     pub fn js_build_fragment_store(
         &self,
-        head_ids: Vec<sedimentree_wasm::commit_id::JsCommitId>,
+        head_ids: Vec<JsCommitId>,
         known_fragment_states: &WasmFragmentStateStore,
         strategy: &WasmHashMetric,
     ) -> Result<Vec<WasmFragmentState>, WasmFragmentError> {
