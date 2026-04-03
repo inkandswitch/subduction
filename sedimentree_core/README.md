@@ -38,11 +38,11 @@ The `DepthMetric` trait determines how commits are partitioned into layers:
 
 ```rust
 pub trait DepthMetric {
-    fn depth(&self, digest: &Digest<LooseCommit>) -> Depth;
+    fn to_depth(&self, id: CommitId) -> Depth;
 }
 ```
 
-Default implementation `CountLeadingZeroBytes` uses the number of leading zero bytes in the hash, giving ~1/256 probability per depth level.
+Default implementation `CountLeadingZeroBytes` uses the number of leading zero bytes in the commit identifier, giving ~1/256 probability per depth level.
 
 ## `no_std` Support
 

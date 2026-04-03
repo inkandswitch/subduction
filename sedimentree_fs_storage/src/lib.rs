@@ -20,7 +20,7 @@
 //!         │       ├── {digest_hex}.meta   ← Signed<LooseCommit> bytes
 //!         │       └── {digest_hex}.blob   ← Blob bytes
 //!         └── fragments/
-//!             └── {fragment_id_hex}/
+//!             └── {fragment_head_hex}/
 //!                 ├── {digest_hex}.meta   ← Signed<Fragment> bytes
 //!                 └── {digest_hex}.blob   ← Blob bytes
 //! ```
@@ -88,7 +88,7 @@ pub enum FsStorageError {
 ///         │       ├── {digest_hex}.meta   ← Signed<LooseCommit>
 ///         │       └── {digest_hex}.blob   ← Blob
 ///         └── fragments/
-///             └── {fragment_id_hex}/
+///             └── {fragment_head_hex}/
 ///                 ├── {digest_hex}.meta   ← Signed<Fragment>
 ///                 └── {digest_hex}.blob   ← Blob
 /// ```
@@ -201,18 +201,11 @@ impl FsStorage {
             .join(format!("{}.blob", hex::encode(digest.as_bytes())))
     }
 
+    /// Parse a hex-encoded directory name into a [`CommitId`].
+    ///
+    /// Used for both commit and fragment identity subdirectories, since
+    /// both are keyed by [`CommitId`] (fragments use their head commit).
     fn parse_commit_id_from_dirname(name: &str) -> Option<CommitId> {
-        let bytes = hex::decode(name).ok()?;
-        if bytes.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Some(CommitId::new(arr))
-        } else {
-            None
-        }
-    }
-
-    fn parse_fragment_id_from_dirname(name: &str) -> Option<CommitId> {
         let bytes = hex::decode(name).ok()?;
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
@@ -639,7 +632,7 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
-                    && let Some(fragment_id) = Self::parse_fragment_id_from_dirname(&name)
+                    && let Some(fragment_id) = Self::parse_commit_id_from_dirname(&name)
                 {
                     ids.insert(fragment_id);
                 }
@@ -668,7 +661,7 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
-                    && let Some(fragment_head) = Self::parse_fragment_id_from_dirname(&name)
+                    && let Some(fragment_head) = Self::parse_commit_id_from_dirname(&name)
                 {
                     match Storage::<Sendable>::load_fragment(self, sedimentree_id, fragment_head)
                         .await

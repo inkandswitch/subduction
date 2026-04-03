@@ -42,6 +42,13 @@ fn insert_or_tiebreak<K: Ord + core::hash::Hash, V: Encode>(map: &mut Map<K, V>,
 /// Each side computes fingerprints with the shared [`FingerprintSeed`]
 /// and performs set difference on u64 values.
 ///
+/// Both commit and fragment fingerprints use `Fingerprint<CommitId>` as
+/// their type — the distinction between commit and fragment identity is
+/// structural (separate fields), not type-level. A commit and a fragment
+/// sharing the same head [`CommitId`] will produce the same fingerprint
+/// value, but they live in separate sets and are never compared against
+/// each other.
+///
 /// Bandwidth: ~16 bytes (seed) + 8 bytes per item, vs ~100+ bytes
 /// per item with [`SedimentreeSummary`].
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
