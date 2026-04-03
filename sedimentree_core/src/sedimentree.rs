@@ -2903,6 +2903,8 @@ mod tests {
         use crate::{
             commit::CountLeadingZeroBytes,
             crypto::fingerprint::{Fingerprint, FingerprintSeed},
+            fragment::Fragment,
+            loose_commit::LooseCommit,
             sedimentree::Sedimentree,
             test_utils::{TestGraph, seeded_rng},
         };
@@ -3191,6 +3193,406 @@ mod tests {
             assert!(
                 diff.remote_only_fragment_fingerprints.is_empty(),
                 "no remote-only fragment fingerprints after convergence"
+            );
+        }
+
+        // ============================================================
+        // Partial-overlap: covered commits excluded from sync
+        // ============================================================
+
+        /// Verifies that minimize reduces wire traffic: covered commits
+        /// are replaced by the fragment, so the peer sends the fragment
+        /// plus only the uncovered loose commits — not every commit.
+        ///
+        /// Uses explicit `CommitId` values with `CountLeadingZeroBytes`
+        /// depth metric to avoid any mock/truncation surprises.
+        ///
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d0) ← D(d2) ← E(d0) ← F(d0)
+        ///     oldest                                     newest
+        ///
+        ///   LOCAL has: all 6 commits + fragment(head=D, boundary={A})
+        ///   After minimize: fragment survives; all commits in blocks
+        ///                   A→D are pruned; E and F survive (blockless)
+        ///
+        ///   REMOTE has: nothing (empty)
+        ///
+        ///   Expected diff:
+        ///     LOCAL sends: fragment(D→A) + commits E, F
+        ///     LOCAL does NOT send: A, B, C, D (captured in fragment)
+        ///     Total: 3 items (not 7)
+        ///
+        ///   After remote receives these 3 items, it has full coverage:
+        ///   the fragment's blob contains the compacted data for A-D,
+        ///   and the loose commits provide E and F.
+        /// ```
+        #[test]
+        #[allow(clippy::too_many_lines)]
+        fn minimize_reduces_wire_traffic() {
+            use crate::{
+                blob::{Blob, BlobMeta},
+                fragment::Fragment,
+                id::SedimentreeId,
+                loose_commit::id::CommitId,
+            };
+
+            const SID: SedimentreeId = SedimentreeId::new([0x42; 32]);
+
+            // Explicit CommitIds with CountLeadingZeroBytes depth control:
+            // d0(n): [n, 0, ..., 0]  → depth 0 (no leading zeros)
+            // d2(n): [0, 0, n, 0, ..., 0]  → depth 2 (two leading zeros)
+            let a = CommitId::new({
+                let mut b = [0u8; 32];
+                b[2] = 1;
+                b[3] = 1;
+                b
+            }); // d2
+            let b = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 2;
+                b[3] = 2;
+                b
+            }); // d0
+            let c = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 3;
+                b[3] = 3;
+                b
+            }); // d0
+            let d = CommitId::new({
+                let mut b = [0u8; 32];
+                b[2] = 4;
+                b[3] = 4;
+                b
+            }); // d2
+            let e = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 5;
+                b[3] = 5;
+                b
+            }); // d0
+            let f = CommitId::new({
+                let mut b = [0u8; 32];
+                b[0] = 6;
+                b[3] = 6;
+                b
+            }); // d0
+
+            let blob_meta = BlobMeta::new(&Blob::new(alloc::vec![0xAB]));
+
+            let commits = alloc::vec![
+                LooseCommit::new(SID, a, BTreeSet::new(), blob_meta),
+                LooseCommit::new(SID, b, BTreeSet::from([a]), blob_meta),
+                LooseCommit::new(SID, c, BTreeSet::from([b]), blob_meta),
+                LooseCommit::new(SID, d, BTreeSet::from([c]), blob_meta),
+                LooseCommit::new(SID, e, BTreeSet::from([d]), blob_meta),
+                LooseCommit::new(SID, f, BTreeSet::from([e]), blob_meta),
+            ];
+
+            let fragment = Fragment::new(SID, d, BTreeSet::from([a]), &[], blob_meta);
+
+            // === LOCAL: 6 commits + 1 fragment ===
+            let local_tree = Sedimentree::new(alloc::vec![fragment], commits);
+            let local_min = local_tree.minimize(&CountLeadingZeroBytes);
+
+            // Verify minimize pruned A-D but kept E, F
+            assert!(
+                !local_min.has_loose_commit(a)
+                    && !local_min.has_loose_commit(b)
+                    && !local_min.has_loose_commit(c)
+                    && !local_min.has_loose_commit(d),
+                "A-D should be pruned (blocks covered by fragment)"
+            );
+            assert!(
+                local_min.has_loose_commit(e) && local_min.has_loose_commit(f),
+                "E, F should survive (blockless, above fragment)"
+            );
+
+            // === REMOTE: empty ===
+            let remote_tree = Sedimentree::new(alloc::vec![], alloc::vec![]);
+            let remote_min = remote_tree.minimize(&CountLeadingZeroBytes);
+
+            // === Fingerprint diff ===
+            let seed = FingerprintSeed::new(42, 99);
+            let local_summary = local_min.fingerprint_summarize(&seed);
+            let remote_summary = remote_min.fingerprint_summarize(&seed);
+
+            let diff = local_min.diff_remote_fingerprints(&remote_summary);
+
+            // Local sends: 1 fragment + 2 commits (E, F) = 3 items total
+            // NOT 1 fragment + 6 commits = 7 items
+            let total_items_sent = diff.local_only_fragments.len() + diff.local_only_commits.len();
+
+            assert_eq!(
+                diff.local_only_fragments.len(),
+                1,
+                "should send 1 fragment (captures A-D)"
+            );
+            assert_eq!(
+                diff.local_only_commits.len(),
+                2,
+                "should send 2 loose commits (E, F only)"
+            );
+            assert_eq!(total_items_sent, 3, "total wire items should be 3, not 7");
+
+            // The sent commits are E and F, not any of A-D
+            let sent_commit_ids: BTreeSet<_> =
+                diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+            assert!(
+                sent_commit_ids.contains(&e) && sent_commit_ids.contains(&f),
+                "sent commits should be E and F"
+            );
+            assert!(
+                !sent_commit_ids.contains(&a)
+                    && !sent_commit_ids.contains(&b)
+                    && !sent_commit_ids.contains(&c)
+                    && !sent_commit_ids.contains(&d),
+                "covered commits A-D must NOT be sent"
+            );
+
+            // === Verify remote has full coverage after receiving ===
+            let mut remote_post_sync = remote_min;
+            for (_, commit) in &diff.local_only_commits {
+                remote_post_sync.add_commit((*commit).clone());
+            }
+            for (_, frag) in &diff.local_only_fragments {
+                remote_post_sync.add_fragment((*frag).clone());
+            }
+
+            // Remote now has 1 fragment + 2 loose commits
+            assert_eq!(
+                remote_post_sync.fragments().count(),
+                1,
+                "remote should have 1 fragment after sync"
+            );
+            assert_eq!(
+                remote_post_sync.loose_commits().count(),
+                2,
+                "remote should have 2 loose commits (E, F) after sync"
+            );
+
+            // After minimize, remote's state matches local's
+            let remote_final = remote_post_sync.minimize(&CountLeadingZeroBytes);
+            let remote_final_summary = remote_final.fingerprint_summarize(&seed);
+
+            assert_eq!(
+                local_summary.commit_fingerprints(),
+                remote_final_summary.commit_fingerprints(),
+                "commit fingerprints should match after sync"
+            );
+            assert_eq!(
+                local_summary.fragment_fingerprints(),
+                remote_final_summary.fragment_fingerprints(),
+                "fragment fingerprints should match after sync"
+            );
+        }
+
+        // ============================================================
+        // Round-trip: minimize → fingerprint → diff → exchange → converge
+        // ============================================================
+
+        /// Full sync round-trip with complex multi-depth data.
+        ///
+        /// Two peers with different data exchange fingerprints, compute
+        /// diffs, send missing items, and both minimize. After the
+        /// exchange, both peers should have identical minimized trees
+        /// and empty diffs.
+        ///
+        /// ```text
+        ///   A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2) ← F(d0) ← G(d0)
+        ///     oldest                                              newest
+        ///
+        ///   ALICE: commits A..F + fragment(head=E, boundary={A}, ckpts={C})
+        ///          After minimize: fragment + loose {F} (B, D pruned)
+        ///
+        ///   BOB:   commits A..G (has G which Alice doesn't, no fragment)
+        ///          After minimize: all 7 commits (no fragments to prune against)
+        ///
+        ///   Sync:
+        ///     Alice sends: fragment(E→A), commit F
+        ///     Bob sends: commit G
+        ///
+        ///   After exchange + re-minimize:
+        ///     Both have: fragment(E→A) + loose {F, G}
+        ///     Fingerprint summaries identical, diff is empty
+        /// ```
+        #[test]
+        #[allow(clippy::too_many_lines)]
+        fn round_trip_minimize_fingerprint_diff_exchange_converge() {
+            let mut rng = seeded_rng(400);
+
+            // Full DAG: A(d2) ← B(d0) ← C(d1) ← D(d0) ← E(d2) ← F(d0) ← G(d0)
+            let graph = TestGraph::new(
+                &mut rng,
+                &[
+                    ("a", 2),
+                    ("b", 0),
+                    ("c", 1),
+                    ("d", 0),
+                    ("e", 2),
+                    ("f", 0),
+                    ("g", 0),
+                ],
+                &[
+                    ("e", "d"),
+                    ("d", "c"),
+                    ("c", "b"),
+                    ("b", "a"),
+                    ("f", "e"),
+                    ("g", "f"),
+                ],
+            );
+
+            // Alice: commits A..F + fragment covering E→A with checkpoint C
+            let alice_commits = graph.get_commits(&["a", "b", "c", "d", "e", "f"]);
+            let fragment = graph.make_fragment("e", &["a"], &["c"]);
+            let alice_tree = Sedimentree::new(vec![fragment.clone()], alice_commits);
+            let alice_min = alice_tree.minimize(graph.depth_metric());
+
+            // Alice after minimize: fragment survives, B and D pruned
+            assert!(
+                !alice_min.has_loose_commit(graph.node_hash("b")),
+                "Alice: B should be pruned by fragment"
+            );
+            assert!(
+                !alice_min.has_loose_commit(graph.node_hash("d")),
+                "Alice: D should be pruned by fragment"
+            );
+            assert_eq!(
+                alice_min.fragments().count(),
+                1,
+                "Alice: 1 fragment should survive"
+            );
+
+            // Bob: all 7 commits, no fragments
+            let bob_tree = graph.to_sedimentree();
+            let bob_min = bob_tree.minimize(graph.depth_metric());
+            assert_eq!(
+                bob_min.loose_commits().count(),
+                7,
+                "Bob: all 7 commits survive (no fragments)"
+            );
+
+            // --- Round 1: Fingerprint exchange ---
+            let seed = FingerprintSeed::new(42, 99);
+            let alice_summary = alice_min.fingerprint_summarize(&seed);
+            let bob_summary = bob_min.fingerprint_summarize(&seed);
+
+            // Alice's diff: what Alice has that Bob doesn't
+            let alice_diff = alice_min.diff_remote_fingerprints(&bob_summary);
+            // Bob's diff: what Bob has that Alice doesn't
+            let bob_diff = bob_min.diff_remote_fingerprints(&alice_summary);
+
+            // Alice should send: fragment + some loose commits (not covered ones)
+            assert_eq!(
+                alice_diff.local_only_fragments.len(),
+                1,
+                "Alice sends 1 fragment"
+            );
+            // Alice should NOT send B or D (covered by fragment, pruned)
+            let alice_sent_commit_ids: BTreeSet<_> = alice_diff
+                .local_only_commits
+                .iter()
+                .map(|(id, _)| **id)
+                .collect();
+            assert!(
+                !alice_sent_commit_ids.contains(&graph.node_hash("b")),
+                "Alice must not send covered commit B"
+            );
+            assert!(
+                !alice_sent_commit_ids.contains(&graph.node_hash("d")),
+                "Alice must not send covered commit D"
+            );
+
+            // Bob should send: commit G (the only thing Alice doesn't have)
+            assert!(
+                bob_diff.local_only_fragments.is_empty(),
+                "Bob has no fragments to send"
+            );
+            let bob_sent_commit_ids: BTreeSet<_> = bob_diff
+                .local_only_commits
+                .iter()
+                .map(|(id, _)| **id)
+                .collect();
+            assert!(
+                bob_sent_commit_ids.contains(&graph.node_hash("g")),
+                "Bob should send commit G"
+            );
+
+            // --- Round 2: Exchange items ---
+            // Alice receives Bob's items (commit G)
+            let mut alice_post_sync = alice_min.clone();
+            for (_, commit) in &bob_diff.local_only_commits {
+                alice_post_sync.add_commit((*commit).clone());
+            }
+            for (_, frag) in &bob_diff.local_only_fragments {
+                alice_post_sync.add_fragment((*frag).clone());
+            }
+
+            // Bob receives Alice's items (fragment + loose commits)
+            let mut bob_post_sync = bob_min.clone();
+            for (_, commit) in &alice_diff.local_only_commits {
+                bob_post_sync.add_commit((*commit).clone());
+            }
+            for (_, frag) in &alice_diff.local_only_fragments {
+                bob_post_sync.add_fragment((*frag).clone());
+            }
+
+            // --- Round 3: Both re-minimize ---
+            let alice_final = alice_post_sync.minimize(graph.depth_metric());
+            let bob_final = bob_post_sync.minimize(graph.depth_metric());
+
+            // Both should have the same fragments
+            let alice_frag_heads: BTreeSet<_> =
+                alice_final.fragments().map(Fragment::head).collect();
+            let bob_frag_heads: BTreeSet<_> = bob_final.fragments().map(Fragment::head).collect();
+            assert_eq!(
+                alice_frag_heads, bob_frag_heads,
+                "both peers should have the same fragment set after sync"
+            );
+
+            // Both should have the same loose commits
+            let alice_commit_ids: BTreeSet<_> =
+                alice_final.loose_commits().map(LooseCommit::head).collect();
+            let bob_commit_ids: BTreeSet<_> =
+                bob_final.loose_commits().map(LooseCommit::head).collect();
+            assert_eq!(
+                alice_commit_ids, bob_commit_ids,
+                "both peers should have the same loose commit set after sync"
+            );
+
+            // --- Round 4: Verify convergence ---
+            let alice_final_summary = alice_final.fingerprint_summarize(&seed);
+            let bob_final_summary = bob_final.fingerprint_summarize(&seed);
+
+            assert_eq!(
+                alice_final_summary.commit_fingerprints(),
+                bob_final_summary.commit_fingerprints(),
+                "commit fingerprints should converge"
+            );
+            assert_eq!(
+                alice_final_summary.fragment_fingerprints(),
+                bob_final_summary.fragment_fingerprints(),
+                "fragment fingerprints should converge"
+            );
+
+            // Diff should be empty — fully converged
+            let final_diff = alice_final.diff_remote_fingerprints(&bob_final_summary);
+            assert!(
+                final_diff.local_only_commits.is_empty(),
+                "no commits to send after convergence"
+            );
+            assert!(
+                final_diff.local_only_fragments.is_empty(),
+                "no fragments to send after convergence"
+            );
+            assert!(
+                final_diff.remote_only_commit_fingerprints.is_empty(),
+                "no remote-only commits after convergence"
+            );
+            assert!(
+                final_diff.remote_only_fragment_fingerprints.is_empty(),
+                "no remote-only fragments after convergence"
             );
         }
     }

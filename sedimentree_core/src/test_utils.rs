@@ -263,6 +263,26 @@ impl TestGraph {
         self.commits.values().cloned().collect()
     }
 
+    /// Get a commit by its node name.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node name doesn't exist.
+    #[must_use]
+    pub fn get_commit(&self, node: &str) -> &LooseCommit {
+        self.commits.get(node).expect("node not found in graph")
+    }
+
+    /// Get a subset of commits by their node names.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any node name doesn't exist.
+    #[must_use]
+    pub fn get_commits(&self, nodes: &[&str]) -> Vec<LooseCommit> {
+        nodes.iter().map(|n| self.get_commit(n).clone()).collect()
+    }
+
     /// Get the [`CommitId`] for a named node.
     ///
     /// # Panics
