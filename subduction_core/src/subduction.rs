@@ -2330,7 +2330,7 @@ where
             .unwrap_or_default()
             .heads(&self.depth_metric);
 
-        let requested_commit_ids: Vec<CommitId> = requesting
+        let mut requested_commit_ids: Vec<CommitId> = requesting
             .commit_fingerprints
             .iter()
             .filter_map(|fp| {
@@ -2341,6 +2341,23 @@ where
                 id
             })
             .collect();
+
+        // DAG-ancestry pruning: don't send commits that are ancestors of
+        // commits the remote already has. The "shared" commits are those
+        // in our resolver that the remote did NOT request (they have them).
+        if !requested_commit_ids.is_empty() {
+            let tree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
+            let requested_set: Set<CommitId> = requested_commit_ids.iter().copied().collect();
+            let shared: Set<CommitId> = tree
+                .loose_commits()
+                .map(LooseCommit::head)
+                .filter(|cid| !requested_set.contains(cid))
+                .collect();
+            if !shared.is_empty() {
+                let ancestors = tree.ancestors_of(&shared);
+                requested_commit_ids.retain(|cid| !ancestors.contains(cid));
+            }
+        }
 
         let requested_fragment_ids: Vec<CommitId> = requesting
             .fragment_fingerprints
