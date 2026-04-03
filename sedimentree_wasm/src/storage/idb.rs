@@ -707,8 +707,8 @@ impl WasmIndexedDbStorage {
 
     /// Save a batch of commits and fragments in a single IDB transaction.
     ///
-    /// Each commit element must be a JS object with `{digest, signedCommit, blob}`.
-    /// Each fragment element must be a JS object with `{digest, signedFragment, blob}`.
+    /// Each commit element must be a JS object with `{commitId, signedCommit, blob}`.
+    /// Each fragment element must be a JS object with `{fragmentHead, signedFragment, blob}`.
     /// This matches the shape produced by `JsStorage::save_batch`.
     ///
     /// The sedimentree ID is _not_ registered here — the caller
