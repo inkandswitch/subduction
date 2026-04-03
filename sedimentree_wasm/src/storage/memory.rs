@@ -93,7 +93,13 @@ impl MemoryStorage {
     /// Save a commit with its blob.
     ///
     /// The `commit_id` parameter must match the `head()` embedded in
-    /// the signed commit payload. This is validated with a debug assertion.
+    /// the signed commit payload. Returns an error if they differ.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error if:
+    /// - The signed payload cannot be decoded
+    /// - The `commit_id` does not match the embedded `head()`
     #[wasm_bindgen(js_name = saveCommit)]
     pub fn save_commit(
         &self,
@@ -111,11 +117,11 @@ impl MemoryStorage {
             // Reconstruct from trusted JS storage without re-verification
             let verified = VerifiedMeta::try_from_trusted(signed, blob)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            debug_assert_eq!(
-                verified.payload().head(),
-                expected_id,
-                "commit_id parameter must match the embedded head"
-            );
+            if verified.payload().head() != expected_id {
+                return Err(JsValue::from_str(
+                    "commit_id parameter does not match the embedded head",
+                ));
+            }
             Storage::<Local>::save_loose_commit(&inner, id, verified)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;

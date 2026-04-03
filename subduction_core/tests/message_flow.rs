@@ -14,12 +14,12 @@ use future_form::{Local, Sendable};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,

@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree",
@@ -313,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree_wasm"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "automerge",
  "base58",
@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_ingest"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
@@ -2591,9 +2591,9 @@ checksum = "964de6e86d545b246d84badc0fef527924ace5134f30641c203ef52ba83f58d5"
 
 [[package]]
 name = "indexmap"
-version = "2.13.0"
+version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
+checksum = "45a8a2b9cb3e0b0c1803dbb0758ffac5de2f425b23c28f518faabd9d805342ff"
 dependencies = [
  "equivalent",
  "hashbrown 0.16.1",
@@ -4722,7 +4722,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -4751,7 +4751,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_fs_storage"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "async-lock",
  "future_form",
@@ -4768,7 +4768,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.8.3"
+version = "0.9.0"
 dependencies = [
  "async-lock",
  "base58",
@@ -5160,7 +5160,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "ahash",
  "async-lock",
@@ -5207,7 +5207,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5255,7 +5255,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_ephemeral"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5277,7 +5277,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5307,7 +5307,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_iroh"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5330,7 +5330,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5354,7 +5354,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive_policy"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "async-channel",
  "ed25519-dalek 2.2.0",
@@ -5376,7 +5376,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5409,7 +5409,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -6984,9 +6984,9 @@ dependencies = [
 
 [[package]]
 name = "writeable"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
+checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "ws_stream_wasm"

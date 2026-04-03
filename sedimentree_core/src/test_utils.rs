@@ -38,15 +38,15 @@ use crate::{
 /// # Example
 ///
 /// ```
-/// use sedimentree_core::test_utils::digest_with_depth;
+/// use sedimentree_core::test_utils::commit_id_with_depth;
 ///
 /// // Create a depth-2 identifier (2 leading zero bytes)
-/// let d1 = digest_with_depth(2, 1);
-/// let d2 = digest_with_depth(2, 2);
+/// let d1 = commit_id_with_depth(2, 1);
+/// let d2 = commit_id_with_depth(2, 2);
 /// assert_ne!(d1, d2); // Different seeds produce different identifiers
 /// ```
 #[must_use]
-pub fn digest_with_depth(leading_zeros: u8, seed: u8) -> CommitId {
+pub fn commit_id_with_depth(leading_zeros: u8, seed: u8) -> CommitId {
     let mut bytes = [0u8; 32];
     // Set leading zeros (bytes already initialized to 0, but explicit for clarity)
     for slot in bytes.iter_mut().take(leading_zeros as usize) {
@@ -65,10 +65,10 @@ pub fn digest_with_depth(leading_zeros: u8, seed: u8) -> CommitId {
 
 /// Create a [`CommitId`] with leading zeros using an RNG for randomness.
 ///
-/// Unlike [`digest_with_depth`], this uses an RNG for the non-zero bytes,
+/// Unlike [`commit_id_with_depth`], this uses an RNG for the non-zero bytes,
 /// providing more randomness for property-based testing.
 #[must_use]
-pub fn random_digest_with_depth<R: Rng>(rng: &mut R, leading_zeros: u32) -> CommitId {
+pub fn random_commit_id_with_depth<R: Rng>(rng: &mut R, leading_zeros: u32) -> CommitId {
     let mut bytes: [u8; 32] = rng.r#gen();
     for slot in bytes.iter_mut().take(leading_zeros as usize) {
         *slot = 0;
@@ -108,7 +108,7 @@ pub fn make_fragment_at_depth(
     checkpoints: &[CommitId],
 ) -> Fragment {
     let sedimentree_id = SedimentreeId::new([seed; 32]);
-    let head = digest_with_depth(depth, seed);
+    let head = commit_id_with_depth(depth, seed);
     let blob = Blob::new(alloc::vec![seed]);
     let blob_meta = BlobMeta::new(&blob);
     Fragment::new(sedimentree_id, head, boundary, checkpoints, blob_meta)
@@ -117,7 +117,7 @@ pub fn make_fragment_at_depth(
 /// Create a simple fragment with a single boundary commit.
 #[must_use]
 pub fn make_simple_fragment(head_depth: u8, head_seed: u8, boundary_seed: u8) -> Fragment {
-    let boundary = digest_with_depth(1, boundary_seed);
+    let boundary = commit_id_with_depth(1, boundary_seed);
     make_fragment_at_depth(head_depth, head_seed, BTreeSet::from([boundary]), &[])
 }
 
@@ -498,8 +498,8 @@ mod tests {
     use testresult::TestResult;
 
     #[test]
-    fn digest_with_depth_produces_correct_leading_zeros() {
-        let d = digest_with_depth(3, 1);
+    fn commit_id_with_depth_produces_correct_leading_zeros() {
+        let d = commit_id_with_depth(3, 1);
         let bytes = d.as_bytes();
         assert_eq!(bytes[0], 0);
         assert_eq!(bytes[1], 0);
@@ -508,9 +508,9 @@ mod tests {
     }
 
     #[test]
-    fn digest_with_depth_different_seeds_differ() {
-        let d1 = digest_with_depth(2, 1);
-        let d2 = digest_with_depth(2, 2);
+    fn commit_id_with_depth_different_seeds_differ() {
+        let d1 = commit_id_with_depth(2, 1);
+        let d2 = commit_id_with_depth(2, 2);
         assert_ne!(d1, d2);
     }
 

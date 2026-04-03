@@ -22,7 +22,7 @@
 
 #![allow(missing_docs, unreachable_pub)]
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
 
 mod generators {
@@ -30,13 +30,13 @@ mod generators {
     use futures::executor::block_on;
     use std::collections::BTreeSet;
 
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         crypto::{digest::Digest, fingerprint::FingerprintSeed},
         fragment::Fragment,
         id::SedimentreeId,
-        loose_commit::{id::CommitId, LooseCommit},
+        loose_commit::{LooseCommit, id::CommitId},
         sedimentree::FingerprintSummary,
     };
     use subduction_core::{
@@ -228,7 +228,7 @@ mod generators {
 }
 
 mod id {
-    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::{id::ConnectionId, message::RequestId},
@@ -364,7 +364,7 @@ mod id {
 }
 
 mod message {
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use subduction_core::{connection::message::SyncMessage, remote_heads::RemoteHeads};
 
     use super::generators::{
@@ -512,7 +512,7 @@ mod message {
 mod sync {
     use std::collections::BTreeSet;
 
-    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::{
         connection::message::{BatchSyncRequest, BatchSyncResponse, SyncMessage, SyncResult},
@@ -667,7 +667,7 @@ mod sync {
 mod collections {
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{connection::id::ConnectionId, peer::id::PeerId};
 
@@ -852,7 +852,7 @@ mod collections {
 }
 
 mod cloning {
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use subduction_core::{
         connection::{id::ConnectionId, message::SyncMessage},
         remote_heads::RemoteHeads,
@@ -961,7 +961,7 @@ mod cloning {
 }
 
 mod display {
-    use criterion::{black_box, Criterion};
+    use criterion::{Criterion, black_box};
     use subduction_core::storage::id::StorageId;
 
     use super::generators::{commit_id_from_seed, peer_id_from_seed, sedimentree_id_from_seed};

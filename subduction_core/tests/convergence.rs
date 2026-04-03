@@ -17,7 +17,7 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_core::{
     authenticated::Authenticated,
@@ -26,7 +26,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;

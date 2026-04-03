@@ -109,7 +109,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 .await
                 .entry(sedimentree_id)
                 .or_default()
-                .insert(commit_id, (signed, blob));
+                .entry(commit_id)
+                .or_insert((signed, blob));
             Ok(())
         })
     }

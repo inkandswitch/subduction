@@ -1,6 +1,6 @@
 [package]
 name = "subduction_core"
-version = "0.10.1"
+version = "0.11.0"
 description = "Subduction: sync protocol for replicating Sedimentrees between peers"
 
 categories = ["web-programming"]

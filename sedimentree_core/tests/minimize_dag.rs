@@ -164,12 +164,12 @@ fn deep_linear_chain() {
 #[test]
 fn nested_fragments_three_levels() {
     // Create digests at specific depths
-    let deep_head = sedimentree_core::test_utils::digest_with_depth(3, 1);
-    let deep_boundary = sedimentree_core::test_utils::digest_with_depth(1, 100);
-    let medium_head = sedimentree_core::test_utils::digest_with_depth(2, 2);
-    let medium_boundary = sedimentree_core::test_utils::digest_with_depth(1, 101);
-    let shallow_head = sedimentree_core::test_utils::digest_with_depth(1, 3);
-    let shallow_boundary = sedimentree_core::test_utils::digest_with_depth(0, 102);
+    let deep_head = sedimentree_core::test_utils::commit_id_with_depth(3, 1);
+    let deep_boundary = sedimentree_core::test_utils::commit_id_with_depth(1, 100);
+    let medium_head = sedimentree_core::test_utils::commit_id_with_depth(2, 2);
+    let medium_boundary = sedimentree_core::test_utils::commit_id_with_depth(1, 101);
+    let shallow_head = sedimentree_core::test_utils::commit_id_with_depth(1, 3);
+    let shallow_boundary = sedimentree_core::test_utils::commit_id_with_depth(0, 102);
 
     let sedimentree_id = make_sedimentree_id(1);
 
@@ -209,7 +209,7 @@ fn nested_fragments_three_levels() {
         vec![],
     );
 
-    // Use CountLeadingZeroBytes since digests were created with digest_with_depth
+    // Use CountLeadingZeroBytes since digests were created with commit_id_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
@@ -233,10 +233,10 @@ fn nested_fragments_three_levels() {
 #[test]
 fn overlapping_same_depth_both_kept() {
     // Two depth-2 fragments with different heads
-    let head1 = sedimentree_core::test_utils::digest_with_depth(2, 1);
-    let head2 = sedimentree_core::test_utils::digest_with_depth(2, 2);
-    let boundary1 = sedimentree_core::test_utils::digest_with_depth(1, 100);
-    let boundary2 = sedimentree_core::test_utils::digest_with_depth(1, 101);
+    let head1 = sedimentree_core::test_utils::commit_id_with_depth(2, 1);
+    let head2 = sedimentree_core::test_utils::commit_id_with_depth(2, 2);
+    let boundary1 = sedimentree_core::test_utils::commit_id_with_depth(1, 100);
+    let boundary2 = sedimentree_core::test_utils::commit_id_with_depth(1, 101);
 
     let sedimentree_id = make_sedimentree_id(1);
 
@@ -261,7 +261,7 @@ fn overlapping_same_depth_both_kept() {
         vec![],
     );
 
-    // Use CountLeadingZeroBytes since digests were created with digest_with_depth
+    // Use CountLeadingZeroBytes since digests were created with commit_id_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
@@ -312,12 +312,12 @@ fn fragment_boundary_at_merge() {
 #[test]
 fn collective_support_from_multiple_deep() {
     let sedimentree_id = make_sedimentree_id(1);
-    let shallow_head = sedimentree_core::test_utils::digest_with_depth(2, 1);
-    let shallow_boundary = sedimentree_core::test_utils::digest_with_depth(1, 100);
+    let shallow_head = sedimentree_core::test_utils::commit_id_with_depth(2, 1);
+    let shallow_boundary = sedimentree_core::test_utils::commit_id_with_depth(1, 100);
 
     // Deep fragment 1 contains shallow's head
-    let deep1_head = sedimentree_core::test_utils::digest_with_depth(3, 10);
-    let deep1_boundary = sedimentree_core::test_utils::digest_with_depth(1, 101);
+    let deep1_head = sedimentree_core::test_utils::commit_id_with_depth(3, 10);
+    let deep1_boundary = sedimentree_core::test_utils::commit_id_with_depth(1, 101);
     let deep1 = sedimentree_core::fragment::Fragment::new(
         sedimentree_id,
         deep1_head,
@@ -327,8 +327,8 @@ fn collective_support_from_multiple_deep() {
     );
 
     // Deep fragment 2 contains shallow's boundary
-    let deep2_head = sedimentree_core::test_utils::digest_with_depth(3, 20);
-    let deep2_boundary = sedimentree_core::test_utils::digest_with_depth(1, 102);
+    let deep2_head = sedimentree_core::test_utils::commit_id_with_depth(3, 20);
+    let deep2_boundary = sedimentree_core::test_utils::commit_id_with_depth(1, 102);
     let deep2 = sedimentree_core::fragment::Fragment::new(
         sedimentree_id,
         deep2_head,
@@ -351,7 +351,7 @@ fn collective_support_from_multiple_deep() {
         vec![],
     );
 
-    // Use CountLeadingZeroBytes since digests were created with digest_with_depth
+    // Use CountLeadingZeroBytes since digests were created with commit_id_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 

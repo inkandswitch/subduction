@@ -13,19 +13,19 @@
 
 #![allow(missing_docs, unreachable_pub)]
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
 
 mod generators {
     use std::collections::BTreeSet;
 
-    use rand::{rngs::SmallRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::SmallRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         crypto::digest::Digest,
         fragment::Fragment,
         id::SedimentreeId,
-        loose_commit::{id::CommitId, LooseCommit},
+        loose_commit::{LooseCommit, id::CommitId},
         sedimentree::Sedimentree,
     };
 

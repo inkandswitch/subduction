@@ -1906,7 +1906,7 @@ mod tests {
             commit::CountLeadingZeroBytes,
             fragment::Fragment,
             sedimentree::Sedimentree,
-            test_utils::{digest_with_depth, make_fragment_at_depth},
+            test_utils::{commit_id_with_depth, make_fragment_at_depth},
         };
 
         /// Helper to collect fragments from a Sedimentree for easier assertions.
@@ -1929,7 +1929,7 @@ mod tests {
 
         #[test]
         fn minimize_single_fragment() {
-            let boundary_digest = digest_with_depth(1, 100);
+            let boundary_digest = commit_id_with_depth(1, 100);
             let fragment = make_fragment_at_depth(2, 1, BTreeSet::from([boundary_digest]), &[]);
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
 
@@ -1943,9 +1943,9 @@ mod tests {
         #[test]
         fn minimize_multi_depth_deep_dominates_shallow() {
             // Create a deep fragment (depth 3)
-            let deep_boundary = digest_with_depth(1, 100);
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101);
+            let deep_boundary = commit_id_with_depth(1, 100);
+            let shallow_head = commit_id_with_depth(2, 1);
+            let shallow_boundary = commit_id_with_depth(1, 101);
 
             // Deep fragment has shallow's head and boundary in its checkpoints
             let deep_fragment = make_fragment_at_depth(
@@ -1975,8 +1975,8 @@ mod tests {
         #[test]
         fn minimize_same_depth_partial_overlap_keeps_both() {
             // Two fragments at same depth with different heads
-            let boundary1 = digest_with_depth(1, 100);
-            let boundary2 = digest_with_depth(1, 101);
+            let boundary1 = commit_id_with_depth(1, 100);
+            let boundary2 = commit_id_with_depth(1, 101);
 
             let fragment1 = make_fragment_at_depth(2, 1, BTreeSet::from([boundary1]), &[]);
             let fragment2 = make_fragment_at_depth(2, 2, BTreeSet::from([boundary2]), &[]);
@@ -1996,7 +1996,7 @@ mod tests {
             // Multiple fragments all at depth 2
             let input_fragments: Vec<Fragment> = (0..5)
                 .map(|i| {
-                    let boundary = digest_with_depth(1, 100 + i);
+                    let boundary = commit_id_with_depth(1, 100 + i);
                     make_fragment_at_depth(2, i, BTreeSet::from([boundary]), &[])
                 })
                 .collect();
@@ -2015,9 +2015,9 @@ mod tests {
         #[test]
         fn minimize_deep_partial_support_keeps_shallow() {
             // Deep fragment supports shallow's head but NOT its boundary
-            let deep_boundary = digest_with_depth(1, 100);
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101); // NOT in deep's checkpoints
+            let deep_boundary = commit_id_with_depth(1, 100);
+            let shallow_head = commit_id_with_depth(2, 1);
+            let shallow_boundary = commit_id_with_depth(1, 101); // NOT in deep's checkpoints
 
             // Deep fragment only has shallow's head in checkpoints
             let deep_fragment = make_fragment_at_depth(
@@ -2044,16 +2044,16 @@ mod tests {
         #[test]
         fn minimize_collective_support() {
             // Two deep fragments together support a shallow one
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101);
+            let shallow_head = commit_id_with_depth(2, 1);
+            let shallow_boundary = commit_id_with_depth(1, 101);
 
             // Deep fragment 1 has shallow's head
-            let deep1_boundary = digest_with_depth(1, 100);
+            let deep1_boundary = commit_id_with_depth(1, 100);
             let deep1 =
                 make_fragment_at_depth(3, 1, BTreeSet::from([deep1_boundary]), &[shallow_head]);
 
             // Deep fragment 2 has shallow's boundary
-            let deep2_boundary = digest_with_depth(1, 102);
+            let deep2_boundary = commit_id_with_depth(1, 102);
             let deep2 =
                 make_fragment_at_depth(3, 2, BTreeSet::from([deep2_boundary]), &[shallow_boundary]);
 
@@ -2074,13 +2074,13 @@ mod tests {
         #[test]
         fn minimize_unsupported_shallow_kept() {
             // Deep fragment and shallow fragment with no overlap
-            let deep_boundary = digest_with_depth(1, 100);
-            let deep_checkpoint = digest_with_depth(2, 50);
+            let deep_boundary = commit_id_with_depth(1, 100);
+            let deep_checkpoint = commit_id_with_depth(2, 50);
             let deep =
                 make_fragment_at_depth(3, 1, BTreeSet::from([deep_boundary]), &[deep_checkpoint]);
 
             // Shallow with completely different commits
-            let shallow_boundary = digest_with_depth(1, 200);
+            let shallow_boundary = commit_id_with_depth(1, 200);
             let shallow = make_fragment_at_depth(2, 10, BTreeSet::from([shallow_boundary]), &[]);
 
             let tree = Sedimentree::new(vec![deep.clone(), shallow.clone()], vec![]);
@@ -2099,7 +2099,7 @@ mod tests {
 
         #[test]
         fn minimize_fragment_empty_checkpoints() {
-            let boundary = digest_with_depth(1, 100);
+            let boundary = commit_id_with_depth(1, 100);
             let fragment = make_fragment_at_depth(2, 1, BTreeSet::from([boundary]), &[]);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
@@ -2111,7 +2111,7 @@ mod tests {
         #[test]
         fn minimize_fragment_empty_boundary() {
             let sedimentree_id = make_sedimentree_id(1);
-            let head = digest_with_depth(2, 1);
+            let head = commit_id_with_depth(2, 1);
             let blob_meta = make_blob_meta(1);
             let fragment = Fragment::new(sedimentree_id, head, BTreeSet::new(), &[], blob_meta);
 
@@ -2125,7 +2125,7 @@ mod tests {
         fn minimize_head_equals_boundary() {
             // Degenerate case: head is also in boundary
             let sedimentree_id = make_sedimentree_id(1);
-            let head = digest_with_depth(2, 1);
+            let head = commit_id_with_depth(2, 1);
             let blob_meta = make_blob_meta(1);
             let fragment =
                 Fragment::new(sedimentree_id, head, BTreeSet::from([head]), &[], blob_meta);
@@ -2141,8 +2141,8 @@ mod tests {
         fn minimize_head_in_checkpoints() {
             // Head appears in own checkpoints (redundant but valid)
             let sedimentree_id = make_sedimentree_id(1);
-            let head = digest_with_depth(2, 1);
-            let boundary = digest_with_depth(1, 100);
+            let head = commit_id_with_depth(2, 1);
+            let boundary = commit_id_with_depth(1, 100);
             let blob_meta = make_blob_meta(1);
             let fragment = Fragment::new(
                 sedimentree_id,
@@ -2927,9 +2927,9 @@ mod tests {
         /// so only the deep fragment appears in the fingerprint summary.
         #[test]
         fn fingerprint_summarize_on_minimized_excludes_dominated_fragments() {
-            let shallow_head = crate::test_utils::digest_with_depth(2, 1);
-            let shallow_boundary = crate::test_utils::digest_with_depth(1, 101);
-            let deep_boundary = crate::test_utils::digest_with_depth(1, 100);
+            let shallow_head = crate::test_utils::commit_id_with_depth(2, 1);
+            let shallow_boundary = crate::test_utils::commit_id_with_depth(1, 101);
+            let deep_boundary = crate::test_utils::commit_id_with_depth(1, 100);
 
             // Deep fragment has shallow's head and boundary in checkpoints
             let deep_fragment = crate::test_utils::make_fragment_at_depth(

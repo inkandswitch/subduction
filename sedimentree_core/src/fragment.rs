@@ -482,7 +482,7 @@ mod tests {
         fragment::{Fragment, FragmentSummary},
         id::SedimentreeId,
         loose_commit::id::CommitId,
-        test_utils::digest_with_depth,
+        test_utils::commit_id_with_depth,
     };
 
     fn make_blob_meta(seed: u8) -> BlobMeta {
@@ -506,8 +506,8 @@ mod tests {
 
     #[test]
     fn supports_block_head() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
 
         // Head should be supported
@@ -516,8 +516,8 @@ mod tests {
 
     #[test]
     fn supports_block_boundary() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
 
         // Boundary should be supported
@@ -526,9 +526,9 @@ mod tests {
 
     #[test]
     fn supports_block_checkpoint() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
-        let checkpoint = digest_with_depth(1, 50);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
+        let checkpoint = commit_id_with_depth(1, 50);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[checkpoint]);
 
         // Checkpoint should be supported (via truncated match)
@@ -537,11 +537,11 @@ mod tests {
 
     #[test]
     fn supports_block_unknown_digest() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
+        let head = commit_id_with_depth(2, 1);
+        let boundary = commit_id_with_depth(1, 100);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
 
-        let unknown = digest_with_depth(1, 200);
+        let unknown = commit_id_with_depth(1, 200);
         assert!(!fragment.supports_block(unknown));
     }
 
@@ -552,10 +552,10 @@ mod tests {
     #[test]
     fn deeper_supports_shallower_with_matching_range() {
         // Deep fragment (depth 3)
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
-        let shallow_head = digest_with_depth(2, 1);
-        let shallow_boundary = digest_with_depth(1, 101);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
+        let shallow_head = commit_id_with_depth(2, 1);
+        let shallow_boundary = commit_id_with_depth(1, 101);
 
         // Deep fragment has shallow's head and boundary in checkpoints
         let deep = make_fragment(
@@ -577,13 +577,13 @@ mod tests {
     #[test]
     fn shallower_never_supports_deeper() {
         // Shallow fragment (depth 2)
-        let shallow_head = digest_with_depth(2, 1);
-        let shallow_boundary = digest_with_depth(1, 100);
+        let shallow_head = commit_id_with_depth(2, 1);
+        let shallow_boundary = commit_id_with_depth(1, 100);
         let shallow = make_fragment(shallow_head, BTreeSet::from([shallow_boundary]), &[]);
 
         // Deep fragment summary (depth 3)
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 101);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 101);
         let deep_summary = FragmentSummary::new(
             deep_head,
             BTreeSet::from([deep_boundary]),
@@ -597,12 +597,12 @@ mod tests {
     #[test]
     fn same_depth_partial_overlap_no_support() {
         // Two fragments at depth 2 with different heads
-        let head1 = digest_with_depth(2, 1);
-        let boundary1 = digest_with_depth(1, 100);
+        let head1 = commit_id_with_depth(2, 1);
+        let boundary1 = commit_id_with_depth(1, 100);
         let fragment1 = make_fragment(head1, BTreeSet::from([boundary1]), &[]);
 
-        let head2 = digest_with_depth(2, 2);
-        let boundary2 = digest_with_depth(1, 101);
+        let head2 = commit_id_with_depth(2, 2);
+        let boundary2 = commit_id_with_depth(1, 101);
         let summary2 = FragmentSummary::new(head2, BTreeSet::from([boundary2]), make_blob_meta(2));
 
         // Neither should support the other
@@ -612,9 +612,9 @@ mod tests {
     #[test]
     fn supports_boundary_subset() {
         // Fragment with boundary {A, B}
-        let head = digest_with_depth(2, 1);
-        let boundary_a = digest_with_depth(1, 100);
-        let boundary_b = digest_with_depth(1, 101);
+        let head = commit_id_with_depth(2, 1);
+        let boundary_a = commit_id_with_depth(1, 100);
+        let boundary_b = commit_id_with_depth(1, 101);
         let fragment = make_fragment(head, BTreeSet::from([boundary_a, boundary_b]), &[]);
 
         // Summary with same head but boundary subset {A}
@@ -627,10 +627,10 @@ mod tests {
     #[test]
     fn supports_head_in_checkpoints_boundary_in_checkpoints() {
         // Deep fragment
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
-        let checkpoint1 = digest_with_depth(2, 50);
-        let checkpoint2 = digest_with_depth(1, 51);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
+        let checkpoint1 = commit_id_with_depth(2, 50);
+        let checkpoint2 = commit_id_with_depth(1, 51);
 
         let deep = make_fragment(
             deep_head,
@@ -650,12 +650,12 @@ mod tests {
 
     #[test]
     fn no_support_when_head_not_in_range() {
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
         let deep = make_fragment(deep_head, BTreeSet::from([deep_boundary]), &[]);
 
         // Shallow with head not in deep's range
-        let other_head = digest_with_depth(2, 99);
+        let other_head = commit_id_with_depth(2, 99);
         let shallow_summary = FragmentSummary::new(
             other_head,
             BTreeSet::from([deep_boundary]), // boundary matches, but head doesn't
@@ -667,15 +667,15 @@ mod tests {
 
     #[test]
     fn no_support_when_boundary_not_in_range() {
-        let deep_head = digest_with_depth(3, 1);
-        let deep_boundary = digest_with_depth(1, 100);
-        let shallow_head = digest_with_depth(2, 50);
+        let deep_head = commit_id_with_depth(3, 1);
+        let deep_boundary = commit_id_with_depth(1, 100);
+        let shallow_head = commit_id_with_depth(2, 50);
 
         // Deep has shallow's head in checkpoints
         let deep = make_fragment(deep_head, BTreeSet::from([deep_boundary]), &[shallow_head]);
 
         // Shallow boundary is NOT in deep's range
-        let other_boundary = digest_with_depth(1, 200);
+        let other_boundary = commit_id_with_depth(1, 200);
         let shallow_summary = FragmentSummary::new(
             shallow_head,
             BTreeSet::from([other_boundary]),

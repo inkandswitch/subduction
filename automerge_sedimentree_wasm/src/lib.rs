@@ -192,8 +192,8 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
 /// # Errors
 ///
 /// Returns a `WasmFromBase58Error` if the input string is not valid base58.
-#[wasm_bindgen(js_name = digestOfBase58Id)]
-pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmCommitId, WasmFromBase58Error> {
+#[wasm_bindgen(js_name = commitIdOfBase58Id)]
+pub fn commit_id_of_base58_id(b58_str: &str) -> Result<WasmCommitId, WasmFromBase58Error> {
     let decoded = b58_str.from_base58()?;
     let raw: [u8; 32] = blake3::hash(&decoded).into();
     Ok(WasmCommitId::from(CommitId::new(raw)))
