@@ -227,10 +227,13 @@ async fn fingerprint_summary_has_all_items_after_add_sedimentree() -> TestResult
     // Check fingerprint summary BEFORE adding to subduction
     let seed = FingerprintSeed::new(123, 456);
     let summary = sedimentree.fingerprint_summarize(&seed);
+    // 10 loose commits + 1 fragment head + 1 fragment boundary = 12 commit fingerprints.
+    // Fragment head/boundary are included as coverage fingerprints to prevent
+    // the remote from re-sending commits already inside our fragments.
     assert_eq!(
         summary.commit_fingerprints().len(),
-        10,
-        "pre-add: summary should have all 10 commits"
+        12,
+        "pre-add: summary should have 10 commits + 2 coverage (fragment head + boundary)"
     );
     assert_eq!(
         summary.fragment_fingerprints().len(),
@@ -243,8 +246,8 @@ async fn fingerprint_summary_has_all_items_after_add_sedimentree() -> TestResult
     let minimized_summary = minimized.fingerprint_summarize(&seed);
     assert_eq!(
         minimized_summary.commit_fingerprints().len(),
-        10,
-        "post-minimize: summary should still have all 10 commits"
+        12,
+        "post-minimize: summary should still have 10 commits + 2 coverage"
     );
     assert_eq!(
         minimized_summary.fragment_fingerprints().len(),
