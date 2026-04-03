@@ -31,12 +31,12 @@ use super::traits::Storage;
 pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
 
-    /// Commits: CAS key → (cached head CommitId, signed payload, blob).
+    /// Commits: CAS key → (cached head [`CommitId`], signed payload, blob).
     commits: Arc<
         Mutex<Map<SedimentreeId, Map<Digest<LooseCommit>, (CommitId, Signed<LooseCommit>, Blob)>>>,
     >,
 
-    /// Fragments: CAS key → (cached head CommitId, signed payload, blob).
+    /// Fragments: CAS key → (cached head [`CommitId`], signed payload, blob).
     fragments:
         Arc<Mutex<Map<SedimentreeId, Map<Digest<Fragment>, (CommitId, Signed<Fragment>, Blob)>>>>,
 }
