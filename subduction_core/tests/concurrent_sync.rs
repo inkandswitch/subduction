@@ -286,14 +286,24 @@ async fn connect_pair(
 // The test
 // ---------------------------------------------------------------------------
 
-/// Verify that `full_sync_with_peer` processes multiple sedimentrees
-/// concurrently, not sequentially.
+/// Regression test: verify that `full_sync_with_peer` processes multiple
+/// sedimentrees concurrently, not sequentially.
+///
+/// This test was added because the original implementation used a sequential
+/// `for id in tree_ids { sync_with_peer(..).await }` loop, causing
+/// head-of-line blocking where each document waited for the previous one's
+/// round trip to complete. The fix uses `FuturesUnordered` to fire all
+/// sync requests concurrently.
 ///
 /// The test creates two nodes, adds one commit to each of N different
 /// sedimentree IDs on Alice, then syncs with Bob. The storage on Bob's
 /// side tracks the high-water mark of concurrent `load_loose_commits`
 /// calls. If sync is concurrent, multiple handler invocations will be
 /// active simultaneously, pushing the high-water mark above 1.
+///
+/// This test covers the `Sendable` (tokio) path. The `Local` (Wasm) path
+/// uses identical code — `full_sync_with_peer` is generic over `FutureForm`
+/// — so the concurrency pattern is the same for both.
 #[tokio::test]
 async fn full_sync_with_peer_is_concurrent() -> TestResult {
     const NUM_DOCUMENTS: u8 = 20;

@@ -114,6 +114,14 @@ pub trait Handler<K: FutureForm, C: Clone> {
         None
     }
 
+    /// Check whether a message is a [`BatchSyncResponse`].
+    ///
+    /// Used by the connection manager to route responses through a dedicated
+    /// unbounded channel, bypassing the bounded request queue.
+    fn is_batch_sync_response_msg(msg: &Self::Message) -> bool {
+        Self::as_batch_sync_response(msg).is_some()
+    }
+
     /// Called when a peer's last connection drops.
     ///
     /// Use this hook to clean up per-peer state such as subscription

@@ -195,6 +195,7 @@ pub struct Subduction<
 
     manager_channel: Sender<Command<Authenticated<C, F>>>,
     msg_queue: async_channel::Receiver<(Authenticated<C, F>, H::Message)>,
+    response_queue: async_channel::Receiver<(Authenticated<C, F>, H::Message)>,
     connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<C, F>)>,
 
     abort_manager_handle: AbortHandle,
@@ -304,12 +305,15 @@ where
         tracing::info!("initializing Subduction instance");
 
         let (manager_sender, manager_receiver) = bounded(256);
-        let (queue_sender, queue_receiver) = async_channel::bounded(256);
+        let (queue_sender, queue_receiver) = async_channel::bounded(2048);
+        let (response_sender, response_receiver) = async_channel::unbounded();
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
         let manager = ConnectionManager::<F, Authenticated<C, F>, H::Message, Sp>::new(
             spawner,
             manager_receiver,
             queue_sender,
+            response_sender,
+            H::is_batch_sync_response_msg,
             closed_sender,
         );
 
@@ -335,6 +339,7 @@ where
             send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
+            response_queue: response_receiver,
             connection_closed: closed_receiver,
             abort_manager_handle,
             abort_listener_handle,
@@ -525,7 +530,7 @@ where
 
         loop {
             futures::select_biased! {
-                // First priority: handle completed dispatch tasks
+                // 1st priority: drain completed handler tasks
                 result = in_flight.select_next_some() => {
                     #[allow(clippy::type_complexity)]
                     let (conn, dispatch_result): (Authenticated<C, F>, Result<(), H::HandlerError>) = result;
@@ -543,7 +548,8 @@ where
                         tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
                 }
-                // Second: receive new messages
+
+                // 2nd priority: accept new requests (maximize parallelism)
                 msg_result = self.msg_queue.recv().fuse() => {
                     if let Ok((conn, msg)) = msg_result {
                         let peer_id = conn.peer_id();
@@ -552,36 +558,6 @@ where
                             peer_id,
                             msg
                         );
-
-                        // Route BatchSyncResponse to pending callers before handler dispatch.
-                        if let Some(resp) = H::as_batch_sync_response(&msg) {
-                            let mut consumed = false;
-
-                            // Clone the mux list while holding the lock, then
-                            // drop it before awaiting resolve_pending.
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
-                            };
-
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        tracing::debug!(
-                                            "routed BatchSyncResponse to pending caller for peer {}",
-                                            peer_id
-                                        );
-                                        consumed = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if consumed {
-                                continue;
-                            }
-                            // Not consumed — fall through to handler dispatch
-                        }
 
                         // Dispatch via handler
                         let h = handler.clone();
@@ -605,7 +581,43 @@ where
                         break;
                     }
                 }
-                // Third: handle closed connections
+
+                // 3rd priority: route responses to pending callers (unbounded, no urgency)
+                resp_result = self.response_queue.recv().fuse() => {
+                    if let Ok((conn, msg)) = resp_result {
+                        let peer_id = conn.peer_id();
+                        if let Some(resp) = H::as_batch_sync_response(&msg) {
+                            // Clone the mux list while holding the lock, then
+                            // drop it before awaiting resolve_pending.
+                            let muxes_for_peer = {
+                                let multiplexers = self.multiplexers.lock().await;
+                                multiplexers.get(&peer_id).cloned()
+                            };
+
+                            let mut consumed = false;
+                            if let Some(muxes) = muxes_for_peer {
+                                for mux in &muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        tracing::debug!(
+                                            "routed BatchSyncResponse to pending caller for peer {}",
+                                            peer_id
+                                        );
+                                        consumed = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !consumed {
+                                tracing::warn!(
+                                    "BatchSyncResponse from peer {peer_id} had no pending caller"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // 4th priority: handle closed connections
                 closed_result = self.connection_closed.recv().fuse() => {
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
