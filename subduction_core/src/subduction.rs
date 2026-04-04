@@ -2070,6 +2070,11 @@ where
     /// Sync all known [`Sedimentree`]s with a single peer.
     ///
     /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
+    /// All sedimentrees are synced **concurrently** using [`FuturesUnordered`],
+    /// avoiding head-of-line blocking where a slow document stalls the rest.
+    /// The multiplexer supports multiple in-flight requests per connection,
+    /// each keyed by a unique [`RequestId`].
+    ///
     /// Errors are collected rather than short-circuiting, so a failure on one
     /// sedimentree does not prevent the rest from syncing.
     pub async fn full_sync_with_peer(
@@ -2092,13 +2097,21 @@ where
         );
         let tree_ids = self.sedimentrees.into_keys().await;
 
+        let mut sync_futures: FuturesUnordered<_> = tree_ids
+            .into_iter()
+            .map(|id| async move {
+                let result = self.sync_with_peer(peer_id, id, subscribe, timeout).await;
+                (id, result)
+            })
+            .collect();
+
         let mut had_success = false;
         let mut stats = SyncStats::new();
         let mut call_errs = Vec::new();
         let mut io_errs = Vec::new();
 
-        for id in tree_ids {
-            match self.sync_with_peer(peer_id, id, subscribe, timeout).await {
+        while let Some((id, result)) = sync_futures.next().await {
+            match result {
                 Ok((success, step_stats, step_errs)) => {
                     if success {
                         had_success = true;
