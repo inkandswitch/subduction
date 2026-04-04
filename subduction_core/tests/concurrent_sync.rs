@@ -2,9 +2,9 @@
 //! rather than sequentially, avoiding head-of-line blocking.
 //!
 //! Uses a storage wrapper that tracks the high-water mark of concurrent
-//! `load_loose_commits` calls. If documents are synced concurrently, multiple
-//! handler invocations will load commits simultaneously, pushing the
-//! high-water mark above 1.
+//! storage load calls across `load_loose_commits` and `load_fragments`.
+//! If documents are synced concurrently, multiple handler invocations will
+//! perform those loads simultaneously, pushing the high-water mark above 1.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -83,7 +83,7 @@ impl ConcurrencyTrackingStorage {
     }
 }
 
-/// Helper: increment in-flight, update high-water mark, yield.
+/// Helper: increment in-flight counter and update high-water mark.
 fn enter_tracking(in_flight: &AtomicUsize, high_water: &AtomicUsize) {
     let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
     high_water.fetch_max(current, Ordering::SeqCst);

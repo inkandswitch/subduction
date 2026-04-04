@@ -306,7 +306,7 @@ where
 
         let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(2048);
-        let (response_sender, response_receiver) = async_channel::unbounded();
+        let (response_sender, response_receiver) = async_channel::bounded(8192);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
         let manager = ConnectionManager::<F, Authenticated<C, F>, H::Message, Sp>::new(
             spawner,
