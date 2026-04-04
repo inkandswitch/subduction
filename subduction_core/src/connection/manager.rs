@@ -91,6 +91,18 @@ pub struct ConnectionManager<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> 
     /// `BatchSyncResponse` messages are routed here instead of through
     /// `messages`, so that responses to our own requests are never blocked
     /// by a full request queue.
+    ///
+    /// # Denial-of-Service Consideration
+    ///
+    /// This channel is unbounded. A malicious peer could send unsolicited
+    /// responses to grow memory. In practice this is mitigated by:
+    /// - Responses with no pending caller are dropped immediately
+    /// - Each response is small (~1-2KB)
+    /// - The peer must hold a valid authenticated connection
+    ///
+    /// If denial-of-service via fake responses becomes a concern, this
+    /// channel can be bounded at a high capacity (e.g., 8192) without
+    /// affecting normal operation.
     responses: async_channel::Sender<(C, M)>,
 
     /// Predicate to identify response messages that should use the fast path.

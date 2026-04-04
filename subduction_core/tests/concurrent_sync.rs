@@ -52,9 +52,10 @@ type Conn = MessageTransport<ChannelTransport>;
 // ---------------------------------------------------------------------------
 
 /// A storage wrapper that tracks the peak number of concurrent
-/// `load_loose_commits` calls via an atomic high-water mark.
+/// storage load calls (`load_loose_commits` and `load_fragments`)
+/// via an atomic high-water mark.
 ///
-/// Each `load_loose_commits` call:
+/// Each tracked load call:
 /// 1. Increments the in-flight counter
 /// 2. Updates the high-water mark if the counter exceeds it
 /// 3. Yields to the executor (allowing other tasks to start their loads)

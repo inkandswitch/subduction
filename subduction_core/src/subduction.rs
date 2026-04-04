@@ -550,68 +550,14 @@ where
                     }
                 }
 
-                // 2nd priority: accept new requests (maximize parallelism)
-                msg_result = self.msg_queue.recv().fuse() => {
-                    if let Ok((conn, msg)) = msg_result {
-                        let peer_id = conn.peer_id();
-                        tracing::debug!(
-                            "Subduction listener received message from peer {}: {:?}",
-                            peer_id,
-                            msg
-                        );
-
-                        // Safety net: if a BatchSyncResponse ended up in the
-                        // request queue (should go through response_queue),
-                        // route it to the multiplexer rather than the handler.
-                        if let Some(resp) = H::as_batch_sync_response(&msg) {
-                            tracing::debug!(
-                                "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
-                                 (expected response_queue) — routing to multiplexer"
-                            );
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
-                            };
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        break;
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-
-                        // Normal path: dispatch to handler
-                        let h = handler.clone();
-                        let conn_clone = conn.clone();
-
-                        in_flight.push(async move {
-                            let result = h.handle(&conn_clone, msg).await;
-                            (conn_clone, result)
-                        });
-                    } else {
-                        tracing::info!("SyncMessage queue closed");
-                        // Drain remaining in-flight tasks before exiting
-                        while let Some((conn, result)) = in_flight.next().await {
-                            if let Err(e) = result {
-                                tracing::error!(
-                                    peer = %conn.peer_id(),
-                                    "error dispatching message during shutdown: {e}"
-                                );
-                            }
-                        }
-                        break;
-                    }
-                }
-
-                // 3rd priority: route responses to pending callers (unbounded, no urgency)
+                // 2nd priority: route responses to complete our pending sync
+                // calls. Prioritized over incoming requests because completing
+                // round trips frees resources and unblocks callers. Response
+                // volume is self-limiting (bounded by our in-flight request count).
                 resp_result = self.response_queue.recv().fuse() => {
                     if let Ok((conn, msg)) = resp_result {
                         let peer_id = conn.peer_id();
                         if let Some(resp) = H::as_batch_sync_response(&msg) {
-                            // Clone the mux list while holding the lock, then
-                            // drop it before awaiting resolve_pending.
                             let muxes_for_peer = {
                                 let multiplexers = self.multiplexers.lock().await;
                                 multiplexers.get(&peer_id).cloned()
@@ -636,7 +582,81 @@ where
                                     "BatchSyncResponse from peer {peer_id} had no pending caller"
                                 );
                             }
+                        } else {
+                            tracing::warn!(
+                                "non-BatchSyncResponse message from peer {peer_id} \
+                                 arrived on response_queue — dropping"
+                            );
                         }
+                    } else {
+                        tracing::info!("response queue closed");
+                        break;
+                    }
+                }
+
+                // 3rd priority: accept new requests from peers. Lower priority
+                // than responses because incoming requests can wait (bounded by
+                // msg_queue backpressure) while our callers are actively blocked
+                // on response routing.
+                msg_result = self.msg_queue.recv().fuse() => {
+                    if let Ok((conn, msg)) = msg_result {
+                        let peer_id = conn.peer_id();
+                        tracing::debug!(
+                            "Subduction listener received message from peer {}: {:?}",
+                            peer_id,
+                            msg
+                        );
+
+                        // Safety net: if a BatchSyncResponse ended up in the
+                        // request queue (should go through response_queue),
+                        // route it to the multiplexer rather than the handler.
+                        if let Some(resp) = H::as_batch_sync_response(&msg) {
+                            tracing::debug!(
+                                "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
+                                 (expected response_queue) — routing to multiplexer"
+                            );
+                            let muxes_for_peer = {
+                                let multiplexers = self.multiplexers.lock().await;
+                                multiplexers.get(&peer_id).cloned()
+                            };
+                            let mut consumed = false;
+                            if let Some(muxes) = muxes_for_peer {
+                                for mux in &muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        consumed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !consumed {
+                                tracing::warn!(
+                                    "BatchSyncResponse from peer {peer_id} via safety net \
+                                     had no pending caller"
+                                );
+                            }
+                            continue;
+                        }
+
+                        // Normal path: dispatch to handler
+                        let h = handler.clone();
+                        let conn_clone = conn.clone();
+
+                        in_flight.push(async move {
+                            let result = h.handle(&conn_clone, msg).await;
+                            (conn_clone, result)
+                        });
+                    } else {
+                        tracing::info!("SyncMessage queue closed");
+                        // Drain remaining in-flight tasks before exiting
+                        while let Some((conn, result)) = in_flight.next().await {
+                            if let Err(e) = result {
+                                tracing::error!(
+                                    peer = %conn.peer_id(),
+                                    "error dispatching message during shutdown: {e}"
+                                );
+                            }
+                        }
+                        break;
                     }
                 }
 
@@ -2108,7 +2128,7 @@ where
     /// All sedimentrees are synced **concurrently** using [`FuturesUnordered`],
     /// avoiding head-of-line blocking where a slow document stalls the rest.
     /// The multiplexer supports multiple in-flight requests per connection,
-    /// each keyed by a unique [`RequestId`].
+    /// each keyed by a unique [`crate::connection::message::RequestId`].
     ///
     /// Errors are collected rather than short-circuiting, so a failure on one
     /// sedimentree does not prevent the rest from syncing.
