@@ -17,6 +17,8 @@ use std::{
     time::Duration,
 };
 
+use futures::StreamExt;
+
 use alloc::vec::Vec;
 use future_form::Sendable;
 use futures::future::BoxFuture;
@@ -377,6 +379,108 @@ async fn full_sync_with_peer_is_concurrent() -> TestResult {
     assert!(
         stats.total_received() > 0 || stats.total_sent() > 0,
         "should have transferred some data"
+    );
+
+    Ok(())
+}
+
+/// Regression test: verify that many independent `sync_with_peer` calls
+/// (simulating JS `Promise.all` over N documents) run concurrently.
+///
+/// Unlike [`full_sync_with_peer_is_concurrent`] which tests the internal
+/// `FuturesUnordered` inside `full_sync_with_peer`, this test fires N
+/// independent `sync_with_peer` calls from outside — the same code path
+/// that a Wasm caller hits when doing:
+///
+/// ```js
+/// await Promise.all(docIds.map(id => syncer.syncWithPeer(peerId, id, true, timeout)))
+/// ```
+///
+/// The responses flow through the unbounded response channel (not the
+/// bounded request queue), so all N pending oneshots can be resolved
+/// without backpressure. If the response channel were removed and
+/// responses shared the bounded request queue, backpressure would
+/// serialize response processing and reduce concurrency.
+#[tokio::test]
+async fn many_independent_sync_with_peer_calls_are_concurrent() -> TestResult {
+    const NUM_DOCUMENTS: u8 = 20;
+
+    let alice_signer = make_signer(60);
+    let bob_signer = make_signer(61);
+
+    let alice_storage = ConcurrencyTrackingStorage::new();
+    let bob_storage = ConcurrencyTrackingStorage::new();
+
+    let alice = make_tracking_node(alice_signer.clone(), alice_storage.clone());
+    let bob = make_tracking_node(bob_signer.clone(), bob_storage.clone());
+
+    // Collect sedimentree IDs for later
+    let mut sed_ids = Vec::new();
+
+    for i in 0..NUM_DOCUMENTS {
+        let sed_id = SedimentreeId::new({
+            let mut b = [0u8; 32];
+            b[0] = i;
+            b[1] = 0xDD;
+            b
+        });
+        sed_ids.push(sed_id);
+
+        let alice_commit = CommitId::new({
+            let mut b = [0u8; 32];
+            b[0] = i;
+            b[1] = 0xAA;
+            b
+        });
+        alice
+            .add_commit(sed_id, alice_commit, BTreeSet::new(), make_blob(i))
+            .await?;
+
+        let bob_commit = CommitId::new({
+            let mut b = [0u8; 32];
+            b[0] = i;
+            b[1] = 0xBB;
+            b
+        });
+        bob.add_commit(sed_id, bob_commit, BTreeSet::new(), make_blob(i + 100))
+            .await?;
+    }
+
+    // Connect the two nodes
+    connect_pair(&alice, &alice_signer, &bob, &bob_signer).await?;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let bob_peer_id = PeerId::from(bob_signer.verifying_key());
+    let sync_timeout = Some(Duration::from_millis(2000));
+
+    // Fire N independent sync_with_peer calls concurrently — simulates
+    // what JS Promise.all would do from the Wasm bindings.
+    let mut sync_futures: futures::stream::FuturesUnordered<_> = sed_ids
+        .iter()
+        .map(|&sed_id| alice.sync_with_peer(&bob_peer_id, sed_id, true, sync_timeout))
+        .collect();
+
+    let mut success_count = 0;
+    while let Some(result) = StreamExt::next(&mut sync_futures).await {
+        if let Ok((true, _stats, _errs)) = result {
+            success_count += 1;
+        }
+    }
+
+    assert!(success_count > 0, "at least some syncs should succeed");
+
+    // Let fire-and-forget messages complete
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The high-water mark on Bob's storage should be > 1, proving
+    // that multiple independent sync requests were handled concurrently.
+    let bob_hwm = bob_storage.high_water_mark();
+    assert!(
+        bob_hwm > 1,
+        "Bob's storage should see concurrent load_loose_commits calls \
+         from independent sync_with_peer requests \
+         (high-water mark = {bob_hwm}, expected > 1). \
+         If this is 1, responses are being serialized."
     );
 
     Ok(())

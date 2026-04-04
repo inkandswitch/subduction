@@ -522,6 +522,7 @@ where
     /// # Errors
     ///
     /// * Returns `ListenError` if a handler error signals a broken connection.
+    #[allow(clippy::too_many_lines)]
     pub async fn listen(self: Arc<Self>) -> Result<(), ListenError<F, S, C, H::Message>> {
         tracing::info!("starting Subduction listener with concurrent dispatch");
 
@@ -559,7 +560,29 @@ where
                             msg
                         );
 
-                        // Dispatch via handler
+                        // Safety net: if a BatchSyncResponse ended up in the
+                        // request queue (should go through response_queue),
+                        // route it to the multiplexer rather than the handler.
+                        if let Some(resp) = H::as_batch_sync_response(&msg) {
+                            tracing::debug!(
+                                "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
+                                 (expected response_queue) — routing to multiplexer"
+                            );
+                            let muxes_for_peer = {
+                                let multiplexers = self.multiplexers.lock().await;
+                                multiplexers.get(&peer_id).cloned()
+                            };
+                            if let Some(muxes) = muxes_for_peer {
+                                for mux in &muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        break;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Normal path: dispatch to handler
                         let h = handler.clone();
                         let conn_clone = conn.clone();
 
