@@ -195,6 +195,7 @@ pub struct Subduction<
 
     manager_channel: Sender<Command<Authenticated<C, F>>>,
     msg_queue: async_channel::Receiver<(Authenticated<C, F>, H::Message)>,
+    response_queue: async_channel::Receiver<(Authenticated<C, F>, H::Message)>,
     connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<C, F>)>,
 
     abort_manager_handle: AbortHandle,
@@ -304,12 +305,15 @@ where
         tracing::info!("initializing Subduction instance");
 
         let (manager_sender, manager_receiver) = bounded(256);
-        let (queue_sender, queue_receiver) = async_channel::bounded(256);
+        let (queue_sender, queue_receiver) = async_channel::bounded(2048);
+        let (response_sender, response_receiver) = async_channel::bounded(8192);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
         let manager = ConnectionManager::<F, Authenticated<C, F>, H::Message, Sp>::new(
             spawner,
             manager_receiver,
             queue_sender,
+            response_sender,
+            H::is_batch_sync_response_msg,
             closed_sender,
         );
 
@@ -335,6 +339,7 @@ where
             send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
+            response_queue: response_receiver,
             connection_closed: closed_receiver,
             abort_manager_handle,
             abort_listener_handle,
@@ -517,6 +522,7 @@ where
     /// # Errors
     ///
     /// * Returns `ListenError` if a handler error signals a broken connection.
+    #[allow(clippy::too_many_lines)]
     pub async fn listen(self: Arc<Self>) -> Result<(), ListenError<F, S, C, H::Message>> {
         tracing::info!("starting Subduction listener with concurrent dispatch");
 
@@ -525,7 +531,7 @@ where
 
         loop {
             futures::select_biased! {
-                // First priority: handle completed dispatch tasks
+                // 1st priority: drain completed handler tasks
                 result = in_flight.select_next_some() => {
                     #[allow(clippy::type_complexity)]
                     let (conn, dispatch_result): (Authenticated<C, F>, Result<(), H::HandlerError>) = result;
@@ -543,27 +549,21 @@ where
                         tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
                 }
-                // Second: receive new messages
-                msg_result = self.msg_queue.recv().fuse() => {
-                    if let Ok((conn, msg)) = msg_result {
+
+                // 2nd priority: route responses to complete our pending sync
+                // calls. Prioritized over incoming requests because completing
+                // round trips frees resources and unblocks callers. Response
+                // volume is self-limiting (bounded by our in-flight request count).
+                resp_result = self.response_queue.recv().fuse() => {
+                    if let Ok((conn, msg)) = resp_result {
                         let peer_id = conn.peer_id();
-                        tracing::debug!(
-                            "Subduction listener received message from peer {}: {:?}",
-                            peer_id,
-                            msg
-                        );
-
-                        // Route BatchSyncResponse to pending callers before handler dispatch.
                         if let Some(resp) = H::as_batch_sync_response(&msg) {
-                            let mut consumed = false;
-
-                            // Clone the mux list while holding the lock, then
-                            // drop it before awaiting resolve_pending.
                             let muxes_for_peer = {
                                 let multiplexers = self.multiplexers.lock().await;
                                 multiplexers.get(&peer_id).cloned()
                             };
 
+                            let mut consumed = false;
                             if let Some(muxes) = muxes_for_peer {
                                 for mux in &muxes {
                                     if mux.resolve_pending(resp).await {
@@ -577,13 +577,67 @@ where
                                 }
                             }
 
-                            if consumed {
-                                continue;
+                            if !consumed {
+                                tracing::warn!(
+                                    "BatchSyncResponse from peer {peer_id} had no pending caller"
+                                );
                             }
-                            // Not consumed — fall through to handler dispatch
+                        } else {
+                            tracing::warn!(
+                                "non-BatchSyncResponse message from peer {peer_id} \
+                                 arrived on response_queue — dropping"
+                            );
+                        }
+                    } else {
+                        tracing::info!("response queue closed");
+                        break;
+                    }
+                }
+
+                // 3rd priority: accept new requests from peers. Lower priority
+                // than responses because incoming requests can wait (bounded by
+                // msg_queue backpressure) while our callers are actively blocked
+                // on response routing.
+                msg_result = self.msg_queue.recv().fuse() => {
+                    if let Ok((conn, msg)) = msg_result {
+                        let peer_id = conn.peer_id();
+                        tracing::debug!(
+                            "Subduction listener received message from peer {}: {:?}",
+                            peer_id,
+                            msg
+                        );
+
+                        // Safety net: if a BatchSyncResponse ended up in the
+                        // request queue (should go through response_queue),
+                        // route it to the multiplexer rather than the handler.
+                        if let Some(resp) = H::as_batch_sync_response(&msg) {
+                            tracing::debug!(
+                                "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
+                                 (expected response_queue) — routing to multiplexer"
+                            );
+                            let muxes_for_peer = {
+                                let multiplexers = self.multiplexers.lock().await;
+                                multiplexers.get(&peer_id).cloned()
+                            };
+                            let mut consumed = false;
+                            if let Some(muxes) = muxes_for_peer {
+                                for mux in &muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        consumed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !consumed {
+                                tracing::warn!(
+                                    "BatchSyncResponse from peer {peer_id} via safety net \
+                                     had no pending caller"
+                                );
+                            }
+                            continue;
                         }
 
-                        // Dispatch via handler
+                        // Normal path: dispatch to handler
                         let h = handler.clone();
                         let conn_clone = conn.clone();
 
@@ -605,7 +659,8 @@ where
                         break;
                     }
                 }
-                // Third: handle closed connections
+
+                // 4th priority: handle closed connections
                 closed_result = self.connection_closed.recv().fuse() => {
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
@@ -2070,6 +2125,11 @@ where
     /// Sync all known [`Sedimentree`]s with a single peer.
     ///
     /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
+    /// All sedimentrees are synced **concurrently** using [`FuturesUnordered`],
+    /// avoiding head-of-line blocking where a slow document stalls the rest.
+    /// The multiplexer supports multiple in-flight requests per connection,
+    /// each keyed by a unique [`crate::connection::message::RequestId`].
+    ///
     /// Errors are collected rather than short-circuiting, so a failure on one
     /// sedimentree does not prevent the rest from syncing.
     pub async fn full_sync_with_peer(
@@ -2092,13 +2152,21 @@ where
         );
         let tree_ids = self.sedimentrees.into_keys().await;
 
+        let mut sync_futures: FuturesUnordered<_> = tree_ids
+            .into_iter()
+            .map(|id| async move {
+                let result = self.sync_with_peer(peer_id, id, subscribe, timeout).await;
+                (id, result)
+            })
+            .collect();
+
         let mut had_success = false;
         let mut stats = SyncStats::new();
         let mut call_errs = Vec::new();
         let mut io_errs = Vec::new();
 
-        for id in tree_ids {
-            match self.sync_with_peer(peer_id, id, subscribe, timeout).await {
+        while let Some((id, result)) = sync_futures.next().await {
+            match result {
                 Ok((success, step_stats, step_errs)) => {
                     if success {
                         had_success = true;

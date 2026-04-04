@@ -83,8 +83,20 @@ pub struct ConnectionManager<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> 
     /// Inbound commands (add/remove connections).
     commands: async_channel::Receiver<Command<C>>,
 
-    /// Outbound messages from all connections.
+    /// Outbound messages from all connections (bounded — provides backpressure).
     messages: async_channel::Sender<(C, M)>,
+
+    /// Fast path for response messages (bounded at high capacity).
+    ///
+    /// `BatchSyncResponse` messages are routed here instead of through
+    /// `messages`, so that responses to our own requests are never blocked
+    /// by a full request queue. Bounded at 8192 to cap memory usage if a
+    /// peer floods fake responses; legitimate use never exceeds a few
+    /// hundred concurrent in-flight requests.
+    responses: async_channel::Sender<(C, M)>,
+
+    /// Predicate to identify response messages that should use the fast path.
+    is_response: fn(&M) -> bool,
 
     /// Notification when a connection closes (either normally or due to error).
     ///
@@ -102,6 +114,8 @@ impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> ConnectionManager<K, C, 
         spawner: S,
         commands: async_channel::Receiver<Command<C>>,
         messages: async_channel::Sender<(C, M)>,
+        responses: async_channel::Sender<(C, M)>,
+        is_response: fn(&M) -> bool,
         closed: async_channel::Sender<(ConnectionId, C)>,
     ) -> Self {
         Self {
@@ -111,6 +125,8 @@ impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> ConnectionManager<K, C, 
             tasks: Arc::new(Mutex::new(Vec::new())),
             commands,
             messages,
+            responses,
+            is_response,
             closed,
             _marker: core::marker::PhantomData,
         }
@@ -196,11 +212,20 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
                         let task_id = manager.next_task_id.fetch_add(1, Ordering::Relaxed);
                         let tasks = manager.tasks.clone();
                         let messages = manager.messages.clone();
+                        let responses = manager.responses.clone();
+                        let is_response = manager.is_response;
                         let closed = manager.closed.clone();
                         let conn_clone = conn.clone();
 
                         let fut = K::from_future(async move {
-                            connection_loop(conn_clone.clone(), peer_id, messages).await;
+                            connection_loop(
+                                conn_clone.clone(),
+                                peer_id,
+                                messages,
+                                responses,
+                                is_response,
+                            )
+                            .await;
 
                             // Normal completion cleanup - remove from tasks list
                             let mut tasks_guard = tasks.lock().await;
@@ -233,11 +258,20 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
                         let task_id = manager.next_task_id.fetch_add(1, Ordering::Relaxed);
                         let tasks = manager.tasks.clone();
                         let messages = manager.messages.clone();
+                        let responses = manager.responses.clone();
+                        let is_response = manager.is_response;
                         let closed = manager.closed.clone();
                         let conn_clone = conn.clone();
 
                         let fut = K::from_future(async move {
-                            connection_loop(conn_clone.clone(), peer_id, messages).await;
+                            connection_loop(
+                                conn_clone.clone(),
+                                peer_id,
+                                messages,
+                                responses,
+                                is_response,
+                            )
+                            .await;
 
                             // Normal completion cleanup - remove from tasks list
                             let mut tasks_guard = tasks.lock().await;
@@ -279,12 +313,19 @@ async fn connection_loop<K: FutureForm, C: Connection<K, M>, M: Encode + Decode>
     conn: C,
     peer_id: PeerId,
     messages: async_channel::Sender<(C, M)>,
+    responses: async_channel::Sender<(C, M)>,
+    is_response: fn(&M) -> bool,
 ) {
     loop {
         match conn.recv().await {
             Ok(msg) => {
                 tracing::debug!("connection for peer {peer_id}: received message");
-                if messages.send((conn.clone(), msg)).await.is_err() {
+                let sender = if is_response(&msg) {
+                    &responses
+                } else {
+                    &messages
+                };
+                if sender.send((conn.clone(), msg)).await.is_err() {
                     tracing::warn!("connection for peer {peer_id}: message channel closed");
                     break;
                 }
