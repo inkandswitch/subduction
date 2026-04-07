@@ -1,0 +1,4 @@
+allow-branch = ["main"]
+consolidate-commits = true
+dependent-version = "upgrade"
+tag = false

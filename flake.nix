@@ -118,6 +118,7 @@
           cargo-expand
           cargo-flamegraph
           cargo-nextest
+          cargo-release
           cargo-outdated
           cargo-sort
           cargo-udeps
