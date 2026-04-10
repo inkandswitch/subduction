@@ -117,10 +117,10 @@ fn linear_single_depth_1_boundary() {
 /// a(0) ← b(1) ← c(0) ← d(1) ← e(0)
 /// ```
 ///
-/// Both b and d have depth 1. Since fragment(d) uses `>` not `>=`,
-/// it should absorb b (same depth) and produce ONE fragment {d, c, b, a}.
+/// Both b and d have depth 1. Since fragment(d) uses `>=`, b becomes a
+/// boundary (sibling fragment head) rather than being absorbed.
 #[test]
-fn linear_two_depth_1_boundaries_absorbed() {
+fn linear_two_depth_1_boundaries_are_siblings() {
     let mut rng = seeded_rng(3);
     let graph = TestGraph::new(
         &mut rng,
@@ -131,30 +131,31 @@ fn linear_two_depth_1_boundaries_absorbed() {
     let (fresh, _known) = run_fragment_store(&graph, &["e"]);
     assert_eq!(
         fresh.len(),
-        1,
-        "same-depth boundaries should be absorbed into one fragment"
+        2,
+        "same-depth commits should produce sibling fragments"
     );
 
-    let frag = &fresh[0];
-    assert_eq!(frag.head_id(), graph.node_hash("d"));
-
-    let members: Set<_> = frag.members().iter().copied().collect();
-    assert!(members.contains(&graph.node_hash("a")));
-    assert!(members.contains(&graph.node_hash("b")));
-    assert!(members.contains(&graph.node_hash("c")));
-    assert!(members.contains(&graph.node_hash("d")));
+    // Fragment headed at d: contains d and c, with b as boundary
+    let frag_d = fresh
+        .iter()
+        .find(|f| f.head_id() == graph.node_hash("d"))
+        .expect("should have fragment headed at d");
+    let d_members: Set<_> = frag_d.members().iter().copied().collect();
+    assert!(d_members.contains(&graph.node_hash("d")));
+    assert!(d_members.contains(&graph.node_hash("c")));
     assert!(
-        !members.contains(&graph.node_hash("e")),
-        "e is loose (depth 0, above d)"
+        !d_members.contains(&graph.node_hash("b")),
+        "b is a boundary, not a member"
     );
 
-    // b is a checkpoint: depth 1, which equals head_depth (1), so NOT a checkpoint
-    // (checkpoints are 0 < depth < head_depth)
-    let checkpoints: Set<_> = frag.checkpoints().iter().copied().collect();
-    assert!(
-        !checkpoints.contains(&graph.node_hash("b")),
-        "same-depth member should not be a checkpoint"
-    );
+    // Fragment headed at b: contains b and a
+    let frag_b = fresh
+        .iter()
+        .find(|f| f.head_id() == graph.node_hash("b"))
+        .expect("should have fragment headed at b");
+    let b_members: Set<_> = frag_b.members().iter().copied().collect();
+    assert!(b_members.contains(&graph.node_hash("b")));
+    assert!(b_members.contains(&graph.node_hash("a")));
 }
 
 /// Linear chain with depth escalation: depth 1 then depth 2.
@@ -456,4 +457,61 @@ fn second_call_produces_no_new_fragments() {
         second.is_empty(),
         "second call should find everything already known"
     );
+}
+
+// -----------------------------------------------------------------------
+// Same-depth sibling tests
+
+/// Two same-depth commits in a linear chain should produce sibling
+/// fragments rather than one large fragment that absorbs the other.
+///
+/// ```text
+/// a(0) ← b(2) ← c(0) ← d(2) ← e(0)
+/// ```
+///
+/// Expected: two fragments:
+///   Frag(d): head=d, members={d, c}, boundary={b}
+///   Frag(b): head=b, members={b, a}, boundary={}
+///
+/// This ensures that same-depth boundary commits are treated as fragment
+/// boundaries (siblings) rather than absorbed as interior members, which
+/// is required for `minimize` to later compact the interior loose commits.
+#[test]
+fn linear_same_depth_produces_sibling_fragments() {
+    let mut rng = seeded_rng(40);
+    let graph = TestGraph::new(
+        &mut rng,
+        &[("a", 0), ("b", 2), ("c", 0), ("d", 2), ("e", 0)],
+        &[("a", "b"), ("b", "c"), ("c", "d"), ("d", "e")],
+    );
+
+    let (fresh, _known) = run_fragment_store(&graph, &["e"]);
+
+    assert_eq!(
+        fresh.len(),
+        2,
+        "same-depth commits should produce sibling fragments, not one merged fragment"
+    );
+
+    // Fragment headed at d should have b as a boundary
+    let frag_d = fresh
+        .iter()
+        .find(|f| f.head_id() == graph.node_hash("d"))
+        .expect("should have fragment headed at d");
+    let d_members: Set<_> = frag_d.members().iter().copied().collect();
+    assert!(d_members.contains(&graph.node_hash("d")));
+    assert!(d_members.contains(&graph.node_hash("c")));
+    assert!(
+        !d_members.contains(&graph.node_hash("b")),
+        "b should be a boundary of frag(d), not a member"
+    );
+
+    // Fragment headed at b
+    let frag_b = fresh
+        .iter()
+        .find(|f| f.head_id() == graph.node_hash("b"))
+        .expect("should have fragment headed at b");
+    let b_members: Set<_> = frag_b.members().iter().copied().collect();
+    assert!(b_members.contains(&graph.node_hash("b")));
+    assert!(b_members.contains(&graph.node_hash("a")));
 }
