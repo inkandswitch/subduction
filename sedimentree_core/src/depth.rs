@@ -35,6 +35,18 @@ use crate::loose_commit::id::CommitId;
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Depth(pub u32);
 
+impl Depth {
+    /// Whether this depth qualifies as a fragment boundary.
+    ///
+    /// Commits at depth 0 are ordinary commits that live only in the
+    /// shallowest stratum. Any nonzero depth indicates the commit can
+    /// serve as a head or boundary for a fragment at that stratum level.
+    #[must_use]
+    pub const fn is_boundary(&self) -> bool {
+        self.0 > 0
+    }
+}
+
 impl core::fmt::Display for Depth {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Depth({})", self.0)
