@@ -157,6 +157,7 @@ where
                                     async move {
                                         let mut ws_config = WebSocketConfig::default();
                                         ws_config.max_message_size = Some(max_message_size);
+                                        ws_config.max_frame_size = Some(max_message_size);
 
                                         // Step 1: WebSocket protocol upgrade
                                         let ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
@@ -371,6 +372,7 @@ where
 
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;
@@ -480,6 +482,7 @@ where
 
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;

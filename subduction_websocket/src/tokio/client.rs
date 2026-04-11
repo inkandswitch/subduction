@@ -90,6 +90,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
         tracing::info!("Connecting to WebSocket server at {address}");
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
         let (ws_stream, _resp) =
             connect_async_with_config(address.clone(), Some(ws_config)).await?;
 
