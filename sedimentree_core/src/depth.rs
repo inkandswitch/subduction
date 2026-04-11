@@ -4,9 +4,6 @@ use alloc::boxed::Box;
 
 use crate::loose_commit::id::CommitId;
 
-/// The maximum depth of strata that a [`Sedimentree`] can go to.
-pub const MAX_STRATA_DEPTH: Depth = Depth(2);
-
 /// How deep in the Sedimentree a stratum is.
 ///
 /// The greater the depth, the more leading zeros, the (probabilistically) larger,

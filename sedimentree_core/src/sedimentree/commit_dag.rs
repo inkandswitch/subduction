@@ -11,7 +11,7 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
-    depth::{DepthMetric, MAX_STRATA_DEPTH},
+    depth::{Depth, DepthMetric},
     fragment::Fragment,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -198,7 +198,12 @@ impl CommitDag {
         // Now, which commits can be discarded? It is any commit which is only
         // in a block which is covered by at least one stratum in the tree.
 
-        // Identify blocks by their end hash and store a mapping from commit hash to block end hash
+        // Identify blocks by their end hash and store a mapping from commit hash to block end hash.
+        //
+        // A commit is a "checkpoint" (block boundary) when the depth metric
+        // assigns it depth >= 1 — i.e. it has enough leading zero bytes (or
+        // equivalent metric property) to serve as a fragment head. Commits at
+        // depth 0 are ordinary "loose commits".
         let mut commits_to_blocks = Map::new();
         let mut blockless_commits = Set::new();
 
@@ -212,7 +217,7 @@ impl CommitDag {
             let mut block: Option<(CommitId, Vec<CommitId>)> = None;
             for id in self.reverse_topo(tip) {
                 let depth = strategy.to_depth(id);
-                if depth >= MAX_STRATA_DEPTH {
+                if depth >= Depth(1) {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -227,10 +232,10 @@ impl CommitDag {
                     block = Some((id, vec![id]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if depth < MAX_STRATA_DEPTH {
+                    if depth < Depth(1) {
                         commits.push(id);
                     }
-                } else if !commits_to_blocks.contains_key(&id) && depth < MAX_STRATA_DEPTH {
+                } else if !commits_to_blocks.contains_key(&id) && depth < Depth(1) {
                     blockless_commits.insert(id);
                 }
             }
