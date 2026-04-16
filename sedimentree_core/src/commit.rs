@@ -118,12 +118,12 @@ pub trait CommitStore<'a> {
                 .ok_or(FragmentError::MissingCommit(MissingCommitError(id)))?;
 
             let depth = strategy.to_depth(id);
-            if depth > head_depth {
-                // Strictly deeper: this commit heads a larger stratum.
+            if depth >= head_depth {
+                // Same or deeper: this commit heads a sibling or larger stratum.
                 // It becomes our boundary — don't expand its parents.
                 boundary.insert(id, node);
             } else {
-                // Same or shallower depth: absorbed into this fragment.
+                // Shallower depth: absorbed into this fragment.
                 members.insert(id);
                 if depth.is_boundary() && depth < head_depth {
                     // Shallower stratum boundary within this fragment.
