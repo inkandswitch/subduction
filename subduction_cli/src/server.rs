@@ -692,6 +692,7 @@ async fn handle_websocket(
 ) {
     let mut ws_config = WebSocketConfig::default();
     ws_config.max_message_size = Some(max_message_size);
+    ws_config.max_frame_size = Some(max_message_size);
 
     let ws_stream = match async_tungstenite::tokio::accept_hdr_async_with_config(
         tcp,
@@ -887,6 +888,7 @@ async fn try_connect_ws(
 
     let mut ws_config = WebSocketConfig::default();
     ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+    ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
     let (ws_stream, _resp) =
         async_tungstenite::tokio::connect_async_with_config(uri.clone(), Some(ws_config)).await?;
 
