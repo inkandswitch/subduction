@@ -11,7 +11,7 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
-    depth::{DepthMetric, MAX_STRATA_DEPTH},
+    depth::DepthMetric,
     fragment::Fragment,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -147,8 +147,8 @@ impl CommitDag {
 
     pub(crate) fn simplify<S: DepthMetric>(&self, fragments: &[Fragment], strategy: &S) -> Self {
         // The work here is to identify which parts of a commit DAG can be
-        // discarded based on the strata we have. This is a little bit fiddly.
-        // Imagine this graph:
+        // discarded based on the fragments we have. This is a little bit
+        // fiddly. Imagine this graph:
         //
         //        ┌─┐
         //        │A│
@@ -176,31 +176,36 @@ impl CommitDag {
         //              │G│         │H│
         //              └─┘         └─┘
         //
-        // Let's say we have a checkpoint commit at F, D, I, and A and we have
-        // strata containing A and F, which commits can we discard? Well, we
-        // can't discard G or H because they are not in any blocks. We can't
-        // discard I or B because they are not in any blocks that we have strata
-        // for.
+        // Let's say we have boundary commits at F, D, I, and A, and we
+        // have fragments covering A and F. Which commits can we discard?
+        // We can't discard G or H because they are not in any fragment
+        // range. We can't discard I or B because they are not in any
+        // fragment range that we actually have fragments for.
         //
-        // The invariant we must maintain is that we always have a path from
-        // some commit back to the last checkpoint commit (a commit with two
-        // leading zeros). How do we identify the commits that can be discarded?
+        // The invariant we must maintain is that we always have a path
+        // from some commit back to the last boundary commit. How do we
+        // identify the commits that can be discarded?
         //
-        // If we start from the heads of the graph then we can walk up the graph
-        // in a (reverse) depth first topological sort. First, this allows us to
-        // easily identify which commits are not in a block (a range of commits
-        // bounded by checkpoint commits) - it's all the commits which we
-        // encounter in this traversal before we have ever encountered a
-        // checkpoint commit. This same technique also allows us to identify all
-        // the blocks in the graph and which commits are in each block (note
-        // that a commit can be in multiple blocks).
+        // Walking from the tips in reverse topological order lets us
+        // identify which commits are not in any fragment range (those
+        // encountered before the first boundary commit), and which
+        // fragment ranges exist (ranges bounded by boundary commits).
+        // A commit can appear in multiple ranges.
         //
-        // Now, which commits can be discarded? It is any commit which is only
-        // in a block which is covered by at least one stratum in the tree.
+        // A commit can be discarded when every fragment range it belongs
+        // to is covered by at least one existing fragment.
 
-        // Identify blocks by their end hash and store a mapping from commit hash to block end hash
-        let mut commits_to_blocks = Map::new();
-        let mut blockless_commits = Set::new();
+        // Identify fragment ranges (runs between boundary commits) and
+        // record which range(s) each commit belongs to. A commit is a
+        // boundary when `Depth::is_boundary` returns true (nonzero depth
+        // from the metric). Commits at depth 0 are ordinary loose commits
+        // that live inside fragment ranges.
+        //
+        // The walk is in reverse topological order (tips → roots), so the
+        // first boundary we encounter is the range's head (newest end)
+        // and subsequent non-boundary commits are its interior.
+        let mut commits_to_ranges = Map::new();
+        let mut rangeless_commits = Set::new();
 
         let mut tips = self.tips().collect::<Vec<_>>();
         tips.sort_by_key(|idx| {
@@ -209,39 +214,40 @@ impl CommitDag {
         });
 
         for tip in tips {
-            let mut block: Option<(CommitId, Vec<CommitId>)> = None;
+            let mut range: Option<(CommitId, Vec<CommitId>)> = None;
             for id in self.reverse_topo(tip) {
                 let depth = strategy.to_depth(id);
-                if depth >= MAX_STRATA_DEPTH {
-                    // We're in a block and we just found a checkpoint, this must be the start hash
-                    // for the block we're in. Flush the current block and start a new one.
-                    if let Some((block, commits)) = block.take() {
+                if depth.is_boundary() {
+                    // Found a boundary — flush the current range and start a new one
+                    // keyed by this boundary commit.
+                    if let Some((range_head, commits)) = range.take() {
                         for commit in commits {
-                            blockless_commits.remove(&commit);
-                            commits_to_blocks
+                            rangeless_commits.remove(&commit);
+                            commits_to_ranges
                                 .entry(commit)
                                 .or_insert_with(Vec::new)
-                                .push(block);
+                                .push(range_head);
                         }
                     }
-                    block = Some((id, vec![id]));
+                    range = Some((id, vec![id]));
                 }
-                if let Some((_, commits)) = &mut block {
-                    if depth < MAX_STRATA_DEPTH {
+                if let Some((_, commits)) = &mut range {
+                    if !depth.is_boundary() {
                         commits.push(id);
                     }
-                } else if !commits_to_blocks.contains_key(&id) && depth < MAX_STRATA_DEPTH {
-                    blockless_commits.insert(id);
+                } else if !commits_to_ranges.contains_key(&id) && !depth.is_boundary() {
+                    rangeless_commits.insert(id);
                 }
             }
-            // We never found a start hash for this block, so the start must be the root hash
-            if let Some((end, commits)) = block.take() {
-                commits_to_blocks
+            // No boundary was found before reaching the root — treat the
+            // accumulated range as unbounded at its oldest end.
+            if let Some((end, commits)) = range.take() {
+                commits_to_ranges
                     .entry(end)
                     .or_insert_with(Vec::new)
                     .push(end);
                 for commit in commits {
-                    commits_to_blocks
+                    commits_to_ranges
                         .entry(commit)
                         .or_insert_with(Vec::new)
                         .push(end);
@@ -249,20 +255,20 @@ impl CommitDag {
             }
         }
 
-        // The commits we can discard are the ones where the blocks they are in are all supported
-        let remaining_commits = commits_to_blocks
+        // Discard commits whose ranges are all covered by existing fragments.
+        let remaining_commits = commits_to_ranges
             .into_iter()
-            .filter_map(|(commit, blocks)| {
-                if blocks
+            .filter_map(|(commit, ranges)| {
+                if ranges
                     .iter()
-                    .all(|&b| fragments.iter().any(|s| s.supports_block(b)))
+                    .all(|&r| fragments.iter().any(|f| f.supports_block(r)))
                 {
                     None
                 } else {
                     Some(commit)
                 }
             })
-            .chain(blockless_commits)
+            .chain(rangeless_commits)
             .collect::<Vec<_>>();
 
         let nodes = remaining_commits
@@ -465,9 +471,9 @@ mod tests {
         }
     }
 
-    /// No fragments: all commits with depth >= threshold remain as block boundaries.
+    /// No fragments: all boundary commits remain as potential fragment heads.
     #[test]
-    fn simplify_block_boundaries_without_fragments() {
+    fn simplify_fragment_boundaries_without_fragments() {
         let sedimentree_id = make_sedimentree_id(1);
 
         // Create commits: b is root, a has b as parent
@@ -488,14 +494,14 @@ mod tests {
             .commit_ids()
             .collect::<Set<_>>();
 
-        // With no fragments, simplify keeps block boundaries + heads
-        // Both a and b should remain (a is head, b would be pruned but there's no fragment)
+        // With no fragments, simplify keeps boundary commits + heads
+        // Both a and b should remain (a is boundary, b would be pruned but there's no fragment)
         assert_eq!(simplified, Set::from([a_id, b_id]));
     }
 
-    /// Two consecutive block boundary commits (both depth >= threshold).
+    /// Two consecutive boundary commits (both with nonzero depth).
     #[test]
-    fn simplify_consecutive_block_boundary_commits_without_fragments() {
+    fn simplify_consecutive_boundary_commits_without_fragments() {
         let sedimentree_id = make_sedimentree_id(1);
 
         // Create commits: b is root, a has b as parent
@@ -516,7 +522,7 @@ mod tests {
             .commit_ids()
             .collect::<Set<_>>();
 
-        // Both are block boundaries, both remain
+        // Both are boundary commits, both remain
         assert_eq!(simplified, Set::from([a_id, b_id]));
     }
 

@@ -7,10 +7,7 @@ use core::error::Error;
 use thiserror::Error;
 
 use crate::{
-    blob::BlobMeta,
-    depth::{Depth, DepthMetric},
-    fragment::Fragment,
-    id::SedimentreeId,
+    blob::BlobMeta, depth::DepthMetric, fragment::Fragment, id::SedimentreeId,
     loose_commit::id::CommitId,
 };
 
@@ -94,7 +91,7 @@ pub trait CommitStore<'a> {
         strategy: &D,
     ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
         let head_depth = strategy.to_depth(head_id);
-        if head_depth == Depth(0) {
+        if !head_depth.is_boundary() {
             return Err(FragmentError::DepthZeroHead(head_id));
         }
 
@@ -128,7 +125,7 @@ pub trait CommitStore<'a> {
             } else {
                 // Same or shallower depth: absorbed into this fragment.
                 members.insert(id);
-                if depth > Depth(0) && depth < head_depth {
+                if depth.is_boundary() && depth < head_depth {
                     // Shallower stratum boundary within this fragment.
                     // Retained so we can determine the "supports"
                     // relationship between strata.
@@ -193,7 +190,7 @@ pub trait CommitStore<'a> {
 
             // Depth-0 commits are loose commits, not fragment heads.
             // Walk their parents so we still discover deeper boundaries.
-            if strategy.to_depth(head) == Depth(0) {
+            if !strategy.to_depth(head).is_boundary() {
                 if let Some(node) = self.lookup(head).map_err(FragmentError::LookupError)? {
                     queue.extend(node.parents());
                 }
@@ -276,13 +273,13 @@ pub trait CommitStore<'a> {
                 let mut visited_d0: Set<CommitId> = Set::new();
                 let mut pending: Vec<CommitId> = Vec::new();
                 horizon.retain(|&h| {
-                    if strategy.to_depth(h) == Depth(0) {
+                    if strategy.to_depth(h).is_boundary() {
+                        true
+                    } else {
                         if visited_d0.insert(h) {
                             pending.push(h);
                         }
                         false
-                    } else {
-                        true
                     }
                 });
 
@@ -294,12 +291,10 @@ pub trait CommitStore<'a> {
                         if known_fragment_states.contains_key(&p) {
                             continue;
                         }
-                        if strategy.to_depth(p) == Depth(0) {
-                            if visited_d0.insert(p) {
-                                pending.push(p);
-                            }
-                        } else {
+                        if strategy.to_depth(p).is_boundary() {
                             horizon.push(p);
+                        } else if visited_d0.insert(p) {
+                            pending.push(p);
                         }
                     }
                 }

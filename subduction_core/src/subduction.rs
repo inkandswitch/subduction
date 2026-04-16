@@ -118,7 +118,7 @@ use sedimentree_core::{
     },
     commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
-    depth::{Depth, DepthMetric},
+    depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
@@ -1226,7 +1226,7 @@ where
 
         let mut maybe_requested_fragment = None;
         let depth = self.depth_metric.to_depth(commit_head);
-        if depth != Depth(0) {
+        if depth.is_boundary() {
             maybe_requested_fragment = Some(FragmentRequested::new(commit_head, depth));
         }
 

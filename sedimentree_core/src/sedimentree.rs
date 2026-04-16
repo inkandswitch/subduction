@@ -15,7 +15,7 @@ use crate::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
+    depth::{Depth, DepthMetric},
     fragment::{Fragment, checkpoint::Checkpoint},
     loose_commit::{LooseCommit, id::CommitId},
     topsorted::Topsorted,
@@ -890,16 +890,6 @@ impl From<[u8; 32]> for MinimalTreeHash {
     fn from(value: [u8; 32]) -> Self {
         Self(value)
     }
-}
-
-/// Checks if any of the given commits has a commit boundary.
-pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<CommitId>, M: DepthMetric>(
-    commits: I,
-    depth_metric: &M,
-) -> bool {
-    commits
-        .into_iter()
-        .any(|id| depth_metric.to_depth(id.into()) <= MAX_STRATA_DEPTH)
 }
 
 #[cfg(test)]
@@ -2289,7 +2279,7 @@ mod tests {
     /// ```text
     /// Depth 0:  [0x01, 0x00, ..., N]   — no leading zero bytes
     /// Depth 1:  [0x00, 0x01, ..., N]   — one leading zero byte
-    /// Depth 2+: [0x00, 0x00, 0x01, N]  — two leading zero bytes (≥ MAX_STRATA_DEPTH)
+    /// Depth 2+: [0x00, 0x00, 0x01, N]  — two leading zero bytes (checkpoint depth)
     /// ```
     ///
     /// The trailing byte `N` distinguishes commits at the same depth.
@@ -2327,7 +2317,7 @@ mod tests {
             CommitId::new(b)
         }
 
-        /// Commit identifier at depth 2 (two leading zero bytes, ≥ `MAX_STRATA_DEPTH`).
+        /// Commit identifier at depth 2 (two leading zero bytes, checkpoint depth).
         ///
         /// Layout: `[0, 0, n, 0, ..., 0]` — two leading zeros, then non-zero.
         /// The distinguishing byte `n` is at index 2, well within the

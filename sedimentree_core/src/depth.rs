@@ -4,9 +4,6 @@ use alloc::boxed::Box;
 
 use crate::loose_commit::id::CommitId;
 
-/// The maximum depth of strata that a [`Sedimentree`] can go to.
-pub const MAX_STRATA_DEPTH: Depth = Depth(2);
-
 /// How deep in the Sedimentree a stratum is.
 ///
 /// The greater the depth, the more leading zeros, the (probabilistically) larger,
@@ -37,6 +34,18 @@ pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Depth(pub u32);
+
+impl Depth {
+    /// Whether this depth qualifies the commit as an eligible fragment head.
+    ///
+    /// Commits at depth 0 are ordinary commits that live only in the
+    /// shallowest stratum. Any nonzero depth indicates the commit can
+    /// head a fragment at that stratum level.
+    #[must_use]
+    pub const fn is_boundary(&self) -> bool {
+        self.0 > 0
+    }
+}
 
 impl core::fmt::Display for Depth {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

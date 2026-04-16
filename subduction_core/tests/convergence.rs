@@ -383,7 +383,7 @@ async fn multi_round_convergence_with_fragments() -> TestResult {
 
 /// A depth metric that assigns `Depth(2)` to every commit digest.
 ///
-/// With `MAX_STRATA_DEPTH = Depth(2)`, every commit becomes a checkpoint
+/// With depth 2 assigned to every commit, every commit becomes a checkpoint
 /// (block boundary). This means a fragment whose head/boundary/checkpoints
 /// include a commit's digest will cause `minimize` to prune that commit.
 #[derive(Debug, Clone, Copy, Default)]
