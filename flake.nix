@@ -111,6 +111,21 @@
           taplo
         ];
 
+        # wasm-bindgen-cli 0.2.118 (not yet in nixpkgs)
+        wasm-bindgen-cli_0_2_118 = unstable.buildWasmBindgenCli rec {
+          src = unstable.fetchCrate {
+            pname = "wasm-bindgen-cli";
+            version = "0.2.118";
+            hash = "sha256-ve783oYH0TGv8Z8lIPdGjItzeLDQLOT5uv/jbFOlZpI=";
+          };
+
+          cargoDeps = unstable.rustPlatform.fetchCargoVendor {
+            inherit src;
+            inherit (src) pname version;
+            hash = "sha256-EYDfuBlH3zmTxACBL+sjicRna84CvoesKSQVcYiG9P0=";
+          };
+        };
+
         cargo-installs = with pkgs; [
           cargo-component
           cargo-criterion
@@ -125,7 +140,7 @@
           cargo-watch
           # llvmPackages.bintools
           twiggy
-          wasm-bindgen-cli_0_2_114
+          wasm-bindgen-cli_0_2_118
           wasm-tools
         ];
 
