@@ -83,7 +83,7 @@ http-body-util = "0.1"
 iroh = "0.96.1"
 hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
-js-sys = { version = "=0.3.91", default-features = false }
+js-sys = { version = "=0.3.95", default-features = false }
 keyhive_core = "0.3.0"
 keyhive_crypto = "0.1.0"
 metrics = "0.24"
@@ -106,8 +106,8 @@ tracing-loki = "0.2"
 tracing-subscriber = { version = "0.3.2", default-features = false }
 tungstenite = "0.27"
 url = { version = "2.5", default-features = false }
-wasm-bindgen = { version = "=0.2.114", default-features = false }
-wasm-bindgen-futures = { version = "=0.4.64", default-features = false }
+wasm-bindgen = { version = "=0.2.118", default-features = false }
+wasm-bindgen-futures = { version = "=0.4.68", default-features = false }
 wasm-tracing = { version = "3.0.0-alpha.0", git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
 wasm_refgen = "0.2.0" # no_std by default
 windows-sys = "0.61.2"
@@ -218,5 +218,3 @@ debug = true        # Full debug symbols for flamegraphs/profiling
 lto = "thin"        # Faster link than "fat", close enough for profiling
 opt-level = 3       # Speed, not size
 strip = false       # Keep symbols for profiling tools
-
-
