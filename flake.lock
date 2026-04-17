@@ -86,11 +86,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1775002709,
-        "narHash": "sha256-d3Yx83vSrN+2z/loBh4mJpyRqr9aAJqlke4TkpFmRJA=",
+        "lastModified": 1776221942,
+        "narHash": "sha256-FbQAeVNi7G4v3QCSThrSAAvzQTmrmyDLiHNPvTF2qFM=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "bcd464ccd2a1a7cd09aa2f8d4ffba83b761b1d0e",
+        "rev": "1766437c5509f444c1b15331e82b8b6a9b967000",
         "type": "github"
       },
       "original": {
@@ -116,11 +116,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1775099554,
-        "narHash": "sha256-3xBsGnGDLOFtnPZ1D3j2LU19wpAlYefRKTlkv648rU0=",
+        "lastModified": 1776395632,
+        "narHash": "sha256-Mi1uF5f2FsdBIvy+v7MtsqxD3Xjhd0ARJdwoqqqPtJo=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "8d6387ed6d8e6e6672fd3ed4b61b59d44b124d99",
+        "rev": "8087ff1f47fff983a1fba70fa88b759f2fd8ae97",
         "type": "github"
       },
       "original": {
@@ -162,16 +162,16 @@
     "wasm-bodge-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1774631482,
-        "narHash": "sha256-HAWtOyeguTiOzcj2K6YUTKtzmYFJ0Z085fAMm1iYaCo=",
+        "lastModified": 1776433191,
+        "narHash": "sha256-cIwlJFM6KpZ9GbzMg/jY9owUrfq+wa83wugyKC1HxR4=",
         "owner": "alexjg",
         "repo": "wasm-bodge",
-        "rev": "95090dc7952afc65960b408336dbcd8ba89417fc",
+        "rev": "c702788b1b22ea39984d9e7e32df2a07322d3088",
         "type": "github"
       },
       "original": {
         "owner": "alexjg",
-        "ref": "v0.2.2",
+        "ref": "v0.2.3",
         "repo": "wasm-bodge",
         "type": "github"
       }
