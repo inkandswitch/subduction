@@ -14,7 +14,7 @@
     };
 
     wasm-bodge-src = {
-      url = "github:alexjg/wasm-bodge/v0.2.2";
+      url = "github:alexjg/wasm-bodge/v0.2.3";
       flake = false;
     };
   };
@@ -100,7 +100,7 @@
           pname = "wasm-bodge";
           version = wasm-bodge-src.shortRev;
           src = wasm-bodge-src;
-          cargoHash = "sha256-FUbDbXmcT3Kbrm42jOEqbqbhiGb7/4+Xbo+eWFEMy2I=";
+          cargoHash = "sha256-akp4r8C4MWGqTbqr40jHdHuzqx6ZKcr4rFynarPsZWI=";
           nativeBuildInputs = [ unstable.cargo-auditable ];
           doCheck = false; # tests require npm/puppeteer infrastructure
         };
