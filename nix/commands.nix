@@ -488,7 +488,8 @@
         ${wasm-bodge-bin} build \
           --crate-path "$WORKSPACE_ROOT/$crate" \
           --package-json "$WORKSPACE_ROOT/$crate/package.json" \
-          --out-dir "$WORKSPACE_ROOT/$crate/dist"
+          --out-dir "$WORKSPACE_ROOT/$crate/dist" \
+          --debug-variant
       done
 
       echo ""
