@@ -122,6 +122,44 @@
       echo "✓ E2E benchmarks complete — results in target/criterion/"
     '';
 
+    "bench:transports" = cmd "Compare sync perf across WebSocket / HTTP longpoll / Iroh / in-memory" ''
+      set -e
+
+      echo "===> Running transport comparison benchmarks..."
+      echo "    (4 transports × {handshake, sync 1, sync 100, 1 MB blob})"
+      ${cargo} bench --package subduction_transport_benches --bench transport_comparison
+
+      echo ""
+      echo "✓ Transport comparison complete — results in target/criterion/"
+    '';
+
+    "bench:wasm:opt-matrix" = cmd "Compare wasm-opt -Oz vs -O3 on subduction_wasm size" ''
+      set -e
+      "$WORKSPACE_ROOT/scripts/wasm-opt-matrix.sh"
+    '';
+
+    "bench:browser" = cmd "Run Playwright performance benchmarks in real browsers" ''
+      set -e
+
+      echo "===> Building Wasm packages (required by Playwright)..."
+      ${cargo} build --release -p subduction_wasm --target wasm32-unknown-unknown
+      cd "$WORKSPACE_ROOT/subduction_wasm"
+      ${pnpm} install
+
+      echo "===> Building web-target wasm for the e2e server..."
+      ${wasm-pack} build --target web --out-dir e2e/server/pkg --release
+
+      echo "===> Ensuring Playwright browsers are installed..."
+      ${pnpm} exec playwright install --with-deps chromium firefox webkit
+
+      echo "===> Running browser performance benchmarks..."
+      echo "    Summaries are printed as JSON per test to the Playwright log."
+      ${pnpm} exec playwright test perf.spec.ts
+
+      echo ""
+      echo "✓ Browser benchmarks complete — report at subduction_wasm/playwright-report/"
+    '';
+
     "bench:flame" = cmd "Profile a benchmark and open its flamegraph" ''
       set -e
 

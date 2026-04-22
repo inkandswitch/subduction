@@ -50,17 +50,20 @@ jobs:
       # Criterion writes `<bench>/<id>/new/estimates.json` files. The benchmark-action reads
       # stdout from a single `cargo bench` invocation using `tool: 'cargo'`, so we pipe all
       # output through a log file and feed that to the action.
-      - name: Run native benches (crypto, ingest, storage, existing)
+      - name: Run native benches (crypto, ingest, storage, ephemeral, many-peer, transport, existing)
         run: |
           set -o pipefail
           {
             cargo bench -p sedimentree_core --features std --bench sedimentree -- --noplot
             cargo bench -p subduction_core  --features std --bench subduction  -- --noplot
+            cargo bench -p subduction_core  --features std --bench many_peer   -- --noplot
             cargo bench -p bijou64                         --bench shootout    -- --noplot
             cargo bench -p subduction_crypto               --bench crypto      -- --noplot
             cargo bench -p sedimentree_fs_storage          --bench storage     -- --noplot
+            cargo bench -p subduction_ephemeral            --bench ephemeral   -- --noplot
             cargo bench -p automerge_sedimentree           --bench ingest      -- --noplot
             cargo bench -p subduction_websocket --features tokio_client,tokio_server --bench e2e -- --noplot
+            cargo bench -p subduction_transport_benches    --bench transport_comparison -- --noplot
           } | tee native-bench.log
 
       - name: Upload raw Criterion artifacts

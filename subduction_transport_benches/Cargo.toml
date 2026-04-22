@@ -1,0 +1,60 @@
+[package]
+name = "subduction_transport_benches"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Cross-transport comparison benchmarks (WebSocket / HTTP long-poll / Iroh / in-memory channel). Dev-only; never published."
+
+# No library code is exposed as a public API. The crate contains only benches that depend on
+# all four transport implementations and the shared bench-support crate. The `lib.rs` exists
+# only so `cargo` has something to check when the crate is part of the workspace.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# This crate is bench-only, but we keep `[dependencies]` empty on purpose — everything that's
+# needed for compiling the benches lives in `[dev-dependencies]` below.
+
+[dev-dependencies]
+# Bench harness + shared test infrastructure.
+criterion = { workspace = true }
+criterion_pprof = { workspace = true }
+subduction_bench_support = { workspace = true, features = ["criterion_harness"] }
+
+# Transports under comparison.
+subduction_websocket = { workspace = true, features = ["tokio_client", "tokio_server"] }
+subduction_http_longpoll = { workspace = true, features = ["server", "reqwest", "rustls-tls"] }
+subduction_iroh = { workspace = true }
+
+# Core + support crates pulled in by every transport bench.
+future_form = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+sedimentree_core = { workspace = true, features = ["std", "test_utils"] }
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
+subduction_crypto = { workspace = true, features = ["std", "test_utils"] }
+
+# HTTP long-poll server requires a real HTTP runtime. Match the dev-deps used by the
+# longpoll crate's own round_trip tests.
+async-channel = { workspace = true, features = ["std"] }
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["http1", "server-auto", "tokio"] }
+
+# Iroh endpoint construction.
+iroh = "0.96.1"
+
+# Runtime.
+rand = { workspace = true, features = ["std", "std_rng"] }
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "time", "net"] }
+tracing = { workspace = true, default-features = true }
+
+[[bench]]
+name = "transport_comparison"
+harness = false
+
+[lints]
+workspace = true

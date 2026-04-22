@@ -18,6 +18,7 @@ members = [
   "subduction_iroh",
   "subduction_keyhive_policy",
   "subduction_keyhive",
+  "subduction_transport_benches",
   "subduction_wasm",
   "subduction_websocket"
 ]

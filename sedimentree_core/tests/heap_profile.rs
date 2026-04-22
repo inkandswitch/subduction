@@ -17,11 +17,11 @@ use sedimentree_core::{
     crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::Sedimentree,
 };
 
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 mod generators {
     use super::*;
@@ -157,6 +157,7 @@ mod generators {
 }
 
 use generators::{overlapping_sedimentrees, synthetic_sedimentree};
+use sedimentree_core::{commit::CountLeadingZeroBytes, crypto::fingerprint::FingerprintSeed};
 
 fn measure_allocs<F: FnOnce() -> R, R>(f: F) -> (u64, u64, R) {
     let before = dhat::HeapStats::get();
@@ -209,6 +210,42 @@ fn heap_profile_all() {
         let t2 = synthetic_sedimentree(size, size, 1_000_000);
         let (blocks, bytes, _) = measure_allocs(|| t1.diff(&t2));
         println!("  {size:>6}  {blocks:>8}  {bytes:>10}");
+    }
+
+    // merge() scenarios
+
+    println!("\n--- merge() 50% overlap (100 fragments, 100 commits each) ---");
+    let (mut tree1, tree2) = overlapping_sedimentrees(50, 50, 50, 50, 42);
+    let (blocks, bytes, ()) = measure_allocs(|| tree1.merge(tree2));
+    println!("  Allocations: {blocks} blocks, {bytes} bytes\n");
+
+    println!("--- merge() scaling (disjoint trees) ---");
+    println!("  {:>6}  {:>8}  {:>10}", "Size", "Blocks", "Bytes");
+    println!("  {:->6}  {:->8}  {:->10}", "", "", "");
+    for size in [10, 50, 100, 500] {
+        let mut t1 = synthetic_sedimentree(size, size, 1);
+        let t2 = synthetic_sedimentree(size, size, 1_000_000);
+        let (blocks, bytes, ()) = measure_allocs(|| t1.merge(t2));
+        println!("  {size:>6}  {blocks:>8}  {bytes:>10}");
+    }
+
+    // minimize_by_metric() scenarios — this is the post-#122 hot path.
+
+    println!("\n--- minimize(CountLeadingZeroBytes) (fragment-heavy tree) ---");
+    for size in [100usize, 500, 1000, 5000] {
+        let tree = synthetic_sedimentree(size, size, 1);
+        let (blocks, bytes, _) = measure_allocs(|| tree.minimize(&CountLeadingZeroBytes));
+        println!("  size={size:>5}  {blocks:>8} blocks  {bytes:>10} bytes");
+    }
+
+    // fingerprint_summarize() — runs on every sync request.
+
+    println!("\n--- fingerprint_summarize() ---");
+    let seed = FingerprintSeed::new(0xdead_beef, 0xcafe_babe);
+    for size in [100usize, 500, 1000, 5000] {
+        let tree = synthetic_sedimentree(size, size, 1);
+        let (blocks, bytes, _) = measure_allocs(|| tree.fingerprint_summarize(&seed));
+        println!("  size={size:>5}  {blocks:>8} blocks  {bytes:>10} bytes");
     }
 
     println!("\n================================================================================");
