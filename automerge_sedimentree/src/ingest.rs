@@ -49,7 +49,7 @@ use sedimentree_core::{
         CommitStore, CountLeadingZeroBytes, FragmentError, FragmentState, MissingCommitError,
     },
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::Sedimentree,
 };
 
@@ -245,18 +245,34 @@ pub fn ingest_automerge_par(
 
 /// Pre-indexed change data for efficient per-fragment blob construction.
 ///
-/// Built once from the full `get_changes(&[])` output, then shared
-/// across all fragment compressions. Each entry stores the raw bytes
-/// of a change keyed by its hash, in topological order.
+/// Built once from the full `get_changes(&[])` output, then shared across all fragment
+/// compressions.
+///
+/// The `entries` vector stores `(ChangeHash, raw_bytes)` in **topological order** — this
+/// ordering is preserved when assembling a fragment's concatenated blob so downstream
+/// `load_incremental` sees changes in dependency order.
+///
+/// `position_by_hash` is a reverse index built from `entries` so per-fragment blob
+/// construction runs in `O(|fragment members| · log |fragment members|)` instead of the
+/// previous `O(|all changes|)` scan. For a document with N total changes and F fragments
+/// each containing ≈ N/F members, this turns the overall compression from `O(F · N)` into
+/// `O(N · log(N/F))`.
 struct ChangeIndex<'a> {
-    /// `(ChangeHash, raw_bytes)` in topological order.
     entries: Vec<(ChangeHash, &'a [u8])>,
+    position_by_hash: Map<ChangeHash, usize>,
 }
 
 impl<'a> ChangeIndex<'a> {
     fn new(changes: &'a [automerge::Change]) -> Self {
+        let entries: Vec<_> = changes.iter().map(|c| (c.hash(), c.raw_bytes())).collect();
+        let position_by_hash: Map<ChangeHash, usize> = entries
+            .iter()
+            .enumerate()
+            .map(|(idx, (hash, _))| (*hash, idx))
+            .collect();
         Self {
-            entries: changes.iter().map(|c| (c.hash(), c.raw_bytes())).collect(),
+            entries,
+            position_by_hash,
         }
     }
 }
@@ -270,20 +286,45 @@ impl<'a> ChangeIndex<'a> {
 /// boundary head — but in a concurrent DAG, member changes can be
 /// ancestors of boundary commits on a different branch, causing them
 /// to be silently dropped.
+///
+/// # Complexity
+///
+/// Previous implementation was `O(|all changes|)` — it scanned the full index once per
+/// fragment to filter out non-members. For a document with N total changes and F fragments
+/// that's `O(F · N)` overall.
+///
+/// Current implementation uses `ChangeIndex::position_by_hash` to look up each member's
+/// position directly, then sorts those positions. That's `O(|members| · log |members|)`
+/// per fragment, so `O(N · log(N/F))` overall — a win whenever F > 1.
 fn compress_one_fragment(
     state: &FragmentState<OwnedParents>,
     index: &ChangeIndex<'_>,
     sedimentree_id: SedimentreeId,
 ) -> (sedimentree_core::fragment::Fragment, Blob) {
-    let members: Set<ChangeHash> = state
-        .members()
-        .iter()
-        .map(|d| ChangeHash(*d.as_bytes()))
-        .collect();
+    let members = state.members();
 
-    let mut raw = Vec::new();
-    for &(hash, bytes) in &index.entries {
-        if members.contains(&hash) {
+    // Map each member's ChangeHash to its position in the topologically-ordered index.
+    // Unknown members (not in the index) can only occur if the state refers to a commit
+    // that isn't in the document — which would be a bug upstream. Skip them to match the
+    // previous implementation's silent behaviour (the old `members.contains(&hash)` check
+    // also simply yielded no bytes for unknowns).
+    let mut positions: Vec<usize> = Vec::with_capacity(members.len());
+    for member in members {
+        let hash = ChangeHash(*member.as_bytes());
+        if let Some(&pos) = index.position_by_hash.get(&hash) {
+            positions.push(pos);
+        }
+    }
+    positions.sort_unstable();
+
+    // Pre-size the concatenated buffer so `extend_from_slice` doesn't repeatedly grow.
+    let total_bytes: usize = positions
+        .iter()
+        .filter_map(|&p| index.entries.get(p).map(|(_, bytes)| bytes.len()))
+        .sum();
+    let mut raw = Vec::with_capacity(total_bytes);
+    for pos in positions {
+        if let Some((_, bytes)) = index.entries.get(pos) {
             raw.extend_from_slice(bytes);
         }
     }

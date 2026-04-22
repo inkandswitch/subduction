@@ -12,8 +12,8 @@ use alloc::{vec, vec::Vec};
 use crate::{
     collections::{Map, Set},
     depth::DepthMetric,
-    fragment::Fragment,
-    loose_commit::{LooseCommit, id::CommitId},
+    fragment::{checkpoint::Checkpoint, Fragment},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
@@ -256,13 +256,37 @@ impl CommitDag {
         }
 
         // Discard commits whose ranges are all covered by existing fragments.
+        //
+        // `Fragment::supports_block(id)` checks three things: the fragment head equals
+        // `id`, the fragment's boundary set contains `id`, or the fragment's checkpoint
+        // set contains `Checkpoint::new(id)`. Pre-computing index sets once up front turns
+        // the filter from `O(N × R × F × |fragment|)` into `O(N × R)` with O(1) lookups.
+        //
+        // At N = 5 000, R ≈ 1-2, F ≈ N/256 ≈ 20, the scan form was ~200 000 compares; the
+        // lookup form is ~10 000.
+        let (supported_ids, supported_checkpoints) = {
+            let mut ids: Set<CommitId> = Set::new();
+            let mut cps: Set<Checkpoint> = Set::new();
+            for f in fragments {
+                ids.insert(f.head());
+                for b in f.summary().boundary() {
+                    ids.insert(*b);
+                }
+                for cp in f.checkpoints() {
+                    cps.insert(*cp);
+                }
+            }
+            (ids, cps)
+        };
+
+        let is_supported = |id: CommitId| -> bool {
+            supported_ids.contains(&id) || supported_checkpoints.contains(&Checkpoint::new(id))
+        };
+
         let remaining_commits = commits_to_ranges
             .into_iter()
             .filter_map(|(commit, ranges)| {
-                if ranges
-                    .iter()
-                    .all(|&r| fragments.iter().any(|f| f.supports_block(r)))
-                {
+                if ranges.iter().all(|&r| is_supported(r)) {
                     None
                 } else {
                     Some(commit)
@@ -356,6 +380,10 @@ struct ReverseTopo<'a> {
     dag: &'a CommitDag,
     stack: Vec<NodeIdx>,
     visited: Set<NodeIdx>,
+    /// Scratch buffer reused across every `next()` call to hold the parents of the node we
+    /// just popped. Keeping it on the iterator avoids an allocation per commit visited — at
+    /// size 5 000 this alone is 5 000 fewer allocations per `minimize()` call.
+    scratch_parents: Vec<NodeIdx>,
 }
 
 impl<'a> ReverseTopo<'a> {
@@ -365,6 +393,7 @@ impl<'a> ReverseTopo<'a> {
             dag,
             stack,
             visited: Set::new(),
+            scratch_parents: Vec::new(),
         }
     }
 }
@@ -378,12 +407,19 @@ impl Iterator for ReverseTopo<'_> {
                 continue;
             }
             self.visited.insert(node);
-            let mut parents = self.dag.parents(node).collect::<Vec<_>>();
-            parents.sort_by_key(|p| {
+
+            // Collect parents into the reusable scratch buffer, sort for deterministic
+            // order, then move into the traversal stack. `Vec::append` leaves the source
+            // empty but preserves its allocation, so the buffer grows at most once over
+            // the lifetime of the iterator.
+            self.scratch_parents.clear();
+            self.scratch_parents.extend(self.dag.parents(node));
+            self.scratch_parents.sort_by_key(|p| {
                 #[allow(clippy::expect_used)]
                 self.dag.nodes.get(p.0).expect("node is not in DAG").id
             });
-            self.stack.extend(parents);
+            self.stack.append(&mut self.scratch_parents);
+
             return Some(self.dag.nodes.get(node.0)?.id);
         }
         None
@@ -428,7 +464,7 @@ mod tests {
         collections::{Map, Set},
         depth::{Depth, DepthMetric},
         id::SedimentreeId,
-        loose_commit::{LooseCommit, id::CommitId},
+        loose_commit::{id::CommitId, LooseCommit},
     };
 
     fn make_sedimentree_id(seed: u8) -> SedimentreeId {
