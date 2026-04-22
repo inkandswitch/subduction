@@ -15,7 +15,7 @@ use alloc::{
     vec::Vec,
 };
 
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use rand::{Rng, RngCore, SeedableRng, rngs::SmallRng};
 
 use core::convert::Infallible;
 
@@ -384,6 +384,316 @@ pub fn seeded_rng(seed: u64) -> SmallRng {
     SmallRng::seed_from_u64(seed)
 }
 
+// ============================================================================
+// Seeded helpers for benchmarks
+// ============================================================================
+//
+// The helpers above take `&mut Rng` references — the property-testing convention. For
+// benchmarks we often want a pure-seed API (reproducible without threading an RNG through
+// every call site). These wrappers construct a `SmallRng` internally.
+
+/// Deterministic [`CommitId`] derived from a u64 seed.
+///
+/// Equivalent to `random_commit_id(&mut seeded_rng(seed))` but with a shorter call site.
+/// Useful for bench generators where threading an RNG is noise.
+#[must_use]
+pub fn commit_id_from_seed(seed: u64) -> CommitId {
+    random_commit_id(&mut seeded_rng(seed))
+}
+
+/// Deterministic [`CommitId`] with exactly `leading_zeros` zero bytes.
+///
+/// Extends [`commit_id_with_depth`] to accept a u64 seed (instead of u8) and `usize` leading
+/// zeros (instead of u8). Saturates at 32 leading zeros.
+#[must_use]
+pub fn commit_id_from_seed_with_leading_zeros(leading_zeros: usize, seed: u64) -> CommitId {
+    let zeros = leading_zeros.min(32);
+    let mut rng = seeded_rng(seed);
+    // Clippy false positive: `zeros <= 32` but u32 is what the helper takes.
+    #[allow(clippy::cast_possible_truncation)]
+    let zeros_u32 = zeros as u32;
+    random_commit_id_with_depth(&mut rng, zeros_u32)
+}
+
+/// Deterministic [`SedimentreeId`] derived from a u64 seed.
+#[must_use]
+pub fn sedimentree_id_from_seed(seed: u64) -> SedimentreeId {
+    let mut bytes = [0u8; 32];
+    let mut rng = seeded_rng(seed);
+    rng.fill_bytes(&mut bytes);
+    SedimentreeId::new(bytes)
+}
+
+/// Deterministic [`Blob`] of exactly `size` bytes with pseudo-random contents.
+#[must_use]
+pub fn blob_from_seed(seed: u64, size: usize) -> Blob {
+    let mut data = alloc::vec![0u8; size];
+    let mut rng = seeded_rng(seed);
+    rng.fill_bytes(data.as_mut_slice());
+    Blob::new(data)
+}
+
+/// Synthetic [`BlobMeta`] with a forged digest — cheaper than hashing a real blob.
+///
+/// Use this when benches need `BlobMeta` values but don't care about digest integrity
+/// (e.g. sedimentree structural benches). For benches that round-trip blobs through the
+/// protocol, use [`random_blob_meta`] (which hashes an actual blob) or build a real blob
+/// via [`blob_from_seed`] and call [`BlobMeta::new`](crate::blob::BlobMeta::new) on it.
+#[must_use]
+pub fn blob_meta_from_seed_forged(seed: u64, size_bytes: u64) -> BlobMeta {
+    use crate::crypto::digest::Digest;
+    let mut bytes = [0u8; 32];
+    let mut rng = seeded_rng(seed);
+    rng.fill_bytes(&mut bytes);
+    BlobMeta::from_digest_size(Digest::force_from_bytes(bytes), size_bytes)
+}
+
+/// Synthetic [`LooseCommit`] with the given parents.
+///
+/// Head, sedimentree id, and blob-meta seeds are derived deterministically from `seed`.
+#[must_use]
+pub fn synthetic_commit(seed: u64, parents: BTreeSet<CommitId>) -> LooseCommit {
+    let sedimentree_id = sedimentree_id_from_seed(seed);
+    let head = commit_id_from_seed(seed.wrapping_add(500_000));
+    let blob_meta = blob_meta_from_seed_forged(seed.wrapping_add(1_000_000), 1024);
+    LooseCommit::new(sedimentree_id, head, parents, blob_meta)
+}
+
+/// Synthetic [`Fragment`] with configurable structural complexity.
+///
+/// | Parameter         | Effect                                                          |
+/// |-------------------|-----------------------------------------------------------------|
+/// | `head_seed`       | RNG seed; determines the head commit id and all derived seeds  |
+/// | `boundary_count`  | Number of boundary commits (predecessors of this fragment)     |
+/// | `checkpoint_count`| Number of checkpoints embedded in the fragment                 |
+/// | `leading_zeros`   | Depth of the head and boundary commits                          |
+///
+/// This is the bench-oriented counterpart to [`make_fragment_at_depth`] — same idea, but
+/// u64-seeded and with explicit boundary/checkpoint counts.
+#[must_use]
+pub fn synthetic_fragment(
+    head_seed: u64,
+    boundary_count: usize,
+    checkpoint_count: usize,
+    leading_zeros: usize,
+) -> Fragment {
+    let sedimentree_id = sedimentree_id_from_seed(head_seed);
+    let head = commit_id_from_seed_with_leading_zeros(leading_zeros, head_seed);
+
+    let boundary: BTreeSet<CommitId> = (0..boundary_count)
+        .map(|i| {
+            commit_id_from_seed_with_leading_zeros(
+                leading_zeros,
+                head_seed.wrapping_add(100).wrapping_add(i as u64),
+            )
+        })
+        .collect();
+
+    let checkpoints: Vec<CommitId> = (0..checkpoint_count)
+        .map(|i| commit_id_from_seed(head_seed.wrapping_add(200).wrapping_add(i as u64)))
+        .collect();
+
+    let blob_meta = blob_meta_from_seed_forged(head_seed.wrapping_add(300), 4096);
+    Fragment::new(sedimentree_id, head, boundary, &checkpoints, blob_meta)
+}
+
+// ============================================================================
+// Canonical DAG shapes
+// ============================================================================
+//
+// These produce realistically-shaped `LooseCommit` sequences for bench workloads. They share a
+// seeded-RNG-free API so bench call sites stay readable.
+
+/// Linear chain: each commit has exactly one parent, the previous commit.
+#[must_use]
+pub fn linear_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {
+    let mut commits = Vec::with_capacity(count);
+    let mut prev = None;
+
+    for i in 0..count {
+        let parents = prev.map(|p| BTreeSet::from([p])).unwrap_or_default();
+        let commit = synthetic_commit(base_seed.wrapping_add(i as u64), parents);
+        prev = Some(commit.head());
+        commits.push(commit);
+    }
+
+    commits
+}
+
+/// DAG with periodic 2-parent merges.
+///
+/// Every `merge_frequency`-th commit has two parents (the two most recent heads); other
+/// commits have one parent. A sliding window of the 10 most recent heads bounds memory.
+#[must_use]
+pub fn merge_heavy_dag(
+    count: usize,
+    merge_frequency: usize,
+    base_seed: u64,
+) -> Vec<LooseCommit> {
+    const RECENT_WINDOW: usize = 10;
+
+    let merge_frequency = merge_frequency.max(1);
+    let mut commits = Vec::with_capacity(count);
+    let mut recent: Vec<CommitId> = Vec::with_capacity(RECENT_WINDOW);
+
+    for i in 0..count {
+        let parents = if i == 0 {
+            BTreeSet::new()
+        } else if i.is_multiple_of(merge_frequency) && recent.len() >= 2 {
+            let mut last_two = recent.iter().rev().take(2).copied();
+            let mut set = BTreeSet::new();
+
+            if let Some(p) = last_two.next() {
+                set.insert(p);
+            }
+            if let Some(p) = last_two.next() {
+                set.insert(p);
+            }
+
+            set
+        } else {
+            recent
+                .last()
+                .copied()
+                .map(|p| BTreeSet::from([p]))
+                .unwrap_or_default()
+        };
+
+        let commit = synthetic_commit(base_seed.wrapping_add(i as u64), parents);
+        recent.push(commit.head());
+
+        if recent.len() > RECENT_WINDOW {
+            recent.remove(0);
+        }
+
+        commits.push(commit);
+    }
+
+    commits
+}
+
+/// Wide DAG: `width` independent branches, each `depth_per_branch` commits long.
+///
+/// Useful for simulating fan-out from many concurrent writers.
+#[must_use]
+pub fn wide_dag(width: usize, depth_per_branch: usize, base_seed: u64) -> Vec<LooseCommit> {
+    let mut commits = Vec::with_capacity(width.saturating_mul(depth_per_branch));
+
+    for branch in 0..width {
+        let branch_seed = base_seed.wrapping_add((branch as u64).wrapping_mul(10_000));
+        let mut prev = None;
+
+        for i in 0..depth_per_branch {
+            let parents = prev.map(|p| BTreeSet::from([p])).unwrap_or_default();
+            let commit = synthetic_commit(branch_seed.wrapping_add(i as u64), parents);
+            prev = Some(commit.head());
+            commits.push(commit);
+        }
+    }
+
+    commits
+}
+
+// ============================================================================
+// Composed trees
+// ============================================================================
+
+/// Build a [`Sedimentree`] with the given counts of fragments and loose commits.
+///
+/// Fragments cycle through depths 0, 1, 2 (wrapping) so the tree exercises the full
+/// depth-metric range. Commits are arranged as a single linear chain.
+#[must_use]
+pub fn synthetic_sedimentree(
+    fragment_count: usize,
+    commit_count: usize,
+    base_seed: u64,
+) -> Sedimentree {
+    let fragments: Vec<Fragment> = (0..fragment_count)
+        .map(|i| {
+            let leading_zeros = i % 3;
+            synthetic_fragment(
+                base_seed.wrapping_add((i as u64).wrapping_mul(1_000)),
+                /* boundary */ 2,
+                /* checkpoints */ 5,
+                leading_zeros,
+            )
+        })
+        .collect();
+
+    let commits = linear_chain(commit_count, base_seed.wrapping_add(500_000));
+
+    Sedimentree::new(fragments, commits)
+}
+
+/// Two [`Sedimentree`]s with a controlled overlap, useful for diff / merge benches.
+///
+/// The returned pair (`a`, `b`) share `shared_fragments` fragments and `shared_commits` loose
+/// commits, plus `unique_fragments_each` and `unique_commits_each` items that are distinct per
+/// side.
+#[must_use]
+pub fn overlapping_sedimentrees(
+    shared_fragments: usize,
+    unique_fragments_each: usize,
+    shared_commits: usize,
+    unique_commits_each: usize,
+    base_seed: u64,
+) -> (Sedimentree, Sedimentree) {
+    let shared_frags: Vec<Fragment> = (0..shared_fragments)
+        .map(|i| {
+            synthetic_fragment(
+                base_seed.wrapping_add((i as u64).wrapping_mul(1_000)),
+                2,
+                5,
+                i % 3,
+            )
+        })
+        .collect();
+    let shared_commits_vec = linear_chain(shared_commits, base_seed.wrapping_add(100_000));
+
+    let a_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
+        .map(|i| {
+            synthetic_fragment(
+                base_seed
+                    .wrapping_add(200_000)
+                    .wrapping_add((i as u64).wrapping_mul(1_000)),
+                2,
+                5,
+                i % 3,
+            )
+        })
+        .collect();
+    let a_unique_commits = linear_chain(unique_commits_each, base_seed.wrapping_add(300_000));
+
+    let b_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
+        .map(|i| {
+            synthetic_fragment(
+                base_seed
+                    .wrapping_add(400_000)
+                    .wrapping_add((i as u64).wrapping_mul(1_000)),
+                2,
+                5,
+                i % 3,
+            )
+        })
+        .collect();
+    let b_unique_commits = linear_chain(unique_commits_each, base_seed.wrapping_add(500_000));
+
+    let mut a_frags = shared_frags.clone();
+    a_frags.extend(a_unique_frags);
+    let mut a_commits = shared_commits_vec.clone();
+    a_commits.extend(a_unique_commits);
+
+    let mut b_frags = shared_frags;
+    b_frags.extend(b_unique_frags);
+    let mut b_commits = shared_commits_vec;
+    b_commits.extend(b_unique_commits);
+
+    (
+        Sedimentree::new(a_frags, a_commits),
+        Sedimentree::new(b_frags, b_commits),
+    )
+}
+
 /// An arbitrary DAG of fragments and loose commits with real dependency
 /// edges.
 ///
@@ -568,5 +878,69 @@ mod tests {
         assert_eq!(d_commit.parents().len(), 2);
 
         Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Seeded helpers for benchmarks
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn commit_id_from_seed_is_deterministic() {
+        assert_eq!(commit_id_from_seed(42), commit_id_from_seed(42));
+        assert_ne!(commit_id_from_seed(42), commit_id_from_seed(43));
+    }
+
+    #[test]
+    fn commit_id_from_seed_with_leading_zeros_respects_zero_prefix() {
+        for zeros in 0..=6 {
+            for seed in 0..4 {
+                let id = commit_id_from_seed_with_leading_zeros(zeros, seed);
+                let bytes = id.as_bytes();
+                for (idx, byte) in bytes.iter().enumerate().take(zeros) {
+                    assert_eq!(*byte, 0, "byte {idx} should be zero for zeros={zeros}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blob_from_seed_length_matches() {
+        for size in [0, 1, 64, 4096] {
+            assert_eq!(blob_from_seed(0, size).as_slice().len(), size);
+        }
+    }
+
+    #[test]
+    fn linear_chain_is_actually_linear() {
+        let commits = linear_chain(10, 0);
+        for pair in commits.windows(2) {
+            if let [prev, curr] = pair {
+                assert_eq!(curr.parents().len(), 1);
+                assert!(curr.parents().contains(&prev.head()));
+            }
+        }
+    }
+
+    #[test]
+    fn merge_heavy_dag_produces_some_merges() {
+        let commits = merge_heavy_dag(50, 5, 0);
+        let merges = commits.iter().filter(|c| c.parents().len() == 2).count();
+        assert!(merges > 0);
+    }
+
+    #[test]
+    fn wide_dag_produces_width_times_depth() {
+        let commits = wide_dag(5, 10, 0);
+        assert_eq!(commits.len(), 50);
+    }
+
+    #[test]
+    fn synthetic_sedimentree_builds() {
+        let _tree = synthetic_sedimentree(8, 32, 0);
+    }
+
+    #[test]
+    fn overlapping_pair_builds() {
+        let (_a, _b) = overlapping_sedimentrees(4, 3, 8, 5, 0);
     }
 }

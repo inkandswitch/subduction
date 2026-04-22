@@ -36,3 +36,7 @@ pub mod signer;
 pub mod verified_author;
 pub mod verified_meta;
 pub mod verified_signature;
+
+#[cfg(any(test, feature = "test_utils"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "test_utils")))]
+pub mod test_utils;

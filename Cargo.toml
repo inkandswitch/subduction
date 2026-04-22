@@ -9,6 +9,7 @@ members = [
   "sedimentree_core",
   "sedimentree_fs_storage",
   "sedimentree_wasm",
+  "subduction_bench_support",
   "subduction_cli",
   "subduction_core",
   "subduction_crypto",
@@ -40,6 +41,7 @@ bijou64 = { version = "0.1.1", path = "bijou64", default-features = false }
 sedimentree_core = { version = "0.9.0", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.8.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.9.0", path = "sedimentree_wasm", default-features = false }
+subduction_bench_support = { version = "0.1.0", path = "subduction_bench_support", default-features = false }
 subduction_core = { version = "0.11.0", path = "subduction_core", default-features = false }
 subduction_crypto = { version = "0.5.0", path = "subduction_crypto", default-features = false }
 subduction_ephemeral = { version = "0.4.0", path = "subduction_ephemeral", default-features = false }

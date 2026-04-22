@@ -64,7 +64,12 @@ std = [
   "thiserror/std"
 ]
 system_time = ["std"]
-test_utils = ["std", "dep:tokio", "sedimentree_core/test_utils"]
+test_utils = [
+  "std",
+  "dep:tokio",
+  "sedimentree_core/test_utils",
+  "subduction_crypto/test_utils",
+]
 
 [lints]
 workspace = true

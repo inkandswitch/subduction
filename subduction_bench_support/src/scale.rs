@@ -45,7 +45,7 @@ impl Scale {
     /// - `Realistic` is included iff the `realistic_benches` feature is on
     ///   (`realistic_benches` implies `medium_benches`).
     #[must_use]
-    pub fn enabled_tiers() -> &'static [Self] {
+    pub const fn enabled_tiers() -> &'static [Self] {
         #[cfg(feature = "realistic_benches")]
         {
             &[Self::Micro, Self::Medium, Self::Realistic]

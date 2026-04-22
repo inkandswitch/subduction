@@ -24,10 +24,15 @@ automerge_sedimentree = { path = ".", features = ["std"] }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
+subduction_bench_support = { workspace = true, features = ["criterion_harness", "egwalker_fixtures"] }
 testresult = { workspace = true }
 
 [[bench]]
 name = "egwalker"
+harness = false
+
+[[bench]]
+name = "ingest"
 harness = false
 
 [features]

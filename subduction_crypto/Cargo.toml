@@ -25,10 +25,23 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
+blake3 = { workspace = true, features = ["std"] }
 bolero = { workspace = true, features = ["arbitrary"] }
-subduction_crypto = { path = ".", features = ["bolero"] }
+criterion = { workspace = true }
+criterion_pprof = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["batch", "rand_core", "std"] }
+futures = { workspace = true, features = ["executor"] }
+rand = { workspace = true, features = ["std", "std_rng"] }
+sedimentree_core = { workspace = true, features = ["std", "test_utils"] }
+siphasher = { workspace = true, features = ["std"] }
+subduction_bench_support = { workspace = true, features = ["criterion_harness"] }
+subduction_crypto = { path = ".", features = ["bolero", "std", "test_utils"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[[bench]]
+name = "crypto"
+harness = false
 
 [features]
 default = []
@@ -41,6 +54,8 @@ std = [
   "serde/std",
   "thiserror/std"
 ]
+# Test and bench utilities: deterministic signer construction from a u64 seed.
+test_utils = ["std"]
 
 [lints]
 workspace = true
