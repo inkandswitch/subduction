@@ -31,6 +31,12 @@
 
 #![warn(missing_docs)]
 
+// `alloc` is needed by the `wasm_harness` module. Other modules use `std` (or nothing) and
+// don't require this. The module itself is gated on both the feature _and_ `wasm32`, so mirror
+// that here to keep `cargo build --all-features` clean on native targets.
+#[cfg(all(feature = "wasm_harness", target_family = "wasm"))]
+extern crate alloc;
+
 pub mod cross_crate;
 pub mod fixtures;
 pub mod harness;

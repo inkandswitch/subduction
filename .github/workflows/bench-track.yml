@@ -1,0 +1,152 @@
+name: Benchmark tracking
+
+# Track native Criterion + Wasm `performance.now()` bench results over time.
+#
+# This workflow is *informational only*: it never fails a PR. Regressions surface as dashboard
+# changes on the `gh-pages` branch and — when a PR is labelled `perf-check` — as PR comments.
+#
+# The canonical bench harness invocations mirror the `bench` and `bench:wasm` nix commands so
+# local runs and CI runs measure the same thing.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    # Only opt-in via label to avoid noise on every PR.
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write # needed to push to gh-pages on push-to-main runs
+  deployments: write # needed by github-action-benchmark's gh-pages deploy
+  pull-requests: write # needed to comment on labelled PRs
+
+jobs:
+  # --- Native Criterion tracking --------------------------------------------
+  native:
+    # Run on push-to-main or when a PR has the `perf-check` label.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'perf-check'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      # Criterion writes `<bench>/<id>/new/estimates.json` files. The benchmark-action reads
+      # stdout from a single `cargo bench` invocation using `tool: 'cargo'`, so we pipe all
+      # output through a log file and feed that to the action.
+      - name: Run native benches (crypto, ingest, storage, existing)
+        run: |
+          set -o pipefail
+          {
+            cargo bench -p sedimentree_core --features std --bench sedimentree -- --noplot
+            cargo bench -p subduction_core  --features std --bench subduction  -- --noplot
+            cargo bench -p bijou64                         --bench shootout    -- --noplot
+            cargo bench -p subduction_crypto               --bench crypto      -- --noplot
+            cargo bench -p sedimentree_fs_storage          --bench storage     -- --noplot
+            cargo bench -p automerge_sedimentree           --bench ingest      -- --noplot
+            cargo bench -p subduction_websocket --features tokio_client,tokio_server --bench e2e -- --noplot
+          } | tee native-bench.log
+
+      - name: Upload raw Criterion artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ github.sha }}
+          path: target/criterion/
+          retention-days: 30
+
+      - name: Publish native trend + comment
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Native (Criterion)
+          tool: cargo
+          output-file-path: native-bench.log
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Push trend data to gh-pages on main only; PR runs only comment.
+          auto-push: ${{ github.event_name == 'push' }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/native
+          comment-on-alert: true
+          summary-always: true
+          # Soft alert at 150% of previous median — never fails the workflow.
+          alert-threshold: 150%
+          fail-on-alert: false
+          comment-always: ${{ github.event_name == 'pull_request' }}
+
+  # --- Wasm performance.now tracking ----------------------------------------
+  wasm:
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'perf-check'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          target: wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      # The --nocapture flag is essential: bench summaries are `console.log`-ed as JSON lines
+      # and wasm-pack-test buffers them per-test otherwise.
+      - name: Run Wasm perf benches
+        run: |
+          set -o pipefail
+          wasm-pack test --node subduction_wasm -- --nocapture 2>&1 | tee wasm-bench.log
+
+      - name: Parse Wasm bench output to github-action-benchmark format
+        run: |
+          ./scripts/parse-wasm-bench-output.sh < wasm-bench.log > wasm-bench.json
+          echo "--- Parsed summaries: ---"
+          cat wasm-bench.json
+
+      - name: Publish Wasm trend + comment
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Wasm (performance.now)
+          tool: customSmallerIsBetter
+          output-file-path: wasm-bench.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.event_name == 'push' }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/wasm
+          comment-on-alert: true
+          summary-always: true
+          alert-threshold: 200% # Wasm numbers have more CI jitter than native
+          fail-on-alert: false
+          comment-always: ${{ github.event_name == 'pull_request' }}
+
+      - name: Upload raw Wasm bench log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-bench-log-${{ github.sha }}
+          path: |
+            wasm-bench.log
+            wasm-bench.json
+          retention-days: 30

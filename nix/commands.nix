@@ -254,6 +254,21 @@
       echo ""
       echo "Heap profile saved to sedimentree_core/dhat-heap.json"
     '';
+
+    "bench:wasm" = cmd "Run Wasm-target benchmarks via wasm-pack test --node" ''
+      set -e
+
+      echo "===> Running subduction_wasm performance tests (Node.js runtime)..."
+      # --nocapture is essential: bench summaries print via console.log and would otherwise
+      # be swallowed by the test runner. Each summary is a JSON line prefixed by
+      # "{\"bench\":".
+      ${wasm-pack} test --node subduction_wasm -- --nocapture
+
+      echo ""
+      echo "✓ Wasm benchmarks complete"
+      echo ""
+      echo "Summaries are JSON lines above (grep '^{\"bench\":' to extract)."
+    '';
   };
 
   fmt = {

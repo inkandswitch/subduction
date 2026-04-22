@@ -30,13 +30,27 @@ criterion_harness = ["dep:criterion", "dep:criterion_pprof"]
 # Filesystem fixtures that need `tempfile`.
 fs_fixtures = ["dep:tempfile"]
 
+# Wasm-target bench harness: `performance.now()`-driven sampling loop + statistics.
+# Only compile on `wasm32-*` targets; activating this feature on a native target will trigger
+# a compile-time error.
+wasm_harness = [
+  "dep:js-sys",
+  "dep:wasm-bindgen",
+  "dep:wasm-bindgen-futures",
+  "dep:web-sys",
+]
+
 [dependencies]
 # Optional feature-gated deps — the crate has no mandatory deps because all its modules are
 # feature-gated.
 automerge = { workspace = true, optional = true }
 criterion = { workspace = true, optional = true }
 criterion_pprof = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { version = "0.3.81", optional = true, default-features = false, features = ["Performance", "console"] }
 
 [lints]
 workspace = true
