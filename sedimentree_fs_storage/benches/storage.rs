@@ -35,7 +35,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use future_form::Sendable;
 use futures::executor::block_on;
 use sedimentree_core::{
@@ -43,7 +43,7 @@ use sedimentree_core::{
     collections::Set,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     test_utils::{
         blob_from_seed, commit_id_from_seed, commit_id_from_seed_with_leading_zeros,
         sedimentree_id_from_seed,

@@ -54,7 +54,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
     test_utils::{blob_from_seed, synthetic_commit},
 };
-use subduction_bench_support::harness::wasm::{bench, bench_async, Config, Summary};
+use subduction_bench_support::harness::wasm::{Config, Summary, bench, bench_async};
 use subduction_crypto::{
     signed::Signed, test_utils::signer_from_seed, verified_signature::VerifiedSignature,
 };

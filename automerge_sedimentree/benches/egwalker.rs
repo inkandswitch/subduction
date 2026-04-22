@@ -22,9 +22,9 @@ use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 use sedimentree_core::{
     blob::BlobMeta,
     collections::Map,
@@ -33,7 +33,7 @@ use sedimentree_core::{
     depth::{CountTrailingZerosInBase, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,
 };
 
@@ -230,11 +230,7 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..=255);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..=255);
-                    if r2 == 0 {
-                        2
-                    } else {
-                        1
-                    }
+                    if r2 == 0 { 2 } else { 1 }
                 } else {
                     0
                 }
@@ -244,11 +240,7 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..10);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..10);
-                    if r2 == 0 {
-                        2
-                    } else {
-                        1
-                    }
+                    if r2 == 0 { 2 } else { 1 }
                 } else {
                     0
                 }

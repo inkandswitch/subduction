@@ -51,7 +51,7 @@
 
 use std::{hint::black_box, sync::Arc, time::Duration};
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
@@ -65,7 +65,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
 };
 use subduction_crypto::{signer::memory::MemorySigner, test_utils::signer_from_seed};

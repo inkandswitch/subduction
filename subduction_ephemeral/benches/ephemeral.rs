@@ -45,7 +45,7 @@
 
 use std::{hint::black_box, time::Duration};
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use future_form::Sendable;
 use futures::executor::block_on;
 use subduction_bench_support::harness::criterion::default_criterion;

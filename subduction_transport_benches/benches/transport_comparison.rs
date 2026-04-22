@@ -135,9 +135,7 @@ macro_rules! populate_server {
         let mut prev: Option<CommitId> = None;
         for i in 0..$count {
             let head = commit_id(i as u64);
-            let parents: BTreeSet<CommitId> = prev
-                .map(|p| BTreeSet::from([p]))
-                .unwrap_or_default();
+            let parents: BTreeSet<CommitId> = prev.map(|p| BTreeSet::from([p])).unwrap_or_default();
             let blob = small_blob(i as u64);
             $server
                 .add_commit($sed_id, head, parents, blob)
@@ -364,7 +362,9 @@ mod lp_bench {
         )
         .with_poll_timeout(POLL_TIMEOUT);
 
-        let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let tcp = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let address = tcp.local_addr().expect("local_addr");
 
         let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
@@ -422,8 +422,9 @@ mod lp_bench {
                     )),
                 };
                 if resp.status() == hyper::StatusCode::OK
-                    && let Some(session_hdr) =
-                        resp.headers().get(subduction_http_longpoll::SESSION_ID_HEADER)
+                    && let Some(session_hdr) = resp
+                        .headers()
+                        .get(subduction_http_longpoll::SESSION_ID_HEADER)
                     && let Ok(sid_str) = session_hdr.to_str()
                     && let Some(sid) = SessionId::from_hex(sid_str)
                     && let Some(auth) = handler.take_authenticated(&sid).await
@@ -436,9 +437,8 @@ mod lp_bench {
             }
         });
 
-        let builder = hyper_util::server::conn::auto::Builder::new(
-            hyper_util::rt::TokioExecutor::new(),
-        );
+        let builder =
+            hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
         let _ = builder.serve_connection(io, service).await;
     }
 
@@ -572,7 +572,10 @@ mod iroh_bench {
         tokio::spawn(listener_fut);
         tokio::spawn(manager_fut);
 
-        let client_ep = iroh::Endpoint::builder().bind().await.expect("bind client endpoint");
+        let client_ep = iroh::Endpoint::builder()
+            .bind()
+            .await
+            .expect("bind client endpoint");
 
         let server_addr = server.endpoint.addr();
         let result = subduction_iroh::client::connect(
@@ -664,93 +667,72 @@ fn bench_sync_commits(c: &mut Criterion) {
         group.throughput(Throughput::Elements(count as u64));
 
         // --- channel ---
-        group.bench_with_input(
-            BenchmarkId::new("channel", count),
-            &count,
-            |b, &n| {
-                b.iter_batched(
-                    || {
-                        rt.block_on(async {
-                            let (server, client, server_sig, _ck) =
-                                channel_bench::connect_pair().await;
-                            populate_server!(server, sed_id, n);
-                            let server_peer = PeerId::from(server_sig.verifying_key());
-                            (server, client, server_peer)
-                        })
-                    },
-                    |(server, client, server_peer)| {
-                        rt.block_on(async move {
-                            let _ = client
-                                .full_sync_with_peer(&server_peer, false, None)
-                                .await;
-                            drop(server);
-                            drop(client);
-                        });
-                    },
-                    BatchSize::PerIteration,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("channel", count), &count, |b, &n| {
+            b.iter_batched(
+                || {
+                    rt.block_on(async {
+                        let (server, client, server_sig, _ck) = channel_bench::connect_pair().await;
+                        populate_server!(server, sed_id, n);
+                        let server_peer = PeerId::from(server_sig.verifying_key());
+                        (server, client, server_peer)
+                    })
+                },
+                |(server, client, server_peer)| {
+                    rt.block_on(async move {
+                        let _ = client.full_sync_with_peer(&server_peer, false, None).await;
+                        drop(server);
+                        drop(client);
+                    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
 
         // --- websocket ---
-        group.bench_with_input(
-            BenchmarkId::new("websocket", count),
-            &count,
-            |b, &n| {
-                b.iter_batched(
-                    || {
-                        rt.block_on(async {
-                            let (server_guard, server_peer, addr) =
-                                ws_bench::fresh_server(0).await;
-                            let client = ws_bench::connect_client(1, server_peer, addr).await;
-                            populate_server!(server_guard.0.subduction(), sed_id, n);
-                            (server_guard, client, server_peer)
-                        })
-                    },
-                    |(server_guard, client, server_peer)| {
-                        rt.block_on(async move {
-                            let _ = client
-                                .full_sync_with_peer(&server_peer, false, None)
-                                .await;
-                            drop(client);
-                            drop(server_guard);
-                        });
-                    },
-                    BatchSize::PerIteration,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("websocket", count), &count, |b, &n| {
+            b.iter_batched(
+                || {
+                    rt.block_on(async {
+                        let (server_guard, server_peer, addr) = ws_bench::fresh_server(0).await;
+                        let client = ws_bench::connect_client(1, server_peer, addr).await;
+                        populate_server!(server_guard.0.subduction(), sed_id, n);
+                        (server_guard, client, server_peer)
+                    })
+                },
+                |(server_guard, client, server_peer)| {
+                    rt.block_on(async move {
+                        let _ = client.full_sync_with_peer(&server_peer, false, None).await;
+                        drop(client);
+                        drop(server_guard);
+                    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
 
         // --- http_longpoll ---
-        group.bench_with_input(
-            BenchmarkId::new("http_longpoll", count),
-            &count,
-            |b, &n| {
-                b.iter_batched(
-                    || {
-                        rt.block_on(async {
-                            let server = lp_bench::start_server(0).await;
-                            let server_peer = server.peer_id;
-                            let addr = server.address;
-                            let client =
-                                lp_bench::connect_client(1, server_peer, addr).await;
-                            populate_server!(server.subduction, sed_id, n);
-                            (server, client, server_peer)
-                        })
-                    },
-                    |(server, client, server_peer)| {
-                        rt.block_on(async move {
-                            let _ = client
-                                .full_sync_with_peer(&server_peer, false, None)
-                                .await;
-                            drop(client);
-                            drop(server);
-                        });
-                    },
-                    BatchSize::PerIteration,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("http_longpoll", count), &count, |b, &n| {
+            b.iter_batched(
+                || {
+                    rt.block_on(async {
+                        let server = lp_bench::start_server(0).await;
+                        let server_peer = server.peer_id;
+                        let addr = server.address;
+                        let client = lp_bench::connect_client(1, server_peer, addr).await;
+                        populate_server!(server.subduction, sed_id, n);
+                        (server, client, server_peer)
+                    })
+                },
+                |(server, client, server_peer)| {
+                    rt.block_on(async move {
+                        let _ = client.full_sync_with_peer(&server_peer, false, None).await;
+                        drop(client);
+                        drop(server);
+                    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
 
         // --- iroh ---
         group.bench_with_input(BenchmarkId::new("iroh", count), &count, |b, &n| {
@@ -766,9 +748,7 @@ fn bench_sync_commits(c: &mut Criterion) {
                 },
                 |(server, client, server_peer)| {
                     rt.block_on(async move {
-                        let _ = client
-                            .full_sync_with_peer(&server_peer, false, None)
-                            .await;
+                        let _ = client.full_sync_with_peer(&server_peer, false, None).await;
                         drop(client);
                         drop(server);
                     });
@@ -810,8 +790,7 @@ fn bench_blob_1mb(c: &mut Criterion) {
         b.iter_batched(
             || {
                 rt.block_on(async {
-                    let (server, client, server_sig, _ck) =
-                        channel_bench::connect_pair().await;
+                    let (server, client, server_sig, _ck) = channel_bench::connect_pair().await;
                     populate_with_blob!(server, sed_id, blob_size);
                     let server_peer = PeerId::from(server_sig.verifying_key());
                     (server, client, server_peer)

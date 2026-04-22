@@ -525,11 +525,7 @@ pub fn linear_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {
 /// Every `merge_frequency`-th commit has two parents (the two most recent heads); other
 /// commits have one parent. A sliding window of the 10 most recent heads bounds memory.
 #[must_use]
-pub fn merge_heavy_dag(
-    count: usize,
-    merge_frequency: usize,
-    base_seed: u64,
-) -> Vec<LooseCommit> {
+pub fn merge_heavy_dag(count: usize, merge_frequency: usize, base_seed: u64) -> Vec<LooseCommit> {
     const RECENT_WINDOW: usize = 10;
 
     let merge_frequency = merge_frequency.max(1);

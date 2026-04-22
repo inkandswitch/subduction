@@ -12,8 +12,8 @@ use alloc::{vec, vec::Vec};
 use crate::{
     collections::{Map, Set},
     depth::DepthMetric,
-    fragment::{checkpoint::Checkpoint, Fragment},
-    loose_commit::{id::CommitId, LooseCommit},
+    fragment::{Fragment, checkpoint::Checkpoint},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
@@ -464,7 +464,7 @@ mod tests {
         collections::{Map, Set},
         depth::{Depth, DepthMetric},
         id::SedimentreeId,
-        loose_commit::{id::CommitId, LooseCommit},
+        loose_commit::{LooseCommit, id::CommitId},
     };
 
     fn make_sedimentree_id(seed: u8) -> SedimentreeId {

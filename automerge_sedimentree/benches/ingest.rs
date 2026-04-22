@@ -31,7 +31,7 @@
 use std::hint::black_box;
 
 use automerge_sedimentree::{indexed::IndexedSedimentreeAutomerge, ingest::ingest_automerge};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use sedimentree_core::{
     collections::Map,
     commit::{CommitStore, CountLeadingZeroBytes, FragmentState},
@@ -39,7 +39,7 @@ use sedimentree_core::{
     loose_commit::id::CommitId,
 };
 use subduction_bench_support::{
-    fixtures::egwalker::{TestVector, STANDARD},
+    fixtures::egwalker::{STANDARD, TestVector},
     harness::criterion::default_criterion,
 };
 
