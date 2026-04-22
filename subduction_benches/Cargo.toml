@@ -1,0 +1,49 @@
+[package]
+name = "subduction_benches"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Shared benchmark workloads, fixtures, and harness helpers for the Subduction workspace. Dev-only; never published."
+
+[features]
+default = []
+
+# Gate progressively heavier workloads so CI stays fast while big-iron runs stay available.
+medium_benches = []
+realistic_benches = ["medium_benches"]
+
+# Opt-in loading of the on-disk `data/trees` CAS fixture (gitignored). Benches that depend on
+# it must tolerate absence and either skip or generate synthetic data.
+real_world_fixture = []
+
+# Expose egwalker `.am` test vectors (bundled with `automerge_sedimentree/test-vectors/`).
+egwalker_fixtures = ["dep:automerge"]
+
+# Criterion-aligned harness helpers. Benches that want our shared Criterion config should pull
+# this in; crates that only need workload generators (e.g., a wasm bench) can skip it.
+criterion_harness = ["dep:criterion", "dep:criterion_pprof"]
+
+# Filesystem fixtures that need `tempfile`.
+fs_fixtures = ["dep:tempfile"]
+
+[dependencies]
+# Internal workspace crates — workloads wrap their public APIs.
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+
+# Deterministic RNG for reproducible workloads.
+rand = { workspace = true, features = ["std", "std_rng", "small_rng"] }
+
+# Optional feature-gated deps.
+automerge = { workspace = true, optional = true }
+criterion = { workspace = true, optional = true }
+criterion_pprof = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+
+[lints]
+workspace = true
