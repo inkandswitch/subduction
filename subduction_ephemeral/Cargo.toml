@@ -27,12 +27,20 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 async-lock = { workspace = true }
+criterion = { workspace = true }
+criterion_pprof = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 getrandom = { workspace = true }
+subduction_bench_support = { workspace = true, features = ["criterion_harness"] }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
-subduction_crypto = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std", "test_utils"] }
 subduction_ephemeral = { path = ".", features = ["std", "test_utils"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[[bench]]
+name = "ephemeral"
+harness = false
 
 [features]
 default = []

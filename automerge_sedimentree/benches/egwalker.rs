@@ -22,9 +22,9 @@ use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
 use automerge_sedimentree::indexed::{IndexedSedimentreeAutomerge, OwnedParents};
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use criterion_pprof::criterion::{Output, PProfProfiler};
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 use sedimentree_core::{
     blob::BlobMeta,
     collections::Map,
@@ -33,7 +33,7 @@ use sedimentree_core::{
     depth::{CountTrailingZerosInBase, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::Sedimentree,
 };
 
@@ -92,8 +92,22 @@ fn random_commit_id_with_depth(rng: &mut SmallRng, depth: u32) -> CommitId {
 
 /// Generate synthetic fragments matching the expected distribution for a document.
 ///
-/// Uses the leading zero bytes metric to distribute fragments across strata.
-/// Fragment count is estimated as: changes / 256 (average distance between depth-0 commits).
+/// ## Post-#122 distribution
+///
+/// Under `CountLeadingZeroBytes`, any commit with nonzero depth is a fragment boundary
+/// (PR #122 removed the `MAX_STRATA_DEPTH = 2` gate). For uniformly-distributed commit ids
+/// the probability of depth `d` is `256⁻ᵈ · (1 - 256⁻¹)`, so the realistic fragment
+/// distribution is:
+///
+/// | Depth | P(depth = d)      | Share of fragments |
+/// |-------|-------------------|--------------------|
+/// | 1     | ≈ 255/256         | ~99.6%             |
+/// | 2     | ≈ 255/256²        | ~0.39%             |
+/// | 3+    | < 256⁻³           | negligible         |
+///
+/// Fragment count is estimated as `changes / 256` (average distance between depth-1
+/// commits). Pre-#122 this bench modelled ~255/256 of fragments at **depth 0** — which
+/// post-#122 aren't fragment boundaries at all. This was off-distribution and is now fixed.
 fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment> {
     let metric = CountLeadingZeroBytes;
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -108,28 +122,37 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
     let mut fragments = Vec::with_capacity(fragment_count);
 
     for _ in 0..fragment_count {
-        // Distribute depths: most fragments at depth 0, fewer at higher depths
-        // P(depth=d) ~ 1/256^d
-        let rand_byte: u8 = rng.gen_range(0..=255);
-        let depth = if rand_byte == 0 {
-            let rand_byte2: u8 = rng.gen_range(0..=255);
-            if rand_byte2 == 0 { 2 } else { 1 }
-        } else {
-            0
+        // Realistic post-#122 distribution:
+        //   depth 1 with ≈ 255/256
+        //   depth 2 with ≈ 1/256
+        //   depth 3+ vanishingly rare (cap at 4)
+        let depth: u32 = {
+            let mut d = 1_u32;
+            while d < 4 {
+                let extend: u8 = rng.r#gen();
+                if extend == 0 {
+                    d += 1;
+                } else {
+                    break;
+                }
+            }
+            d
         };
 
         let head = random_commit_id_with_depth(&mut rng, depth);
 
-        // Generate 1-3 boundary commits at same or higher depth
+        // Generate 1-3 boundary commits at same depth (boundary must be at-or-above depth
+        // of head, and same-depth is the natural common case).
         let boundary_count = rng.gen_range(1..=3);
         let boundary: BTreeSet<_> = (0..boundary_count)
             .map(|_| random_commit_id_with_depth(&mut rng, depth))
             .collect();
 
-        // Generate checkpoints (commits at higher depths within this fragment)
+        // Generate checkpoints (commits at higher depths within this fragment). Note
+        // these are checkpoints, not fragment heads; depth-0 checkpoints are fine.
         let checkpoint_count = rng.gen_range(0..=10);
         let checkpoints: Vec<_> = (0..checkpoint_count)
-            .map(|_| random_commit_id_with_depth(&mut rng, depth + 1))
+            .map(|_| random_commit_id_with_depth(&mut rng, depth.saturating_sub(1)))
             .collect();
 
         // Blob size: average commit is ~100 bytes, fragment covers ~256 commits
@@ -207,7 +230,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..=255);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..=255);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }
@@ -217,7 +244,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..10);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..10);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }

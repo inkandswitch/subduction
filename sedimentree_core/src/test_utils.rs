@@ -822,6 +822,87 @@ impl<'a> arbitrary::Arbitrary<'a> for CyclicGraph {
     }
 }
 
+// ============================================================================
+// Realistic depth distribution (post-#122)
+// ============================================================================
+//
+// Under `CountLeadingZeroBytes`, a commit's depth is the number of leading zero bytes in its
+// id. For uniformly-distributed ids (the natural output of BLAKE3), the probability of depth
+// ≥ d is `256^-d`. Since PR #122, any commit with nonzero depth is a fragment boundary — so
+// the realistic distribution over _fragments_ is geometric:
+//
+// | Depth | P(depth = d)              | Expected share of fragments |
+// |-------|---------------------------|----------------------------|
+// | 1     | 1/256 · (1 - 1/256) ≈ 1/256 | ~99.6%                     |
+// | 2     | 1/256²                    | ~0.39% (1 in 256)          |
+// | 3+    | < 1/256³                  | negligible                 |
+//
+// Pre-#122 fragment generators (e.g. `automerge_sedimentree/benches/egwalker.rs`) modelled
+// _P(depth = 0)_ ≈ 255/256, which is wrong for fragments: a depth-0 commit is a loose commit,
+// not a boundary. Benches using those generators measure an off-distribution workload.
+//
+// The helpers below produce the correct post-#122 distribution.
+
+/// Sample a fragment depth from the realistic post-#122 geometric distribution.
+///
+/// Returns a depth in `1..=max_depth` (inclusive on both ends). Each step deeper is 1/256×
+/// less likely than the previous one; `max_depth` of 4 covers roughly 1 - 256⁻⁴ ≈ 99.9999998%
+/// of the distribution. Values above 4 are very rare; benches are free to clamp.
+#[must_use]
+pub fn realistic_fragment_depth<R: Rng>(rng: &mut R, max_depth: u32) -> u32 {
+    let max_depth = max_depth.max(1);
+    let mut depth: u32 = 1;
+
+    // Each iteration extends to the next stratum with probability 1/256.
+    while depth < max_depth {
+        let extend: u8 = rng.r#gen();
+
+        if extend == 0 {
+            depth += 1;
+        } else {
+            break;
+        }
+    }
+
+    depth
+}
+
+/// Generate a fragment whose head depth is sampled from the realistic distribution.
+///
+/// Unlike [`synthetic_fragment`] (which takes `leading_zeros` as an explicit parameter), this
+/// helper samples the depth from [`realistic_fragment_depth`] before building the fragment.
+/// Boundary commits are sampled independently at the same depth so the `supports_range`
+/// relationships make sense.
+#[must_use]
+pub fn realistic_fragment<R: Rng>(
+    rng: &mut R,
+    boundary_count: usize,
+    checkpoint_count: usize,
+    max_depth: u32,
+) -> Fragment {
+    // Derive a stable "head seed" from a u64 drawn from the RNG so the downstream
+    // `synthetic_fragment` construction is reproducible per-draw.
+    let head_seed: u64 = rng.r#gen();
+
+    // Usage keeps the u32 depth inline with the rest of the `random_commit_id_with_depth`
+    // API; cast to `usize` only at the `synthetic_fragment` boundary.
+    let depth = realistic_fragment_depth(rng, max_depth);
+
+    synthetic_fragment(head_seed, boundary_count, checkpoint_count, depth as usize)
+}
+
+/// Generate `count` fragments whose depths follow the realistic distribution.
+///
+/// Ordering within the returned `Vec` is arbitrary; benches that need ordered input should
+/// sort by head id or depth explicitly.
+#[must_use]
+pub fn realistic_fragments(count: usize, base_seed: u64, max_depth: u32) -> Vec<Fragment> {
+    let mut rng = seeded_rng(base_seed);
+    (0..count)
+        .map(|_| realistic_fragment(&mut rng, 2, 5, max_depth))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -942,5 +1023,60 @@ mod tests {
     #[test]
     fn overlapping_pair_builds() {
         let (_a, _b) = overlapping_sedimentrees(4, 3, 8, 5, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // Realistic depth distribution
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn realistic_depth_never_returns_zero() {
+        let mut rng = seeded_rng(42);
+        for _ in 0..10_000 {
+            let d = realistic_fragment_depth(&mut rng, 4);
+            assert!(d >= 1, "depth-0 is not a fragment boundary post-#122");
+            assert!(d <= 4, "exceeded max_depth");
+        }
+    }
+
+    #[test]
+    fn realistic_depth_distribution_skews_to_one() {
+        // With 100_000 samples and max_depth = 3 the expected depth-1 share is ~99.6%. Use a
+        // wide tolerance (> 95%) to keep the test robust against RNG chance.
+        let mut rng = seeded_rng(7);
+        let samples = 100_000;
+        let mut depth_one = 0_usize;
+
+        for _ in 0..samples {
+            if realistic_fragment_depth(&mut rng, 3) == 1 {
+                depth_one += 1;
+            }
+        }
+
+        // `samples` is 100_000 and `depth_one ≤ samples`, both comfortably below f64's
+        // mantissa limit of 2^52. Use `From` to satisfy `clippy::cast-lossless`; the
+        // `u32`-from-`usize` step is bounded by `samples` (100k < u32::MAX).
+        let samples_u32 = u32::try_from(samples).expect("samples fits in u32");
+        let depth_one_u32 = u32::try_from(depth_one).expect("depth_one fits in u32");
+        let ratio = f64::from(depth_one_u32) / f64::from(samples_u32);
+        assert!(
+            ratio > 0.95 && ratio < 1.0,
+            "depth-1 share should be ~99.6%, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn realistic_depth_respects_max() {
+        // max_depth = 1 should always return 1.
+        let mut rng = seeded_rng(0);
+        for _ in 0..100 {
+            assert_eq!(realistic_fragment_depth(&mut rng, 1), 1);
+        }
+    }
+
+    #[test]
+    fn realistic_fragments_produces_requested_count() {
+        let frags = realistic_fragments(64, 123, 3);
+        assert_eq!(frags.len(), 64);
     }
 }
