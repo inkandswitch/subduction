@@ -14,7 +14,7 @@
     };
 
     wasm-bodge-src = {
-      url = "github:alexjg/wasm-bodge/v0.2.3";
+      url = "github:alexjg/wasm-bodge";
       flake = false;
     };
   };

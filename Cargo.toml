@@ -33,22 +33,22 @@ authors = [
 
 [workspace.dependencies]
 # Internal crates
-automerge_sedimentree = { version = "0.8.0", path = "automerge_sedimentree", default-features = false }
-automerge_sedimentree_wasm = { version = "0.8.0", path = "automerge_sedimentree_wasm" }
-automerge_subduction_wasm = { version = "0.7.0", path = "automerge_subduction_wasm", default-features = false }
-bijou64 = { version = "0.1.1", path = "bijou64", default-features = false }
-sedimentree_core = { version = "0.9.0", path = "sedimentree_core", default-features = false }
-sedimentree_fs_storage = { version = "0.8.0", path = "sedimentree_fs_storage" }
-sedimentree_wasm = { version = "0.9.0", path = "sedimentree_wasm", default-features = false }
-subduction_core = { version = "0.11.0", path = "subduction_core", default-features = false }
-subduction_crypto = { version = "0.5.0", path = "subduction_crypto", default-features = false }
-subduction_ephemeral = { version = "0.4.0", path = "subduction_ephemeral", default-features = false }
-subduction_http_longpoll = { version = "0.7.0", path = "subduction_http_longpoll", default-features = false }
-subduction_iroh = { version = "0.6.0", path = "subduction_iroh" }
-subduction_keyhive = { version = "0.3.0", path = "subduction_keyhive" }
-subduction_keyhive_policy = { version = "0.7.0", path = "subduction_keyhive_policy" }
-subduction_wasm = { version = "0.11.0", path = "subduction_wasm", default-features = false }
-subduction_websocket = { version = "0.9.0", path = "subduction_websocket", default-features = false }
+automerge_sedimentree = { version = "0.9.0", path = "automerge_sedimentree", default-features = false }
+automerge_sedimentree_wasm = { version = "0.9.0", path = "automerge_sedimentree_wasm" }
+automerge_subduction_wasm = { version = "0.8.0", path = "automerge_subduction_wasm", default-features = false }
+bijou64 = { version = "0.2.0", path = "bijou64", default-features = false }
+sedimentree_core = { version = "0.10.0", path = "sedimentree_core", default-features = false }
+sedimentree_fs_storage = { version = "0.9.0", path = "sedimentree_fs_storage" }
+sedimentree_wasm = { version = "0.10.0", path = "sedimentree_wasm", default-features = false }
+subduction_core = { version = "0.12.0", path = "subduction_core", default-features = false }
+subduction_crypto = { version = "0.6.0", path = "subduction_crypto", default-features = false }
+subduction_ephemeral = { version = "0.5.0", path = "subduction_ephemeral", default-features = false }
+subduction_http_longpoll = { version = "0.8.0", path = "subduction_http_longpoll", default-features = false }
+subduction_iroh = { version = "0.7.0", path = "subduction_iroh" }
+subduction_keyhive = { version = "0.4.0", path = "subduction_keyhive" }
+subduction_keyhive_policy = { version = "0.8.0", path = "subduction_keyhive_policy" }
+subduction_wasm = { version = "0.12.0", path = "subduction_wasm", default-features = false }
+subduction_websocket = { version = "0.9.1", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"
@@ -218,3 +218,83 @@ debug = true        # Full debug symbols for flamegraphs/profiling
 lto = "thin"        # Faster link than "fat", close enough for profiling
 opt-level = 3       # Speed, not size
 strip = false       # Keep symbols for profiling tools
+
+# Debug-oriented Wasm profile. Preserves full DWARF so Chrome DevTools
+# (with the C/C++ DevTools Support extension) can step through.
+#
+# Built via: `bodge:debug <crate>` / `bodge:all:debug`, which pass
+# `--debug-profile wasm-debug` to wasm-bodge. The debug variant is exposed
+# through the `./debug` subpath exports of each `*_wasm` package.
+#
+# Tradeoff rationale vs. profile.release:
+#
+# | knob             | wasm-debug | release | why different             |
+# |------------------|------------|---------|---------------------------|
+# | opt-level        | 1          | "z"     | preserve locals/stepping  |
+# | lto              | "thin"     | "fat"   | keep stack frames clear   |
+# | codegen-units    | 16         | 1       | faster rebuild cycle      |
+# | debug            | "limited"  | (off)   | DWARF for step-through    |
+# | strip            | "none"     | symbols | DWARF must survive        |
+# | debug-assertions | true       | false   | catch bugs during debug   |
+# | overflow-checks  | true       | false   | catch bugs during debug   |
+# | panic            | "abort"    | "abort" | (inherited)               |
+#
+# opt-level=1 is the Chrome-DevTools sweet spot: most locals remain visible,
+# line stepping feels natural, and iterator chains don't fuse. Dropping to 0
+# would preserve every variable but makes Automerge/sedimentree_core
+# unusably slow in the browser; raising to 2 starts fusing lines and
+# optimizing out locals, which makes stepping confusing. See per-package
+# overrides below for the one concession to runtime ergonomics.
+#
+# wasm-opt is skipped by wasm-bodge for the debug variant (binaryen's DWARF
+# support corrupts wasm-bindgen-emitted DWARF), so no additional knob here.
+[profile.wasm-debug]
+inherits = "release"
+codegen-units = 16
+# "limited" keeps line tables + most type info + locals, but omits the
+# exhaustive location expressions of `debug = "full"`. Chrome DevTools can
+# still step through and inspect variables; empirically ~2x smaller DWARF
+# than "full". Measured sizes for the four `_wasm` crates under this profile
+# (raw / gzipped, compared to release):
+#
+# |                            | release       | wasm-debug    | multiplier   |
+# | sedimentree_wasm           |  1 MiB / 224K | 11 MiB / 2 MiB | 12x raw, 10x gz |
+# | subduction_wasm            |  3 MiB / 723K | 29 MiB / 6 MiB | 10x raw,  8x gz |
+# | automerge_sedimentree_wasm |  3 MiB / 761K | 43 MiB / 8 MiB | 14x raw, 11x gz |
+# | automerge_subduction_wasm  |  3 MiB / 778K | 41 MiB / 8 MiB | 14x raw, 11x gz |
+debug = "limited"
+debug-assertions = true
+lto = "thin"
+opt-level = 1
+overflow-checks = true
+strip = "none"
+
+# Override the release profile's per-package `strip = "debuginfo"` for the
+# four Wasm-binding crates: we inherit from release, so those strip
+# overrides would otherwise wipe the DWARF we explicitly want here.
+[profile.wasm-debug.package.sedimentree_wasm]
+strip = "none"
+
+[profile.wasm-debug.package.subduction_wasm]
+strip = "none"
+
+[profile.wasm-debug.package.automerge_sedimentree_wasm]
+strip = "none"
+
+[profile.wasm-debug.package.automerge_subduction_wasm]
+strip = "none"
+
+# Mirror the [profile.dev.package.*] / [profile.test.package.*] overrides:
+# Automerge and sedimentree_core are HashMap/BTreeMap-heavy and crawl at
+# opt-level < 2 in the browser. Users debugging Subduction code (the usual
+# case) don't need to step through Automerge internals line-by-line. If you
+# DO need to debug inside Automerge itself, temporarily remove these
+# overrides.
+[profile.wasm-debug.package.automerge]
+opt-level = 2
+
+[profile.wasm-debug.package.automerge_sedimentree]
+opt-level = 2
+
+[profile.wasm-debug.package.sedimentree_core]
+opt-level = 2

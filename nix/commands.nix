@@ -529,6 +529,66 @@
       echo ""
       echo "✓ $CRATE built with wasm-bodge"
     '';
+
+    # Debug variants. Identical to `bodge` / `bodge:all` but pass
+    # `--debug-profile wasm-debug` so wasm-bodge also emits a parallel
+    # `/debug` subpath export compiled under the `[profile.wasm-debug]`
+    # profile defined in the workspace Cargo.toml. DWARF is preserved so
+    # Chrome DevTools (+ the C/C++ DevTools Support extension) can step
+    # through. Debug bundles are ~10x larger than release; see
+    # `subduction_wasm/README.md` for the full Chrome setup.
+    "bodge:all:debug" = cmd "Build all wasm packages with wasm-bodge (release + /debug variants)" ''
+      set -e
+
+      for crate in sedimentree_wasm subduction_wasm automerge_sedimentree_wasm automerge_subduction_wasm; do
+        echo "===> wasm-bodge build $crate (with /debug variant)..."
+        rm -rf "$WORKSPACE_ROOT/$crate/dist"
+        ${wasm-bodge-bin} build \
+          --crate-path "$WORKSPACE_ROOT/$crate" \
+          --package-json "$WORKSPACE_ROOT/$crate/package.json" \
+          --out-dir "$WORKSPACE_ROOT/$crate/dist" \
+          --debug-profile wasm-debug
+      done
+
+      echo ""
+      echo "✓ All wasm packages built with wasm-bodge (release + /debug)"
+
+      wasm:sizes
+    '';
+
+    "bodge:debug" = cmd "Build a single wasm package with wasm-bodge (release + /debug variant)" ''
+      set -e
+
+      if [ -z "''${1:-}" ]; then
+        echo "Usage: bodge:debug <crate>"
+        echo ""
+        echo "Available crates:"
+        echo "  sedimentree_wasm"
+        echo "  subduction_wasm"
+        echo "  automerge_sedimentree_wasm"
+        echo "  automerge_subduction_wasm"
+        exit 1
+      fi
+
+      CRATE="$1"
+
+      if [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
+        echo "Error: crate directory not found: $CRATE"
+        exit 1
+      fi
+
+      rm -rf "$WORKSPACE_ROOT/$CRATE/dist"
+
+      echo "===> wasm-bodge build $CRATE (with /debug variant)..."
+      ${wasm-bodge-bin} build \
+        --crate-path "$WORKSPACE_ROOT/$CRATE" \
+        --package-json "$WORKSPACE_ROOT/$CRATE/package.json" \
+        --out-dir "$WORKSPACE_ROOT/$CRATE/dist" \
+        --debug-profile wasm-debug
+
+      echo ""
+      echo "✓ $CRATE built with wasm-bodge (release + /debug)"
+    '';
   };
 
   lint = {

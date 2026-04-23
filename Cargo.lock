@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree",
@@ -313,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree_wasm"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "automerge",
  "base58",
@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_ingest"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "bijou64"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arbitrary",
  "bijou64",
@@ -3033,9 +3033,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "leb128"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
+checksum = "6cc46bac87ef8093eed6f272babb833b6443374399985ac8ed28471ee0918545"
 
 [[package]]
 name = "leb128fmt"
@@ -3680,9 +3680,9 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openssl"
-version = "0.10.77"
+version = "0.10.78"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfe4646e360ec77dff7dde40ed3d6c5fee52d156ef4a62f53973d38294dad87f"
+checksum = "f38c4372413cdaaf3cc79dd92d29d7d9f5ab09b51b10dded508fb90bb70b9222"
 dependencies = [
  "bitflags 2.11.1",
  "cfg-if 1.0.4",
@@ -3712,9 +3712,9 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.113"
+version = "0.9.114"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad2f2c0eba47118757e4c6d2bff2838f3e0523380021356e7875e858372ce644"
+checksum = "13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6"
 dependencies = [
  "cc",
  "libc",
@@ -4587,9 +4587,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.38"
+version = "0.23.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
+checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -4652,9 +4652,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.12"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8279bb85272c9f10811ae6a6c547ff594d6a7f3c6c6b02ee9726d1d0dcfcdd06"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -4729,7 +4729,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -4758,7 +4758,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_fs_storage"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-lock",
  "future_form",
@@ -4775,7 +4775,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-lock",
  "base58",
@@ -5167,7 +5167,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ahash",
  "async-lock",
@@ -5214,7 +5214,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5244,7 +5244,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_crypto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arbitrary",
  "bolero",
@@ -5262,7 +5262,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_ephemeral"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5284,7 +5284,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5314,7 +5314,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_iroh"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5337,7 +5337,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5361,7 +5361,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive_policy"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "ed25519-dalek 2.2.0",
@@ -5383,7 +5383,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5416,7 +5416,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5454,9 +5454,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "symbolic-common"
-version = "12.18.1"
+version = "12.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f3cdeaae6779ecba2567f20bf7716718b8c4ce6717c9def4ced18786bb11ea"
+checksum = "332615d90111d8eeaf86a84dc9bbe9f65d0d8c5cf11b4caccedc37754eb0dcfd"
 dependencies = [
  "debugid",
  "memmap2",
@@ -5466,9 +5466,9 @@ dependencies = [
 
 [[package]]
 name = "symbolic-demangle"
-version = "12.18.1"
+version = "12.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "672c6ad9cb8fce6a1283cc9df9070073cccad00ae241b80e3686328a64e3523b"
+checksum = "912017718eb4d21930546245af9a3475c9dccf15675a5c215664e76621afc471"
 dependencies = [
  "rustc-demangle",
  "symbolic-common",
@@ -5808,7 +5808,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
- "winnow 1.0.1",
+ "winnow 1.0.2",
 ]
 
 [[package]]
@@ -5817,7 +5817,7 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow 1.0.1",
+ "winnow 1.0.2",
 ]
 
 [[package]]
@@ -6057,9 +6057,9 @@ dependencies = [
 
 [[package]]
 name = "typenum"
-version = "1.19.0"
+version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
+checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
 name = "unicode-ident"
@@ -6875,9 +6875,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09dac053f1cd375980747450bfc7250c264eaae0583872e845c0c7cd578872b5"
+checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
 dependencies = [
  "memchr",
 ]
