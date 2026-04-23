@@ -24,6 +24,7 @@ BlobSize
 BlobsRequest
 BlobsResponse
 BndryCnt
+Bundler
 CAS
 CBOR
 CBOR-encoded
@@ -56,6 +57,7 @@ DataRequestRejected
 Debuggable
 Deployers
 Dev
+DevTools
 DiscoveryId
 DoS
 DoS-resistant
@@ -90,6 +92,7 @@ JSON
 Keyhive
 KeyhivePolicy
 Keyoxide
+KiB
 LEB
 Little-endian
 LooseCommit
@@ -137,6 +140,7 @@ ReplayedNonce
 RequestId
 Responder
 Retryable
+Rollup
 Ryzen
 SChaCha
 SDK
@@ -175,6 +179,7 @@ Valgrind's
 Vec
 Vec-based
 Versionable
+Vite
 WTF
 Wasm
 WebAssembly
@@ -183,6 +188,7 @@ WebCryptoSigner
 WebKit
 WebRTC
 WebSocket
+Webpack
 XChaCha
 Zelenka
 acyclic
@@ -195,6 +201,7 @@ authN
 authZ
 authn
 authz
+auto-init
 automerge
 automerge-repo
 backend
@@ -210,12 +217,15 @@ bijou64
 biːʒuː
 blake
 branchless
+bundler
+bundler's
 canonicality
 ciphertext
 cleartext
 cli
 codebase
 codec
+codepath
 commit's
 composable
 concap
@@ -245,11 +255,13 @@ enum
 et
 expede
 faq
+fetchable
 filesystem
 flamegraphs
 fs
 fsync
 fɔːr
+gzipped
 hardcoded
 heatmaps
 hexdump
@@ -263,6 +275,7 @@ img
 impl
 implementor
 impls
+inlining
 instantiation
 instantiations
 invariant
@@ -354,6 +367,7 @@ subdirectory
 subduction
 subgraph
 submodules
+subpath
 subsumptions
 subtype
 subtyping
@@ -377,6 +391,7 @@ varu
 vectorisation
 vu
 wasm
+wasm-bindgen
 www
 xF
 xFA
