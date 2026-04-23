@@ -97,7 +97,7 @@ in {
 
       maxMessageSize = lib.mkOption {
         type = lib.types.int;
-        default = 52428800; # 50 MB
+        default = 52428800; # 50 MiB
         description = ''
           Maximum WebSocket message size in bytes.
 
@@ -115,7 +115,8 @@ in {
         default = null;
         description = ''
           Maximum WebSocket frame size in bytes. When null (the
-          default), the server uses {option}`maxMessageSize`.
+          default), the server uses
+          {option}`services.subduction.server.maxMessageSize`.
 
           Most deployments should leave this unset. Only useful if
           you need WebSocket frame fragmentation with a smaller

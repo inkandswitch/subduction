@@ -92,7 +92,7 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "5")]
     pub(crate) timeout: u64,
 
-    /// Maximum WebSocket message size in bytes (default: 50 MB).
+    /// Maximum WebSocket message size in bytes (default: 50 MiB).
     ///
     /// This sets the aggregate-message limit. If `--max-frame-size` is
     /// not set, individual frames are capped at the same value (browsers
@@ -101,13 +101,15 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value_t = DEFAULT_MAX_MESSAGE_SIZE)]
     pub(crate) max_message_size: usize,
 
-    /// Maximum WebSocket frame size in bytes. Defaults to `max_message_size`.
+    /// Override for the maximum WebSocket frame size in bytes. When
+    /// unset (the common case), the effective frame size equals
+    /// `max_message_size`.
     ///
     /// Most deployments should leave this unset. Only useful if you need
     /// WebSocket frame fragmentation with a smaller per-frame cap than
     /// the aggregate message size.
-    #[arg(long)]
-    pub(crate) max_frame_size: Option<usize>,
+    #[arg(long = "max-frame-size", value_name = "MAX_FRAME_SIZE")]
+    pub(crate) max_frame_size_override: Option<usize>,
 
     /// Metrics server port (Prometheus endpoint)
     #[arg(long, default_value = "9090")]
@@ -164,12 +166,12 @@ pub(crate) struct ServerArgs {
 impl ServerArgs {
     /// Resolve the effective max frame size.
     ///
-    /// Returns the explicit `--max-frame-size` if provided, otherwise
-    /// falls back to `--max-message-size`. Keeping the two equal by
-    /// default avoids the 16 MiB silent-rejection footgun in tungstenite
-    /// (see PR #123).
+    /// Returns `max_frame_size_override` if the `--max-frame-size`
+    /// CLI flag was passed, otherwise falls back to `max_message_size`.
+    /// Keeping the two equal by default avoids the 16 MiB silent-rejection
+    /// footgun in tungstenite (see PR #123).
     pub(crate) fn max_frame_size(&self) -> usize {
-        self.max_frame_size.unwrap_or(self.max_message_size)
+        self.max_frame_size_override.unwrap_or(self.max_message_size)
     }
 }
 
