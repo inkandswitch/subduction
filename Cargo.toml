@@ -222,7 +222,7 @@ strip = false       # Keep symbols for profiling tools
 # Debug-oriented Wasm profile. Preserves full DWARF so Chrome DevTools
 # (with the C/C++ DevTools Support extension) can step through.
 #
-# Built via: `bodge:debug <crate>` / `bodge:all:debug`, which pass
+# Built via: `bodge <crate>` / `bodge:all`, which pass
 # `--debug-profile wasm-debug` to wasm-bodge. The debug variant is exposed
 # through the `./debug` subpath exports of each `*_wasm` package.
 #

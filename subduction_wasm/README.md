@@ -54,11 +54,11 @@ Subduction's Wasm packages can ship a parallel `./debug` subpath export that pre
 From the workspace root:
 
 ```
-bodge:debug subduction_wasm          # one crate
-bodge:all:debug                      # all four _wasm crates
+bodge subduction_wasm          # one crate
+bodge:all                      # all four _wasm crates
 ```
 
-Both commands pass `--debug-profile wasm-debug` to `wasm-bodge`, which runs a second `cargo build` under the `[profile.wasm-debug]` profile declared in the workspace `Cargo.toml`. The generated `dist/` tree contains both the release artifacts (under the usual paths) _and_ debug artifacts (prefixed with `debug-` under `esm/` / `cjs/`, plus `*-debug.wasm` standalone, plus `iife/debug.js`).
+Both `bodge` and `bodge:all` pass `--debug-profile wasm-debug` to `wasm-bodge`, which runs a second `cargo build` under the `[profile.wasm-debug]` profile declared in the workspace `Cargo.toml`. The generated `dist/` tree contains both the release artifacts (under the usual paths) _and_ debug artifacts (prefixed with `debug-` under `esm/` / `cjs/`, plus `*-debug.wasm` standalone, plus `iife/debug.js`).
 
 ### Consuming the debug bundle
 
