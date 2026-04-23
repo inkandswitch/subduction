@@ -1345,7 +1345,9 @@ where
     /// at the end.
     ///
     /// No messages are broadcast to peers — use
-    /// [`sync_with_peer`](Self::sync_with_peer) afterward to propagate.
+    /// [`sync_with_peer`](Self::sync_with_peer) afterward to propagate, or
+    /// prefer [`add_commits_batch_broadcast`](Self::add_commits_batch_broadcast)
+    /// which keeps the O(1) minimization but still broadcasts.
     ///
     /// # Errors
     ///
@@ -1380,6 +1382,130 @@ where
         self.minimize_tree(id).await;
         tracing::info!("bulk-insert of {count} commits complete, tree minimized");
         Ok(())
+    }
+
+    /// Bulk-insert commits with a single broadcast round-trip.
+    ///
+    /// Semantically equivalent to calling [`add_commit`](Self::add_commit) in a loop but
+    /// avoids the per-commit `minimize_tree` cost that makes the naive loop O(n²) in the
+    /// tree size. Instead:
+    ///
+    /// 1. All commits are inserted locally (sequential; the seal is the dominant cost).
+    /// 2. `minimize_tree` runs once at the end.
+    /// 3. Each commit is then broadcast to every authorised subscriber (or every connection,
+    ///    when no subscribers are registered), in the order they were inserted.
+    ///
+    /// Step 3 is **still linear in `commits × peers`** — there's no wire-protocol support
+    /// for "batch of commits" in a single message today. Adding one would be a separate
+    /// follow-up. What this method _does_ save is the `minimize_tree` cost that otherwise
+    /// runs on a tree growing by one commit each time.
+    ///
+    /// Returns the `FragmentRequested` for each commit (in order), or `None` for commits
+    /// whose head wasn't a fragment boundary.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] if a storage error occurs.
+    pub async fn add_commits_batch_broadcast(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
+    ) -> Result<Vec<Option<FragmentRequested>>, WriteError<F, S, C, H::Message, P::PutDisallowed>>
+    {
+        if commits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let self_id = self.peer_id();
+        let putter = self.storage.local_putter::<F>(id);
+
+        let count = commits.len();
+        tracing::info!(
+            "bulk-insert-and-broadcast of {count} commits into sedimentree {id:?}"
+        );
+
+        // Phase 1: seal + insert every commit locally. Record the wire-ready `Signed<...>`
+        // plus its blob for the broadcast phase, and compute per-commit `FragmentRequested`
+        // at seal time (depth is deterministic from the commit id).
+        let mut prepared: Vec<(Signed<LooseCommit>, Blob, Option<FragmentRequested>)> =
+            Vec::with_capacity(count);
+
+        for (head, parents, blob) in commits {
+            let verified_blob = VerifiedBlobMeta::new(blob);
+            let verified_meta: VerifiedMeta<LooseCommit> =
+                VerifiedMeta::seal::<F, _>(&self.signer, (id, head, parents), verified_blob).await;
+
+            let commit_head = verified_meta.payload().head();
+            let signed_for_wire = verified_meta.signed().clone();
+            let blob_for_wire = verified_meta.blob().clone();
+
+            let depth = self.depth_metric.to_depth(commit_head);
+            let fragment_requested =
+                depth.is_boundary().then(|| FragmentRequested::new(commit_head, depth));
+
+            self.insert_commit_locally(&putter, verified_meta)
+                .await
+                .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
+            prepared.push((signed_for_wire, blob_for_wire, fragment_requested));
+        }
+
+        // Phase 2: one `minimize_tree` call for the whole batch, instead of one per commit.
+        self.minimize_tree(id).await;
+
+        // Phase 3: compute heads once (post-minimize) and broadcast every commit to every
+        // authorised peer.
+        let heads = {
+            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            shard
+                .get(&id)
+                .map(|s| s.heads(&self.depth_metric))
+                .unwrap_or_default()
+        };
+
+        let conns = {
+            let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
+            if subscriber_conns.is_empty() {
+                tracing::debug!(
+                    "No subscribers for sedimentree {id:?}, broadcasting batch to all connections"
+                );
+                self.all_connections().await
+            } else {
+                subscriber_conns
+            }
+        };
+
+        for (signed_for_wire, blob, _fragment) in &prepared {
+            for conn in &conns {
+                let peer_id = conn.peer_id();
+                let msg: H::Message = SyncMessage::LooseCommit {
+                    id,
+                    commit: signed_for_wire.clone(),
+                    blob: blob.clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.send_counter.next(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                }
+                .into();
+                if let Err(e) = conn.send(&msg).await {
+                    tracing::warn!(
+                        "peer {} disconnected: {}",
+                        peer_id,
+                        IoError::<F, S, C, H::Message>::ConnSend(e)
+                    );
+                    if self.remove_connection(conn).await == Some(true) {
+                        self.send_counter.clear_peer(&peer_id).await;
+                    }
+                }
+            }
+        }
+
+        tracing::info!(
+            "bulk-insert-and-broadcast of {count} commits complete, tree minimized"
+        );
+
+        Ok(prepared.into_iter().map(|(_, _, f)| f).collect())
     }
 
     /// Bulk-insert fragments without per-fragment minimization or broadcasting.
