@@ -171,7 +171,8 @@ impl ServerArgs {
     /// Keeping the two equal by default avoids the 16 MiB silent-rejection
     /// footgun in tungstenite (see PR #123).
     pub(crate) fn max_frame_size(&self) -> usize {
-        self.max_frame_size_override.unwrap_or(self.max_message_size)
+        self.max_frame_size_override
+            .unwrap_or(self.max_message_size)
     }
 }
 
