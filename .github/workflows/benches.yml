@@ -37,6 +37,12 @@ jobs:
             package: subduction_websocket
             features: tokio_client,tokio_server
             bench: e2e
+            # Reduced sample count to avoid OOM/resource exhaustion on
+            # shared GH runners. Each e2e iteration spins up a fresh
+            # TCP server + Subduction client; at 100 samples × 7 bench
+            # fns × multiple parameter sweeps, the runner runs out of
+            # FDs or memory. 20 samples is enough for regression detection.
+            extra_args: "--sample-size 20 --measurement-time 2"
 
     steps:
       - uses: actions/checkout@v4
@@ -62,12 +68,12 @@ jobs:
               --package ${{ matrix.package }} \
               --features ${{ matrix.features }} \
               --bench ${{ matrix.bench }} \
-              -- --noplot
+              -- --noplot ${{ matrix.extra_args }}
           else
             cargo bench \
               --package ${{ matrix.package }} \
               --bench ${{ matrix.bench }} \
-              -- --noplot
+              -- --noplot ${{ matrix.extra_args }}
           fi
 
       - name: Upload benchmark results

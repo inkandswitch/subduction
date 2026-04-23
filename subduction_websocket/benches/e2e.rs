@@ -62,6 +62,13 @@ use subduction_websocket::{
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// When `BENCH_HEAVY=1` is set, run the full parameter sweep (1 MB blobs,
+/// 8 concurrent clients). When unset (the default, including CI), use a
+/// smaller sweep that fits comfortably in a 7 GB shared GitHub runner.
+fn bench_heavy() -> bool {
+    std::env::var("BENCH_HEAVY").is_ok_and(|v| v == "1")
+}
+
 fn signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
 }
@@ -326,7 +333,13 @@ fn bench_batch_sync(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("sync/batch");
 
-    for count in [1, 10, 50, 100] {
+    let counts: Vec<u64> = if bench_heavy() {
+        vec![1, 10, 50, 100]
+    } else {
+        vec![1, 10, 50]
+    };
+
+    for count in counts {
         group.throughput(Throughput::Elements(count));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
             b.iter_batched(
@@ -369,12 +382,18 @@ fn bench_large_blob_sync(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("sync/blob_size");
 
-    for &(label, size) in &[
-        ("1KB", 1_024),
-        ("64KB", 64 * 1_024),
-        ("256KB", 256 * 1_024),
-        ("1MB", 1_024 * 1_024),
-    ] {
+    let sizes: Vec<(&str, usize)> = if bench_heavy() {
+        vec![
+            ("1KB", 1_024),
+            ("64KB", 64 * 1_024),
+            ("256KB", 256 * 1_024),
+            ("1MB", 1_024 * 1_024),
+        ]
+    } else {
+        vec![("1KB", 1_024), ("64KB", 64 * 1_024)]
+    };
+
+    for &(label, size) in &sizes {
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::new("blob", label), &size, |b, &size| {
             b.iter_batched(
@@ -517,7 +536,13 @@ fn bench_concurrent_clients(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("sync/concurrent_clients");
 
-    for num_clients in [1, 2, 4, 8] {
+    let client_counts: Vec<u64> = if bench_heavy() {
+        vec![1, 2, 4, 8]
+    } else {
+        vec![1, 2, 4]
+    };
+
+    for num_clients in client_counts {
         group.throughput(Throughput::Elements(num_clients));
         group.bench_with_input(
             BenchmarkId::from_parameter(num_clients),
