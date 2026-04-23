@@ -87,10 +87,45 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
     where
         R: 'a,
     {
+        Self::with_max_message_size(address, signer, audience, DEFAULT_MAX_MESSAGE_SIZE).await
+    }
+
+    /// Create a new [`TokioWebSocketClient`] with a custom tungstenite
+    /// `max_message_size` (and matching `max_frame_size`).
+    ///
+    /// Use this when connecting to a server that accepts messages larger
+    /// than [`DEFAULT_MAX_MESSAGE_SIZE`] (50 MiB). See [`Self::new`] for
+    /// parameter semantics; this constructor is identical except that it
+    /// raises both tungstenite size limits to `max_message_size`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection could not be established or handshake fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if internal state is inconsistent after a successful handshake (should never happen).
+    #[allow(clippy::expect_used)]
+    pub async fn with_max_message_size<'a>(
+        address: Uri,
+        signer: R,
+        audience: Audience,
+        max_message_size: usize,
+    ) -> Result<
+        (
+            Authenticated<Self, Sendable>,
+            ListenerTask<'a>,
+            SenderTask<'a>,
+        ),
+        ClientConnectError,
+    >
+    where
+        R: 'a,
+    {
         tracing::info!("Connecting to WebSocket server at {address}");
         let mut ws_config = WebSocketConfig::default();
-        ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
-        ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        ws_config.max_message_size = Some(max_message_size);
+        ws_config.max_frame_size = Some(max_message_size);
         let (ws_stream, _resp) =
             connect_async_with_config(address.clone(), Some(ws_config)).await?;
 

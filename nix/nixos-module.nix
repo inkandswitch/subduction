@@ -98,7 +98,29 @@ in {
       maxMessageSize = lib.mkOption {
         type = lib.types.int;
         default = 52428800; # 50 MB
-        description = "Maximum WebSocket message size in bytes.";
+        description = ''
+          Maximum WebSocket message size in bytes.
+
+          Sets the aggregate-message limit passed to the server. If
+          {option}`services.subduction.server.maxFrameSize` is left
+          unset, individual WebSocket frames are capped at the same
+          value — browsers commonly send unfragmented frames, so
+          keeping the two limits equal avoids a silent 16 MiB
+          rejection at the tungstenite default (see PR #123).
+        '';
+      };
+
+      maxFrameSize = lib.mkOption {
+        type = lib.types.nullOr lib.types.int;
+        default = null;
+        description = ''
+          Maximum WebSocket frame size in bytes. When null (the
+          default), the server uses {option}`maxMessageSize`.
+
+          Most deployments should leave this unset. Only useful if
+          you need WebSocket frame fragmentation with a smaller
+          per-frame cap than the aggregate message size.
+        '';
       };
 
       metricsPort = lib.mkOption {
@@ -247,6 +269,10 @@ in {
                   (toString cfg.server.handshakeMaxDrift)
                   "--max-message-size"
                   (toString cfg.server.maxMessageSize)
+                ]
+                ++ lib.optionals (cfg.server.maxFrameSize != null) [
+                  "--max-frame-size"
+                  (toString cfg.server.maxFrameSize)
                 ]
                 ++ lib.optionals cfg.server.enableMetrics [
                   "--metrics"
