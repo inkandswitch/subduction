@@ -16,6 +16,27 @@ env:
 jobs:
   benchmarks:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: sedimentree_core
+            package: sedimentree_core
+            features: std
+            bench: sedimentree
+          - name: subduction_core
+            package: subduction_core
+            features: std
+            bench: subduction
+          - name: bijou64-shootout
+            package: bijou64
+            features: ""
+            bench: shootout
+          - name: e2e-websocket
+            package: subduction_websocket
+            features: tokio_client,tokio_server
+            bench: e2e
 
     steps:
       - uses: actions/checkout@v4
@@ -23,29 +44,57 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache: true
+          # Defer caching to Swatinem/rust-cache so we can use a
+          # per-package `shared-key`. Each matrix job keeps its own
+          # cache entry keyed by the bench package, which avoids
+          # cross-suite invalidation when a single crate changes.
+          cache: false
 
-      - name: Run sedimentree_core benchmarks
-        run: cargo bench --package sedimentree_core --features std --bench sedimentree -- --noplot
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "bench-${{ matrix.package }}"
+          cache-all-crates: true
 
-      - name: Run subduction_core benchmarks
-        run: cargo bench --package subduction_core --features std --bench subduction -- --noplot
-
-      - name: Run bijou64 shootout benchmarks
-        run: cargo bench --package bijou64 --bench shootout -- --noplot
-
-      - name: Run e2e WebSocket benchmarks
-        run: cargo bench --package subduction_websocket --features tokio_client,tokio_server --bench e2e -- --noplot
-
-      - name: Run heap allocation profiling
-        run: cargo test --package sedimentree_core --test heap_profile -- --nocapture
+      - name: Run ${{ matrix.name }} benchmarks
+        run: |
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo bench \
+              --package ${{ matrix.package }} \
+              --features ${{ matrix.features }} \
+              --bench ${{ matrix.bench }} \
+              -- --noplot
+          else
+            cargo bench \
+              --package ${{ matrix.package }} \
+              --bench ${{ matrix.bench }} \
+              -- --noplot
+          fi
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results
+          name: benchmark-results-${{ matrix.name }}
           path: target/criterion/
           retention-days: 90
+
+  heap-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "heap-profile"
+
+      - name: Run heap allocation profiling
+        run: cargo test --package sedimentree_core --test heap_profile -- --nocapture
 
       - name: Upload heap profile
         uses: actions/upload-artifact@v4

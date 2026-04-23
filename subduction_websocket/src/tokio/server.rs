@@ -3,7 +3,6 @@
 use subduction_core::timeout::Timeout;
 
 use crate::{
-    DEFAULT_MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
@@ -60,6 +59,12 @@ pub struct TokioWebSocketServer<
     address: SocketAddr,
     accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
+    /// Tungstenite max message size used for outbound connections
+    /// (`try_connect` / `try_connect_discover`). The incoming accept loop
+    /// already receives this value as a local variable — storing it here
+    /// lets the outbound methods use the configured value instead of
+    /// falling back to the transport default.
+    max_message_size: usize,
 }
 
 impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
@@ -79,6 +84,7 @@ where
             address: self.address,
             accept_task: self.accept_task.clone(),
             cancellation_token: self.cancellation_token.clone(),
+            max_message_size: self.max_message_size,
         }
     }
 }
@@ -242,6 +248,7 @@ where
             subduction,
             accept_task: Arc::new(accept_task),
             cancellation_token,
+            max_message_size,
         })
     }
 
@@ -371,8 +378,8 @@ where
         tracing::info!("Connecting to peer at {uri_str}");
 
         let mut ws_config = WebSocketConfig::default();
-        ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
-        ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        ws_config.max_message_size = Some(self.max_message_size);
+        ws_config.max_frame_size = Some(self.max_message_size);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;
@@ -481,8 +488,8 @@ where
         tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
 
         let mut ws_config = WebSocketConfig::default();
-        ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
-        ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        ws_config.max_message_size = Some(self.max_message_size);
+        ws_config.max_frame_size = Some(self.max_message_size);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;

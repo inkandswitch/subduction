@@ -92,9 +92,24 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "5")]
     pub(crate) timeout: u64,
 
-    /// Maximum WebSocket message size in bytes (default: 50 MB)
+    /// Maximum WebSocket message size in bytes (default: 50 MiB).
+    ///
+    /// This sets the aggregate-message limit. If `--max-frame-size` is
+    /// not set, individual frames are capped at the same value (browsers
+    /// commonly send unfragmented frames, so having the two limits equal
+    /// avoids a silent 16 MiB rejection at the tungstenite default).
     #[arg(long, default_value_t = DEFAULT_MAX_MESSAGE_SIZE)]
     pub(crate) max_message_size: usize,
+
+    /// Override for the maximum WebSocket frame size in bytes. When
+    /// unset (the common case), the effective frame size equals
+    /// `max_message_size`.
+    ///
+    /// Most deployments should leave this unset. Only useful if you need
+    /// WebSocket frame fragmentation with a smaller per-frame cap than
+    /// the aggregate message size.
+    #[arg(long = "max-frame-size", value_name = "MAX_FRAME_SIZE")]
+    pub(crate) max_frame_size_override: Option<usize>,
 
     /// Metrics server port (Prometheus endpoint)
     #[arg(long, default_value = "9090")]
@@ -146,6 +161,19 @@ pub(crate) struct ServerArgs {
     /// Useful for integration tests that need to discover the server's address.
     #[arg(long = "ready-file", value_name = "PATH")]
     pub(crate) ready_file: Option<PathBuf>,
+}
+
+impl ServerArgs {
+    /// Resolve the effective max frame size.
+    ///
+    /// Returns `max_frame_size_override` if the `--max-frame-size`
+    /// CLI flag was passed, otherwise falls back to `max_message_size`.
+    /// Keeping the two equal by default avoids the 16 MiB silent-rejection
+    /// footgun in tungstenite (see PR #123).
+    pub(crate) fn max_frame_size(&self) -> usize {
+        self.max_frame_size_override
+            .unwrap_or(self.max_message_size)
+    }
 }
 
 /// Default interval for refreshing storage metrics (1 minute).
@@ -338,6 +366,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let accept_ephemeral = ephemeral.clone();
     let accept_handler = lp_handler;
     let max_message_size = args.max_message_size;
+    let max_frame_size = args.max_frame_size();
 
     let accept_task = tokio::spawn(async move {
         accept_loop(
@@ -348,6 +377,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             accept_cancel,
             handshake_max_drift,
             max_message_size,
+            max_frame_size,
             server_peer_id,
             discovery_audience,
             ws_enabled,
@@ -532,6 +562,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let peer_signer = signer.clone();
         let peer_service_name = service_name.clone();
         let peer_cancel = token.clone();
+        let peer_max_message_size = args.max_message_size;
+        let peer_max_frame_size = args.max_frame_size();
 
         tokio::spawn(async move {
             match try_connect_ws(
@@ -541,6 +573,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 &peer_signer,
                 &peer_service_name,
                 peer_cancel,
+                peer_max_message_size,
+                peer_max_frame_size,
             )
             .await
             {
@@ -596,6 +630,7 @@ async fn accept_loop(
     cancel: CancellationToken,
     handshake_max_drift: Duration,
     max_message_size: usize,
+    max_frame_size: usize,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     ws_enabled: bool,
@@ -644,6 +679,7 @@ async fn accept_loop(
                                     task_ephemeral.clone(),
                                     handshake_max_drift,
                                     max_message_size,
+                                    max_frame_size,
                                     server_peer_id,
                                     task_discovery,
                                 )
@@ -687,12 +723,13 @@ async fn handle_websocket(
     ephemeral: CliEphemeralHandler,
     handshake_max_drift: Duration,
     max_message_size: usize,
+    max_frame_size: usize,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
 ) {
     let mut ws_config = WebSocketConfig::default();
     ws_config.max_message_size = Some(max_message_size);
-    ws_config.max_frame_size = Some(max_message_size);
+    ws_config.max_frame_size = Some(max_frame_size);
 
     let ws_stream = match async_tungstenite::tokio::accept_hdr_async_with_config(
         tcp,
@@ -882,13 +919,15 @@ async fn try_connect_ws(
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
+    max_message_size: usize,
+    max_frame_size: usize,
 ) -> Result<PeerId, eyre::Error> {
     let uri_str = uri.to_string();
     tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
 
     let mut ws_config = WebSocketConfig::default();
-    ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
-    ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+    ws_config.max_message_size = Some(max_message_size);
+    ws_config.max_frame_size = Some(max_frame_size);
     let (ws_stream, _resp) =
         async_tungstenite::tokio::connect_async_with_config(uri.clone(), Some(ws_config)).await?;
 
