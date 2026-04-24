@@ -1,9 +1,6 @@
 //! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
-extern crate alloc;
-
-use alloc::sync::Arc;
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use eyre::Result;
 use iroh::{EndpointAddr, endpoint::presets};
@@ -16,7 +13,6 @@ use subduction_core::{
     },
     nonce_cache::NonceCache,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::Subduction,
     timestamp::TimestampSeconds,
@@ -40,9 +36,14 @@ use subduction_ephemeral::{
     policy::OpenEphemeralPolicy,
 };
 
+use subduction_keyhive::KeyhivePeerId;
+
 use crate::{
     handler::{CliConn, CliEphemeralHandler, CliHandler},
-    key, metrics,
+    key,
+    keyhive::{CliConnKeyhiveAdapter, CliKeyhiveHandle},
+    metrics,
+    policy::{CliKeyhivePolicyHandle, LegacyRelayPolicy},
     transport::UnifiedTransport,
 };
 
@@ -54,7 +55,7 @@ type CliSubduction = Arc<
         MetricsStorage<FsStorage>,
         CliConn,
         CliHandler,
-        OpenPolicy,
+        LegacyRelayPolicy,
         MemorySigner,
         FuturesTimerTimeout,
         CountLeadingZeroBytes,
@@ -198,7 +199,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     }
 
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
-    let fs_storage = FsStorage::new(data_dir)?;
+    let fs_storage = FsStorage::new(data_dir.clone())?;
     let storage = MetricsStorage::new(fs_storage);
 
     // Background metrics refresh
@@ -228,7 +229,10 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
     }
 
-    let signer = key::load_signer(&args.key)?;
+    let seed = key::load_signer_bytes(&args.key)?;
+    let signer = key::signer_from_seed(&seed);
+    let keyhive_signer = key::keyhive_signer_from_seed(&seed);
+
     let peer_id = PeerId::from(signer.verifying_key());
     let handshake_max_drift = Duration::from_secs(args.handshake_max_drift);
 
@@ -240,27 +244,28 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
-    // Set up the keyhive handler (actor bridge for !Send keyhive_core).
     let (keyhive_handle, keyhive_rx) =
         subduction_keyhive_policy::handler::KeyhiveProtocolHandle::channel();
 
-    // Stub actor: drains commands and replies with errors until the real
-    // keyhive actor is wired up (see KEYHIVE_FLAG_PLAN.md).
-    tokio::spawn(async move {
-        use subduction_keyhive_policy::handler::{HandleError, KeyhiveCommand};
-        while let Ok(cmd) = keyhive_rx.recv().await {
-            match cmd {
-                KeyhiveCommand::HandleInbound { reply, .. } => {
-                    drop(reply.send(Err(HandleError::ActorGone)).await);
-                }
-                KeyhiveCommand::PeerDisconnect { .. } => {}
-            }
-        }
-    });
+    let sites_keyhive_handle: CliKeyhiveHandle = keyhive_handle.clone();
+
+    let (policy_handle, policy_rx) = CliKeyhivePolicyHandle::channel();
+    let legacy_policy = Arc::new(LegacyRelayPolicy::new(policy_handle));
+    let legacy_policy_for_driver = Arc::clone(&legacy_policy);
+
+    crate::keyhive::spawn_keyhive_thread(
+        keyhive_rx,
+        policy_rx,
+        &data_dir,
+        keyhive_signer,
+        subduction_keyhive_orchestrator::OrchestratorConfig::default(),
+        token.clone(),
+    )
+    .await?;
 
     let builder = subduction_core::subduction::builder::SubductionBuilder::new()
         .signer(signer.clone())
-        .storage(storage, Arc::new(OpenPolicy))
+        .storage(storage, legacy_policy)
         .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout);
 
@@ -304,6 +309,45 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
 
     let server_peer_id = subduction.peer_id();
+
+    // Relay driver: fan out sync_with_peer to all peers for legacy doc fetches.
+    {
+        use futures::FutureExt;
+        let subduction_weak = Arc::downgrade(&subduction);
+        let relay_cancel = token.clone();
+        legacy_policy_for_driver.install_relay_driver(Arc::new(
+            move |id: sedimentree_core::id::SedimentreeId| {
+                let weak = subduction_weak.clone();
+                let cancel = relay_cancel.clone();
+                async move {
+                    let Some(sub) = weak.upgrade() else {
+                        return;
+                    };
+                    let peers = sub.connected_peer_ids().await;
+                    if peers.is_empty() {
+                        tracing::debug!(?id, "legacy relay: no connected peers to ask");
+                        return;
+                    }
+                    for peer in peers {
+                        tokio::select! {
+                            () = cancel.cancelled() => return,
+                            result = sub.sync_with_peer(&peer, id, true, None) => {
+                                if let Err(e) = result {
+                                    tracing::debug!(
+                                        ?peer,
+                                        ?id,
+                                        error = %e,
+                                        "legacy relay fetch from peer failed",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                .boxed()
+            },
+        ));
+    }
 
     // Set up the HTTP long-poll handler (uses its own NonceCache)
     let lp_handler = LongPollHandler::new(
@@ -368,12 +412,14 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let max_message_size = args.max_message_size;
     let max_frame_size = args.max_frame_size();
 
+    let accept_keyhive = sites_keyhive_handle.clone();
     let accept_task = tokio::spawn(async move {
         accept_loop(
             tcp_listener,
             accept_subduction,
             accept_ephemeral,
             accept_handler,
+            accept_keyhive,
             accept_cancel,
             handshake_max_drift,
             max_message_size,
@@ -421,6 +467,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let iroh_ep = iroh_endpoint.clone();
         let iroh_cancel = token.child_token();
         let iroh_ephemeral = ephemeral.clone();
+        let iroh_keyhive_handle = sites_keyhive_handle.clone();
 
         let task = tokio::spawn({
             let cancel = iroh_cancel.clone();
@@ -446,9 +493,11 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     tokio::spawn(accepted.sender_task);
 
                                     let auth = accepted.authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
+                                    let conn_for_keyhive = auth.inner().clone();
                                     match iroh_subduction.add_connection(auth).await {
                                         Ok(_) => {
                                             iroh_ephemeral.subscribe_peer(remote).await;
+                                            notify_peer_connect(&iroh_keyhive_handle, remote, conn_for_keyhive).await;
                                             iroh_subduction.full_sync_with_peer(&remote, true, None).await;
                                             tracing::info!("iroh: added peer {remote}");
                                         }
@@ -487,6 +536,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             let peer_signer = signer.clone();
             let peer_cancel = token.clone();
             let peer_service_name = service_name.clone();
+            let peer_keyhive = sites_keyhive_handle.clone();
 
             tokio::spawn(async move {
                 match try_connect_iroh(
@@ -494,6 +544,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     peer_addr,
                     &peer_subduction,
                     &peer_ephemeral,
+                    &peer_keyhive,
                     &peer_signer,
                     &peer_service_name,
                     peer_cancel,
@@ -578,12 +629,14 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let peer_cancel = token.clone();
         let peer_max_message_size = args.max_message_size;
         let peer_max_frame_size = args.max_frame_size();
+        let peer_keyhive = sites_keyhive_handle.clone();
 
         tokio::spawn(async move {
             match try_connect_ws(
                 uri.clone(),
                 &peer_subduction,
                 &peer_ephemeral,
+                &peer_keyhive,
                 &peer_signer,
                 &peer_service_name,
                 peer_cancel,
@@ -641,6 +694,7 @@ async fn accept_loop(
     subduction: CliSubduction,
     ephemeral: CliEphemeralHandler,
     lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    keyhive_handle: CliKeyhiveHandle,
     cancel: CancellationToken,
     handshake_max_drift: Duration,
     max_message_size: usize,
@@ -666,6 +720,7 @@ async fn accept_loop(
                         let task_subduction = subduction.clone();
                         let task_ephemeral = ephemeral.clone();
                         let task_handler = lp_handler.clone();
+                        let task_keyhive = keyhive_handle.clone();
                         let task_discovery = discovery_audience;
 
                         conns.spawn(async move {
@@ -691,6 +746,7 @@ async fn accept_loop(
                                     addr,
                                     task_subduction,
                                     task_ephemeral.clone(),
+                                    task_keyhive,
                                     handshake_max_drift,
                                     max_message_size,
                                     max_frame_size,
@@ -705,6 +761,7 @@ async fn accept_loop(
                                     task_subduction,
                                     task_ephemeral,
                                     task_handler,
+                                    task_keyhive,
                                 )
                                 .await;
                             } else if peek_buf.starts_with(b"GET") {
@@ -735,6 +792,7 @@ async fn handle_websocket(
     addr: SocketAddr,
     subduction: CliSubduction,
     ephemeral: CliEphemeralHandler,
+    keyhive_handle: CliKeyhiveHandle,
     handshake_max_drift: Duration,
     max_message_size: usize,
     max_frame_size: usize,
@@ -810,10 +868,12 @@ async fn handle_websocket(
     };
 
     let peer_id = authenticated.peer_id();
+    let conn_for_keyhive = authenticated.inner().clone();
     if let Err(e) = subduction.add_connection(authenticated).await {
         tracing::error!("Failed to add WebSocket connection: {e}");
     } else {
         ephemeral.subscribe_peer(peer_id).await;
+        notify_peer_connect(&keyhive_handle, peer_id, conn_for_keyhive).await;
     }
 }
 
@@ -824,6 +884,7 @@ async fn handle_http_longpoll(
     subduction: CliSubduction,
     ephemeral: CliEphemeralHandler,
     handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    keyhive_handle: CliKeyhiveHandle,
 ) {
     use http_body_util::Full;
     use hyper::{
@@ -841,6 +902,7 @@ async fn handle_http_longpoll(
         let handler = handler.clone();
         let subduction = subduction.clone();
         let ephemeral = ephemeral.clone();
+        let keyhive_handle = keyhive_handle.clone();
         async move {
             // Handle CORS preflight
             if req.method() == hyper::Method::OPTIONS {
@@ -885,10 +947,12 @@ async fn handle_http_longpoll(
                 let peer_id = auth.peer_id();
                 let unified_auth =
                     auth.map(|lp| MessageTransport::new(UnifiedTransport::HttpLongPoll(lp)));
+                let conn_for_keyhive = unified_auth.inner().clone();
                 if let Err(e) = subduction.add_connection(unified_auth).await {
                     tracing::error!("Failed to add HTTP long-poll connection: {e}");
                 } else {
                     ephemeral.subscribe_peer(peer_id).await;
+                    notify_peer_connect(&keyhive_handle, peer_id, conn_for_keyhive).await;
                 }
             }
 
@@ -924,12 +988,19 @@ async fn handle_http_longpoll(
     }
 }
 
+/// Wrap a connection in a keyhive adapter and notify the handle.
+async fn notify_peer_connect(handle: &CliKeyhiveHandle, peer_id: PeerId, conn: CliConn) {
+    let adapter = CliConnKeyhiveAdapter::new(KeyhivePeerId::from_bytes(*peer_id.as_bytes()), conn);
+    handle.on_peer_connect(peer_id, adapter).await;
+}
+
 /// Connect to a peer via WebSocket (outbound).
 #[allow(clippy::too_many_arguments)]
 async fn try_connect_ws(
     uri: Uri,
     subduction: &CliSubduction,
     ephemeral: &CliEphemeralHandler,
+    keyhive_handle: &CliKeyhiveHandle,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -1003,8 +1074,10 @@ async fn try_connect_ws(
     let remote_id = authenticated.peer_id();
     tracing::info!("Handshake complete: connected to {remote_id}");
 
+    let conn_for_keyhive = authenticated.inner().clone();
     subduction.add_connection(authenticated).await?;
     ephemeral.subscribe_peer(remote_id).await;
+    notify_peer_connect(keyhive_handle, remote_id, conn_for_keyhive).await;
     tracing::info!("Connected to peer at {uri_str}");
 
     Ok(remote_id)
@@ -1017,6 +1090,7 @@ async fn try_connect_iroh(
     addr: EndpointAddr,
     subduction: &CliSubduction,
     ephemeral: &CliEphemeralHandler,
+    keyhive_handle: &CliKeyhiveHandle,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -1063,8 +1137,10 @@ async fn try_connect_iroh(
 
     let remote_id = authenticated.peer_id();
     let auth = authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
+    let conn_for_keyhive = auth.inner().clone();
     subduction.add_connection(auth).await?;
     ephemeral.subscribe_peer(remote_id).await;
+    notify_peer_connect(keyhive_handle, remote_id, conn_for_keyhive).await;
     subduction.full_sync_with_peer(&remote_id, true, None).await;
 
     tracing::info!("iroh: added peer {node_id} (subduction ID: {remote_id})");

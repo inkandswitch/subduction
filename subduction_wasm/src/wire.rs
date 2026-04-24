@@ -7,19 +7,16 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use sedimentree_core::codec::{
-    decode::Decode,
-    encode::Encode,
-    error::{DecodeError, InvalidSchema},
-};
+use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
 use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 
-/// Composed wire message carrying sync or ephemeral traffic.
+/// Composed wire message carrying sync, ephemeral, or unknown-protocol traffic.
 ///
 /// Encode delegates to the inner variant (schema headers are already
 /// distinct: `SUM\x00` vs `SUE\x00`). Decode reads the 4-byte schema
-/// header and dispatches to the appropriate decoder.
+/// header and dispatches to the appropriate decoder. Unrecognized schemas
+/// are captured as [`Unknown`](Self::Unknown) for forwarding to JS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireMessage {
     /// A sync-protocol message.
@@ -27,6 +24,9 @@ pub enum WireMessage {
 
     /// An ephemeral-protocol message.
     Ephemeral(EphemeralMessage),
+
+    /// A frame with an unrecognized 4-byte schema header.
+    Unknown(Vec<u8>),
 }
 
 impl From<SyncMessage> for WireMessage {
@@ -46,6 +46,7 @@ impl Encode for WireMessage {
         match self {
             Self::Sync(msg) => Encode::encode(msg.as_ref()),
             Self::Ephemeral(msg) => msg.encode(),
+            Self::Unknown(bytes) => bytes.clone(),
         }
     }
 
@@ -53,6 +54,7 @@ impl Encode for WireMessage {
         match self {
             Self::Sync(msg) => msg.encoded_size(),
             Self::Ephemeral(msg) => msg.encoded_size(),
+            Self::Unknown(bytes) => bytes.len(),
         }
     }
 }
@@ -81,39 +83,7 @@ impl Decode for WireMessage {
         match schema {
             MESSAGE_SCHEMA => SyncMessage::try_decode(buf).map(|m| WireMessage::Sync(Box::new(m))),
             EPHEMERAL_SCHEMA => EphemeralMessage::try_decode(buf).map(WireMessage::Ephemeral),
-            _ => Err(InvalidSchema {
-                expected: MESSAGE_SCHEMA,
-                got: schema,
-            }
-            .into()),
-        }
-    }
-}
-
-impl subduction_ephemeral::composed::WireEnvelope for WireMessage {
-    fn dispatch(self) -> subduction_ephemeral::composed::Dispatched {
-        match self {
-            Self::Sync(msg) => subduction_ephemeral::composed::Dispatched::Sync(msg),
-            Self::Ephemeral(msg) => subduction_ephemeral::composed::Dispatched::Ephemeral(msg),
-        }
-    }
-
-    fn as_batch_sync_response(
-        &self,
-    ) -> Option<&subduction_core::connection::message::BatchSyncResponse> {
-        match self {
-            Self::Sync(msg) => match msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                SyncMessage::BatchSyncRequest(_)
-                | SyncMessage::BlobsRequest { .. }
-                | SyncMessage::BlobsResponse { .. }
-                | SyncMessage::DataRequestRejected(_)
-                | SyncMessage::Fragment { .. }
-                | SyncMessage::LooseCommit { .. }
-                | SyncMessage::RemoveSubscriptions(_)
-                | SyncMessage::HeadsUpdate { .. } => None,
-            },
-            Self::Ephemeral(_) => None,
+            _ => Ok(WireMessage::Unknown(buf.to_vec())),
         }
     }
 }

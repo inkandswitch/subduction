@@ -1,6 +1,6 @@
 //! Message types for the keyhive sync protocol.
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 
 use crate::peer_id::KeyhivePeerId;
 
@@ -9,8 +9,14 @@ use crate::peer_id::KeyhivePeerId;
 /// Events are identified by their 32-byte BLAKE3 hash.
 pub type EventHash = [u8; 32];
 
-/// Serialized event bytes.
+/// Bincode-serialized `StaticEvent<T>`.
 pub type EventBytes = Vec<u8>;
+
+/// [`EventBytes`] wrapped as a CBOR byte string (major type 2).
+pub type CborBytes = Vec<u8>;
+
+/// Hash-keyed map of serialized events for a peer or peer pair.
+pub type AgentHashMap = BTreeMap<EventHash, (EventBytes, CborBytes)>;
 
 /// The keyhive sync protocol messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,11 +36,19 @@ pub enum Message {
         /// Operation hashes that the initiator has for the target peer.
         ///
         /// These are the intersection of operations accessible to both peers.
+        #[cfg_attr(
+            feature = "serde",
+            serde(with = "crate::serde_compat::vec_byte_array_32")
+        )]
         found: Vec<EventHash>,
 
         /// Operation hashes that are pending (awaiting dependencies).
         ///
         /// These might become relevant once dependencies are resolved.
+        #[cfg_attr(
+            feature = "serde",
+            serde(with = "crate::serde_compat::vec_byte_array_32")
+        )]
         pending: Vec<EventHash>,
     },
 
@@ -52,11 +66,16 @@ pub enum Message {
         /// Hashes of operations we want to request from the initiator.
         ///
         /// These are operations the initiator has that we don't.
+        #[cfg_attr(
+            feature = "serde",
+            serde(with = "crate::serde_compat::vec_byte_array_32")
+        )]
         requested: Vec<EventHash>,
 
         /// Serialized operations to send to the initiator.
         ///
         /// These are operations we have that the initiator is missing.
+        #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
         found: Vec<EventBytes>,
 
         /// Total operation count for the responder (intersection + pending).
@@ -82,6 +101,7 @@ pub enum Message {
         target_id: KeyhivePeerId,
 
         /// The serialized operations being sent.
+        #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
         ops: Vec<EventBytes>,
 
         /// Total operation count for the responder (from the sync response).
@@ -198,5 +218,131 @@ impl Message {
             Message::SyncCheck { .. } => "SyncCheck",
             Message::SyncConfirmation { .. } => "SyncConfirmation",
         }
+    }
+}
+
+#[cfg(all(test, feature = "serde", feature = "std"))]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+mod wire_format_tests {
+    //! Verify the on-wire CBOR shape: every binary field must serialize
+    //! as a CBOR byte string (major type 2), never as an array of
+    //! integers (major type 4). `keyhive_wasm` expects byte
+    //! strings. If these tests fail the cross-stack pipe is broken.
+
+    use super::*;
+    use alloc::vec;
+
+    fn cbor(msg: &Message) -> ciborium::Value {
+        let mut buf = Vec::new();
+        ciborium::into_writer(msg, &mut buf).expect("encode");
+        ciborium::de::from_reader(buf.as_slice()).expect("decode as raw value")
+    }
+
+    fn variant_payload(msg: &Message, variant: &str) -> ciborium::Value {
+        // Serialized enum is a single-key map: { "<Variant>": { ... } }.
+        let raw = cbor(msg);
+        let map = raw.as_map().expect("enum encoded as map");
+        let (_, payload) = map
+            .iter()
+            .find(|(k, _)| k.as_text() == Some(variant))
+            .expect("variant key");
+        payload.clone()
+    }
+
+    fn field<'a>(payload: &'a ciborium::Value, key: &str) -> &'a ciborium::Value {
+        let map = payload.as_map().expect("payload map");
+        let (_, v) = map
+            .iter()
+            .find(|(k, _)| k.as_text() == Some(key))
+            .expect("field key");
+        v
+    }
+
+    const fn peer(byte: u8) -> KeyhivePeerId {
+        KeyhivePeerId::from_bytes([byte; 32])
+    }
+
+    fn assert_peer_id_uses_byte_string(payload: &ciborium::Value, key: &str) {
+        let pid = field(payload, key);
+        let pid_map = pid.as_map().expect("peer id map");
+        let (_, vk) = pid_map
+            .iter()
+            .find(|(k, _)| k.as_text() == Some("verifying_key"))
+            .expect("verifying_key field");
+        assert!(
+            vk.is_bytes(),
+            "{key}.verifying_key must be CBOR bytes, got {vk:?}"
+        );
+    }
+
+    #[test]
+    fn sync_request_event_hashes_are_byte_strings() {
+        let msg = Message::SyncRequest {
+            sender_id: peer(1),
+            target_id: peer(2),
+            found: vec![[3u8; 32], [4u8; 32]],
+            pending: vec![[5u8; 32]],
+        };
+        let payload = variant_payload(&msg, "SyncRequest");
+        assert_peer_id_uses_byte_string(&payload, "sender_id");
+        assert_peer_id_uses_byte_string(&payload, "target_id");
+        for (label, key) in [("found", "found"), ("pending", "pending")] {
+            let arr = field(&payload, key).as_array().expect("array");
+            assert!(
+                arr.iter().all(ciborium::Value::is_bytes),
+                "{label} elements must be CBOR bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn sync_response_event_hashes_and_event_bytes_are_byte_strings() {
+        let msg = Message::SyncResponse {
+            sender_id: peer(1),
+            target_id: peer(2),
+            requested: vec![[3u8; 32]],
+            found: vec![vec![10, 11, 12], vec![20, 21]],
+            sync_responder_total: 5,
+            sync_requester_total: 4,
+        };
+        let payload = variant_payload(&msg, "SyncResponse");
+        let requested = field(&payload, "requested").as_array().expect("array");
+        assert!(requested.iter().all(ciborium::Value::is_bytes));
+        let found = field(&payload, "found").as_array().expect("array");
+        assert!(
+            found.iter().all(ciborium::Value::is_bytes),
+            "found event-bytes elements must be CBOR bytes"
+        );
+    }
+
+    #[test]
+    fn sync_ops_event_bytes_are_byte_strings() {
+        let msg = Message::SyncOps {
+            sender_id: peer(1),
+            target_id: peer(2),
+            ops: vec![vec![1, 2, 3], vec![4, 5]],
+            sync_responder_total: 1,
+            sync_requester_total: 1,
+        };
+        let payload = variant_payload(&msg, "SyncOps");
+        let ops = field(&payload, "ops").as_array().expect("array");
+        assert!(
+            ops.iter().all(ciborium::Value::is_bytes),
+            "ops elements must be CBOR bytes"
+        );
+    }
+
+    #[test]
+    fn round_trip_through_cbor() {
+        let original = Message::SyncRequest {
+            sender_id: peer(1),
+            target_id: peer(2),
+            found: vec![[7u8; 32], [9u8; 32]],
+            pending: vec![[11u8; 32]],
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&original, &mut buf).expect("encode");
+        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
+        assert_eq!(original, recovered);
     }
 }

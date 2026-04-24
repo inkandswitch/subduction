@@ -35,16 +35,37 @@ use subduction_keyhive::{KeyhiveMessage, SignedMessage, signed_message::CborErro
 // ── Command enum ────────────────────────────────────────────────────────
 
 /// Commands sent from the handle to the actor.
+///
+/// Two connection generics:
+///
+/// * `C` is the [`Handler`] trait's connection payload, forwarded over
+///   `HandleInbound` so the actor can auto-register unknown peers.
+/// * `Conn` is the per-peer keyhive connection passed to
+///   [`KeyhiveProtocol::add_peer`](subduction_keyhive::KeyhiveProtocol::add_peer).
 #[allow(missing_debug_implementations)]
-pub enum KeyhiveCommand {
+pub enum KeyhiveCommand<C, Conn> {
     /// Handle an inbound keyhive message from a peer.
     HandleInbound {
         /// Subduction peer ID of the sender.
         peer_id: PeerId,
+        /// Connection payload from the inbound `Authenticated<C>`. The
+        /// orchestrator converts this to a `Conn` and uses it to
+        /// auto-register the peer when a sync-check arrives before any
+        /// explicit `AddPeer`.
+        c: C,
         /// The keyhive wire message.
         message: KeyhiveMessage,
         /// Reply channel for the result.
         reply: Sender<Result<(), HandleError>>,
+    },
+
+    /// A peer connected; register it with the keyhive protocol.
+    AddPeer {
+        /// Subduction peer ID.
+        peer_id: PeerId,
+        /// Connection handle the actor should hand to
+        /// `KeyhiveProtocol::add_peer`.
+        conn: Conn,
     },
 
     /// A peer disconnected.
@@ -79,25 +100,32 @@ pub enum HandleError {
 /// Implements [`Handler<Sendable, C>`] by forwarding messages to the
 /// actor via an async channel. Clone is cheap (just an `Arc` bump on
 /// the channel internals).
-#[derive(Clone)]
-pub struct KeyhiveProtocolHandle {
-    tx: Sender<KeyhiveCommand>,
+pub struct KeyhiveProtocolHandle<C, Conn> {
+    tx: Sender<KeyhiveCommand<C, Conn>>,
 }
 
-impl core::fmt::Debug for KeyhiveProtocolHandle {
+impl<C, Conn> Clone for KeyhiveProtocolHandle<C, Conn> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+impl<C, Conn> core::fmt::Debug for KeyhiveProtocolHandle<C, Conn> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("KeyhiveProtocolHandle")
             .finish_non_exhaustive()
     }
 }
 
-impl KeyhiveProtocolHandle {
+impl<C, Conn> KeyhiveProtocolHandle<C, Conn> {
     /// Create a new handle from a command sender.
     ///
-    /// The corresponding [`Receiver<KeyhiveCommand>`] should be consumed
-    /// by [`run_actor`].
+    /// The corresponding [`Receiver<KeyhiveCommand<C, Conn>>`] should be
+    /// consumed by [`run_actor`].
     #[must_use]
-    pub const fn new(tx: Sender<KeyhiveCommand>) -> Self {
+    pub const fn new(tx: Sender<KeyhiveCommand<C, Conn>>) -> Self {
         Self { tx }
     }
 
@@ -105,9 +133,23 @@ impl KeyhiveProtocolHandle {
     ///
     /// Pass the receiver to [`run_actor`] on a `LocalSet`.
     #[must_use]
-    pub fn channel() -> (Self, Receiver<KeyhiveCommand>) {
+    pub fn channel() -> (Self, Receiver<KeyhiveCommand<C, Conn>>) {
         let (tx, rx) = async_channel::bounded(1024);
         (Self { tx }, rx)
+    }
+
+    /// Register a newly-connected peer with the keyhive actor.
+    ///
+    /// Fire-and-forget: if the actor has shut down, the command is
+    /// silently dropped (same semantics as [`on_peer_disconnect`]).
+    ///
+    /// [`on_peer_disconnect`]: subduction_core::handler::Handler::on_peer_disconnect
+    pub async fn on_peer_connect(&self, peer_id: PeerId, conn: Conn) {
+        drop(
+            self.tx
+                .send(KeyhiveCommand::AddPeer { peer_id, conn })
+                .await,
+        );
     }
 }
 
@@ -122,42 +164,27 @@ impl KeyhiveProtocolHandle {
 /// # Arguments
 ///
 /// * `rx` — command receiver from [`KeyhiveProtocolHandle::channel`]
-/// * `process` — async callback `(PeerId, SignedMessage) -> Result<(), String>`
-///   that calls [`KeyhiveProtocol::handle_message`] internally
+/// * `process` — async callback `(PeerId, Conn, SignedMessage) -> Result<(), String>`
+///   that calls [`KeyhiveProtocol::handle_message`] internally and may
+///   auto-register `Conn` on sync-check from unknown peers
+/// * `on_connect` — callback for peer registration (calls
+///   [`KeyhiveProtocol::add_peer`])
 /// * `on_disconnect` — callback for peer cleanup (calls
 ///   [`KeyhiveProtocol::remove_peer`])
 ///
-/// # Example
-///
-/// ```ignore
-/// let (handle, rx) = KeyhiveProtocolHandle::channel();
-/// let protocol: Arc<KeyhiveProtocol<...>> = ...;
-///
-/// local_set.spawn_local(run_actor(
-///     rx,
-///     |peer_id, signed_msg| {
-///         let proto = protocol.clone();
-///         let khid = KeyhivePeerId::from_bytes(*peer_id.as_bytes());
-///         async move {
-///             proto.handle_message(&khid, signed_msg)
-///                 .await
-///                 .map_err(|e| e.to_string())
-///         }
-///     },
-///     |peer_id| {
-///         let proto = protocol.clone();
-///         let khid = KeyhivePeerId::from_bytes(*peer_id.as_bytes());
-///         async move { proto.remove_peer(&khid).await; }
-///     },
-/// ));
-/// ```
-///
 /// [`KeyhiveProtocol::handle_message`]: subduction_keyhive::KeyhiveProtocol::handle_message
+/// [`KeyhiveProtocol::add_peer`]: subduction_keyhive::KeyhiveProtocol::add_peer
 /// [`KeyhiveProtocol::remove_peer`]: subduction_keyhive::KeyhiveProtocol::remove_peer
-pub async fn run_actor<F, Fut, D, DFut>(rx: Receiver<KeyhiveCommand>, process: F, on_disconnect: D)
-where
-    F: Fn(PeerId, SignedMessage) -> Fut,
+pub async fn run_actor<C, Conn, F, Fut, A, AFut, D, DFut>(
+    rx: Receiver<KeyhiveCommand<C, Conn>>,
+    process: F,
+    on_connect: A,
+    on_disconnect: D,
+) where
+    F: Fn(PeerId, C, SignedMessage) -> Fut,
     Fut: core::future::Future<Output = Result<(), String>>,
+    A: Fn(PeerId, Conn) -> AFut,
+    AFut: core::future::Future<Output = ()>,
     D: Fn(PeerId) -> DFut,
     DFut: core::future::Future<Output = ()>,
 {
@@ -165,17 +192,21 @@ where
         match cmd {
             KeyhiveCommand::HandleInbound {
                 peer_id,
+                c,
                 message,
                 reply,
             } => {
                 let result = match message.into_signed() {
-                    Ok(signed_msg) => process(peer_id, signed_msg)
+                    Ok(signed_msg) => process(peer_id, c, signed_msg)
                         .await
                         .map_err(HandleError::Protocol),
                     Err(e) => Err(HandleError::Decode(e)),
                 };
                 // Best-effort reply; handle may have been dropped.
                 drop(reply.send(result).await);
+            }
+            KeyhiveCommand::AddPeer { peer_id, conn } => {
+                on_connect(peer_id, conn).await;
             }
             KeyhiveCommand::PeerDisconnect { peer_id } => {
                 on_disconnect(peer_id).await;
@@ -188,9 +219,10 @@ where
 
 // ── Handler impl ────────────────────────────────────────────────────────
 
-impl<C> Handler<future_form::Sendable, C> for KeyhiveProtocolHandle
+impl<C, Conn> Handler<future_form::Sendable, C> for KeyhiveProtocolHandle<C, Conn>
 where
     C: Clone + Send + Sync + 'static,
+    Conn: Send + 'static,
 {
     type Message = KeyhiveMessage;
     type HandlerError = HandleError;
@@ -201,6 +233,7 @@ where
         message: KeyhiveMessage,
     ) -> BoxFuture<'a, Result<(), Self::HandlerError>> {
         let peer_id = conn.peer_id();
+        let c = conn.inner().clone();
         let tx = self.tx.clone();
 
         async move {
@@ -208,6 +241,7 @@ where
 
             tx.send(KeyhiveCommand::HandleInbound {
                 peer_id,
+                c,
                 message,
                 reply: reply_tx,
             })
@@ -249,7 +283,9 @@ mod tests {
     }
 
     fn valid_keyhive_message() -> KeyhiveMessage {
-        let signed = SignedMessage::with_contact_card(vec![1, 2, 3], vec![4, 5, 6]);
+        // The actor-decoding tests only need a syntactically-valid
+        // SignedMessage. They don't exercise contact-card behaviour.
+        let signed = SignedMessage::new(vec![1, 2, 3]);
         let cbor = signed.to_cbor().expect("CBOR serialization");
         KeyhiveMessage::new(cbor)
     }
@@ -260,11 +296,12 @@ mod tests {
 
     #[tokio::test]
     async fn actor_processes_handle_inbound() -> TestResult {
-        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
 
         tokio::spawn(run_actor(
             rx,
-            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id, _conn, _msg| async { Ok(()) },
+            |_peer_id, _conn| async {},
             |_peer_id| async {},
         ));
 
@@ -277,14 +314,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn actor_processes_peer_disconnect() -> TestResult {
-        let (handle, rx) = KeyhiveProtocolHandle::channel();
+    async fn actor_processes_peer_connect() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
 
         let (done_tx, done_rx) = async_channel::bounded::<PeerId>(1);
 
         tokio::spawn(run_actor(
             rx,
-            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id, _conn, _msg| async { Ok(()) },
+            move |peer_id, _conn| {
+                let done_tx = done_tx.clone();
+                async move {
+                    let _ = done_tx.send(peer_id).await;
+                }
+            },
+            |_peer_id| async {},
+        ));
+
+        handle.on_peer_connect(test_peer_id(), DummyConn).await;
+
+        let connected_peer = done_rx.recv().await?;
+        assert_eq!(connected_peer, test_peer_id());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn actor_processes_peer_disconnect() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
+
+        let (done_tx, done_rx) = async_channel::bounded::<PeerId>(1);
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _conn, _msg| async { Ok(()) },
+            |_peer_id, _conn| async {},
             move |peer_id| {
                 let done_tx = done_tx.clone();
                 async move {
@@ -304,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_returns_actor_gone_when_receiver_dropped() -> TestResult {
-        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
         drop(rx);
 
         let conn = test_conn();
@@ -318,11 +382,12 @@ mod tests {
 
     #[tokio::test]
     async fn handle_returns_decode_error_for_invalid_cbor() -> TestResult {
-        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
 
         tokio::spawn(run_actor(
             rx,
-            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id, _conn, _msg| async { Ok(()) },
+            |_peer_id, _conn| async {},
             |_peer_id| async {},
         ));
 
@@ -337,11 +402,12 @@ mod tests {
 
     #[tokio::test]
     async fn handle_returns_protocol_error_from_process() -> TestResult {
-        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
 
         tokio::spawn(run_actor(
             rx,
-            |_peer_id, _msg| async { Err("boom".to_string()) },
+            |_peer_id, _conn, _msg| async { Err("boom".to_string()) },
+            |_peer_id, _conn| async {},
             |_peer_id| async {},
         ));
 
@@ -359,7 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_is_fire_and_forget_when_actor_gone() -> TestResult {
-        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
         drop(rx);
 
         // Should not panic even though the actor is gone.
@@ -371,12 +437,18 @@ mod tests {
 
     #[tokio::test]
     async fn actor_shuts_down_when_all_handles_dropped() -> TestResult {
-        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        let (handle, rx) = KeyhiveProtocolHandle::<DummyConn, DummyConn>::channel();
 
         let (done_tx, done_rx) = async_channel::bounded::<()>(1);
 
         tokio::spawn(async move {
-            run_actor(rx, |_peer_id, _msg| async { Ok(()) }, |_peer_id| async {}).await;
+            run_actor(
+                rx,
+                |_peer_id, _conn, _msg| async { Ok(()) },
+                |_peer_id, _conn| async {},
+                |_peer_id| async {},
+            )
+            .await;
             let _ = done_tx.send(()).await;
         });
 

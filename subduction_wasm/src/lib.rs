@@ -37,6 +37,7 @@ pub mod clock;
 pub mod ephemeral;
 pub mod error;
 pub mod fragment;
+pub(crate) mod handler;
 pub mod memory_signer;
 pub mod peer_id;
 pub mod policy;

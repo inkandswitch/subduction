@@ -12,8 +12,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-channel = { workspace = true, optional = true }
 async-lock = { workspace = true }
 base64 = { workspace = true }
+bincode = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ciborium = { workspace = true }
@@ -25,14 +27,17 @@ keyhive_crypto = { workspace = true }
 sedimentree_core = { workspace = true }
 rand = "0.8.5"
 serde = { workspace = true, optional = true, features = ["derive"] }
+serde_bytes = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [features]
 default = []
 bolero = ["dep:bolero"]
-serde = ["dep:serde", "std"]
+serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "std"]
 std = ["thiserror/std"]
+test-utils = ["dep:async-channel", "serde"]
 
 [dev-dependencies]
 async-channel = { workspace = true }

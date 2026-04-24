@@ -46,7 +46,6 @@ use subduction_core::{
 };
 use subduction_crypto::signed::Signed;
 use subduction_ephemeral::{
-    composed::ComposedHandler,
     config::EphemeralConfig,
     handler::EphemeralHandler,
     message::{EphemeralMessage, EphemeralPayload},
@@ -90,7 +89,7 @@ use futures::{
 };
 
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
-const WASM_SHARD_COUNT: usize = 4;
+pub(crate) const WASM_SHARD_COUNT: usize = 4;
 
 /// A spawner that uses wasm-bindgen-futures to spawn local tasks.
 #[derive(Debug, Clone, Copy, Default)]
@@ -108,28 +107,18 @@ impl Spawn<Local> for WasmSpawn {
 
 use crate::{
     clock::JsClock,
+    handler::WasmComposedHandler,
     policy::{
         JsPolicy,
         ephemeral::{JsEphemeralPolicy, make_open_ephemeral_policy},
         make_open_policy,
     },
+    wire::WireMessage,
 };
 
 type WasmConn = MessageTransport<JsTransport>;
 
-type WasmHandler = ComposedHandler<
-    SyncHandler<
-        Local,
-        JsStorage,
-        WasmConn,
-        JsPolicy,
-        WasmHashMetric,
-        WASM_SHARD_COUNT,
-        crate::remote_heads::JsRemoteHeadsObserver,
-    >,
-    EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>,
-    crate::wire::WireMessage,
->;
+type WasmHandler = WasmComposedHandler;
 
 type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>;
 
@@ -152,6 +141,7 @@ pub struct WasmSubduction {
     core: Arc<WasmSubductionCore>,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
     ephemeral_handler: WasmEphemeralHandler,
+    unknown_frame_callback: Arc<Mutex<Option<js_sys::Function>>>,
 }
 
 impl core::fmt::Debug for WasmSubduction {
@@ -241,7 +231,12 @@ impl WasmSubduction {
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
         let send_counter = sync_handler.send_counter().clone();
-        let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+        let unknown_frame_callback = Arc::new(Mutex::new(None));
+        let handler = Arc::new(WasmComposedHandler::new(
+            sync_handler,
+            ephemeral_handler,
+            unknown_frame_callback.clone(),
+        ));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
             handler,
@@ -293,6 +288,7 @@ impl WasmSubduction {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
+            unknown_frame_callback,
         }
     }
 
@@ -437,7 +433,12 @@ impl WasmSubduction {
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
         let send_counter = sync_handler.send_counter().clone();
-        let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+        let unknown_frame_callback = Arc::new(Mutex::new(None));
+        let handler = Arc::new(WasmComposedHandler::new(
+            sync_handler,
+            ephemeral_handler,
+            unknown_frame_callback.clone(),
+        ));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
             handler,
@@ -489,6 +490,7 @@ impl WasmSubduction {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
+            unknown_frame_callback,
         })
     }
 
@@ -1355,6 +1357,45 @@ impl WasmSubduction {
         if let Some(topics) = NonEmpty::from_vec(topics) {
             self.ephemeral_handler.unsubscribe(topics).await;
         }
+    }
+
+    // ── Unknown-protocol frame forwarding ─────────────────────────────
+
+    /// Register a callback for frames with unrecognized 4-byte schema headers.
+    ///
+    /// When a frame arrives whose header is not `SUM\0` (sync) or `SUE\0`
+    /// (ephemeral), the raw bytes and the sender's peer ID are forwarded
+    /// to this callback instead of being dropped.
+    ///
+    /// Only one handler can be registered at a time. Calling this again
+    /// replaces the previous handler. Pass `null`/`undefined` to unregister.
+    #[wasm_bindgen(js_name = registerFrameHandler)]
+    pub async fn register_frame_handler(&self, callback: Option<js_sys::Function>) {
+        *self.unknown_frame_callback.lock().await = callback;
+    }
+
+    /// Send raw bytes through the connection to a specific peer.
+    ///
+    /// The caller is responsible for framing (including any 4-byte schema
+    /// header). Subduction sends the bytes as-is with no additional encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the peer has no active connection or if sending fails.
+    #[wasm_bindgen(js_name = sendRawFrame)]
+    pub async fn send_raw_frame(&self, bytes: &[u8], peer_id: &WasmPeerId) -> Result<(), JsValue> {
+        use subduction_core::connection::Connection;
+
+        let pid: PeerId = peer_id.clone().into();
+        let conn = self
+            .core
+            .get_connection(&pid)
+            .await
+            .ok_or_else(|| JsValue::from_str("no connection for peer"))?;
+        let msg = WireMessage::Unknown(bytes.to_vec());
+        conn.send(&msg)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     // ── Queries ──────────────────────────────────────────────────────────

@@ -7,8 +7,11 @@ use alloc::{string::ToString, sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use keyhive_core::{
-    archive::Archive, event::static_event::StaticEvent, keyhive::Keyhive,
-    listener::membership::MembershipListener, store::ciphertext::CiphertextStore,
+    archive::Archive,
+    event::static_event::StaticEvent,
+    keyhive::Keyhive,
+    listener::membership::MembershipListener,
+    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 
@@ -29,6 +32,20 @@ fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageErro
 /// Deserialize a value from CBOR bytes.
 fn cbor_deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError> {
     ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+}
+
+// `StaticEvent` payloads use bincode (matching keyhive-wasm). Archives
+// still use CBOR since they're server-internal.
+// TODO: This is temporary as bincode is unmaintained and we're planning to
+// move off of it once we've migrated keyhive.
+pub(crate) fn bincode_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
+    bincode::serialize(value).map_err(|e| StorageError::Serialization(e.to_string()))
+}
+
+pub(crate) fn bincode_deserialize<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, StorageError> {
+    bincode::deserialize(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
 /// Hash event bytes using BLAKE3 to produce a storage key.
@@ -54,7 +71,7 @@ pub async fn save_keyhive_archive<T, S, K>(
 where
     T: ContentRef,
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
     let bytes = cbor_serialize(archive)?;
 
@@ -72,11 +89,13 @@ where
 
 /// Serialize and save an event to storage.
 ///
-/// The event is serialized using CBOR and stored with its BLAKE3 hash as the key.
+/// The event is serialized using bincode (matching keyhive-wasm) and
+/// stored with its BLAKE3 hash as the key.
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if CBOR serialization or the storage write fails.
+/// Returns [`StorageError`] if bincode serialization or the storage write
+/// fails.
 pub async fn save_event<T, S, K>(
     storage: &S,
     event: &StaticEvent<T>,
@@ -84,9 +103,9 @@ pub async fn save_event<T, S, K>(
 where
     T: ContentRef,
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
-    let bytes = cbor_serialize(event)?;
+    let bytes = bincode_serialize(event)?;
     save_event_bytes(storage, bytes).await
 }
 
@@ -103,7 +122,7 @@ pub async fn save_event_bytes<S, K>(
 ) -> Result<StorageHash, StorageError>
 where
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
     let hash = hash_event_bytes(&bytes);
 
@@ -132,7 +151,7 @@ pub async fn load_archives<T, S, K>(
 where
     T: ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
     let raw_archives = storage
         .load_archives()
@@ -160,7 +179,7 @@ pub async fn load_events<T, S, K>(
 where
     T: ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
     let raw_events = storage
         .load_events()
@@ -169,7 +188,7 @@ where
 
     let mut events = Vec::with_capacity(raw_events.len());
     for (hash, bytes) in raw_events {
-        let event: StaticEvent<T> = cbor_deserialize(&bytes)?;
+        let event: StaticEvent<T> = bincode_deserialize(&bytes)?;
         events.push((hash, event));
     }
 
@@ -189,7 +208,7 @@ pub async fn load_event_bytes<S, K>(
 ) -> Result<Vec<(StorageHash, Vec<u8>)>, StorageError>
 where
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
     storage
         .load_events()
@@ -206,19 +225,19 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if loading, deserialization, or archive ingestion fails.
-pub async fn ingest_from_storage<Signer, T, P, C, L, R, S, K>(
-    keyhive: &Keyhive<Signer, T, P, C, L, R>,
+pub async fn ingest_from_storage<K, Signer, T, P, C, L, R, S>(
+    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
     storage: &S,
 ) -> Result<Vec<Arc<StaticEvent<T>>>, StorageError>
 where
-    Signer: AsyncSigner + Clone,
+    Signer: AsyncSigner<K> + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
+    L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
     // Load archives
     let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage).await?;
@@ -263,20 +282,20 @@ where
 ///
 /// Returns [`StorageError`] if any storage operation, serialization, or
 /// deserialization fails.
-pub async fn compact<Signer, T, P, C, L, R, S, K>(
-    keyhive: &Keyhive<Signer, T, P, C, L, R>,
+pub async fn compact<K, Signer, T, P, C, L, R, S>(
+    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
     storage: &S,
     storage_id: StorageHash,
 ) -> Result<(), StorageError>
 where
-    Signer: AsyncSigner + Clone,
+    Signer: AsyncSigner<K> + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
+    L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    K: FutureForm + ?Sized,
+    K: FutureForm,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage
@@ -321,7 +340,7 @@ where
     // Deserialize and ingest events
     let events: Vec<StaticEvent<T>> = raw_events
         .iter()
-        .map(|(_, bytes)| cbor_deserialize(bytes))
+        .map(|(_, bytes)| bincode_deserialize(bytes))
         .collect::<Result<_, _>>()?;
 
     let pending = keyhive.ingest_unsorted_static_events(events).await;
@@ -330,7 +349,7 @@ where
     let pending_hashes: Set<[u8; 32]> = pending
         .iter()
         .filter_map(|e| {
-            let bytes = cbor_serialize(e.as_ref()).ok()?;
+            let bytes = bincode_serialize(e.as_ref()).ok()?;
             Some(*hash_event_bytes(&bytes).as_bytes())
         })
         .collect();
@@ -433,7 +452,7 @@ mod tests {
             .get_agent(alice_id)
             .await
             .expect("alice should have herself as agent");
-        let events = alice.static_events_for_agent(&alice_agent).await.unwrap();
+        let events = alice.static_events_for_agent(&alice_agent).await;
         assert!(
             !events.is_empty(),
             "contact card exchange should produce events"
@@ -455,7 +474,7 @@ mod tests {
 
         // Compact
         let consolidated_id = StorageHash::new([10u8; 32]);
-        compact::<_, _, _, _, _, _, _, Local>(&alice, &storage, consolidated_id)
+        compact::<Local, _, _, _, _, _, _, _>(&alice, &storage, consolidated_id)
             .await
             .unwrap();
 

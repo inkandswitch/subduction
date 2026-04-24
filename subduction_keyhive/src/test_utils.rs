@@ -26,7 +26,8 @@ use crate::{
 };
 
 /// Type alias for the simple keyhive type used in tests.
-pub(crate) type SimpleKeyhive = Keyhive<
+pub type SimpleKeyhive = Keyhive<
+    Local,
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -37,15 +38,15 @@ pub(crate) type SimpleKeyhive = Keyhive<
 
 /// An in-memory connection using async channels for testing.
 #[derive(Debug, Clone)]
-pub(crate) struct ChannelConnection {
+pub struct ChannelConnection {
     remote_peer_id: KeyhivePeerId,
-    pub(crate) outbound_tx: Sender<SignedMessage>,
-    pub(crate) inbound_rx: Receiver<SignedMessage>,
+    pub outbound_tx: Sender<SignedMessage>,
+    pub inbound_rx: Receiver<SignedMessage>,
 }
 
 impl ChannelConnection {
     /// Create a new channel connection with the given channels.
-    pub(crate) const fn new(
+    pub const fn new(
         remote_peer_id: KeyhivePeerId,
         outbound_tx: Sender<SignedMessage>,
         inbound_rx: Receiver<SignedMessage>,
@@ -61,19 +62,19 @@ impl ChannelConnection {
 /// Channel is closed, cannot send.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("channel closed: cannot send")]
-pub(crate) struct ChannelSendError;
+pub struct ChannelSendError;
 
 /// Channel is closed, cannot receive.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("channel closed: cannot receive")]
-pub(crate) struct ChannelRecvError;
+pub struct ChannelRecvError;
 
 /// Create a pair of connected channel connections.
 ///
 /// Returns `(conn_a_to_b, conn_b_to_a)` where:
 /// * `conn_a_to_b` sends messages from A that B receives
 /// * `conn_b_to_a` sends messages from B that A receives
-pub(crate) fn create_channel_pair(
+pub fn create_channel_pair(
     peer_a: KeyhivePeerId,
     peer_b: &KeyhivePeerId,
 ) -> (ChannelConnection, ChannelConnection) {
@@ -113,7 +114,7 @@ impl KeyhiveConnection<Local> for ChannelConnection {
 }
 
 /// Create a simple keyhive instance for testing.
-pub(crate) async fn make_keyhive() -> SimpleKeyhive {
+pub async fn make_keyhive() -> SimpleKeyhive {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
     Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
@@ -122,22 +123,13 @@ pub(crate) async fn make_keyhive() -> SimpleKeyhive {
 }
 
 /// Get the peer ID for a keyhive instance.
-pub(crate) fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
+pub fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
     let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
     KeyhivePeerId::from_bytes(id.to_bytes())
 }
 
-/// Serialize a contact card to CBOR bytes.
-pub(crate) fn serialize_contact_card(
-    contact_card: &keyhive_core::contact_card::ContactCard,
-) -> Vec<u8> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(contact_card, &mut buf).expect("failed to serialize contact card");
-    buf
-}
-
 /// Type alias for the test protocol type.
-pub(crate) type TestProtocol = KeyhiveProtocol<
+pub type TestProtocol = KeyhiveProtocol<
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -155,7 +147,7 @@ pub(crate) type TestProtocol = KeyhiveProtocol<
 /// keyhive. The returned `Arc<Mutex<SimpleKeyhive>>` is the same one the
 /// protocol uses, so mutations made through the Arc are visible to the
 /// protocol.
-pub(crate) async fn make_protocol_with_shared_keyhive(
+pub async fn make_protocol_with_shared_keyhive(
     keyhive: SimpleKeyhive,
 ) -> (
     TestProtocol,
@@ -167,15 +159,14 @@ pub(crate) async fn make_protocol_with_shared_keyhive(
         .contact_card()
         .await
         .expect("failed to get contact card");
-    let cc_bytes = serialize_contact_card(&cc);
     let storage = MemoryKeyhiveStorage::new();
     let shared = Arc::new(Mutex::new(keyhive));
-    let protocol = TestProtocol::new(shared.clone(), storage.clone(), peer_id, cc_bytes);
+    let protocol = TestProtocol::new(shared.clone(), storage.clone(), peer_id, cc);
     (protocol, shared, storage)
 }
 
 /// Result of a sync round, including all outcomes from handled messages.
-pub(crate) struct SyncRoundResult {
+pub struct SyncRoundResult {
     /// All [`SyncOutcome`]s returned by `handle_message` during this round.
     pub outcomes: Vec<SyncOutcome>,
 }
@@ -189,7 +180,7 @@ pub(crate) struct SyncRoundResult {
 /// 4. Confirmation messages are forwarded and handled
 ///
 /// Returns a [`SyncRoundResult`] with all outcomes.
-pub(crate) async fn run_sync_round(
+pub async fn run_sync_round(
     initiator_proto: &TestProtocol,
     responder_proto: &TestProtocol,
     initiator_id: &KeyhivePeerId,
@@ -262,8 +253,27 @@ pub(crate) async fn run_sync_round(
     SyncRoundResult { outcomes }
 }
 
+/// Run `rounds` bidirectional sync exchanges between two peers.
+///
+/// Each round runs `a→b` then `b→a`, matching the pattern used by
+/// the three-peer server tests.
+pub async fn sync_pair_rounds(
+    proto_a: &TestProtocol,
+    proto_b: &TestProtocol,
+    id_a: &KeyhivePeerId,
+    id_b: &KeyhivePeerId,
+    conn_a: &ChannelConnection,
+    conn_b: &ChannelConnection,
+    rounds: usize,
+) {
+    for _ in 0..rounds {
+        run_sync_round(proto_a, proto_b, id_a, id_b, conn_a, conn_b).await;
+        run_sync_round(proto_b, proto_a, id_b, id_a, conn_b, conn_a).await;
+    }
+}
+
 /// Harness for a two-peer test setup with shared keyhives.
-pub(crate) struct TwoPeerHarness {
+pub struct TwoPeerHarness {
     /// Alice's protocol handler.
     pub alice_proto: TestProtocol,
     /// Bob's protocol handler.
@@ -284,7 +294,7 @@ pub(crate) struct TwoPeerHarness {
 
 /// Exchange contact cards between two fresh keyhives and set up protocols
 /// and channel pairs. Returns a [`TwoPeerHarness`] with everything wired up.
-pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
+pub async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
     let alice_keyhive = make_keyhive().await;
     let bob_keyhive = make_keyhive().await;
 
@@ -329,7 +339,7 @@ pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
 }
 
 /// Exchange contact cards between every pair of keyhives.
-pub(crate) async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhive]) {
+pub async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhive]) {
     let mut cards = Vec::new();
     for kh in keyhives {
         cards.push(kh.contact_card().await.expect("contact_card"));
@@ -346,7 +356,7 @@ pub(crate) async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhive]) {
 }
 
 /// Create a group and add the given peers as Read members.
-pub(crate) async fn create_group_with_read_members(
+pub async fn create_group_with_read_members(
     kh: &SimpleKeyhive,
     member_ids: &[&KeyhivePeerId],
 ) -> GroupId {

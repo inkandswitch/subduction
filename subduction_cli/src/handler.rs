@@ -10,6 +10,10 @@
 
 use std::sync::Arc;
 
+use crate::{
+    keyhive::CliKeyhiveHandle, policy::LegacyRelayPolicy, transport::UnifiedTransport,
+    wire::CliWireMessage,
+};
 use future_form::Sendable;
 use futures::future::BoxFuture;
 use sedimentree_core::commit::CountLeadingZeroBytes;
@@ -18,7 +22,6 @@ use subduction_core::{
     authenticated::Authenticated,
     handler::Handler,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     storage::metrics::MetricsStorage,
     subduction::error::{IoError, ListenError},
@@ -27,9 +30,6 @@ use subduction_core::{
 use subduction_ephemeral::{
     clock::std_clock::StdClock, handler::EphemeralHandler, policy::OpenEphemeralPolicy,
 };
-use subduction_keyhive_policy::handler::KeyhiveProtocolHandle;
-
-use crate::{transport::UnifiedTransport, wire::CliWireMessage};
 
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
@@ -48,12 +48,12 @@ pub(crate) struct CliHandler {
             Sendable,
             MetricsStorage<FsStorage>,
             CliConn,
-            OpenPolicy,
+            LegacyRelayPolicy,
             CountLeadingZeroBytes,
         >,
     >,
     pub(crate) ephemeral: CliEphemeralHandler,
-    pub(crate) keyhive: KeyhiveProtocolHandle,
+    pub(crate) keyhive: CliKeyhiveHandle,
 }
 
 impl core::fmt::Debug for CliHandler {

@@ -285,7 +285,10 @@ mod tests {
     fn signed_message_roundtrip() {
         use crate::signed_message::SignedMessage;
 
-        let signed = SignedMessage::with_contact_card(vec![1, 2, 3], vec![4, 5, 6]);
+        // Exercises the SUK frame envelope around an arbitrary
+        // SignedMessage payload. Contact-card serialization is covered
+        // separately in `signed_message::tests`.
+        let signed = SignedMessage::new(vec![1, 2, 3]);
         let keyhive_msg = KeyhiveMessage::from_signed(&signed).expect("serialize");
 
         let encoded = keyhive_msg.encode();

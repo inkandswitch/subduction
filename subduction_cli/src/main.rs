@@ -6,6 +6,8 @@ pub mod metrics;
 
 mod handler;
 mod key;
+mod keyhive;
+mod policy;
 mod purge;
 mod server;
 mod transport;

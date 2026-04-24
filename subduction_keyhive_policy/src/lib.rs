@@ -12,7 +12,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
-use future_form::{Local, Sendable};
+use future_form::{FutureForm, Local, Sendable};
 use futures::{
     FutureExt,
     future::{BoxFuture, LocalBoxFuture},
@@ -21,8 +21,11 @@ use keyhive_core::{
     access::Access,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
-    store::ciphertext::CiphertextStore,
+    principal::{
+        document::id::DocumentId, identifier::Identifier, individual::id::IndividualId,
+        public::Public,
+    },
+    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 use sedimentree_core::id::SedimentreeId;
@@ -84,44 +87,46 @@ pub enum PutDisallowedError {
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
 #[allow(missing_debug_implementations)]
 pub struct SubductionKeyhive<
-    S: AsyncSigner + Clone,
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
     R: rand::CryptoRng + rand::RngCore,
->(Keyhive<S, T, P, C, L, R>);
+>(Keyhive<F, S, T, P, C, L, R>);
 
 impl<
-    S: AsyncSigner + Clone,
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
     R: rand::CryptoRng + rand::RngCore,
-> SubductionKeyhive<S, T, P, C, L, R>
+> SubductionKeyhive<F, S, T, P, C, L, R>
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
     #[must_use]
-    pub const fn new(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
+    pub const fn new(keyhive: Keyhive<F, S, T, P, C, L, R>) -> Self {
         Self(keyhive)
     }
 
     /// Get a reference to the inner [`Keyhive`].
     #[must_use]
-    pub const fn keyhive(&self) -> &Keyhive<S, T, P, C, L, R> {
+    pub const fn keyhive(&self) -> &Keyhive<F, S, T, P, C, L, R> {
         &self.0
     }
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
+    S: AsyncSigner<Sendable> + Clone + Send + Sync,
     T: ContentRef + Send + Sync,
     P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
+    C: CiphertextStore<Sendable, T, P> + CiphertextStoreExt<Sendable, T, P> + Clone + Send + Sync,
+    L: MembershipListener<Sendable, S, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+> ConnectionPolicy<Sendable> for SubductionKeyhive<Sendable, S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
@@ -129,28 +134,18 @@ impl<
         &self,
         peer_id: PeerId,
     ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
-        async move {
-            let identifier = try_peer_id_to_identifier(peer_id)
-                .ok_or(ConnectionDisallowedError::InvalidPeerId)?;
-
-            if self.0.get_agent(identifier).await.is_some() {
-                return Ok(());
-            }
-
-            Err(ConnectionDisallowedError::UnknownAgent)
-        }
-        .boxed()
+        authorize_connect_with(&self.0, peer_id).boxed()
     }
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
+    S: AsyncSigner<Sendable> + Clone + Send + Sync,
     T: ContentRef + Send + Sync,
     P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
+    C: CiphertextStore<Sendable, T, P> + CiphertextStoreExt<Sendable, T, P> + Clone + Send + Sync,
+    L: MembershipListener<Sendable, S, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+> StoragePolicy<Sendable> for SubductionKeyhive<Sendable, S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -160,65 +155,16 @@ impl<
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
-        async move {
-            let identifier =
-                try_peer_id_to_identifier(peer).ok_or(FetchDisallowedError::InvalidPeerId)?;
-
-            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
-                .ok_or(FetchDisallowedError::InvalidSedimentreeId)?;
-
-            let doc = self
-                .0
-                .get_document(doc_id)
-                .await
-                .ok_or(FetchDisallowedError::DocumentNotFound)?;
-
-            let members = doc.lock().await.transitive_members().await;
-
-            // Check if the peer has at least Relay access
-            if members
-                .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Relay)
-            {
-                Ok(())
-            } else {
-                Err(FetchDisallowedError::InsufficientAccess)
-            }
-        }
-        .boxed()
+        authorize_fetch_with(&self.0, peer, sedimentree_id).boxed()
     }
 
     fn authorize_put(
         &self,
-        _requestor: PeerId,
+        requestor: PeerId,
         author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
-        async move {
-            let identifier = Identifier::from(*author.verifying_key());
-
-            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
-                .ok_or(PutDisallowedError::InvalidSedimentreeId)?;
-
-            let doc = self
-                .0
-                .get_document(doc_id)
-                .await
-                .ok_or(PutDisallowedError::DocumentNotFound)?;
-
-            let members = doc.lock().await.transitive_members().await;
-
-            // Check if the author has at least Edit access
-            if members
-                .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Edit)
-            {
-                Ok(())
-            } else {
-                Err(PutDisallowedError::InsufficientAccess)
-            }
-        }
-        .boxed()
+        authorize_put_with(&self.0, requestor, author, sedimentree_id).boxed()
     }
 
     fn filter_authorized_fetch(
@@ -226,80 +172,53 @@ impl<
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
-        async move {
-            let Some(identifier) = try_peer_id_to_identifier(peer) else {
-                return Vec::new();
-            };
-
-            let mut authorized = Vec::new();
-            for sedimentree_id in ids {
-                let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
-                    continue;
-                };
-
-                let Some(doc) = self.0.get_document(doc_id).await else {
-                    continue;
-                };
-
-                let members = doc.lock().await.transitive_members().await;
-
-                if members
-                    .get(&identifier)
-                    .is_some_and(|(_, access)| *access >= Access::Relay)
-                {
-                    authorized.push(sedimentree_id);
-                }
-            }
-
-            authorized
-        }
-        .boxed()
+        filter_authorized_fetch_with(&self.0, peer, ids).boxed()
     }
 }
 
 impl<
-    S: AsyncSigner + Clone,
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
     R: rand::CryptoRng + rand::RngCore,
-> From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
+> From<Keyhive<F, S, T, P, C, L, R>> for SubductionKeyhive<F, S, T, P, C, L, R>
 {
-    fn from(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
+    fn from(keyhive: Keyhive<F, S, T, P, C, L, R>) -> Self {
         SubductionKeyhive(keyhive)
     }
 }
 
 impl<
-    S: AsyncSigner + Clone,
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
     R: rand::CryptoRng + rand::RngCore,
-> From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
+> From<SubductionKeyhive<F, S, T, P, C, L, R>> for Keyhive<F, S, T, P, C, L, R>
 {
-    fn from(subduction_keyhive: SubductionKeyhive<S, T, P, C, L, R>) -> Self {
+    fn from(subduction_keyhive: SubductionKeyhive<F, S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0
     }
 }
 
 // ── Local policy impls ──────────────────────────────────────────────────
 //
-// These are the natural form for `!Send` keyhive_core. The `Sendable`
-// impls above compile but can't be used in practice until keyhive_core
-// is `Send`. These `Local` impls work today in Wasm and other
+// Natural form for `!Send` keyhive_core. Used in WASM and other
 // single-threaded contexts.
 
 impl<
-    S: AsyncSigner + Clone,
+    S: AsyncSigner<Local> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    C: CiphertextStore<Local, T, P> + CiphertextStoreExt<Local, T, P> + Clone,
+    L: MembershipListener<Local, S, T>,
     R: rand::CryptoRng + rand::RngCore,
-> ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+> ConnectionPolicy<Local> for SubductionKeyhive<Local, S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
@@ -307,28 +226,18 @@ impl<
         &self,
         peer_id: PeerId,
     ) -> LocalBoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
-        async move {
-            let identifier = try_peer_id_to_identifier(peer_id)
-                .ok_or(ConnectionDisallowedError::InvalidPeerId)?;
-
-            if self.0.get_agent(identifier).await.is_some() {
-                return Ok(());
-            }
-
-            Err(ConnectionDisallowedError::UnknownAgent)
-        }
-        .boxed_local()
+        authorize_connect_with(&self.0, peer_id).boxed_local()
     }
 }
 
 impl<
-    S: AsyncSigner + Clone,
+    S: AsyncSigner<Local> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    C: CiphertextStore<Local, T, P> + CiphertextStoreExt<Local, T, P> + Clone,
+    L: MembershipListener<Local, S, T>,
     R: rand::CryptoRng + rand::RngCore,
-> StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+> StoragePolicy<Local> for SubductionKeyhive<Local, S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -338,63 +247,16 @@ impl<
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::FetchDisallowed>> {
-        async move {
-            let identifier =
-                try_peer_id_to_identifier(peer).ok_or(FetchDisallowedError::InvalidPeerId)?;
-
-            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
-                .ok_or(FetchDisallowedError::InvalidSedimentreeId)?;
-
-            let doc = self
-                .0
-                .get_document(doc_id)
-                .await
-                .ok_or(FetchDisallowedError::DocumentNotFound)?;
-
-            let members = doc.lock().await.transitive_members().await;
-
-            if members
-                .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Relay)
-            {
-                Ok(())
-            } else {
-                Err(FetchDisallowedError::InsufficientAccess)
-            }
-        }
-        .boxed_local()
+        authorize_fetch_with(&self.0, peer, sedimentree_id).boxed_local()
     }
 
     fn authorize_put(
         &self,
-        _requestor: PeerId,
+        requestor: PeerId,
         author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::PutDisallowed>> {
-        async move {
-            let identifier = Identifier::from(*author.verifying_key());
-
-            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
-                .ok_or(PutDisallowedError::InvalidSedimentreeId)?;
-
-            let doc = self
-                .0
-                .get_document(doc_id)
-                .await
-                .ok_or(PutDisallowedError::DocumentNotFound)?;
-
-            let members = doc.lock().await.transitive_members().await;
-
-            if members
-                .get(&identifier)
-                .is_some_and(|(_, access)| *access >= Access::Edit)
-            {
-                Ok(())
-            } else {
-                Err(PutDisallowedError::InsufficientAccess)
-            }
-        }
-        .boxed_local()
+        authorize_put_with(&self.0, requestor, author, sedimentree_id).boxed_local()
     }
 
     fn filter_authorized_fetch(
@@ -402,35 +264,193 @@ impl<
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> LocalBoxFuture<'_, Vec<SedimentreeId>> {
-        async move {
-            let Some(identifier) = try_peer_id_to_identifier(peer) else {
-                return Vec::new();
-            };
-
-            let mut authorized = Vec::new();
-            for sedimentree_id in ids {
-                let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
-                    continue;
-                };
-
-                let Some(doc) = self.0.get_document(doc_id).await else {
-                    continue;
-                };
-
-                let members = doc.lock().await.transitive_members().await;
-
-                if members
-                    .get(&identifier)
-                    .is_some_and(|(_, access)| *access >= Access::Relay)
-                {
-                    authorized.push(sedimentree_id);
-                }
-            }
-
-            authorized
-        }
-        .boxed_local()
+        filter_authorized_fetch_with(&self.0, peer, ids).boxed_local()
     }
+}
+
+// Bodies of the four `authorize_*` policy methods, lifted out so callers
+// that hold a `&Keyhive<...>` directly (e.g. an actor on a `LocalSet` that
+// owns `Arc<async_lock::Mutex<Keyhive<...>>>`) can run the same checks
+// without first wrapping in `SubductionKeyhive`. The `Local` and
+// `Sendable` impls above are now thin delegates over these functions.
+
+/// Authorize a connection from `peer_id` against `keyhive`.
+///
+/// Connect is permissive: any peer with a valid Ed25519 public key may
+/// connect, regardless of whether they are a known agent. Per-doc fetch/put
+/// authorization (see [`authorize_fetch_with`] / [`authorize_put_with`])
+/// gates actual access.
+///
+/// Without this, a fresh peer can never onboard. The server learns about
+/// new agents over a connection (via contact-card exchange).
+///
+/// # Errors
+///
+/// Returns [`ConnectionDisallowedError::InvalidPeerId`] if `peer_id` is
+/// not a valid Ed25519 public key.
+#[allow(clippy::unused_async)]
+pub async fn authorize_connect_with<F, S, T, P, C, L, R>(
+    _keyhive: &Keyhive<F, S, T, P, C, L, R>,
+    peer_id: PeerId,
+) -> Result<(), ConnectionDisallowedError>
+where
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+{
+    let _identifier =
+        try_peer_id_to_identifier(peer_id).ok_or(ConnectionDisallowedError::InvalidPeerId)?;
+    Ok(())
+}
+
+/// Authorize a fetch of `sedimentree_id` by `peer` against `keyhive`.
+///
+/// # Errors
+///
+/// Returns [`FetchDisallowedError`] variants when the peer/document IDs
+/// are invalid, the document is unknown, or the peer lacks at least
+/// [`Access::Relay`] access.
+pub async fn authorize_fetch_with<F, S, T, P, C, L, R>(
+    keyhive: &Keyhive<F, S, T, P, C, L, R>,
+    peer: PeerId,
+    sedimentree_id: SedimentreeId,
+) -> Result<(), FetchDisallowedError>
+where
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+{
+    let identifier = try_peer_id_to_identifier(peer).ok_or(FetchDisallowedError::InvalidPeerId)?;
+
+    let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+        .ok_or(FetchDisallowedError::InvalidSedimentreeId)?;
+
+    let doc = keyhive
+        .get_document(doc_id)
+        .await
+        .ok_or(FetchDisallowedError::DocumentNotFound)?;
+
+    let members = doc.lock().await.transitive_members().await;
+
+    // Public access on the doc grants access to anyone, in addition to
+    // direct grants to the requesting identifier.
+    let public_id = Public.id();
+    if members
+        .get(&public_id)
+        .is_some_and(|(_, access)| *access >= Access::Relay)
+        || members
+            .get(&identifier)
+            .is_some_and(|(_, access)| *access >= Access::Relay)
+    {
+        Ok(())
+    } else {
+        Err(FetchDisallowedError::InsufficientAccess)
+    }
+}
+
+/// Authorize a put to `sedimentree_id` by `author` against `keyhive`.
+///
+/// TODO: Only `author` is currently checked for [`Access::Edit`].
+/// Should we check requestor for [`Access::Relay`]?
+///
+/// # Errors
+///
+/// Returns [`PutDisallowedError`] variants when the document ID is
+/// invalid, the document is unknown, or the author lacks at least
+/// [`Access::Edit`] access.
+pub async fn authorize_put_with<F, S, T, P, C, L, R>(
+    keyhive: &Keyhive<F, S, T, P, C, L, R>,
+    _requestor: PeerId,
+    author: VerifiedAuthor,
+    sedimentree_id: SedimentreeId,
+) -> Result<(), PutDisallowedError>
+where
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+{
+    let identifier = Identifier::from(*author.verifying_key());
+
+    let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+        .ok_or(PutDisallowedError::InvalidSedimentreeId)?;
+
+    let doc = keyhive
+        .get_document(doc_id)
+        .await
+        .ok_or(PutDisallowedError::DocumentNotFound)?;
+
+    let members = doc.lock().await.transitive_members().await;
+
+    let public_id = Public.id();
+    if members
+        .get(&public_id)
+        .is_some_and(|(_, access)| *access >= Access::Edit)
+        || members
+            .get(&identifier)
+            .is_some_and(|(_, access)| *access >= Access::Edit)
+    {
+        Ok(())
+    } else {
+        Err(PutDisallowedError::InsufficientAccess)
+    }
+}
+
+/// Filter `ids` to those `peer` is authorized to fetch from `keyhive`.
+pub async fn filter_authorized_fetch_with<F, S, T, P, C, L, R>(
+    keyhive: &Keyhive<F, S, T, P, C, L, R>,
+    peer: PeerId,
+    ids: Vec<SedimentreeId>,
+) -> Vec<SedimentreeId>
+where
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+{
+    let Some(identifier) = try_peer_id_to_identifier(peer) else {
+        return Vec::new();
+    };
+
+    let public_id = Public.id();
+    let mut authorized = Vec::new();
+    for sedimentree_id in ids {
+        let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
+            continue;
+        };
+
+        let Some(doc) = keyhive.get_document(doc_id).await else {
+            continue;
+        };
+
+        let members = doc.lock().await.transitive_members().await;
+
+        if members
+            .get(&public_id)
+            .is_some_and(|(_, access)| *access >= Access::Relay)
+            || members
+                .get(&identifier)
+                .is_some_and(|(_, access)| *access >= Access::Relay)
+        {
+            authorized.push(sedimentree_id);
+        }
+    }
+
+    authorized
 }
 
 /// Try to convert a [`PeerId`] to an [`Identifier`].

@@ -76,7 +76,7 @@ impl StorageHash {
 /// Archives contain the full keyhive state, while events are individual
 /// operations.
 #[allow(clippy::type_complexity)]
-pub trait KeyhiveStorage<K: FutureForm + ?Sized> {
+pub trait KeyhiveStorage<K: FutureForm> {
     /// The error type for storage operations.
     type Error: core::error::Error;
 

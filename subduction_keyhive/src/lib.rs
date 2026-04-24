@@ -17,13 +17,24 @@ pub mod storage;
 pub mod wire;
 
 #[cfg(feature = "serde")]
+pub mod all_agent_events;
+#[cfg(feature = "serde")]
 pub mod protocol;
+#[cfg(feature = "serde")]
+mod serde_compat;
 #[cfg(feature = "serde")]
 pub mod storage_ops;
 
-#[cfg(all(test, feature = "serde"))]
-#[allow(clippy::expect_used, clippy::indexing_slicing)]
-mod test_utils;
+#[cfg(any(test, feature = "test-utils"))]
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    missing_debug_implementations,
+    missing_docs
+)]
+pub mod test_utils;
 
 pub use connection::KeyhiveConnection;
 pub use error::StorageError;
@@ -35,6 +46,8 @@ pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
 pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
+#[cfg(feature = "serde")]
+pub use all_agent_events::AllAgentEvents;
 #[cfg(feature = "serde")]
 pub use protocol::{KeyhiveProtocol, SyncOutcome};
 #[cfg(feature = "serde")]

@@ -24,6 +24,9 @@ use keyhive_core::principal::identifier::Identifier;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KeyhivePeerId {
     /// The 32-byte Ed25519 verifying key.
+    ///
+    /// Encoded as a CBOR byte string on the wire.
+    #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
     verifying_key: [u8; 32],
 
     /// Optional suffix to distinguish different connections/roles.
@@ -263,6 +266,24 @@ mod tests {
         let parsed = KeyhivePeerId::from_string_repr(&s).expect("should parse");
 
         assert_eq!(peer_id, parsed);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn verifying_key_serialises_as_cbor_byte_string() {
+        let peer = KeyhivePeerId::from_bytes([0xAB; 32]);
+        let mut buf = alloc::vec::Vec::new();
+        ciborium::into_writer(&peer, &mut buf).expect("encode");
+        let raw: ciborium::Value = ciborium::de::from_reader(buf.as_slice()).expect("decode");
+        let map = raw.as_map().expect("map");
+        let (_, vk) = map
+            .iter()
+            .find(|(k, _)| k.as_text() == Some("verifying_key"))
+            .expect("verifying_key key");
+        assert!(
+            vk.is_bytes(),
+            "verifying_key must be CBOR bytes, got {vk:?}"
+        );
     }
 
     #[test]

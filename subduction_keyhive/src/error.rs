@@ -86,6 +86,10 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
     /// Deserialization failed.
     #[error("deserialization error: {0}")]
     Deserialization(String),
+
+    /// A storage operation failed.
+    #[error("storage error")]
+    Storage(#[from] StorageError),
 }
 
 /// Errors that can occur during storage operations.

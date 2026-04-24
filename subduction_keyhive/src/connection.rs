@@ -9,7 +9,7 @@ use crate::{peer_id::KeyhivePeerId, signed_message::SignedMessage};
 /// This trait abstracts over the underlying transport mechanism, allowing
 /// the keyhive protocol to work with different connection backends such as
 /// WebSocket, in-memory channels, or other transports.
-pub trait KeyhiveConnection<K: FutureForm + ?Sized>: Clone {
+pub trait KeyhiveConnection<K: FutureForm>: Clone {
     /// The error type returned when sending a message fails.
     type SendError: core::error::Error;
 

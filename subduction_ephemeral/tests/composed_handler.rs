@@ -324,19 +324,19 @@ fn as_batch_sync_response_extracts_from_sync() {
         responder_heads: RemoteHeads::default(),
     };
 
-    let wire = TestWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
+    let msg = TestWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
     let extracted =
         <ComposedHandler<TrackingSyncHandler, TrackingEphemeralHandler, TestWireMessage> as Handler<
             Sendable,
             TestConn,
-        >>::as_batch_sync_response(&wire);
+        >>::as_batch_sync_response(&msg);
 
     assert_eq!(extracted, Some(&resp));
 }
 
 #[test]
 fn as_batch_sync_response_returns_none_for_other_sync() {
-    let wire = TestWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
+    let msg = TestWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
         id: SedimentreeId::new([0xCC; 32]),
         digests: vec![],
     }));
@@ -345,14 +345,14 @@ fn as_batch_sync_response_returns_none_for_other_sync() {
         <ComposedHandler<TrackingSyncHandler, TrackingEphemeralHandler, TestWireMessage> as Handler<
             Sendable,
             TestConn,
-        >>::as_batch_sync_response(&wire);
+        >>::as_batch_sync_response(&msg);
 
     assert_eq!(extracted, None);
 }
 
 #[test]
 fn as_batch_sync_response_returns_none_for_ephemeral() {
-    let wire = TestWireMessage::Ephemeral(EphemeralMessage::Subscribe {
+    let msg = TestWireMessage::Ephemeral(EphemeralMessage::Subscribe {
         topics: NonEmpty::new(Topic::new([0xDD; 32])),
     });
 
@@ -360,7 +360,7 @@ fn as_batch_sync_response_returns_none_for_ephemeral() {
         <ComposedHandler<TrackingSyncHandler, TrackingEphemeralHandler, TestWireMessage> as Handler<
             Sendable,
             TestConn,
-        >>::as_batch_sync_response(&wire);
+        >>::as_batch_sync_response(&msg);
 
     assert_eq!(extracted, None);
 }
