@@ -2298,6 +2298,26 @@ where
             .map(|tree| tree.fragments().cloned().collect())
     }
 
+    /// Get the current heads for every locally known sedimentree.
+    ///
+    /// Walks each shard exactly once, computing heads while holding the
+    /// shard's lock (matching the existing pattern in `SyncHandler`).
+    /// An inner empty `Vec<CommitId>` means the sedimentree exists but has
+    /// no heads yet.
+    pub async fn get_heads(&self) -> Vec<(SedimentreeId, Vec<CommitId>)> {
+        let mut out = Vec::new();
+        for idx in self.sedimentrees.shard_indices() {
+            if let Some(shard) = self.sedimentrees.shard_at(idx) {
+                let guard = shard.lock().await;
+                out.reserve(guard.len());
+                for (id, tree) in guard.iter() {
+                    out.push((*id, tree.heads(&self.depth_metric)));
+                }
+            }
+        }
+        out
+    }
+
     /// Get the set of all connected peer IDs.
     pub async fn connected_peer_ids(&self) -> Set<PeerId> {
         self.connections.lock().await.keys().copied().collect()

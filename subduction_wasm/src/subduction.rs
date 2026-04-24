@@ -1247,6 +1247,24 @@ impl WasmSubduction {
             .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
     }
 
+    /// Get the current heads for every locally known sedimentree.
+    ///
+    /// An inner empty heads array means the sedimentree exists but has no
+    /// heads yet.
+    #[must_use]
+    #[wasm_bindgen(js_name = getHeads)]
+    pub async fn get_heads(&self) -> Vec<WasmSedimentreeHeads> {
+        self.core
+            .get_heads()
+            .await
+            .into_iter()
+            .map(|(id, heads)| WasmSedimentreeHeads {
+                id: id.into(),
+                heads: heads.into_iter().map(WasmCommitId::from).collect(),
+            })
+            .collect()
+    }
+
     /// Get the peer IDs of all connected peers.
     #[wasm_bindgen(js_name = getConnectedPeerIds)]
     pub async fn connected_peer_ids(&self) -> Vec<WasmPeerId> {
@@ -1263,6 +1281,32 @@ impl WasmSubduction {
     #[wasm_bindgen(getter, js_name = storage)]
     pub fn storage(&self) -> JsValue {
         self.js_storage.clone()
+    }
+}
+
+/// Heads of a single sedimentree, returned by
+/// [`WasmSubduction::get_heads`](WasmSubduction::get_heads).
+#[wasm_bindgen(js_name = SedimentreeHeads)]
+#[derive(Debug, Clone)]
+pub struct WasmSedimentreeHeads {
+    id: WasmSedimentreeId,
+    heads: Vec<WasmCommitId>,
+}
+
+#[wasm_bindgen(js_class = SedimentreeHeads)]
+impl WasmSedimentreeHeads {
+    /// The sedimentree ID these heads belong to.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> WasmSedimentreeId {
+        self.id.clone()
+    }
+
+    /// The current heads of the sedimentree.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn heads(&self) -> Vec<WasmCommitId> {
+        self.heads.clone()
     }
 }
 
