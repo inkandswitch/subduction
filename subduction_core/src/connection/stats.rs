@@ -4,6 +4,9 @@
 //! sent/received). They are _not_ wire types — they are never serialized
 //! or sent over the network.
 
+use alloc::vec::Vec;
+use sedimentree_core::loose_commit::id::CommitId;
+
 use crate::remote_heads::RemoteHeads;
 
 /// Statistics from a sync operation.
@@ -68,11 +71,17 @@ impl SyncStats {
 
 /// Number of commits and fragments sent in a single
 /// [`send_requested_data`](crate::subduction::Subduction::send_requested_data) call.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SendCount {
     /// Number of commits sent.
     pub commits: usize,
 
     /// Number of fragments sent.
     pub fragments: usize,
+
+    /// Commit ids successfully sent.
+    pub commit_ids: Vec<CommitId>,
+
+    /// Fragment head ids successfully sent.
+    pub fragment_ids: Vec<CommitId>,
 }
