@@ -17,7 +17,7 @@
 
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -26,7 +26,7 @@ use sedimentree_core::{
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
@@ -34,11 +34,11 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use crate::{
     authenticated::Authenticated,
     connection::{
-        Connection,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
             SyncResult,
         },
+        Connection,
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
@@ -49,6 +49,7 @@ use crate::{
         ingest, peers,
         pending_blob_requests::PendingBlobRequests,
     },
+    sync_session::{DynSyncSessionObserver, SyncSession, SyncSessionKind},
 };
 
 use super::Handler;
@@ -92,17 +93,19 @@ pub struct SyncHandler<
     depth_metric: M,
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
+    sync_session_observer: Arc<Mutex<Option<DynSyncSessionObserver>>>,
+    pending_push_sessions: Arc<Mutex<Map<(PeerId, SedimentreeId), SyncSession>>>,
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -110,14 +113,14 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric + Clone,
-    R: RemoteHeadsObserver + Clone,
-    const N: usize,
-> Clone for SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric + Clone,
+        R: RemoteHeadsObserver + Clone,
+        const N: usize,
+    > Clone for SyncHandler<F, S, C, P, M, N, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -129,18 +132,20 @@ impl<
             depth_metric: self.depth_metric.clone(),
             heads_notifier: self.heads_notifier.clone(),
             send_counter: self.send_counter.clone(),
+            sync_session_observer: self.sync_session_observer.clone(),
+            pending_push_sessions: self.pending_push_sessions.clone(),
         }
     }
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        const N: usize,
+    > SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -167,19 +172,21 @@ impl<
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
             send_counter: PeerCounter::default(),
+            sync_session_observer: Arc::new(Mutex::new(None)),
+            pending_push_sessions: Arc::new(Mutex::new(Map::new())),
         }
     }
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > SyncHandler<F, S, C, P, M, N, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
@@ -201,6 +208,22 @@ impl<
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
             send_counter: PeerCounter::default(),
+            sync_session_observer: Arc::new(Mutex::new(None)),
+            pending_push_sessions: Arc::new(Mutex::new(Map::new())),
+        }
+    }
+
+    pub fn set_sync_session_observer(&self, observer: DynSyncSessionObserver) {
+        *self
+            .sync_session_observer
+            .try_lock()
+            .expect("sync session observer lock uncontended during setup") = Some(observer);
+    }
+
+    async fn emit_sync_session(&self, session: SyncSession) {
+        let observer = self.sync_session_observer.lock().await.clone();
+        if let Some(observer) = observer {
+            observer.on_sync_session(session);
         }
     }
 
@@ -291,14 +314,14 @@ impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
 // ---------------------------------------------------------------------------
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
@@ -310,14 +333,14 @@ impl<
 // ---------------------------------------------------------------------------
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    R: RemoteHeadsObserver,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, R>
+        F: FutureForm,
+        S: Storage<F>,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+        P: StoragePolicy<F>,
+        M: DepthMetric,
+        R: RemoteHeadsObserver,
+        const N: usize,
+    > SyncHandler<F, S, C, P, M, N, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
@@ -514,6 +537,7 @@ impl<
                 return Err(IoError::BlobMismatch(e));
             }
         };
+        let commit_id = verified_meta.payload().head();
 
         let was_new = self
             .insert_commit_locally(&putter, verified_meta)
@@ -523,6 +547,14 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
+            let session_key = (*from, id);
+            {
+                let mut sessions = self.pending_push_sessions.lock().await;
+                let session = sessions
+                    .entry(session_key)
+                    .or_insert_with(|| SyncSession::new(id, *from, SyncSessionKind::InboundPush));
+                session.received_commit_ids.push(commit_id);
+            }
             let heads = self.heads_for(id).await;
 
             // Send HeadsUpdate back to the originating peer
@@ -535,6 +567,11 @@ impl<
             };
             if let Err(e) = conn.send(&heads_msg).await {
                 tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+            }
+
+            let maybe_session = self.pending_push_sessions.lock().await.remove(&session_key);
+            if let Some(session) = maybe_session {
+                self.emit_sync_session(session).await;
             }
 
             // Broadcast to subscribers (excluding sender)
@@ -610,6 +647,7 @@ impl<
                 return Err(IoError::BlobMismatch(e));
             }
         };
+        let fragment_id = verified_meta.payload().head();
 
         let was_new = self
             .insert_fragment_locally(&putter, verified_meta)
@@ -619,6 +657,14 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
+            let session_key = (*from, id);
+            {
+                let mut sessions = self.pending_push_sessions.lock().await;
+                let session = sessions
+                    .entry(session_key)
+                    .or_insert_with(|| SyncSession::new(id, *from, SyncSessionKind::InboundPush));
+                session.received_fragment_ids.push(fragment_id);
+            }
             let heads = self.heads_for(id).await;
 
             // Send HeadsUpdate back to the originating peer
@@ -631,6 +677,11 @@ impl<
             };
             if let Err(e) = conn.send(&heads_msg).await {
                 tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+            }
+
+            let maybe_session = self.pending_push_sessions.lock().await.remove(&session_key);
+            if let Some(session) = maybe_session {
+                self.emit_sync_session(session).await;
             }
 
             // Broadcast to subscribers (excluding sender)
@@ -667,6 +718,7 @@ impl<
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
 
         let peer_id = conn.peer_id();
+        let mut session = SyncSession::new(id, peer_id, SyncSessionKind::InboundBatch);
         let fetcher = match self.storage.get_fetcher::<F>(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
@@ -769,15 +821,19 @@ impl<
 
         for commit_id in local_commit_ids {
             if let Some(verified) = commit_by_id.get(&commit_id) {
+                session.sent_commit_ids.push(commit_id);
                 their_missing_commits.push((verified.signed().clone(), verified.blob().clone()));
             }
         }
 
         for frag_id in local_fragment_ids {
             if let Some(verified) = fragment_by_id.get(&frag_id) {
+                session.sent_fragment_ids.push(frag_id);
                 their_missing_fragments.push((verified.signed().clone(), verified.blob().clone()));
             }
         }
+
+        session.remote_heads = Some(responder_heads.clone());
 
         tracing::info!(
             "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments, requesting {} commits and {} fragments",
@@ -786,7 +842,6 @@ impl<
             our_missing_commit_fingerprints.len(),
             our_missing_fragment_fingerprints.len(),
         );
-
         let sync_diff = SyncDiff {
             missing_commits: their_missing_commits,
             missing_fragments: their_missing_fragments,
@@ -806,6 +861,8 @@ impl<
         if let Err(e) = conn.send(&msg).await {
             tracing::warn!("peer {} disconnected: {e}", conn.peer_id());
         }
+
+        self.emit_sync_session(session).await;
 
         Ok(())
     }
