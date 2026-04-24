@@ -239,6 +239,20 @@ where
             + stats.cgka_operations
     }
 
+    /// Last confirmed operation total recorded for `peer_id`.
+    ///
+    /// A value exists after a sync exchange reaches `SyncConfirmation`.
+    pub async fn syncpoint_for_peer(&self, peer_id: &KeyhivePeerId) -> Option<u64> {
+        self.syncpoints.lock().await.get(peer_id)
+    }
+
+    /// Forget the last confirmed syncpoint for `peer_id`.
+    ///
+    /// This forces the next sync with that peer through the full request path.
+    pub async fn clear_syncpoint_for_peer(&self, peer_id: &KeyhivePeerId) {
+        self.syncpoints.lock().await.remove(peer_id);
+    }
+
     /// Serialized events reachable by `peer_id`.
     ///
     /// Values are [`Arc`]-shared.
