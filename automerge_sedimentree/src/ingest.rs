@@ -106,6 +106,9 @@ pub struct IngestResult {
 
     /// Number of fragments produced.
     pub fragment_count: usize,
+
+    /// Fragment-state cache built during ingestion.
+    pub fragment_state_store: Map<CommitId, FragmentState<OwnedParents>>,
 }
 
 /// Ingest an Automerge document into a [`Sedimentree`].
@@ -180,6 +183,7 @@ pub fn ingest_automerge(
         covered_count,
         loose_count,
         fragment_count,
+        fragment_state_store: known,
     })
 }
 
@@ -240,6 +244,7 @@ pub fn ingest_automerge_par(
         covered_count,
         loose_count,
         fragment_count,
+        fragment_state_store: known,
     })
 }
 

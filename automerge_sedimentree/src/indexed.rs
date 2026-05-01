@@ -25,6 +25,12 @@ use sedimentree_core::{
 #[derive(Debug, Clone)]
 pub struct OwnedParents(Set<CommitId>);
 
+impl From<Set<CommitId>> for OwnedParents {
+    fn from(value: Set<CommitId>) -> Self {
+        Self(value)
+    }
+}
+
 impl Parents for OwnedParents {
     fn parents(&self) -> Set<CommitId> {
         self.0.clone()
