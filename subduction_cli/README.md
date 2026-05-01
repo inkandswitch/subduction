@@ -328,12 +328,13 @@ tail -f ~/.cache/subduction/server.log
 
 ### Behind a Reverse Proxy (Caddy)
 
-When running behind Caddy or another reverse proxy, bind to localhost:
+When running behind Caddy or another reverse proxy, bind to localhost, and give subduction a `serviceName`.
 
 ```nix
 services.subduction.server = {
   enable = true;
   socket = "127.0.0.1:8080";
+  serviceName = "sync.example.com";
   keyFile = "/var/lib/subduction/key";
 };
 
