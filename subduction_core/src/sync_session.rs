@@ -2,6 +2,7 @@
 //! observing the commits, peer and heads involved.
 //!
 //! Probably should be part of [`Handler`] or [`SyncStats`] instead.
+//!
 //! [`Handler`]: crate::handler::Handler
 //! [`SyncStats`]: crate::connection::stats::SyncStats
 
@@ -50,7 +51,11 @@ impl SyncSession {
     /// Constructor for use at start of any sync session with fields to be filled
     /// out later depending on sync happenings.
     #[must_use]
-    pub fn new(sedimentree_id: SedimentreeId, peer_id: PeerId, kind: SyncSessionKind) -> Self {
+    pub const fn new(
+        sedimentree_id: SedimentreeId,
+        peer_id: PeerId,
+        kind: SyncSessionKind,
+    ) -> Self {
         Self {
             sedimentree_id,
             peer_id,
@@ -65,7 +70,7 @@ impl SyncSession {
 
     /// Indicates if anything really was exchanged in the session?
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.received_commit_ids.is_empty()
             || !self.received_fragment_ids.is_empty()
             || !self.sent_commit_ids.is_empty()
@@ -74,11 +79,14 @@ impl SyncSession {
 }
 
 /// A trait to observe [`SyncSession`]s as they happen.
+///
 /// [`SyncSession`]: crate::sync_session::SyncSession
 pub trait SyncSessionObserver {
+    /// Observe.
     fn on_sync_session(&self, session: SyncSession);
 }
 
 /// A type erased trait object of [`SyncSessionObserver`].
+///
 /// [`SyncSessionObserver`]: crate::sync_session::SyncSessionObserver
 pub type DynSyncSessionObserver = Arc<dyn SyncSessionObserver + Send + Sync>;

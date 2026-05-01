@@ -86,8 +86,8 @@ use crate::{
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
-    timeout::Timeout,
     sync_session::{DynSyncSessionObserver, SyncSession, SyncSessionKind},
+    timeout::Timeout,
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
@@ -377,11 +377,14 @@ where
     ///
     /// [`SyncSessionObserver`]: crate::sync_session::SyncSessionObserver
     /// [`new`]: Subduction::new
+    ///
+    /// # Panics
+    /// Don't call this in parallel.
     pub fn set_sync_session_observer(&self, observer: DynSyncSessionObserver) {
-        *self
-            .sync_session_observer
-            .try_lock()
-            .expect("sync session observer lock uncontended during setup") = Some(observer);
+        let Some(mut lock) = self.sync_session_observer.try_lock() else {
+            unreachable!("sync session observer lock uncontended during setup")
+        };
+        *lock = Some(observer);
     }
 
     async fn emit_sync_session(&self, session: SyncSession) {

@@ -17,7 +17,7 @@
 
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -26,7 +26,7 @@ use sedimentree_core::{
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
@@ -34,11 +34,11 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use crate::{
     authenticated::Authenticated,
     connection::{
+        Connection,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
             SyncResult,
         },
-        Connection,
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
@@ -98,14 +98,14 @@ pub struct SyncHandler<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -113,14 +113,14 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric + Clone,
-        R: RemoteHeadsObserver + Clone,
-        const N: usize,
-    > Clone for SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric + Clone,
+    R: RemoteHeadsObserver + Clone,
+    const N: usize,
+> Clone for SyncHandler<F, S, C, P, M, N, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -139,13 +139,13 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -179,14 +179,14 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
@@ -213,11 +213,21 @@ impl<
         }
     }
 
+    /// Set a [`SyncSessionObserver`] implementation.
+    ///
+    /// This should just be another parameter to `new` but that
+    /// would be an invasive change just for a sketch.
+    ///
+    /// [`SyncSessionObserver`]: crate::sync_session::SyncSessionObserver
+    /// [`new`]: Self::new
+    ///
+    /// # Panics
+    /// Don't call this in parallel.
     pub fn set_sync_session_observer(&self, observer: DynSyncSessionObserver) {
-        *self
-            .sync_session_observer
-            .try_lock()
-            .expect("sync session observer lock uncontended during setup") = Some(observer);
+        let Some(mut lock) = self.sync_session_observer.try_lock() else {
+            unreachable!("sync session observer lock uncontended during setup")
+        };
+        *lock = Some(observer);
     }
 
     async fn emit_sync_session(&self, session: SyncSession) {
@@ -314,14 +324,14 @@ impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
 // ---------------------------------------------------------------------------
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
@@ -333,14 +343,14 @@ impl<
 // ---------------------------------------------------------------------------
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        R: RemoteHeadsObserver,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N, R>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    R: RemoteHeadsObserver,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
