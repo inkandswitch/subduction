@@ -1255,7 +1255,7 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = getHeads)]
     pub async fn get_heads(&self) -> Vec<WasmSedimentreeHeads> {
         self.core
-            .get_heads()
+            .get_all_heads()
             .await
             .into_iter()
             .map(|(id, heads)| WasmSedimentreeHeads {

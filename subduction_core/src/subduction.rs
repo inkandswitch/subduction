@@ -2304,7 +2304,7 @@ where
     /// shard's lock (matching the existing pattern in `SyncHandler`).
     /// An inner empty `Vec<CommitId>` means the sedimentree exists but has
     /// no heads yet.
-    pub async fn get_heads(&self) -> Vec<(SedimentreeId, Vec<CommitId>)> {
+    pub async fn get_all_heads(&self) -> Vec<(SedimentreeId, Vec<CommitId>)> {
         let mut out = Vec::new();
         for idx in self.sedimentrees.shard_indices() {
             if let Some(shard) = self.sedimentrees.shard_at(idx) {
