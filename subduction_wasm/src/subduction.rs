@@ -1252,8 +1252,8 @@ impl WasmSubduction {
     /// An inner empty heads array means the sedimentree exists but has no
     /// heads yet.
     #[must_use]
-    #[wasm_bindgen(js_name = getHeads)]
-    pub async fn get_heads(&self) -> Vec<WasmSedimentreeHeads> {
+    #[wasm_bindgen(js_name = getAllHeads)]
+    pub async fn get_all_heads(&self) -> Vec<WasmSedimentreeHeads> {
         self.core
             .get_all_heads()
             .await
@@ -1285,7 +1285,7 @@ impl WasmSubduction {
 }
 
 /// Heads of a single sedimentree, returned by
-/// [`WasmSubduction::get_heads`](WasmSubduction::get_heads).
+/// [`WasmSubduction::get_all_heads`](WasmSubduction::get_all_heads).
 #[wasm_bindgen(js_name = SedimentreeHeads)]
 #[derive(Debug, Clone)]
 pub struct WasmSedimentreeHeads {
