@@ -543,7 +543,7 @@
   };
 
   ci = {
-    "ci" = cmd "Run full CI suite (build, lint, test, wasm)" ''
+    "ci" = cmd "Run full CI suite (build, lint, test, wasm, audit)" ''
       set -e
 
       echo "========================================"
@@ -551,36 +551,41 @@
       echo "========================================"
       echo ""
 
-      echo "===> [1/7] Checking formatting..."
+      echo "===> [1/8] Checking formatting..."
       ${cargo} fmt --check
       echo "✓ Formatting OK"
       echo ""
 
-      echo "===> [2/7] Running Clippy..."
+      echo "===> [2/8] Auditing dependencies..."
+      ${pkgs.cargo-audit}/bin/cargo-audit audit
+      echo "✓ Audit OK"
+      echo ""
+
+      echo "===> [3/8] Running Clippy..."
       ${cargo} clippy --workspace --all-targets -- -D warnings
       echo "✓ Clippy OK"
       echo ""
 
-      echo "===> [3/7] Checking for &mut on wasm_bindgen boundaries..."
+      echo "===> [4/8] Checking for &mut on wasm_bindgen boundaries..."
       lint:wasm-mut
       echo ""
 
-      echo "===> [4/7] Building host target..."
+      echo "===> [5/8] Building host target..."
       ${cargo} build --workspace
       echo "✓ Host build OK"
       echo ""
 
-      echo "===> [5/7] Running host tests..."
+      echo "===> [6/8] Running host tests..."
       ${cargo} test --workspace
       echo "✓ Host tests OK"
       echo ""
 
-      echo "===> [6/7] Building wasm packages..."
+      echo "===> [7/8] Building wasm packages..."
       ${wasm-pack} build --target web subduction_wasm
       echo "✓ Wasm build OK"
       echo ""
 
-      echo "===> [7/7] Running wasm tests..."
+      echo "===> [8/8] Running wasm tests..."
       ${wasm-pack} test --node subduction_wasm
       echo "✓ Wasm tests OK"
       echo ""
