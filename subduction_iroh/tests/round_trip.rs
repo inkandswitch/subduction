@@ -179,6 +179,9 @@ impl TestServer {
 struct TestClient {
     subduction: TestSubduction,
     peer_id: PeerId,
+    // Retain the endpoint so iroh 0.98+ doesn't tear down the QUIC driver
+    // (and thus the connection) when it would otherwise be dropped.
+    _endpoint: iroh::Endpoint,
 }
 
 impl TestClient {
@@ -215,6 +218,7 @@ impl TestClient {
         Self {
             subduction,
             peer_id,
+            _endpoint: client_ep,
         }
     }
 }
@@ -317,6 +321,7 @@ impl TestClient {
         Self {
             subduction,
             peer_id,
+            _endpoint: client_ep,
         }
     }
 }
