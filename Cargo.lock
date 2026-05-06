@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_ingest"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "automerge",
  "automerge_sedimentree",
@@ -4828,7 +4828,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_fs_storage"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "async-lock",
  "future_form",
@@ -5336,7 +5336,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_ephemeral"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5358,7 +5358,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5435,7 +5435,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive_policy"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "async-channel",
  "ed25519-dalek 2.2.0",
@@ -5490,7 +5490,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "arbitrary",
  "async-channel",
