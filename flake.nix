@@ -127,6 +127,7 @@
         };
 
         cargo-installs = with pkgs; [
+          cargo-audit
           cargo-component
           cargo-criterion
           cargo-deny
@@ -157,6 +158,7 @@
 
         command_menu = command-utils.commands.${system} [
           # Rust commands
+          (rust.audit { cargo-audit = pkgs.cargo-audit; })
           (rust.build { cargo = pkgs.cargo; })
           (rust.test { cargo = pkgs.cargo; cargo-watch = pkgs.cargo-watch; })
           (rust.lint { cargo = pkgs.cargo; })

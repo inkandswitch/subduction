@@ -6,7 +6,7 @@ use alloc::sync::Arc;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use eyre::Result;
-use iroh::EndpointAddr;
+use iroh::{EndpointAddr, endpoint::presets};
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
@@ -400,7 +400,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             iroh::endpoint::RelayMode::Default
         };
 
-        let iroh_endpoint = iroh::Endpoint::builder()
+        let iroh_endpoint = iroh::Endpoint::builder(presets::N0)
             .alpns(vec![subduction_iroh::ALPN.to_vec()])
             .relay_mode(relay_mode)
             .bind()
