@@ -129,7 +129,7 @@ impl TestServer {
 
         let subduction = spawn_subduction(&sig, None);
 
-        let endpoint = iroh::Endpoint::builder(presets::N0)
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .alpns(vec![subduction_iroh::ALPN.to_vec()])
             .bind()
             .await
@@ -188,7 +188,7 @@ impl TestClient {
 
         let subduction = spawn_subduction(&sig, None);
 
-        let client_ep = iroh::Endpoint::builder(presets::N0)
+        let client_ep = iroh::Endpoint::builder(presets::Minimal)
             .bind()
             .await
             .expect("bind iroh client endpoint");
@@ -236,7 +236,7 @@ impl TestServerDiscover {
 
         let subduction = spawn_subduction(&sig, Some(discovery_id));
 
-        let endpoint = iroh::Endpoint::builder(presets::N0)
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .alpns(vec![subduction_iroh::ALPN.to_vec()])
             .bind()
             .await
@@ -290,7 +290,7 @@ impl TestClient {
 
         let subduction = spawn_subduction(&sig, None);
 
-        let client_ep = iroh::Endpoint::builder(presets::N0)
+        let client_ep = iroh::Endpoint::builder(presets::Minimal)
             .bind()
             .await
             .expect("bind iroh client endpoint");
@@ -799,7 +799,7 @@ async fn discovery_wrong_service_name_rejected() -> TestResult {
 
     let sig = signer(91);
 
-    let client_ep = iroh::Endpoint::builder(presets::N0)
+    let client_ep = iroh::Endpoint::builder(presets::Minimal)
         .bind()
         .await
         .expect("bind client endpoint");
@@ -1003,7 +1003,7 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
 
     let subduction = spawn_subduction(&sig, None);
 
-    let endpoint = iroh::Endpoint::builder(presets::N0)
+    let endpoint = iroh::Endpoint::builder(presets::Minimal)
         .alpns(vec![subduction_iroh::ALPN.to_vec()])
         .bind()
         .await
@@ -1040,7 +1040,7 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
 
     // Try to connect — should fail
     let client_sig = signer(121);
-    let client_ep = iroh::Endpoint::builder(presets::N0)
+    let client_ep = iroh::Endpoint::builder(presets::Minimal)
         .bind()
         .await
         .expect("bind client endpoint");
