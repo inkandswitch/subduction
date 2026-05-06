@@ -19,6 +19,7 @@ use std::{
 };
 
 use future_form::Sendable;
+use iroh::endpoint::presets;
 use rand::RngCore;
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
@@ -35,7 +36,6 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use iroh::endpoint::presets;
 use subduction_iroh::transport::IrohTransport;
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
