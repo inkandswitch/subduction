@@ -92,6 +92,11 @@
       "import": "./dist/esm/debug-web.js",
       "require": "./dist/cjs/debug-web.cjs"
     },
+    "./debug/slim": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/esm/debug-slim.js",
+      "require": "./dist/cjs/debug-slim.cjs"
+    },
     "./debug/wasm": "./dist/sedimentree-debug.wasm",
     "./debug/wasm-base64": {
       "import": "./dist/esm/debug-wasm-base64.js",
