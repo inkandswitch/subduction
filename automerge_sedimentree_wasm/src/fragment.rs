@@ -76,7 +76,7 @@ impl WasmFragmentState {
     #[wasm_bindgen(js_name = intoFragment)]
     pub fn into_fragment(
         &self,
-        sedimentree_id: WasmSedimentreeId,
+        sedimentree_id: &WasmSedimentreeId,
         blob_meta: &WasmBlobMeta,
     ) -> WasmFragment {
         self.0

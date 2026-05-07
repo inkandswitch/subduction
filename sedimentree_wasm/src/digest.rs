@@ -103,6 +103,12 @@ impl<T> From<WasmDigest> for Digest<T> {
     }
 }
 
+impl<T> From<&WasmDigest> for Digest<T> {
+    fn from(digest: &WasmDigest) -> Self {
+        Digest::force_from_bytes(digest.0)
+    }
+}
+
 /// An error indicating an invalid [`Digest`].
 #[derive(Debug, Error)]
 pub enum WasmInvalidDigest {

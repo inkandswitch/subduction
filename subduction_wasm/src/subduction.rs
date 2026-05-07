@@ -66,7 +66,7 @@ use crate::{
     peer_id::WasmPeerId,
     signer::JsSigner,
     sync_stats::WasmSyncStats,
-    topic::WasmTopic,
+    topic::{JsTopic, WasmTopic},
     transport::{
         DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
@@ -1332,8 +1332,12 @@ impl WasmSubduction {
     /// Subscribe to ephemeral messages for the given topics
     /// from all connected peers.
     #[wasm_bindgen(js_name = subscribeEphemeral)]
-    pub async fn subscribe_ephemeral(&self, topics: Vec<WasmTopic>) {
-        let topics: Vec<Topic> = topics.into_iter().map(Topic::from).collect();
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn subscribe_ephemeral(&self, topics: Vec<JsTopic>) {
+        let topics: Vec<Topic> = topics
+            .iter()
+            .map(|t| Topic::from(WasmTopic::from(t)))
+            .collect();
         if let Some(topics) = NonEmpty::from_vec(topics) {
             self.ephemeral_handler.subscribe(topics).await;
         }
@@ -1342,8 +1346,12 @@ impl WasmSubduction {
     /// Unsubscribe from ephemeral messages for the given topics
     /// from all connected peers.
     #[wasm_bindgen(js_name = unsubscribeEphemeral)]
-    pub async fn unsubscribe_ephemeral(&self, topics: Vec<WasmTopic>) {
-        let topics: Vec<Topic> = topics.into_iter().map(Topic::from).collect();
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn unsubscribe_ephemeral(&self, topics: Vec<JsTopic>) {
+        let topics: Vec<Topic> = topics
+            .iter()
+            .map(|t| Topic::from(WasmTopic::from(t)))
+            .collect();
         if let Some(topics) = NonEmpty::from_vec(topics) {
             self.ephemeral_handler.unsubscribe(topics).await;
         }

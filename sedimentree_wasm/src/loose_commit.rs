@@ -28,8 +28,8 @@ impl WasmLooseCommit {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
-        sedimentree_id: WasmSedimentreeId,
-        head: WasmCommitId,
+        sedimentree_id: &WasmSedimentreeId,
+        head: &WasmCommitId,
         parents: Vec<JsCommitId>,
         blob_meta: &WasmBlobMeta,
     ) -> Self {
@@ -143,6 +143,12 @@ impl From<BlobMeta> for WasmBlobMeta {
 
 impl From<WasmBlobMeta> for BlobMeta {
     fn from(meta: WasmBlobMeta) -> Self {
+        meta.0
+    }
+}
+
+impl From<&WasmBlobMeta> for BlobMeta {
+    fn from(meta: &WasmBlobMeta) -> Self {
         meta.0
     }
 }

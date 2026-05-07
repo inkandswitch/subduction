@@ -28,11 +28,11 @@ impl WasmFragment {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
-        sedimentree_id: WasmSedimentreeId,
-        head: WasmCommitId,
+        sedimentree_id: &WasmSedimentreeId,
+        head: &WasmCommitId,
         boundary: Vec<JsCommitId>,
         checkpoints: Vec<JsCommitId>,
-        blob_meta: WasmBlobMeta,
+        blob_meta: &WasmBlobMeta,
     ) -> Self {
         let cps: Vec<_> = checkpoints
             .iter()
