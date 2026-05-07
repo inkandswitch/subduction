@@ -312,19 +312,15 @@ fn fragment_boundary_at_merge() {
 /// span a depth-2 fragment's head and boundary, but where neither
 /// individually covers both.
 ///
-/// This configuration is impossible to produce from `build_fragment_store`
-/// (a real depth-3 fragment walks back through every `depth<3` ancestor
-/// as a member, so the same depth-3 fragment would carry both
-/// `shallow_head` AND `shallow_boundary` in its checkpoints). It can
-/// only arise from malformed input — hand-crafted in tests, Byzantine
-/// peers, or storage corruption.
+/// This is impossible from `build_fragment_store` — a real depth-3
+/// fragment walks every `depth<3` ancestor as a member, so a single
+/// depth-3 fragment would carry both `shallow_head` and
+/// `shallow_boundary` in its checkpoints. Only malformed input
+/// (hand-crafted, Byzantine, or corrupted) produces this shape.
 ///
-/// We pin the safe behavior: the shallow fragment is kept. Its data is
-/// not recoverable from the union of deep1's and deep2's blobs in
-/// general, because each deep fragment's blob contains only its own
-/// members. Pre-fix `minimize` dropped shallow on the (unsound)
-/// assumption that collective structural coverage implies recoverable
-/// content.
+/// We pin the safe behaviour: shallow is kept. Each deep fragment's
+/// blob contains only its own members, so dropping shallow on
+/// "collective" coverage would lose its data.
 #[test]
 fn collective_support_from_multiple_deep_keeps_shallow() {
     let sedimentree_id = make_sedimentree_id(1);
@@ -370,9 +366,6 @@ fn collective_support_from_multiple_deep_keeps_shallow() {
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
-    // All three are kept: collective coverage is unsound at the blob
-    // level. Shallow's data lives only in shallow's blob; dropping
-    // shallow would lose data.
     assert_eq!(fragments.len(), 3);
     assert!(fragments.contains(&deep1));
     assert!(fragments.contains(&deep2));

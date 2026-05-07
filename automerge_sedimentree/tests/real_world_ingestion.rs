@@ -515,20 +515,10 @@ fn fingerprint_summary_includes_all_items_after_ingestion() {
     );
 }
 
-/// Round-trip an Automerge document through ingest → minimize → reassemble,
-/// verifying that the recovered document has the same heads and change
-/// count as the original.
-///
-/// This is the most direct correctness test for `Sedimentree::minimize`
-/// in the Automerge use case: minimize must never drop a fragment whose
-/// blob data isn't physically contained in some kept fragment's blob.
-///
-/// Regression coverage for the fix that requires *strict-deeper*
-/// dominance (or exact-equality) before a fragment is dropped. The
-/// previous "structural reachability of head + boundary in any kept
-/// fragment's `head ∪ boundary ∪ checkpoints`" check was unsafe for
-/// merge-heavy docs (typical Automerge workload) where many same-depth
-/// fragments cross-reference each other's heads in their boundaries.
+/// Ingest → minimize → reassemble round-trip. The most direct
+/// correctness test for `Sedimentree::minimize` in the Automerge use
+/// case: `minimize` must never drop a fragment whose blob data isn't
+/// physically contained in some kept fragment's blob.
 fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
     let doc = Automerge::load(bytes).expect(name);
     let original_heads = doc.get_heads();
@@ -536,25 +526,22 @@ fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
 
     let sed_id = sed_id(bytes);
     let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
-
-    // Apply minimize.
     let minimized = result.sedimentree.minimize(&CountLeadingZeroBytes);
 
-    // The blobs collected during ingest are still our source of truth
-    // for raw bytes — `minimize` removes Sedimentree entries but doesn't
-    // touch blob storage. Build the digest → bytes map from `result.blobs`.
+    // `minimize` only prunes Sedimentree entries; blob storage is
+    // unaffected, so all blobs collected during ingest are still
+    // addressable.
     let blob_by_digest: Map<Digest<Blob>, &[u8]> = result
         .blobs
         .iter()
         .map(|blob| (Digest::hash(blob), blob.as_slice()))
         .collect();
 
-    // For every kept item in the minimized tree, look up its blob and
-    // verify it's available. (Any reachable blob must be stored — if a
-    // blob is missing, minimize has implicitly orphaned data.)
     let kept_fragments: Vec<_> = minimized.fragments().collect();
     let kept_loose: Vec<_> = minimized.loose_commits().collect();
 
+    // Every kept item must reference a blob we have. A miss means
+    // `minimize` orphaned data.
     for f in &kept_fragments {
         let d = f.summary().blob_meta().digest();
         assert!(
@@ -570,8 +557,6 @@ fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
         );
     }
 
-    // Reassemble the document by topsorting the *minimized* tree and
-    // concatenating each item's blob bytes.
     let order = minimized
         .topsorted_blob_order()
         .expect("no cycles in minimized tree");
@@ -612,7 +597,6 @@ fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
         rebuilt.get_changes(&[]).len(),
     );
 
-    // Spot-check that the rebuilt doc agrees on the root keyset.
     let orig_keys: Vec<_> = doc.keys(&ROOT).collect();
     let rebuilt_keys: Vec<_> = rebuilt.keys(&ROOT).collect();
     assert_eq!(
@@ -660,15 +644,10 @@ fn ingest_minimize_roundtrip_c2() {
     ingest_minimize_roundtrip("C2", include_bytes!("../test-vectors/C2.am"));
 }
 
-/// Snapshot of structural metrics for each test vector.
-///
-/// Pins the expected (`change_count`, `fragment_count`, `uncovered_count`)
-/// triple for the egwalker vectors. Drift in any of these signals a
-/// behavioural change in `ingest_automerge` or its dependencies
-/// (`build_fragment_store`, `CountLeadingZeroBytes`).
-///
-/// These are *snapshots* — when intentional changes shift these
-/// numbers, update the table and explain why in the commit message.
+/// Pins (`change_count`, `fragment_count`, `uncovered_count`) for each
+/// egwalker vector. Drift signals a behavioural change in
+/// `ingest_automerge` or `build_fragment_store`/`CountLeadingZeroBytes`.
+/// Update the table when shifting numbers intentionally.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "needs get_changes; release-only")]
 fn egwalker_vector_snapshots() {
@@ -716,19 +695,13 @@ fn egwalker_vector_snapshots() {
     }
 }
 
-/// Snapshot of `MinimalTreeHash` for each test vector after ingest +
-/// minimize.
-///
-/// This is the strongest possible regression test for sync-correctness:
-/// `MinimalTreeHash` is the canonical content-addressed identity of a
-/// minimized tree. Two peers with identical content must compute
-/// identical hashes for the sync protocol to work. If `minimize` ever
-/// changes its output for these vectors, this test fires and the
-/// expected-hash table needs to be updated alongside an explanation.
-///
-/// Pinned hashes also confirm that `minimize` is deterministic across
-/// runs (within and across processes) for these vectors — a regression
-/// against the determinism fix would surface here.
+/// Pins `MinimalTreeHash` for each egwalker vector after ingest +
+/// minimize. The strongest sync-correctness regression test:
+/// `MinimalTreeHash` is the canonical content-addressed identity, so
+/// two peers with identical content must compute identical values.
+/// Also catches determinism regressions, since the hash depends on
+/// `minimize`'s output. Update the table when intentional behaviour
+/// changes shift these.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "needs get_changes; release-only")]
 fn egwalker_minimal_hash_snapshots() {
@@ -780,7 +753,7 @@ fn egwalker_minimal_hash_snapshots() {
         let sed_id = sed_id(bytes);
         let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
 
-        // Compute hash twice and assert determinism within this run.
+        // Determinism within a single ingest result.
         let h1: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
         let h2: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
         assert_eq!(
@@ -790,8 +763,7 @@ fn egwalker_minimal_hash_snapshots() {
              — DETERMINISM REGRESSION",
         );
 
-        // Re-ingest and re-hash. Should match — ingest is a function of
-        // the document bytes alone.
+        // Determinism across re-ingest of the same document bytes.
         let result2 =
             automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("re-ingest");
         let h3: MinimalTreeHash = result2.sedimentree.minimal_hash(&CountLeadingZeroBytes);
@@ -802,7 +774,6 @@ fn egwalker_minimal_hash_snapshots() {
              — DETERMINISM REGRESSION",
         );
 
-        // Compare against pinned snapshot.
         let mut hex = String::with_capacity(64);
         for b in h1.as_bytes() {
             use core::fmt::Write;
@@ -816,9 +787,8 @@ fn egwalker_minimal_hash_snapshots() {
     }
 }
 
-/// Stress: minimize twice and confirm the round-trip still works.
-/// Re-minimization on already-minimized output must remain stable;
-/// regression coverage for the determinism fix at the Automerge level.
+/// Minimize twice, then round-trip. Pins idempotence at the Automerge
+/// level — regression coverage for the determinism fix.
 #[test]
 fn ingest_double_minimize_roundtrip_s1() {
     let bytes = include_bytes!("../test-vectors/S1.am");
@@ -835,7 +805,6 @@ fn ingest_double_minimize_roundtrip_s1() {
         "minimize is not idempotent on real Automerge document",
     );
 
-    // And the round-trip still works on the doubly-minimized tree.
     let blob_by_digest: Map<Digest<Blob>, &[u8]> = result
         .blobs
         .iter()

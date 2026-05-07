@@ -85,20 +85,12 @@ impl CommitDag {
     }
 
     fn add_edge(&mut self, source: NodeIdx, target: NodeIdx) {
-        // Both edge lists are unordered (consumers iterate without
-        // assuming any order), so prepend to the head of each list.
-        // This makes insertion O(1) instead of O(degree).
-        //
-        // The `source` field on each `Edge` is what the iterator yields:
-        // - `target_node.parents` chain yields parent NodeIdxs
-        //   (so the edge stored on the child carries `source = parent`)
-        // - `source_node.children` chain yields child NodeIdxs
-        //   (so the edge stored on the parent carries `source = child`)
-        //
-        // The two edges below have different `source` values for that
-        // reason; they are NOT duplicates.
+        // Prepend to each adjacency list (O(1) instead of O(degree)).
+        // Consumers iterate without assuming order. The two `Edge`
+        // writes below are NOT duplicates: each carries the *other*
+        // endpoint as `source` (parents-chain yields parents,
+        // children-chain yields children).
 
-        // Edge stored on the child (target) — points back to the parent.
         let parent_edge_idx = EdgeIdx(self.edges.len());
         #[allow(clippy::expect_used)]
         let target_node = self
@@ -112,7 +104,6 @@ impl CommitDag {
             next: prev_parent_head,
         });
 
-        // Edge stored on the parent (source) — points forward to the child.
         let child_edge_idx = EdgeIdx(self.edges.len());
         #[allow(clippy::expect_used)]
         let source_node = self
@@ -139,15 +130,19 @@ impl CommitDag {
         fragments: &[Fragment],
         strategy: &S,
     ) -> Set<CommitId> {
-        // The work here is to identify which parts of a commit DAG can be
-        // discarded based on the fragments we have. This is a little bit
-        // fiddly. Imagine this graph:
+        // Algorithm: walk reverse-topo from each tip, partitioning
+        // commits into fragment "ranges" (runs between boundaries — a
+        // commit is a boundary when `Depth::is_boundary()`). A commit
+        // can appear in multiple ranges (visited from multiple tips),
+        // and is dropped iff every range it belongs to is covered by
+        // some kept fragment.
+        //
+        // Example DAG (boundary commits in *bold*; fragments covering
+        // *A* and *F*):
         //
         //        ┌─┐
         //        │A│
         //   ┌────┴─┴────┐
-        //   │           │
-        //   │           │
         //  ┌▼┐         ┌▼┐          ┌─┐
         //  │B│         │C│          │D│
         //  └┬┘         └┬┘          └┬┘
@@ -157,46 +152,15 @@ impl CommitDag {
         //  │I│               ┌▼┐
         //  └─┘               │E│
         //                    └┬┘
-        //                     │
-        //                     │
         //                    ┌▼┐
         //               ┌────┤F├────┐
-        //               │    └─┘    │
-        //               │           │
-        //               │           │
-        //               │           │
         //              ┌▼┐         ┌▼┐
         //              │G│         │H│
         //              └─┘         └─┘
         //
-        // Let's say we have boundary commits at F, D, I, and A, and we
-        // have fragments covering A and F. Which commits can we discard?
-        // We can't discard G or H because they are not in any fragment
-        // range. We can't discard I or B because they are not in any
-        // fragment range that we actually have fragments for.
-        //
-        // The invariant we must maintain is that we always have a path
-        // from some commit back to the last boundary commit. How do we
-        // identify the commits that can be discarded?
-        //
-        // Walking from the tips in reverse topological order lets us
-        // identify which commits are not in any fragment range (those
-        // encountered before the first boundary commit), and which
-        // fragment ranges exist (ranges bounded by boundary commits).
-        // A commit can appear in multiple ranges.
-        //
-        // A commit can be discarded when every fragment range it belongs
-        // to is covered by at least one existing fragment.
-
-        // Identify fragment ranges (runs between boundary commits) and
-        // record which range(s) each commit belongs to. A commit is a
-        // boundary when `Depth::is_boundary` returns true (nonzero depth
-        // from the metric). Commits at depth 0 are ordinary loose commits
-        // that live inside fragment ranges.
-        //
-        // The walk is in reverse topological order (tips → roots), so the
-        // first boundary we encounter is the range's head (newest end)
-        // and subsequent non-boundary commits are its interior.
+        // We keep G and H (not in any range), and B and I (in a range
+        // not covered by any fragment we have). We drop everything in
+        // the A-covered and F-covered ranges.
         let mut commits_to_ranges = Map::new();
         let mut rangeless_commits = Set::new();
 
@@ -211,8 +175,6 @@ impl CommitDag {
             for id in self.reverse_topo(tip) {
                 let depth = strategy.to_depth(id);
                 if depth.is_boundary() {
-                    // Found a boundary — flush the current range and start a new one
-                    // keyed by this boundary commit.
                     if let Some((range_head, commits)) = range.take() {
                         for commit in commits {
                             rangeless_commits.remove(&commit);
@@ -232,8 +194,9 @@ impl CommitDag {
                     rangeless_commits.insert(id);
                 }
             }
-            // No boundary was found before reaching the root — treat the
-            // accumulated range as unbounded at its oldest end.
+            // The walk reached a root without crossing another
+            // boundary; treat the trailing range as unbounded at its
+            // oldest end.
             if let Some((end, commits)) = range.take() {
                 commits_to_ranges
                     .entry(end)
@@ -248,18 +211,10 @@ impl CommitDag {
             }
         }
 
-        // Discard commits whose ranges are all covered by existing fragments.
-        //
-        // The naive form was O(commits × ranges × fragments × supports_block):
-        //   filter(|(_, ranges)| ranges.iter().all(|r|
-        //       fragments.iter().any(|f| f.supports_block(r))))
-        //
-        // Inverted: build the set of CommitIds that ANY fragment supports,
-        // then each commit's `ranges` check is O(ranges) hash lookups.
-        // A fragment "supports" its head, all its checkpoints (truncated),
-        // and all its boundary commits — see `Fragment::supports_block`.
-        // Range heads recorded during the walk are full `CommitId`s that
-        // happen to also live as `Checkpoint`s, so we collect both forms.
+        // Build the union of `CommitId`s that any fragment supports
+        // (head, boundary, and checkpoints). Range heads recorded above
+        // are full `CommitId`s; checkpoints are truncated, so we
+        // collect both forms. See `Fragment::supports_block`.
         let mut covered_range_heads: Set<CommitId> = Set::new();
         let mut covered_checkpoints: Set<Checkpoint> = Set::new();
         for f in fragments {
@@ -584,12 +539,9 @@ mod tests {
             v
         }
 
-        /// `simplify` (with no fragments) returns the same `CommitId` set
-        /// regardless of the order commits were inserted into the DAG.
-        ///
-        /// Probes the `add_edge` prepend optimization: the per-node
-        /// adjacency-list order depends on insertion sequence, but
-        /// `simplify`'s output must not.
+        /// `simplify` output is independent of commit insertion order.
+        /// Guards against `add_edge`'s per-node adjacency-list order
+        /// leaking into observable behaviour.
         #[test]
         fn simplify_invariant_under_input_order() {
             bolero::check!()
@@ -611,12 +563,10 @@ mod tests {
                 });
         }
 
-        /// `heads` returns the same `CommitId` set regardless of the
-        /// order commits were inserted into the DAG.
-        ///
-        /// `heads` walks `node.children.is_none()`, which the prepend
-        /// change shouldn't affect — but this test guards against any
-        /// future change that introduces order-sensitivity.
+        /// `heads` is independent of commit insertion order. The
+        /// current implementation walks `node.children.is_none()` so
+        /// this is trivially true today; the test guards against future
+        /// changes.
         #[test]
         fn heads_invariant_under_input_order() {
             bolero::check!()
@@ -633,9 +583,8 @@ mod tests {
                 });
         }
 
-        /// `contains_commit` returns the same answer regardless of input
-        /// order. Trivially true (it's just a `node_map` lookup) but
-        /// included as a baseline.
+        /// `contains_commit` is independent of insertion order.
+        /// Trivially true (a `node_map` lookup), included as a baseline.
         #[test]
         fn contains_commit_invariant_under_input_order() {
             bolero::check!()
@@ -656,9 +605,9 @@ mod tests {
                 });
         }
 
-        /// `simplify` with arbitrary fragments is invariant under input
-        /// order. This exercises the inlined coverage check in
-        /// `simplify_inner` across non-empty `fragments` slices.
+        /// `simplify` with arbitrary fragments is independent of
+        /// insertion order. Exercises the precomputed-coverage path
+        /// across non-empty `fragments` slices.
         #[test]
         fn simplify_with_fragments_invariant_under_input_order() {
             bolero::check!()
