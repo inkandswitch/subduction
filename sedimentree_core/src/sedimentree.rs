@@ -528,13 +528,12 @@ impl Sedimentree {
         // order is independent of the underlying `Map`'s iteration order.
         // With the `std` feature `Map = HashMap`, whose iteration order
         // is hasher-state-dependent and so varies across processes.
-        // Without this sort, when two same-depth fragments mutually
-        // dominate, different processes can pick different
-        // representatives — producing non-equal `Sedimentree`s from
-        // identical input and violating the spec in
-        // `design/sedimentree.md` ("two trees with the same content
-        // will have identical minimal representations"). That, in turn,
-        // breaks fingerprint stability for sync.
+        // Without this sort, different processes can pick different
+        // representatives among equivalent fragments — producing non-equal
+        // `Sedimentree`s from identical input and violating the spec in
+        // `design/sedimentree.md` ("two trees with the same content will
+        // have identical minimal representations"). That, in turn, breaks
+        // `MinimalTreeHash` and fingerprint stability for sync.
         let mut sorted_frags: Vec<&Fragment> = self.fragments.values().collect();
         sorted_frags.sort_by_key(|f| *f.head().as_bytes());
 
@@ -550,31 +549,58 @@ impl Sedimentree {
         let mut depths: Vec<Depth> = by_depth.keys().copied().collect();
         depths.sort_by(|a, b| b.cmp(a)); // Descending
 
-        // 3. Process deepest first, building supported set
+        // 3. Process deepest first.
+        //
+        // A candidate fragment is dominated (and may be dropped) when:
+        // - it is *exactly equal* to some already-kept fragment
+        //   (deduplication), OR
+        // - some *strictly deeper* kept fragment supports it (per
+        //   `Fragment::supports`: head + boundary fall within the deeper
+        //   fragment's range).
+        //
+        // We must NOT allow a same-depth peer to dominate a candidate.
+        // In a merge-heavy DAG (typical Automerge workload), many depth-N
+        // fragments cross-reference each other's heads in their
+        // boundaries. The old check ("head + boundary in some union of
+        // checkpoints") would conclude these peers dominate each other
+        // structurally, but each fragment's *blob* contains only its own
+        // members — so dropping any of them silently drops change data.
+        //
+        // Tracking the kept fragments themselves (rather than a flat
+        // `Set<Checkpoint>` union) lets us enforce the strict-deeper rule
+        // and check `Fragment::supports` directly.
         let mut minimized_fragments = Vec::<Fragment>::new();
-        let mut supported: Set<Checkpoint> = Set::new();
+        let mut kept_summaries_by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
 
         for depth in depths {
-            if let Some(group) = by_depth.remove(&depth) {
-                for fragment in group {
-                    // Check if this fragment is fully supported by deeper fragments
-                    let dominated = supported.contains(&Checkpoint::new(fragment.head()))
-                        && fragment
-                            .summary()
-                            .boundary()
+            let Some(group) = by_depth.remove(&depth) else {
+                continue;
+            };
+            for fragment in group {
+                // (1) Exact dedup against already-kept fragments at this depth.
+                let already_present = kept_summaries_by_depth
+                    .get(&depth)
+                    .is_some_and(|peers| peers.iter().any(|kept| *kept == fragment));
+                if already_present {
+                    continue;
+                }
+
+                // (2) Strict-deeper dominance: some kept fragment with depth > our depth supports us.
+                let dominated_by_deeper = kept_summaries_by_depth
+                    .iter()
+                    .filter(|(d, _)| **d > depth)
+                    .any(|(_, peers)| {
+                        peers
                             .iter()
-                            .all(|b| supported.contains(&Checkpoint::new(*b)));
+                            .any(|deeper| deeper.supports(fragment.summary(), depth_metric))
+                    });
 
-                    if !dominated {
-                        // Accept this fragment and add its commits to supported set
-                        supported.insert(Checkpoint::new(fragment.head()));
-                        supported.extend(fragment.checkpoints().iter().copied());
-                        for b in fragment.summary().boundary() {
-                            supported.insert(Checkpoint::new(*b));
-                        }
-
-                        minimized_fragments.push(fragment.clone());
-                    }
+                if !dominated_by_deeper {
+                    minimized_fragments.push(fragment.clone());
+                    kept_summaries_by_depth
+                        .entry(depth)
+                        .or_default()
+                        .push(fragment);
                 }
             }
         }

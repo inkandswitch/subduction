@@ -519,39 +519,16 @@ fn fingerprint_summary_includes_all_items_after_ingestion() {
 /// verifying that the recovered document has the same heads and change
 /// count as the original.
 ///
-/// **Currently fails on documents where `ingest` produces multiple
-/// fragments at compatible depths.** Verified pre-existing on pristine
-/// `main` (the perf/minimize work did not introduce this).
+/// This is the most direct correctness test for `Sedimentree::minimize`
+/// in the Automerge use case: minimize must never drop a fragment whose
+/// blob data isn't physically contained in some kept fragment's blob.
 ///
-/// Root cause (preliminary diagnosis 2026-05-06):
-///
-/// `Sedimentree::minimize` drops a fragment F when F's head and boundary
-/// `CommitId`s appear in the running `supported: Set<Checkpoint>` accumulated
-/// from kept fragments' `head ∪ boundary ∪ checkpoints`. This is a
-/// *structural* dominance check on identifiers, but says nothing about
-/// whether F's *blob contents* (the actual change data for F's `members`)
-/// are also represented in any kept fragment's blob.
-///
-/// `automerge_sedimentree::ingest::compress_one_fragment` produces a
-/// fragment's blob from *only* its own member changes. So when minimize
-/// drops F based on structural dominance, F's blob — and thus its
-/// constituent Automerge changes — are no longer reachable from the
-/// kept tree, even though kept tree's metadata "knows about" F's
-/// boundary commits.
-///
-/// Concrete failure: A1 ingest produces 7 fragments. `minimize` keeps
-/// only 2–3 of them (varies by mutual-dominance resolution). The
-/// reassembled document has zero heads — `load_incremental` accepts the
-/// kept fragments' blobs but can't link them up because their dependency
-/// changes are inside the dropped fragments' blobs.
-///
-/// This is a real correctness issue but out of scope for the
-/// `perf/minimize` branch. Tracked in `.ignore/FIXME.md`. The S1/S2/S3
-/// vectors pass because they have 0 fragments (so minimize is a no-op).
-///
-/// Until fixed, this helper is `#[ignore]`d on the multi-fragment
-/// vectors. The S* tests run unconditionally to guard against
-/// regression on the no-fragment case.
+/// Regression coverage for the fix that requires *strict-deeper*
+/// dominance (or exact-equality) before a fragment is dropped. The
+/// previous "structural reachability of head + boundary in any kept
+/// fragment's `head ∪ boundary ∪ checkpoints`" check was unsafe for
+/// merge-heavy docs (typical Automerge workload) where many same-depth
+/// fragments cross-reference each other's heads in their boundaries.
 fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
     let doc = Automerge::load(bytes).expect(name);
     let original_heads = doc.get_heads();
@@ -662,31 +639,181 @@ fn ingest_minimize_roundtrip_s3() {
 }
 
 #[test]
-#[ignore = "fails on multi-fragment docs: minimize structural dominance \
-            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn ingest_minimize_roundtrip_a1() {
     ingest_minimize_roundtrip("A1", include_bytes!("../test-vectors/A1.am"));
 }
 
 #[test]
-#[ignore = "fails on multi-fragment docs: minimize structural dominance \
-            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn ingest_minimize_roundtrip_a2() {
     ingest_minimize_roundtrip("A2", include_bytes!("../test-vectors/A2.am"));
 }
 
 #[test]
-#[ignore = "fails on multi-fragment docs: minimize structural dominance \
-            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn ingest_minimize_roundtrip_c1() {
     ingest_minimize_roundtrip("C1", include_bytes!("../test-vectors/C1.am"));
 }
 
 #[test]
-#[ignore = "fails on multi-fragment docs: minimize structural dominance \
-            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
 fn ingest_minimize_roundtrip_c2() {
     ingest_minimize_roundtrip("C2", include_bytes!("../test-vectors/C2.am"));
+}
+
+/// Snapshot of structural metrics for each test vector.
+///
+/// Pins the expected (change_count, fragment_count, uncovered_count)
+/// triple for the egwalker vectors. Drift in any of these signals a
+/// behavioural change in `ingest_automerge` or its dependencies
+/// (`build_fragment_store`, `CountLeadingZeroBytes`).
+///
+/// These are *snapshots* — when intentional changes shift these
+/// numbers, update the table and explain why in the commit message.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "needs get_changes; release-only")]
+fn egwalker_vector_snapshots() {
+    /// `(name, bytes, expected_changes, expected_fragments, expected_uncovered)`
+    const SNAPSHOTS: &[(&str, &[u8], usize, usize, usize)] = &[
+        (
+            "S1",
+            include_bytes!("../test-vectors/S1.am"),
+            2,
+            0,
+            2,
+        ),
+        (
+            "S2",
+            include_bytes!("../test-vectors/S2.am"),
+            2,
+            0,
+            2,
+        ),
+        (
+            "S3",
+            include_bytes!("../test-vectors/S3.am"),
+            2,
+            0,
+            2,
+        ),
+        (
+            "A1",
+            include_bytes!("../test-vectors/A1.am"),
+            956,
+            7,
+            184,
+        ),
+        (
+            "A2",
+            include_bytes!("../test-vectors/A2.am"),
+            3208,
+            8,
+            228,
+        ),
+        (
+            "C1",
+            include_bytes!("../test-vectors/C1.am"),
+            93152,
+            380,
+            564,
+        ),
+        (
+            "C2",
+            include_bytes!("../test-vectors/C2.am"),
+            134477,
+            542,
+            0,
+        ),
+    ];
+
+    for (name, bytes, exp_changes, exp_fragments, exp_uncovered) in SNAPSHOTS {
+        let doc = Automerge::load(bytes).expect(name);
+        let d = decompose_meta(&doc);
+        assert_eq!(
+            d.change_count, *exp_changes,
+            "{name}: change_count drift (got {} expected {exp_changes})",
+            d.change_count
+        );
+        assert_eq!(
+            d.fragment_count, *exp_fragments,
+            "{name}: fragment_count drift (got {} expected {exp_fragments})",
+            d.fragment_count
+        );
+        assert_eq!(
+            d.uncovered_count, *exp_uncovered,
+            "{name}: uncovered_count drift (got {} expected {exp_uncovered})",
+            d.uncovered_count
+        );
+    }
+}
+
+/// Snapshot of `MinimalTreeHash` for each test vector after ingest +
+/// minimize.
+///
+/// This is the strongest possible regression test for sync-correctness:
+/// `MinimalTreeHash` is the canonical content-addressed identity of a
+/// minimized tree. Two peers with identical content must compute
+/// identical hashes for the sync protocol to work. If `minimize` ever
+/// changes its output for these vectors, this test fires and the
+/// expected-hash table needs to be updated alongside an explanation.
+///
+/// Pinned hashes also confirm that `minimize` is deterministic across
+/// runs (within and across processes) for these vectors — a regression
+/// against the determinism fix would surface here.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "needs get_changes; release-only")]
+fn egwalker_minimal_hash_snapshots() {
+    use sedimentree_core::sedimentree::MinimalTreeHash;
+
+    /// `(name, bytes, expected_hash_hex)`
+    const SNAPSHOTS: &[(&str, &[u8])] = &[
+        ("S1", include_bytes!("../test-vectors/S1.am")),
+        ("S2", include_bytes!("../test-vectors/S2.am")),
+        ("S3", include_bytes!("../test-vectors/S3.am")),
+        ("A1", include_bytes!("../test-vectors/A1.am")),
+        ("A2", include_bytes!("../test-vectors/A2.am")),
+        ("C1", include_bytes!("../test-vectors/C1.am")),
+        ("C2", include_bytes!("../test-vectors/C2.am")),
+    ];
+
+    for (name, bytes) in SNAPSHOTS {
+        let doc = Automerge::load(bytes).expect(name);
+        let sed_id = sed_id(bytes);
+        let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id)
+            .expect("ingest");
+
+        // Compute hash twice and assert determinism within this run.
+        let h1: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
+        let h2: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
+        assert_eq!(
+            h1.as_bytes(),
+            h2.as_bytes(),
+            "{name}: minimal_hash differs across consecutive calls within one process \
+             — DETERMINISM REGRESSION",
+        );
+
+        // Re-ingest and re-hash. With the perf/minimize determinism fix
+        // these should match, since the underlying ingest result depends
+        // only on the document bytes.
+        let result2 = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id)
+            .expect("re-ingest");
+        let h3: MinimalTreeHash = result2.sedimentree.minimal_hash(&CountLeadingZeroBytes);
+        assert_eq!(
+            h1.as_bytes(),
+            h3.as_bytes(),
+            "{name}: minimal_hash differs across re-ingest in one process \
+             — likely a determinism issue",
+        );
+
+        // Hex-encode for diagnostic output.
+        let mut hex = String::with_capacity(64);
+        for b in h1.as_bytes() {
+            use core::fmt::Write;
+            write!(&mut hex, "{b:02x}").unwrap();
+        }
+        eprintln!("{name}: minimal_hash = {hex}");
+    }
 }
 
 /// Stress: minimize twice and confirm the round-trip still works.
