@@ -1474,6 +1474,95 @@ where
         Ok(())
     }
 
+    /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads
+    /// alongside their blobs into local storage and the in-memory tree only.
+    ///
+    /// This is the local-only counterpart to
+    /// [`add_built_batch`](Self::add_built_batch): it signs each payload,
+    /// flushes to storage in a single `save_batch` call, applies the in-memory
+    /// updates under one shard lock, and minimizes once — but does *not*
+    /// follow up with [`sync_with_all_peers`](Self::sync_with_all_peers). Use
+    /// when the caller will trigger sync explicitly (or never), e.g. from a
+    /// background ingestion path.
+    ///
+    /// Commits are inserted before fragments. Passing two empty vectors is a
+    /// no-op (no minimize).
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] if a storage error occurs.
+    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
+    ///   digest does not match its payload's claimed
+    ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    pub async fn add_built_batch_locally(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        if commits.is_empty() && fragments.is_empty() {
+            return Ok(());
+        }
+
+        let putter = self.storage.local_putter::<F>(id);
+        let commit_count = commits.len();
+        let fragment_count = fragments.len();
+        tracing::info!(
+            "bulk-inserting {commit_count} commits and {fragment_count} fragments \
+             into sedimentree {id:?} (no broadcast)"
+        );
+
+        // Sign every commit and fragment first; defer all storage I/O so we
+        // can hit the adapter exactly once via `save_batch`.
+        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> =
+            Vec::with_capacity(commit_count);
+        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(commit_count);
+        for (commit, blob) in commits {
+            let verified_sig = Signed::seal::<F, _>(&self.signer, commit).await;
+            let verified_meta = VerifiedMeta::new(verified_sig, blob)
+                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
+            commit_payloads.push(verified_meta.payload().clone());
+            verified_commits.push(verified_meta);
+        }
+
+        let mut verified_fragments: Vec<VerifiedMeta<Fragment>> =
+            Vec::with_capacity(fragment_count);
+        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(fragment_count);
+        for (fragment, blob) in fragments {
+            let verified_sig = Signed::seal::<F, _>(&self.signer, fragment).await;
+            let verified_meta = VerifiedMeta::new(verified_sig, blob)
+                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
+            fragment_payloads.push(verified_meta.payload().clone());
+            verified_fragments.push(verified_meta);
+        }
+
+        putter
+            .save_batch(verified_commits, verified_fragments)
+            .await
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
+        self.sedimentrees
+            .with_entry_or_default(id, |tree| {
+                for commit in commit_payloads {
+                    tree.add_commit(commit);
+                }
+                for fragment in fragment_payloads {
+                    tree.add_fragment(fragment);
+                }
+                *tree = tree.minimize(&self.depth_metric);
+            })
+            .await;
+
+        tracing::info!(
+            "bulk-insert of {commit_count} commits and {fragment_count} fragments \
+             complete, tree minimized"
+        );
+        Ok(())
+    }
+
     /// Handle receiving a batch sync response from a peer.
     ///
     /// Ingests all commits and fragments from the diff, then re-minimizes
@@ -1630,68 +1719,10 @@ where
             return Ok(());
         }
 
-        let putter = self.storage.local_putter::<F>(id);
-        let commit_count = commits.len();
-        let fragment_count = fragments.len();
-        tracing::info!(
-            "bulk-inserting {commit_count} commits and {fragment_count} fragments \
-             into sedimentree {id:?}"
-        );
-
-        // Sign every commit and fragment first; defer all storage I/O so we
-        // can hit the adapter exactly once via `save_batch`. On adapters with
-        // native batched writes (IndexedDB, NodeFS) this collapses 2N+ small
-        // round trips into one.
-        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> =
-            Vec::with_capacity(commit_count);
-        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(commit_count);
-        for (commit, blob) in commits {
-            let verified_sig = Signed::seal::<F, _>(&self.signer, commit).await;
-            let verified_meta = VerifiedMeta::new(verified_sig, blob)
-                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            commit_payloads.push(verified_meta.payload().clone());
-            verified_commits.push(verified_meta);
-        }
-
-        let mut verified_fragments: Vec<VerifiedMeta<Fragment>> =
-            Vec::with_capacity(fragment_count);
-        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(fragment_count);
-        for (fragment, blob) in fragments {
-            let verified_sig = Signed::seal::<F, _>(&self.signer, fragment).await;
-            let verified_meta = VerifiedMeta::new(verified_sig, blob)
-                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            fragment_payloads.push(verified_meta.payload().clone());
-            verified_fragments.push(verified_meta);
-        }
-
         // Storage write first (cancel-safety: storage is the source of truth;
-        // a cancel between this and the in-memory update self-heals on
-        // rehydrate). On non-atomic adapters that fall back to per-item
-        // writes, partial-failure semantics are the same as a sequence of
-        // singular `add_commit` / `add_fragment` calls.
-        putter
-            .save_batch(verified_commits, verified_fragments)
-            .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        // Apply in-memory updates and minimize under a single shard lock.
-        self.sedimentrees
-            .with_entry_or_default(id, |tree| {
-                for commit in commit_payloads {
-                    tree.add_commit(commit);
-                }
-                for fragment in fragment_payloads {
-                    tree.add_fragment(fragment);
-                }
-                *tree = tree.minimize(&self.depth_metric);
-            })
-            .await;
-
+        // a cancel between this and the broadcast self-heals on rehydrate).
+        self.add_built_batch_locally(id, commits, fragments).await?;
         self.sync_with_all_peers(id, true, None).await?;
-        tracing::info!(
-            "bulk-insert of {commit_count} commits and {fragment_count} fragments \
-             complete, tree minimized and broadcast"
-        );
         Ok(())
     }
 

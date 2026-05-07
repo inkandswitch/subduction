@@ -57,6 +57,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::{
+    batch_input::{WasmCommitInput, WasmFragmentInput},
     error::{
         WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHandshakeError,
         WasmHydrationError, WasmIoError, WasmLongPollConnectError, WasmWriteError,
@@ -1005,61 +1006,102 @@ impl WasmSubduction {
     /// add many commits or fragments at once this avoids `O(N²)` minimize work
     /// and `N` redundant broadcasts.
     ///
-    /// `commits` and `commit_blobs` (likewise `fragments` and `fragment_blobs`)
-    /// are parallel arrays: the *i*th blob is the payload for the *i*th
-    /// commit/fragment. Either pair may be empty; passing two empty pairs is a
-    /// no-op (no minimize, no broadcast).
+    /// Each [`WasmCommitInput`] bundles an unsigned
+    /// [`LooseCommit`](sedimentree_core::loose_commit::LooseCommit) with its
+    /// blob; each [`WasmFragmentInput`] bundles an unsigned
+    /// [`Fragment`](sedimentree_core::fragment::Fragment) with its blob.
+    /// Either list may be empty; passing two empty lists is a no-op (no
+    /// minimize, no broadcast).
     ///
     /// # Errors
     ///
     /// Returns a [`WasmWriteError`] if any blob does not match its claimed
     /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage,
     /// networking, or policy fail during insert/broadcast.
-    ///
-    /// # Panics
-    ///
-    /// Panics (as a JS exception) if `commits.len() != commit_blobs.len()` or
-    /// `fragments.len() != fragment_blobs.len()` — these are caller-side
-    /// invariants that indicate a bug in the JS code building the batch.
     #[wasm_bindgen(js_name = addBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn add_batch(
         &self,
         id: &WasmSedimentreeId,
-        commits: Vec<WasmLooseCommit>,
-        commit_blobs: Vec<Uint8Array>,
-        fragments: Vec<WasmFragment>,
-        fragment_blobs: Vec<Uint8Array>,
+        commits: Vec<WasmCommitInput>,
+        fragments: Vec<WasmFragmentInput>,
     ) -> Result<(), WasmWriteError> {
-        use sedimentree_core::{blob::Blob, fragment::Fragment, loose_commit::LooseCommit};
-
-        assert_eq!(
-            commits.len(),
-            commit_blobs.len(),
-            "addBatch: commits and commit_blobs must be parallel arrays"
-        );
-        assert_eq!(
-            fragments.len(),
-            fragment_blobs.len(),
-            "addBatch: fragments and fragment_blobs must be parallel arrays"
-        );
-
         let core_id: SedimentreeId = id.clone().into();
-
-        let core_commits: Vec<(LooseCommit, Blob)> = commits
+        let core_commits = commits
             .into_iter()
-            .map(LooseCommit::from)
-            .zip(commit_blobs.into_iter().map(|b| Blob::from(b.to_vec())))
+            .map(WasmCommitInput::into_core)
             .collect();
-
-        let core_fragments: Vec<(Fragment, Blob)> = fragments
+        let core_fragments = fragments
             .into_iter()
-            .map(Fragment::from)
-            .zip(fragment_blobs.into_iter().map(|b| Blob::from(b.to_vec())))
+            .map(WasmFragmentInput::into_core)
             .collect();
 
         self.core
             .add_built_batch(core_id, core_commits, core_fragments)
+            .await?;
+        Ok(())
+    }
+
+    /// Bulk-insert commits into a sedimentree without broadcasting.
+    ///
+    /// Like [`addBatch`](Self::add_batch) for the commits half only, but
+    /// skips the trailing `sync_with_all_peers` step. Useful for ingestion
+    /// paths (e.g. local replay, hydration from another store) where the
+    /// caller will trigger sync separately or not at all.
+    ///
+    /// Each [`WasmCommitInput`] bundles an unsigned commit with its blob;
+    /// an empty list is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    #[wasm_bindgen(js_name = addCommitsBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn add_commits_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        commits: Vec<WasmCommitInput>,
+    ) -> Result<(), WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_commits = commits
+            .into_iter()
+            .map(WasmCommitInput::into_core)
+            .collect();
+
+        self.core
+            .add_built_batch_locally(core_id, core_commits, Vec::new())
+            .await?;
+        Ok(())
+    }
+
+    /// Bulk-insert fragments into a sedimentree without broadcasting.
+    ///
+    /// Like [`addBatch`](Self::add_batch) for the fragments half only, but
+    /// skips the trailing `sync_with_all_peers` step.
+    ///
+    /// Each [`WasmFragmentInput`] bundles an unsigned fragment with its
+    /// blob; an empty list is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    #[wasm_bindgen(js_name = addFragmentsBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn add_fragments_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        fragments: Vec<WasmFragmentInput>,
+    ) -> Result<(), WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_fragments = fragments
+            .into_iter()
+            .map(WasmFragmentInput::into_core)
+            .collect();
+
+        self.core
+            .add_built_batch_locally(core_id, Vec::new(), core_fragments)
             .await?;
         Ok(())
     }
