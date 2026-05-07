@@ -54,6 +54,19 @@ impl WasmDepth {
         self.0.0
     }
 
+    /// Whether this depth qualifies the commit as an eligible fragment head.
+    ///
+    /// Returns `true` for any nonzero depth. Mirrors
+    /// [`Depth::is_boundary`](sedimentree_core::depth::Depth::is_boundary).
+    /// Use this from JavaScript instead of comparing `value > 0` directly so
+    /// the boundary semantic stays in lock-step with the Rust definition.
+    #[must_use]
+    #[wasm_bindgen(getter, js_name = isBoundary)]
+    #[allow(clippy::missing_const_for_fn)] // wasm_bindgen rejects const fn
+    pub fn is_boundary(&self) -> bool {
+        self.0.is_boundary()
+    }
+
     /// Internal method for a hack crossing the JS boundary.
     #[must_use]
     #[wasm_bindgen(js_name = __subduction_castToDepth)]

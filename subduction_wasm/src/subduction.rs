@@ -57,6 +57,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::{
+    batch_input::{WasmCommitInput, WasmFragmentInput},
     error::{
         WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHandshakeError,
         WasmHydrationError, WasmIoError, WasmLongPollConnectError, WasmWriteError,
@@ -993,6 +994,140 @@ impl WasmSubduction {
             .await?;
 
         Ok(())
+    }
+
+    /// Bulk-insert commits and fragments into a sedimentree, then broadcast.
+    ///
+    /// Unlike [`add_commit`](Self::add_commit) and
+    /// [`add_fragment`](Self::add_fragment) — which each re-minimize the tree
+    /// and broadcast to peers per call — this method inserts everything first,
+    /// runs `minimize_tree` once at the end, and then performs a single
+    /// `sync_with_all_peers` to propagate the new state. For workloads that
+    /// add many commits or fragments at once this avoids `O(N²)` minimize work
+    /// and `N` redundant broadcasts.
+    ///
+    /// Each [`WasmCommitInput`] bundles an unsigned
+    /// [`LooseCommit`](sedimentree_core::loose_commit::LooseCommit) with its
+    /// blob; each [`WasmFragmentInput`] bundles an unsigned
+    /// [`Fragment`](sedimentree_core::fragment::Fragment) with its blob.
+    /// Either list may be empty; passing two empty lists is a no-op (no
+    /// minimize, no broadcast).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if a local
+    /// [`Storage`](sedimentree_wasm::storage::JsStorage) error is hit while
+    /// persisting the batch or while ingesting inbound data during the
+    /// trailing broadcast.
+    ///
+    /// Per-peer transport failures during the trailing broadcast are *not*
+    /// surfaced as `Err`: peers that can't be reached (closed connections,
+    /// timeouts) are reported by `sync_with_all_peers` as data inside its
+    /// per-peer result map, which this method discards. If you need to
+    /// observe peer-level sync outcomes, drive the local insert via
+    /// [`addCommitsBatch`](Self::add_commits_batch) /
+    /// [`addFragmentsBatch`](Self::add_fragments_batch) and call
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers) directly.
+    #[wasm_bindgen(js_name = addBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn add_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        commits: Vec<WasmCommitInput>,
+        fragments: Vec<WasmFragmentInput>,
+    ) -> Result<(), WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_commits = commits
+            .into_iter()
+            .map(WasmCommitInput::into_core)
+            .collect();
+        let core_fragments = fragments
+            .into_iter()
+            .map(WasmFragmentInput::into_core)
+            .collect();
+
+        self.core
+            .add_built_batch(core_id, core_commits, core_fragments)
+            .await?;
+        Ok(())
+    }
+
+    /// Bulk-insert commits into a sedimentree without broadcasting.
+    ///
+    /// Like [`addBatch`](Self::add_batch) for the commits half only, but
+    /// skips the trailing `sync_with_all_peers` step. Useful for ingestion
+    /// paths (e.g. local replay, hydration from another store) where the
+    /// caller will trigger sync separately or not at all.
+    ///
+    /// Each [`WasmCommitInput`] bundles an unsigned commit with its blob;
+    /// an empty list is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    #[wasm_bindgen(js_name = addCommitsBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn add_commits_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        commits: Vec<WasmCommitInput>,
+    ) -> Result<(), WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_commits = commits
+            .into_iter()
+            .map(WasmCommitInput::into_core)
+            .collect();
+
+        self.core
+            .add_built_batch_locally(core_id, core_commits, Vec::new())
+            .await?;
+        Ok(())
+    }
+
+    /// Bulk-insert fragments into a sedimentree without broadcasting.
+    ///
+    /// Like [`addBatch`](Self::add_batch) for the fragments half only, but
+    /// skips the trailing `sync_with_all_peers` step.
+    ///
+    /// Each [`WasmFragmentInput`] bundles an unsigned fragment with its
+    /// blob; an empty list is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    #[wasm_bindgen(js_name = addFragmentsBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn add_fragments_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        fragments: Vec<WasmFragmentInput>,
+    ) -> Result<(), WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_fragments = fragments
+            .into_iter()
+            .map(WasmFragmentInput::into_core)
+            .collect();
+
+        self.core
+            .add_built_batch_locally(core_id, Vec::new(), core_fragments)
+            .await?;
+        Ok(())
+    }
+
+    /// Compute the [`WasmDepth`] of a commit identifier under this node's
+    /// configured hash metric.
+    ///
+    /// Combine with [`WasmDepth::isBoundary`] to decide whether a commit is an
+    /// eligible fragment head — for example after [`addBatch`](Self::add_batch),
+    /// where the per-call `FragmentRequested` signal returned by
+    /// [`addCommit`](Self::add_commit) is unavailable.
+    #[wasm_bindgen(js_name = commitDepth)]
+    #[must_use]
+    pub fn commit_depth(&self, commit_id: &WasmCommitId) -> WasmDepth {
+        self.core.commit_depth(CommitId::from(commit_id)).into()
     }
 
     /// Request blobs by their digests from connected peers for a specific sedimentree.
