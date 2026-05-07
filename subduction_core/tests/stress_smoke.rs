@@ -1,4 +1,4 @@
-//! Smoke test for the stress-test scaffolding in `tests/common/mod.rs`.
+//! Smoke test for the stress-test scaffolding in `tests/common.rs`.
 //!
 //! Confirms the helpers wire up correctly before the larger stress
 //! scenarios are run. If this fails, the scaffolding is broken and every
@@ -12,7 +12,7 @@ use future_form::Sendable;
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::{authenticated::Authenticated, peer::id::PeerId};
 
-#[path = "common/mod.rs"]
+#[path = "common.rs"]
 mod common;
 
 use common::{
