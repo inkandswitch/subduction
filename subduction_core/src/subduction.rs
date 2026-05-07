@@ -118,7 +118,7 @@ use sedimentree_core::{
     },
     commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
-    depth::DepthMetric,
+    depth::{Depth, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
@@ -385,6 +385,17 @@ where
     #[must_use]
     pub fn nonce_cache(&self) -> &NonceCache {
         &self.nonce_tracker
+    }
+
+    /// Compute the [`Depth`] of a commit identifier under this node's
+    /// [`DepthMetric`].
+    ///
+    /// Useful when callers (e.g., language bindings) need the per-commit
+    /// boundary check — `commit_depth(id).is_boundary()` — without
+    /// reimplementing the metric outside of Rust.
+    #[must_use]
+    pub fn commit_depth(&self, commit_id: CommitId) -> Depth {
+        self.depth_metric.to_depth(commit_id)
     }
 
     /// Returns a reference to the sedimentrees map.

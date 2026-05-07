@@ -1064,6 +1064,19 @@ impl WasmSubduction {
         Ok(())
     }
 
+    /// Compute the [`WasmDepth`] of a commit identifier under this node's
+    /// configured hash metric.
+    ///
+    /// Combine with [`WasmDepth::isBoundary`] to decide whether a commit is an
+    /// eligible fragment head — for example after [`addBatch`](Self::add_batch),
+    /// where the per-call `FragmentRequested` signal returned by
+    /// [`addCommit`](Self::add_commit) is unavailable.
+    #[wasm_bindgen(js_name = commitDepth)]
+    #[must_use]
+    pub fn commit_depth(&self, commit_id: &WasmCommitId) -> WasmDepth {
+        self.core.commit_depth(CommitId::from(commit_id)).into()
+    }
+
     /// Request blobs by their digests from connected peers for a specific sedimentree.
     #[wasm_bindgen(js_name = requestBlobs)]
     pub async fn request_blobs(&self, id: &WasmSedimentreeId, digests: Vec<JsDigest>) {
