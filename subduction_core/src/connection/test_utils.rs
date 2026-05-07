@@ -21,6 +21,7 @@ use crate::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::Transport,
 };
 
 /// A minimal mock connection for testing.
@@ -445,7 +446,7 @@ impl PartialEq for ChannelTransport {
 #[error("channel closed")]
 pub struct ChannelClosed;
 
-impl crate::transport::Transport<Sendable> for ChannelTransport {
+impl Transport<Sendable> for ChannelTransport {
     type SendError = ChannelClosed;
     type RecvError = ChannelClosed;
     type DisconnectionError = core::convert::Infallible;
@@ -462,6 +463,32 @@ impl crate::transport::Transport<Sendable> for ChannelTransport {
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// `Local`-flavored implementation, mirroring the [`Sendable`] one above.
+///
+/// Enables single-threaded tests (and wasm tests via the same code path)
+/// to use `ChannelTransport::pair()` for in-process round trips without
+/// pulling in tokio's multi-thread runtime.
+impl Transport<Local> for ChannelTransport {
+    type SendError = ChannelClosed;
+    type RecvError = ChannelClosed;
+    type DisconnectionError = core::convert::Infallible;
+
+    fn send_bytes(&self, bytes: &[u8]) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        let data = bytes.to_vec();
+        let tx = self.tx.clone();
+        Box::pin(async move { tx.send(data).await.map_err(|_| ChannelClosed) })
+    }
+
+    fn recv_bytes(&self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        let rx = self.rx.clone();
+        Box::pin(async move { rx.recv().await.map_err(|_| ChannelClosed) })
+    }
+
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         Box::pin(async { Ok(()) })
     }
 }
