@@ -522,9 +522,24 @@ impl Sedimentree {
     /// Complexity: `O(|M| × avg_checkpoints)` where M = total fragments.
     #[must_use]
     pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
-        // 1. Group fragments by depth
+        // 1. Group fragments by depth.
+        //
+        // Sort fragments by head bytes before grouping so the iteration
+        // order is independent of the underlying `Map`'s iteration order.
+        // With the `std` feature `Map = HashMap`, whose iteration order
+        // is hasher-state-dependent and so varies across processes.
+        // Without this sort, when two same-depth fragments mutually
+        // dominate, different processes can pick different
+        // representatives — producing non-equal `Sedimentree`s from
+        // identical input and violating the spec in
+        // `design/sedimentree.md` ("two trees with the same content
+        // will have identical minimal representations"). That, in turn,
+        // breaks fingerprint stability for sync.
+        let mut sorted_frags: Vec<&Fragment> = self.fragments.values().collect();
+        sorted_frags.sort_by_key(|f| *f.head().as_bytes());
+
         let mut by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
-        for fragment in self.fragments.values() {
+        for fragment in sorted_frags {
             by_depth
                 .entry(fragment.depth(depth_metric))
                 .or_default()
@@ -564,14 +579,17 @@ impl Sedimentree {
             }
         }
 
-        // 4. Simplify loose commits relative to minimized fragments
+        // 4. Simplify loose commits relative to minimized fragments.
+        //
+        // `simplify` returns only the set of surviving `CommitId`s — we
+        // need membership to filter, not graph structure.
         let dag = commit_dag::CommitDag::from_commits(self.commits.values());
-        let simplified_dag = dag.simplify(&minimized_fragments, depth_metric);
+        let keepers = dag.simplify(&minimized_fragments, depth_metric);
 
         let commits = self
             .commits
             .values()
-            .filter(|c| simplified_dag.contains_commit(&c.head()))
+            .filter(|c| keepers.contains(&c.head()))
             .cloned()
             .collect();
 
@@ -789,12 +807,18 @@ impl Sedimentree {
     pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<CommitId> {
         let minimized = self.minimize(depth_metric);
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.values());
+
+        // Precompute the union of all fragment boundaries once instead of
+        // doing an `O(F²)` `any()` scan inside the fragment loop.
+        let all_fragment_boundaries: Set<CommitId> = minimized
+            .fragments
+            .values()
+            .flat_map(|f| f.boundary().iter().copied())
+            .collect();
+
         let mut heads = Vec::<CommitId>::new();
         for fragment in minimized.fragments.values() {
-            if !minimized
-                .fragments
-                .values()
-                .any(|s| s.boundary().contains(&fragment.head()))
+            if !all_fragment_boundaries.contains(&fragment.head())
                 && fragment
                     .boundary()
                     .iter()
@@ -1372,6 +1396,31 @@ mod tests {
                     let tree = Sedimentree::new(vec![], commits.clone());
                     let minimized = tree.minimize(&CountLeadingZeroBytes);
                     assert_eq!(tree, minimized);
+                });
+        }
+
+        /// `minimize` is idempotent on trees that contain fragments.
+        ///
+        /// Companion to [`minimized_loose_commit_dag_doesnt_change`]
+        /// (which only covers the no-fragments case). Exercises the
+        /// fragment-minimization step by generating arbitrary
+        /// `Sedimentree`s with fragments, minimizing once, and asserting
+        /// that a second minimize yields the same tree.
+        ///
+        /// Regression test for the cross-process determinism bug fixed
+        /// alongside `perf/minimize`: previously, re-minimizing a
+        /// freshly-minimized tree could pick a different mutual-dominance
+        /// representative due to `HashMap` iteration order, dropping a
+        /// fragment the first pass kept.
+        #[test]
+        fn minimize_with_fragments_is_idempotent() {
+            use crate::test_utils::ArbitraryDag;
+            bolero::check!()
+                .with_arbitrary::<ArbitraryDag>()
+                .for_each(|ArbitraryDag { tree }| {
+                    let once = tree.minimize(&CountLeadingZeroBytes);
+                    let twice = once.minimize(&CountLeadingZeroBytes);
+                    assert_eq!(once, twice, "minimize on tree-with-fragments is not idempotent");
                 });
         }
 

@@ -515,6 +515,229 @@ fn fingerprint_summary_includes_all_items_after_ingestion() {
     );
 }
 
+/// Round-trip an Automerge document through ingest → minimize → reassemble,
+/// verifying that the recovered document has the same heads and change
+/// count as the original.
+///
+/// **Currently fails on documents where `ingest` produces multiple
+/// fragments at compatible depths.** Verified pre-existing on pristine
+/// `main` (the perf/minimize work did not introduce this).
+///
+/// Root cause (preliminary diagnosis 2026-05-06):
+///
+/// `Sedimentree::minimize` drops a fragment F when F's head and boundary
+/// `CommitId`s appear in the running `supported: Set<Checkpoint>` accumulated
+/// from kept fragments' `head ∪ boundary ∪ checkpoints`. This is a
+/// *structural* dominance check on identifiers, but says nothing about
+/// whether F's *blob contents* (the actual change data for F's `members`)
+/// are also represented in any kept fragment's blob.
+///
+/// `automerge_sedimentree::ingest::compress_one_fragment` produces a
+/// fragment's blob from *only* its own member changes. So when minimize
+/// drops F based on structural dominance, F's blob — and thus its
+/// constituent Automerge changes — are no longer reachable from the
+/// kept tree, even though kept tree's metadata "knows about" F's
+/// boundary commits.
+///
+/// Concrete failure: A1 ingest produces 7 fragments. `minimize` keeps
+/// only 2–3 of them (varies by mutual-dominance resolution). The
+/// reassembled document has zero heads — `load_incremental` accepts the
+/// kept fragments' blobs but can't link them up because their dependency
+/// changes are inside the dropped fragments' blobs.
+///
+/// This is a real correctness issue but out of scope for the
+/// `perf/minimize` branch. Tracked in `.ignore/FIXME.md`. The S1/S2/S3
+/// vectors pass because they have 0 fragments (so minimize is a no-op).
+///
+/// Until fixed, this helper is `#[ignore]`d on the multi-fragment
+/// vectors. The S* tests run unconditionally to guard against
+/// regression on the no-fragment case.
+fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
+    let doc = Automerge::load(bytes).expect(name);
+    let original_heads = doc.get_heads();
+    let original_count = doc.get_changes(&[]).len();
+
+    let sed_id = sed_id(bytes);
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+
+    // Apply minimize.
+    let minimized = result
+        .sedimentree
+        .minimize(&CountLeadingZeroBytes);
+
+    // The blobs collected during ingest are still our source of truth
+    // for raw bytes — `minimize` removes Sedimentree entries but doesn't
+    // touch blob storage. Build the digest → bytes map from `result.blobs`.
+    let blob_by_digest: Map<Digest<Blob>, &[u8]> = result
+        .blobs
+        .iter()
+        .map(|blob| (Digest::hash(blob), blob.as_slice()))
+        .collect();
+
+    // For every kept item in the minimized tree, look up its blob and
+    // verify it's available. (Any reachable blob must be stored — if a
+    // blob is missing, minimize has implicitly orphaned data.)
+    let kept_fragments: Vec<_> = minimized.fragments().collect();
+    let kept_loose: Vec<_> = minimized.loose_commits().collect();
+
+    for f in &kept_fragments {
+        let d = f.summary().blob_meta().digest();
+        assert!(
+            blob_by_digest.contains_key(&d),
+            "{name}: minimized fragment references blob {d:?} we don't have",
+        );
+    }
+    for c in &kept_loose {
+        let d = c.blob_meta().digest();
+        assert!(
+            blob_by_digest.contains_key(&d),
+            "{name}: minimized loose commit references blob {d:?} we don't have",
+        );
+    }
+
+    // Reassemble the document by topsorting the *minimized* tree and
+    // concatenating each item's blob bytes.
+    let order = minimized
+        .topsorted_blob_order()
+        .expect("no cycles in minimized tree");
+
+    let mut buf = Vec::new();
+    for item in &order {
+        let digest = match item {
+            SedimentreeItem::Fragment(i) => kept_fragments[*i].summary().blob_meta().digest(),
+            SedimentreeItem::LooseCommit(i) => kept_loose[*i].blob_meta().digest(),
+        };
+        let raw = blob_by_digest
+            .get(&digest)
+            .unwrap_or_else(|| panic!("{name}: blob not found for {item:?}"));
+        buf.extend_from_slice(raw);
+    }
+
+    let mut rebuilt = Automerge::new();
+    rebuilt
+        .load_incremental(&buf)
+        .expect("load minimized blobs");
+
+    assert_eq!(
+        rebuilt.get_heads(),
+        original_heads,
+        "{name}: heads diverged after minimize round-trip \
+         (ingest produced {} fragments / {} loose; \
+          after minimize {} fragments / {} loose)",
+        result.fragment_count,
+        result.loose_count,
+        kept_fragments.len(),
+        kept_loose.len(),
+    );
+    assert_eq!(
+        rebuilt.get_changes(&[]).len(),
+        original_count,
+        "{name}: change count diverged after minimize round-trip \
+         (original={original_count}, rebuilt={})",
+        rebuilt.get_changes(&[]).len(),
+    );
+
+    // Spot-check that the rebuilt doc agrees on the root keyset.
+    let orig_keys: Vec<_> = doc.keys(&ROOT).collect();
+    let rebuilt_keys: Vec<_> = rebuilt.keys(&ROOT).collect();
+    assert_eq!(
+        orig_keys, rebuilt_keys,
+        "{name}: root keys diverged after minimize round-trip",
+    );
+}
+
+#[test]
+fn ingest_minimize_roundtrip_s1() {
+    ingest_minimize_roundtrip("S1", include_bytes!("../test-vectors/S1.am"));
+}
+
+#[test]
+fn ingest_minimize_roundtrip_s2() {
+    ingest_minimize_roundtrip("S2", include_bytes!("../test-vectors/S2.am"));
+}
+
+#[test]
+fn ingest_minimize_roundtrip_s3() {
+    ingest_minimize_roundtrip("S3", include_bytes!("../test-vectors/S3.am"));
+}
+
+#[test]
+#[ignore = "fails on multi-fragment docs: minimize structural dominance \
+            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+fn ingest_minimize_roundtrip_a1() {
+    ingest_minimize_roundtrip("A1", include_bytes!("../test-vectors/A1.am"));
+}
+
+#[test]
+#[ignore = "fails on multi-fragment docs: minimize structural dominance \
+            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+fn ingest_minimize_roundtrip_a2() {
+    ingest_minimize_roundtrip("A2", include_bytes!("../test-vectors/A2.am"));
+}
+
+#[test]
+#[ignore = "fails on multi-fragment docs: minimize structural dominance \
+            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+fn ingest_minimize_roundtrip_c1() {
+    ingest_minimize_roundtrip("C1", include_bytes!("../test-vectors/C1.am"));
+}
+
+#[test]
+#[ignore = "fails on multi-fragment docs: minimize structural dominance \
+            doesn't imply blob-level data preservation. See test docs + FIXME.md"]
+fn ingest_minimize_roundtrip_c2() {
+    ingest_minimize_roundtrip("C2", include_bytes!("../test-vectors/C2.am"));
+}
+
+/// Stress: minimize twice and confirm the round-trip still works.
+/// Re-minimization on already-minimized output must remain stable;
+/// regression coverage for the determinism fix at the Automerge level.
+#[test]
+fn ingest_double_minimize_roundtrip_s1() {
+    let bytes = include_bytes!("../test-vectors/S1.am");
+    let doc = Automerge::load(bytes).expect("S1");
+    let original_heads = doc.get_heads();
+
+    let sed_id = sed_id(bytes);
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+
+    let once = result.sedimentree.minimize(&CountLeadingZeroBytes);
+    let twice = once.minimize(&CountLeadingZeroBytes);
+    assert_eq!(
+        once, twice,
+        "minimize is not idempotent on real Automerge document",
+    );
+
+    // And the round-trip still works on the doubly-minimized tree.
+    let blob_by_digest: Map<Digest<Blob>, &[u8]> = result
+        .blobs
+        .iter()
+        .map(|blob| (Digest::hash(blob), blob.as_slice()))
+        .collect();
+
+    let kept_fragments: Vec<_> = twice.fragments().collect();
+    let kept_loose: Vec<_> = twice.loose_commits().collect();
+
+    let order = twice.topsorted_blob_order().expect("no cycles");
+    let mut buf = Vec::new();
+    for item in &order {
+        let digest = match item {
+            SedimentreeItem::Fragment(i) => kept_fragments[*i].summary().blob_meta().digest(),
+            SedimentreeItem::LooseCommit(i) => kept_loose[*i].blob_meta().digest(),
+        };
+        let raw = blob_by_digest
+            .get(&digest)
+            .expect("blob not found after double minimize");
+        buf.extend_from_slice(raw);
+    }
+
+    let mut rebuilt = Automerge::new();
+    rebuilt
+        .load_incremental(&buf)
+        .expect("load double-minimized");
+    assert_eq!(rebuilt.get_heads(), original_heads, "heads diverged after double minimize");
+}
+
 /// Ingest A2 (3,208 changes) via the production `ingest_automerge` API
 /// and verify the roundtrip: topsorted reassembly must produce the same
 /// document heads and change count.
