@@ -33,7 +33,12 @@ fn make_commit(id: SedimentreeId, head: u8, blob_seed: u8) -> (LooseCommit, Blob
 }
 
 /// Build a `(Fragment, Blob)` pair whose `BlobMeta` matches its blob.
-fn make_fragment(id: SedimentreeId, head: u8, boundary_byte: u8, blob_seed: u8) -> (Fragment, Blob) {
+fn make_fragment(
+    id: SedimentreeId,
+    head: u8,
+    boundary_byte: u8,
+    blob_seed: u8,
+) -> (Fragment, Blob) {
     let blob = make_blob(blob_seed);
     let blob_meta = BlobMeta::new(&blob);
     let head = CommitId::new([head; 32]);
@@ -79,9 +84,8 @@ async fn add_built_batch_locally_stores_commits_and_fragments() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
     let sed_id = SedimentreeId::new([3u8; 32]);
 
-    let commits: Vec<(LooseCommit, Blob)> = (0..5)
-        .map(|i| make_commit(sed_id, i + 100, i))
-        .collect();
+    let commits: Vec<(LooseCommit, Blob)> =
+        (0..5).map(|i| make_commit(sed_id, i + 100, i)).collect();
     let fragments: Vec<(Fragment, Blob)> = (0..3)
         .map(|i| make_fragment(sed_id, i + 200, i + 220, i + 240))
         .collect();
@@ -122,13 +126,12 @@ async fn add_built_batch_locally_rejects_mismatched_commit_blob() -> TestResult 
     );
     let actual = make_blob(0xBB); // different bytes -> different digest
 
-    let result = sd.add_built_batch_locally(sed_id, vec![(commit, actual)], Vec::new()).await;
+    let result = sd
+        .add_built_batch_locally(sed_id, vec![(commit, actual)], Vec::new())
+        .await;
 
     assert!(
-        matches!(
-            result,
-            Err(WriteError::Io(IoError::BlobMismatch(_)))
-        ),
+        matches!(result, Err(WriteError::Io(IoError::BlobMismatch(_)))),
         "mismatched blob should produce BlobMismatch, got: {result:?}"
     );
 
@@ -158,10 +161,7 @@ async fn add_built_batch_locally_rejects_mismatched_fragment_blob() -> TestResul
         .await;
 
     assert!(
-        matches!(
-            result,
-            Err(WriteError::Io(IoError::BlobMismatch(_)))
-        ),
+        matches!(result, Err(WriteError::Io(IoError::BlobMismatch(_)))),
         "mismatched blob should produce BlobMismatch, got: {result:?}"
     );
 
