@@ -520,7 +520,12 @@ mod tests {
                         }
                         let pick = u.choose_index(available.len())?;
                         let idx = available.remove(pick);
-                        parents.insert(frontier[idx]);
+                        #[allow(clippy::expect_used)]
+                        let parent = frontier
+                            .get(idx)
+                            .copied()
+                            .expect("idx came from 0..frontier.len() and frontier doesn't shrink");
+                        parents.insert(parent);
                     }
                     let blob_meta = BlobMeta::arbitrary(u)?;
                     commits.push(LooseCommit::new(sedimentree_id, head, parents, blob_meta));
