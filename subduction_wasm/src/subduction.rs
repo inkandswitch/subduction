@@ -1331,11 +1331,6 @@ impl WasmSubduction {
 
     /// Subscribe to ephemeral messages for the given topics
     /// from all connected peers.
-    ///
-    /// `topics` is an array of [`Topic`](crate::topic::WasmTopic) handles
-    /// taken by JS reference; the caller's handles remain valid after the
-    /// call so the same array can be passed to
-    /// [`unsubscribeEphemeral`](Self::unsubscribe_ephemeral) later.
     #[wasm_bindgen(js_name = subscribeEphemeral)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn subscribe_ephemeral(&self, topics: Vec<JsTopic>) {
@@ -1350,10 +1345,6 @@ impl WasmSubduction {
 
     /// Unsubscribe from ephemeral messages for the given topics
     /// from all connected peers.
-    ///
-    /// `topics` is an array of [`Topic`](crate::topic::WasmTopic) handles
-    /// taken by JS reference; the caller's handles remain valid after the
-    /// call.
     #[wasm_bindgen(js_name = unsubscribeEphemeral)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn unsubscribe_ephemeral(&self, topics: Vec<JsTopic>) {

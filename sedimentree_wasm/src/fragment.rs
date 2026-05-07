@@ -24,10 +24,6 @@ pub struct WasmFragment(Fragment);
 #[wasm_bindgen(js_class = Fragment)]
 impl WasmFragment {
     /// Create a new fragment from the given sedimentree ID, head, boundary, checkpoints, and blob metadata.
-    ///
-    /// `sedimentree_id`, `head`, and `blob_meta` are taken by reference so
-    /// JS callers can reuse the same handles when constructing many
-    /// fragments in a loop.
     #[wasm_bindgen(constructor)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices

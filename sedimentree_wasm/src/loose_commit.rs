@@ -24,10 +24,6 @@ pub struct WasmLooseCommit(LooseCommit);
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
     /// Create a new `LooseCommit` from the given sedimentree ID, head, parents, and blob metadata.
-    ///
-    /// `sedimentree_id`, `head`, and `blob_meta` are taken by reference so
-    /// JS callers can reuse the same handles when constructing many commits
-    /// in a loop (for example, populating an entire sedimentree).
     #[wasm_bindgen(constructor)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices

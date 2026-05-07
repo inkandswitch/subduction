@@ -103,9 +103,6 @@ impl<T> From<WasmDigest> for Digest<T> {
     }
 }
 
-/// Borrowing variant of [`From<WasmDigest> for Digest<T>`] so wasm-bindgen
-/// methods can take `&WasmDigest` (or `Vec<JsDigest>`) without moving the
-/// JS-side handle.
 impl<T> From<&WasmDigest> for Digest<T> {
     fn from(digest: &WasmDigest) -> Self {
         Digest::force_from_bytes(digest.0)

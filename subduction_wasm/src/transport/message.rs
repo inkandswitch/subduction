@@ -47,9 +47,6 @@ impl WasmMessage {
     }
 
     /// Create a [`SyncMessage::BlobsRequest`] message.
-    ///
-    /// `digests` is taken as an array of [`Digest`](sedimentree_wasm::digest::WasmDigest)
-    /// JS references; the caller's handles remain valid after the call.
     #[wasm_bindgen(js_name = blobsRequest)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]

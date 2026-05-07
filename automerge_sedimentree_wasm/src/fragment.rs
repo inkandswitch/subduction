@@ -72,11 +72,6 @@ impl WasmFragmentState {
     }
 
     /// Convert the fragment state into a fragment.
-    ///
-    /// `sedimentree_id` is taken by reference so JS callers can reuse the
-    /// same handle when converting many states (e.g. iterating over the
-    /// result of [`buildFragmentStore`](crate::WasmSedimentreeAutomerge::js_build_fragment_store))
-    /// under one sedimentree.
     #[must_use]
     #[wasm_bindgen(js_name = intoFragment)]
     pub fn into_fragment(
