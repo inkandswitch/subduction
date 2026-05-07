@@ -17,10 +17,6 @@ jobs:
   benchmarks:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Allow individual matrix entries to be marked non-blocking via a
-    # `continue-on-error` field. Defaults to false for any entry that
-    # doesn't set it explicitly.
-    continue-on-error: ${{ matrix.continue-on-error || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,11 +37,6 @@ jobs:
             package: subduction_websocket
             features: tokio_client,tokio_server
             bench: e2e
-            # The e2e-websocket bench is currently flaky / slow in CI
-            # (see TODO.md). Don't block the bench job on this entry
-            # while we diagnose. Other matrix entries still gate the
-            # job's overall conclusion.
-            continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
