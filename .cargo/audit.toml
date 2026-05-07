@@ -1,0 +1,39 @@
+# cargo-audit configuration.
+# https://github.com/rustsec/rustsec/blob/main/cargo-audit/audit.toml.example
+#
+# Single source of truth for suppressed advisories. CI (`actions-rust-lang/audit`)
+# reads this file too, so don't add `ignore:` entries to the workflow.
+# Each entry below has a revisit trigger; see `.ignore/FIXME.md` for full context.
+
+[advisories]
+ignore = [
+    # ─── Vulnerabilities (temporary suppression) ───────────────────
+    #
+    # Both pulled in by iroh-relay 0.98.0's exact pin
+    # `hickory-resolver = "=0.26.0-beta.4"`. Upstream fix exists at
+    # hickory-* >= 0.26.1. Revisit when iroh-relay relaxes the pin or
+    # bumps to >= 0.99.
+
+    # hickory-net NSEC3 closest-encloser proof unbounded loop on
+    # cross-zone responses (DoS).
+    "RUSTSEC-2026-0120",
+    # hickory-proto CPU exhaustion via O(n²) name compression during
+    # message encoding (DoS).
+    "RUSTSEC-2026-0119",
+
+    # ─── Unmaintained warnings (transitive, no fix on our side) ────
+
+    # heapless 0.7 → atomic-polyfill 1.0.3, pulled in by iroh-relay's
+    # postcard chain. Revisit when iroh's postcard chain bumps heapless
+    # to 0.8+.
+    "RUSTSEC-2023-0089",
+    # paste 1.0.15, pulled in by netlink-* family via iroh's portmapper.
+    # Revisit when netlink-* migrates off paste.
+    "RUSTSEC-2024-0436",
+    # derivative 2.2.0, pulled in by keyhive_core. Revisit when
+    # keyhive_core upstream replaces derivative with derive_more.
+    "RUSTSEC-2024-0388",
+    # bincode 1.3.3, pulled in by keyhive_core / keyhive_crypto.
+    # Revisit when keyhive_core upstream migrates to bincode 2.x.
+    "RUSTSEC-2025-0141",
+]
