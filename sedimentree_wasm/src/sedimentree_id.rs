@@ -62,6 +62,12 @@ impl From<WasmSedimentreeId> for SedimentreeId {
     }
 }
 
+impl From<&WasmSedimentreeId> for SedimentreeId {
+    fn from(id: &WasmSedimentreeId) -> Self {
+        id.0
+    }
+}
+
 /// Error indicating that the provided byte array is not exactly 32 bytes long.
 #[derive(Debug, Error)]
 #[error("ID must be exactly 32 bytes")]

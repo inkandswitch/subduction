@@ -12,7 +12,9 @@ use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 use sedimentree_wasm::{
-    digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit,
+    digest::{JsDigest, WasmDigest},
+    fragment::WasmFragment,
+    loose_commit::WasmLooseCommit,
     sedimentree_id::WasmSedimentreeId,
 };
 
@@ -45,13 +47,16 @@ impl WasmMessage {
     }
 
     /// Create a [`SyncMessage::BlobsRequest`] message.
+    ///
+    /// `digests` is taken as an array of [`Digest`](sedimentree_wasm::digest::WasmDigest)
+    /// JS references; the caller's handles remain valid after the call.
     #[wasm_bindgen(js_name = blobsRequest)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn blobs_request(id: &WasmSedimentreeId, digests: Vec<WasmDigest>) -> Self {
+    pub fn blobs_request(id: &WasmSedimentreeId, digests: Vec<JsDigest>) -> Self {
         SyncMessage::BlobsRequest {
             id: id.clone().into(),
-            digests: digests.into_iter().map(Into::into).collect(),
+            digests: digests.iter().map(|d| WasmDigest::from(d).into()).collect(),
         }
         .into()
     }

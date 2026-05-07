@@ -8,6 +8,7 @@ use alloc::{
 use subduction_ephemeral::topic::Topic;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 /// A Wasm wrapper around the ephemeral [`Topic`] type.
 ///
@@ -21,6 +22,7 @@ use wasm_bindgen::prelude::*;
 #[allow(missing_copy_implementations)]
 pub struct WasmTopic(Topic);
 
+#[wasm_refgen(js_ref = JsTopic)]
 #[wasm_bindgen(js_class = Topic)]
 impl WasmTopic {
     /// Create a topic from a 32-byte array.
@@ -57,6 +59,12 @@ impl From<Topic> for WasmTopic {
 
 impl From<WasmTopic> for Topic {
     fn from(t: WasmTopic) -> Self {
+        t.0
+    }
+}
+
+impl From<&WasmTopic> for Topic {
+    fn from(t: &WasmTopic) -> Self {
         t.0
     }
 }
