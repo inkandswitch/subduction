@@ -1714,18 +1714,26 @@ where
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
-    ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
-    ///   backends `save_batch` may have persisted some items before
-    ///   surfacing an error; in that case this method returns early and
-    ///   leaves the in-memory tree behind the on-disk state until rehydrate.
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a local storage error
+    ///   occurs while persisting the batch, or if ingestion of inbound data
+    ///   during the trailing [`sync_with_all_peers`](Self::sync_with_all_peers)
+    ///   call hits a storage error. On non-transactional
+    ///   [`Storage`](crate::storage::traits::Storage) backends `save_batch`
+    ///   may have persisted some items before surfacing an error; in that
+    ///   case this method returns early and leaves the in-memory tree
+    ///   behind the on-disk state until rehydrate.
     /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
     ///   digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
-    /// * [`WriteError::Io`] (`IoError::ConnSend` / `ConnRecv` / `ConnCall`)
-    ///   if the post-write `sync_with_all_peers` broadcast fails. Storage
-    ///   has already been updated successfully when this variant is
-    ///   returned.
+    ///
+    /// Per-peer transport failures during the trailing broadcast are *not*
+    /// surfaced as `Err`. [`sync_with_all_peers`](Self::sync_with_all_peers)
+    /// reports those out-of-band in its `Ok` value (a per-peer map of
+    /// successes and per-connection [`CallError`](crate::connection::managed::CallError)s);
+    /// this method discards that map. If a caller needs to observe peer-level
+    /// sync outcomes, prefer driving the local insert via
+    /// [`add_built_batch_locally`](Self::add_built_batch_locally) and calling
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) directly.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).

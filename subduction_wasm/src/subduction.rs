@@ -1016,8 +1016,19 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`WasmWriteError`] if any blob does not match its claimed
-    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage,
-    /// networking, or policy fail during insert/broadcast.
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if a local
+    /// [`Storage`](sedimentree_wasm::storage::JsStorage) error is hit while
+    /// persisting the batch or while ingesting inbound data during the
+    /// trailing broadcast.
+    ///
+    /// Per-peer transport failures during the trailing broadcast are *not*
+    /// surfaced as `Err`: peers that can't be reached (closed connections,
+    /// timeouts) are reported by `sync_with_all_peers` as data inside its
+    /// per-peer result map, which this method discards. If you need to
+    /// observe peer-level sync outcomes, drive the local insert via
+    /// [`addCommitsBatch`](Self::add_commits_batch) /
+    /// [`addFragmentsBatch`](Self::add_fragments_batch) and call
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers) directly.
     #[wasm_bindgen(js_name = addBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn add_batch(
