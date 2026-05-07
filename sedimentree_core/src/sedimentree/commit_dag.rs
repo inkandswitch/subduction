@@ -596,7 +596,8 @@ mod tests {
                     let s2 = dag2.simplify(&[], &CountLeadingZeroBytes);
 
                     assert_eq!(
-                        s1, s2,
+                        s1,
+                        s2,
                         "simplify output depends on input order: {} commits",
                         commits.len()
                     );
@@ -655,18 +656,16 @@ mod tests {
         fn simplify_with_fragments_invariant_under_input_order() {
             bolero::check!()
                 .with_arbitrary::<(ArbitraryCommits, Vec<Fragment>, u64)>()
-                .for_each(
-                    |(ArbitraryCommits { commits }, fragments, shuffle_seed)| {
-                        let dag1 = CommitDag::from_commits(commits.iter());
-                        let shuffled = shuffle(commits, *shuffle_seed);
-                        let dag2 = CommitDag::from_commits(shuffled.iter());
+                .for_each(|(ArbitraryCommits { commits }, fragments, shuffle_seed)| {
+                    let dag1 = CommitDag::from_commits(commits.iter());
+                    let shuffled = shuffle(commits, *shuffle_seed);
+                    let dag2 = CommitDag::from_commits(shuffled.iter());
 
-                        let s1 = dag1.simplify(fragments, &CountLeadingZeroBytes);
-                        let s2 = dag2.simplify(fragments, &CountLeadingZeroBytes);
+                    let s1 = dag1.simplify(fragments, &CountLeadingZeroBytes);
+                    let s2 = dag2.simplify(fragments, &CountLeadingZeroBytes);
 
-                        assert_eq!(s1, s2);
-                    },
-                );
+                    assert_eq!(s1, s2);
+                });
         }
     }
 }

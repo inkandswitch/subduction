@@ -272,8 +272,7 @@ fn dropped_loose_commits_are_covered_by_kept_fragments() {
             let kept_loose: BTreeSet<CommitId> =
                 prod.loose_commits().map(LooseCommit::head).collect();
 
-            let kept_fragment_coverage: BTreeSet<Checkpoint> =
-                coverage(prod.fragments());
+            let kept_fragment_coverage: BTreeSet<Checkpoint> = coverage(prod.fragments());
 
             for c in tree.loose_commits() {
                 let id = c.head();
@@ -394,7 +393,8 @@ fn fragment_minimization_preserves_coverage() {
             let cov_after = coverage(prod.fragments());
 
             assert_eq!(
-                cov_before, cov_after,
+                cov_before,
+                cov_after,
                 "fragment minimization lost coverage: \
                  before={} entries, after={} entries",
                 cov_before.len(),
@@ -493,8 +493,7 @@ fn minimize_with_no_fragments_keeps_all_commits() {
             let minimized = stripped.minimize(&CountLeadingZeroBytes);
             let prod_set: BTreeSet<CommitId> =
                 minimized.loose_commits().map(LooseCommit::head).collect();
-            let orig_set: BTreeSet<CommitId> =
-                commits.iter().map(LooseCommit::head).collect();
+            let orig_set: BTreeSet<CommitId> = commits.iter().map(LooseCommit::head).collect();
 
             assert_eq!(prod_set, orig_set, "no fragments → all commits kept");
         });
@@ -567,8 +566,12 @@ fn fingerprint_summary_of_minimized_tree_is_stable() {
             // Use a fixed seed so the only variable is the tree.
             let seed = FingerprintSeed::new(0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210);
 
-            let s_orig = tree.minimize(&CountLeadingZeroBytes).fingerprint_summarize(&seed);
-            let s_alt = alt.minimize(&CountLeadingZeroBytes).fingerprint_summarize(&seed);
+            let s_orig = tree
+                .minimize(&CountLeadingZeroBytes)
+                .fingerprint_summarize(&seed);
+            let s_alt = alt
+                .minimize(&CountLeadingZeroBytes)
+                .fingerprint_summarize(&seed);
 
             assert_eq!(
                 s_orig, s_alt,

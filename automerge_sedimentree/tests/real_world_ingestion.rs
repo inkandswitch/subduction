@@ -538,9 +538,7 @@ fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
     let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
 
     // Apply minimize.
-    let minimized = result
-        .sedimentree
-        .minimize(&CountLeadingZeroBytes);
+    let minimized = result.sedimentree.minimize(&CountLeadingZeroBytes);
 
     // The blobs collected during ingest are still our source of truth
     // for raw bytes — `minimize` removes Sedimentree entries but doesn't
@@ -676,41 +674,11 @@ fn ingest_minimize_roundtrip_c2() {
 fn egwalker_vector_snapshots() {
     /// `(name, bytes, expected_changes, expected_fragments, expected_uncovered)`
     const SNAPSHOTS: &[(&str, &[u8], usize, usize, usize)] = &[
-        (
-            "S1",
-            include_bytes!("../test-vectors/S1.am"),
-            2,
-            0,
-            2,
-        ),
-        (
-            "S2",
-            include_bytes!("../test-vectors/S2.am"),
-            2,
-            0,
-            2,
-        ),
-        (
-            "S3",
-            include_bytes!("../test-vectors/S3.am"),
-            2,
-            0,
-            2,
-        ),
-        (
-            "A1",
-            include_bytes!("../test-vectors/A1.am"),
-            956,
-            7,
-            184,
-        ),
-        (
-            "A2",
-            include_bytes!("../test-vectors/A2.am"),
-            3208,
-            8,
-            228,
-        ),
+        ("S1", include_bytes!("../test-vectors/S1.am"), 2, 0, 2),
+        ("S2", include_bytes!("../test-vectors/S2.am"), 2, 0, 2),
+        ("S3", include_bytes!("../test-vectors/S3.am"), 2, 0, 2),
+        ("A1", include_bytes!("../test-vectors/A1.am"), 956, 7, 184),
+        ("A2", include_bytes!("../test-vectors/A2.am"), 3208, 8, 228),
         (
             "C1",
             include_bytes!("../test-vectors/C1.am"),
@@ -766,22 +734,51 @@ fn egwalker_vector_snapshots() {
 fn egwalker_minimal_hash_snapshots() {
     use sedimentree_core::sedimentree::MinimalTreeHash;
 
-    /// `(name, bytes, expected_hash_hex)`
-    const SNAPSHOTS: &[(&str, &[u8])] = &[
-        ("S1", include_bytes!("../test-vectors/S1.am")),
-        ("S2", include_bytes!("../test-vectors/S2.am")),
-        ("S3", include_bytes!("../test-vectors/S3.am")),
-        ("A1", include_bytes!("../test-vectors/A1.am")),
-        ("A2", include_bytes!("../test-vectors/A2.am")),
-        ("C1", include_bytes!("../test-vectors/C1.am")),
-        ("C2", include_bytes!("../test-vectors/C2.am")),
+    /// `(name, bytes, expected_hash_hex)` — pinned post-fix.
+    /// If `minimize` ever changes its output for these vectors,
+    /// update the table and explain why in the commit message.
+    const SNAPSHOTS: &[(&str, &[u8], &str)] = &[
+        (
+            "S1",
+            include_bytes!("../test-vectors/S1.am"),
+            "eb4edf5719382f067537124deec2696937125cb11ba0fd7f4e54d9abf36282ad",
+        ),
+        (
+            "S2",
+            include_bytes!("../test-vectors/S2.am"),
+            "455c9e3a257f1eae359403408e22347c6856ae60fe00262ddc7a8e7da5c619bd",
+        ),
+        (
+            "S3",
+            include_bytes!("../test-vectors/S3.am"),
+            "ea65d7e84b1b1cc0b0a536ab4d02cbedace6d21aaa033c626ad768fad275bc6b",
+        ),
+        (
+            "A1",
+            include_bytes!("../test-vectors/A1.am"),
+            "55cd0bf902a8f515b50ab8353c8668a89dd1c0a2f38b4e7992ee052eba0b9959",
+        ),
+        (
+            "A2",
+            include_bytes!("../test-vectors/A2.am"),
+            "813d197c265e3d72ab7147491ad2d735dc5c5bfad9c351f57891dad45eb6bcfd",
+        ),
+        (
+            "C1",
+            include_bytes!("../test-vectors/C1.am"),
+            "1aeb3a9f1f7220af7dc91dcdc62e96005d15a78091e115292d0584e7b0e421ec",
+        ),
+        (
+            "C2",
+            include_bytes!("../test-vectors/C2.am"),
+            "c2af810d5ceabd50154ed26f81d9f313962de4d9fade24d332d54a9884c3a480",
+        ),
     ];
 
-    for (name, bytes) in SNAPSHOTS {
+    for (name, bytes, expected_hex) in SNAPSHOTS {
         let doc = Automerge::load(bytes).expect(name);
         let sed_id = sed_id(bytes);
-        let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id)
-            .expect("ingest");
+        let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
 
         // Compute hash twice and assert determinism within this run.
         let h1: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
@@ -793,26 +790,29 @@ fn egwalker_minimal_hash_snapshots() {
              — DETERMINISM REGRESSION",
         );
 
-        // Re-ingest and re-hash. With the perf/minimize determinism fix
-        // these should match, since the underlying ingest result depends
-        // only on the document bytes.
-        let result2 = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id)
-            .expect("re-ingest");
+        // Re-ingest and re-hash. Should match — ingest is a function of
+        // the document bytes alone.
+        let result2 =
+            automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("re-ingest");
         let h3: MinimalTreeHash = result2.sedimentree.minimal_hash(&CountLeadingZeroBytes);
         assert_eq!(
             h1.as_bytes(),
             h3.as_bytes(),
             "{name}: minimal_hash differs across re-ingest in one process \
-             — likely a determinism issue",
+             — DETERMINISM REGRESSION",
         );
 
-        // Hex-encode for diagnostic output.
+        // Compare against pinned snapshot.
         let mut hex = String::with_capacity(64);
         for b in h1.as_bytes() {
             use core::fmt::Write;
             write!(&mut hex, "{b:02x}").unwrap();
         }
-        eprintln!("{name}: minimal_hash = {hex}");
+        assert_eq!(
+            hex, *expected_hex,
+            "{name}: minimal_hash drift from pinned snapshot. \
+             If this is intentional, update the SNAPSHOTS table and explain why."
+        );
     }
 }
 
@@ -862,7 +862,11 @@ fn ingest_double_minimize_roundtrip_s1() {
     rebuilt
         .load_incremental(&buf)
         .expect("load double-minimized");
-    assert_eq!(rebuilt.get_heads(), original_heads, "heads diverged after double minimize");
+    assert_eq!(
+        rebuilt.get_heads(),
+        original_heads,
+        "heads diverged after double minimize"
+    );
 }
 
 /// Ingest A2 (3,208 changes) via the production `ingest_automerge` API

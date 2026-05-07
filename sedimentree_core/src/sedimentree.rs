@@ -1446,7 +1446,10 @@ mod tests {
                 .for_each(|ArbitraryDag { tree }| {
                     let once = tree.minimize(&CountLeadingZeroBytes);
                     let twice = once.minimize(&CountLeadingZeroBytes);
-                    assert_eq!(once, twice, "minimize on tree-with-fragments is not idempotent");
+                    assert_eq!(
+                        once, twice,
+                        "minimize on tree-with-fragments is not idempotent"
+                    );
                 });
         }
 
