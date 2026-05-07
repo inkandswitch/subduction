@@ -12,7 +12,7 @@ use alloc::{vec, vec::Vec};
 use crate::{
     collections::{Map, Set},
     depth::DepthMetric,
-    fragment::Fragment,
+    fragment::{Fragment, checkpoint::Checkpoint},
     loose_commit::{LooseCommit, id::CommitId},
 };
 
@@ -85,76 +85,64 @@ impl CommitDag {
     }
 
     fn add_edge(&mut self, source: NodeIdx, target: NodeIdx) {
-        // Add an edge in the child node
-        let new_edge_idx = EdgeIdx(self.edges.len());
-        let new_edge = Edge { source, next: None };
-        self.edges.push(new_edge);
+        // Prepend to each adjacency list (O(1) instead of O(degree)).
+        // Consumers iterate without assuming order. The two `Edge`
+        // writes below are NOT duplicates: each carries the *other*
+        // endpoint as `source` (parents-chain yields parents,
+        // children-chain yields children).
 
+        let parent_edge_idx = EdgeIdx(self.edges.len());
         #[allow(clippy::expect_used)]
         let target_node = self
             .nodes
             .get_mut(target.0)
             .expect("NodeId not in self.nodes");
+        let prev_parent_head = target_node.parents;
+        target_node.parents = Some(parent_edge_idx);
+        self.edges.push(Edge {
+            source,
+            next: prev_parent_head,
+        });
 
-        if let Some(edge_idx) = target_node.parents {
-            #[allow(clippy::expect_used)]
-            let mut edge = self
-                .edges
-                .get_mut(edge_idx.0)
-                .expect("NodeId not in self.nodes");
-
-            #[allow(clippy::expect_used)]
-            while let Some(next) = edge.next {
-                edge = self
-                    .edges
-                    .get_mut(next.0)
-                    .expect("NodeId not in self.nodes");
-            }
-            edge.next = Some(new_edge_idx);
-        } else {
-            target_node.parents = Some(new_edge_idx);
-        }
-
-        // Now add an edge in the parent node
-        let new_edge_idx = EdgeIdx(self.edges.len());
-        let new_edge = Edge { source, next: None };
-        self.edges.push(new_edge);
-
+        let child_edge_idx = EdgeIdx(self.edges.len());
         #[allow(clippy::expect_used)]
         let source_node = self
             .nodes
             .get_mut(source.0)
             .expect("NodeId not in self.nodes");
-        if let Some(edge_idx) = source_node.children {
-            #[allow(clippy::expect_used)]
-            let mut edge = self
-                .edges
-                .get_mut(edge_idx.0)
-                .expect("NodeId not in self.nodes");
-
-            #[allow(clippy::expect_used)]
-            while let Some(next) = edge.next {
-                edge = self
-                    .edges
-                    .get_mut(next.0)
-                    .expect("next NodeId not in self.nodes");
-            }
-            edge.next = Some(new_edge_idx);
-        } else {
-            source_node.children = Some(new_edge_idx);
-        }
+        let prev_child_head = source_node.children;
+        source_node.children = Some(child_edge_idx);
+        self.edges.push(Edge {
+            source: target,
+            next: prev_child_head,
+        });
     }
 
-    pub(crate) fn simplify<S: DepthMetric>(&self, fragments: &[Fragment], strategy: &S) -> Self {
-        // The work here is to identify which parts of a commit DAG can be
-        // discarded based on the fragments we have. This is a little bit
-        // fiddly. Imagine this graph:
+    /// Returns the set of [`CommitId`]s that survive simplification given
+    /// `fragments`. A commit is dropped when every fragment range it
+    /// belongs to is already covered by some fragment in `fragments`.
+    ///
+    /// Returns just the membership set rather than rebuilding a fresh
+    /// [`CommitDag`]: the only caller ([`Sedimentree::minimize`]) needs
+    /// `contains` lookups, not graph structure.
+    pub(crate) fn simplify<S: DepthMetric>(
+        &self,
+        fragments: &[Fragment],
+        strategy: &S,
+    ) -> Set<CommitId> {
+        // Algorithm: walk reverse-topo from each tip, partitioning
+        // commits into fragment "ranges" (runs between boundaries — a
+        // commit is a boundary when `Depth::is_boundary()`). A commit
+        // can appear in multiple ranges (visited from multiple tips),
+        // and is dropped iff every range it belongs to is covered by
+        // some kept fragment.
+        //
+        // Example DAG (boundary commits in *bold*; fragments covering
+        // *A* and *F*):
         //
         //        ┌─┐
         //        │A│
         //   ┌────┴─┴────┐
-        //   │           │
-        //   │           │
         //  ┌▼┐         ┌▼┐          ┌─┐
         //  │B│         │C│          │D│
         //  └┬┘         └┬┘          └┬┘
@@ -164,46 +152,15 @@ impl CommitDag {
         //  │I│               ┌▼┐
         //  └─┘               │E│
         //                    └┬┘
-        //                     │
-        //                     │
         //                    ┌▼┐
         //               ┌────┤F├────┐
-        //               │    └─┘    │
-        //               │           │
-        //               │           │
-        //               │           │
         //              ┌▼┐         ┌▼┐
         //              │G│         │H│
         //              └─┘         └─┘
         //
-        // Let's say we have boundary commits at F, D, I, and A, and we
-        // have fragments covering A and F. Which commits can we discard?
-        // We can't discard G or H because they are not in any fragment
-        // range. We can't discard I or B because they are not in any
-        // fragment range that we actually have fragments for.
-        //
-        // The invariant we must maintain is that we always have a path
-        // from some commit back to the last boundary commit. How do we
-        // identify the commits that can be discarded?
-        //
-        // Walking from the tips in reverse topological order lets us
-        // identify which commits are not in any fragment range (those
-        // encountered before the first boundary commit), and which
-        // fragment ranges exist (ranges bounded by boundary commits).
-        // A commit can appear in multiple ranges.
-        //
-        // A commit can be discarded when every fragment range it belongs
-        // to is covered by at least one existing fragment.
-
-        // Identify fragment ranges (runs between boundary commits) and
-        // record which range(s) each commit belongs to. A commit is a
-        // boundary when `Depth::is_boundary` returns true (nonzero depth
-        // from the metric). Commits at depth 0 are ordinary loose commits
-        // that live inside fragment ranges.
-        //
-        // The walk is in reverse topological order (tips → roots), so the
-        // first boundary we encounter is the range's head (newest end)
-        // and subsequent non-boundary commits are its interior.
+        // We keep G and H (not in any range), and B and I (in a range
+        // not covered by any fragment we have). We drop everything in
+        // the A-covered and F-covered ranges.
         let mut commits_to_ranges = Map::new();
         let mut rangeless_commits = Set::new();
 
@@ -218,8 +175,6 @@ impl CommitDag {
             for id in self.reverse_topo(tip) {
                 let depth = strategy.to_depth(id);
                 if depth.is_boundary() {
-                    // Found a boundary — flush the current range and start a new one
-                    // keyed by this boundary commit.
                     if let Some((range_head, commits)) = range.take() {
                         for commit in commits {
                             rangeless_commits.remove(&commit);
@@ -239,8 +194,9 @@ impl CommitDag {
                     rangeless_commits.insert(id);
                 }
             }
-            // No boundary was found before reaching the root — treat the
-            // accumulated range as unbounded at its oldest end.
+            // The walk reached a root without crossing another
+            // boundary; treat the trailing range as unbounded at its
+            // oldest end.
             if let Some((end, commits)) = range.take() {
                 commits_to_ranges
                     .entry(end)
@@ -255,50 +211,29 @@ impl CommitDag {
             }
         }
 
-        // Discard commits whose ranges are all covered by existing fragments.
-        let remaining_commits = commits_to_ranges
+        // Build the union of `CommitId`s that any fragment supports
+        // (head, boundary, and checkpoints). Range heads recorded above
+        // are full `CommitId`s; checkpoints are truncated, so we
+        // collect both forms. See `Fragment::supports_block`.
+        let mut covered_range_heads: Set<CommitId> = Set::new();
+        let mut covered_checkpoints: Set<Checkpoint> = Set::new();
+        for f in fragments {
+            covered_range_heads.insert(f.head());
+            covered_range_heads.extend(f.boundary().iter().copied());
+            covered_checkpoints.extend(f.checkpoints().iter().copied());
+        }
+
+        commits_to_ranges
             .into_iter()
             .filter_map(|(commit, ranges)| {
-                if ranges
-                    .iter()
-                    .all(|&r| fragments.iter().any(|f| f.supports_block(r)))
-                {
-                    None
-                } else {
-                    Some(commit)
-                }
+                let all_covered = ranges.iter().all(|r| {
+                    covered_range_heads.contains(r)
+                        || covered_checkpoints.contains(&Checkpoint::new(*r))
+                });
+                if all_covered { None } else { Some(commit) }
             })
             .chain(rangeless_commits)
-            .collect::<Vec<_>>();
-
-        let nodes = remaining_commits
-            .iter()
-            .map(|&c| Node {
-                id: c,
-                parents: None,
-                children: None,
-            })
-            .collect::<Vec<_>>();
-        let node_map = nodes
-            .iter()
-            .enumerate()
-            .map(|(idx, node)| (node.id, NodeIdx(idx)))
-            .collect::<Map<_, _>>();
-
-        let mut dag = CommitDag {
-            nodes,
-            node_map,
-            edges: Vec::new(),
-        };
-
-        for (child_idx, commit) in remaining_commits.into_iter().enumerate() {
-            for parent in self.parents_of_id(commit) {
-                if let Some(parent) = dag.node_map.get(&parent) {
-                    dag.add_edge(*parent, NodeIdx(child_idx));
-                }
-            }
-        }
-        dag
+            .collect()
     }
 
     fn tips(&self) -> impl Iterator<Item = NodeIdx> + '_ {
@@ -315,6 +250,7 @@ impl CommitDag {
         ParentsIter::new(self, node)
     }
 
+    #[cfg(test)]
     fn parents_of_id(&self, id: CommitId) -> impl Iterator<Item = CommitId> + '_ {
         self.node_map
             .get(&id)
@@ -344,11 +280,6 @@ impl CommitDag {
                 None
             }
         })
-    }
-
-    #[cfg(test)]
-    fn commit_ids(&self) -> impl Iterator<Item = CommitId> + '_ {
-        self.nodes.iter().map(|node| node.id)
     }
 }
 
@@ -489,10 +420,7 @@ mod tests {
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
-        let simplified = dag
-            .simplify(&[], &depth_metric)
-            .commit_ids()
-            .collect::<Set<_>>();
+        let simplified = dag.simplify(&[], &depth_metric);
 
         // With no fragments, simplify keeps boundary commits + heads
         // Both a and b should remain (a is boundary, b would be pruned but there's no fragment)
@@ -517,10 +445,7 @@ mod tests {
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
-        let simplified = dag
-            .simplify(&[], &depth_metric)
-            .commit_ids()
-            .collect::<Set<_>>();
+        let simplified = dag.simplify(&[], &depth_metric);
 
         // Both are boundary commits, both remain
         assert_eq!(simplified, Set::from([a_id, b_id]));
@@ -545,5 +470,163 @@ mod tests {
             dag.parents_of_id(c_id).collect::<Set<_>>(),
             Set::from([a_id, b_id])
         );
+    }
+
+    /// Property tests for `CommitDag` invariants under input ordering.
+    ///
+    /// `add_edge` prepends to per-node adjacency lists in O(1), so the
+    /// internal edge storage order depends on the order `from_commits`
+    /// receives commits. Consumers (`simplify`, `heads`, `contains_commit`)
+    /// must be insensitive to that order.
+    ///
+    /// Gated on both `bolero` (for `bolero::check!` and the
+    /// `arbitrary::Arbitrary` impl) and `test_utils` (which is what
+    /// enables the `rand` optional dependency this module uses).
+    /// `cargo test -p sedimentree_core --features bolero` alone is not
+    /// sufficient — `rand` would be unresolved.
+    #[cfg(all(feature = "bolero", feature = "test_utils"))]
+    mod proptests {
+        use alloc::vec::Vec;
+        use rand::{Rng, SeedableRng, rngs::SmallRng};
+
+        use super::*;
+        use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
+
+        /// A randomly-generated valid commit DAG.
+        ///
+        /// Each generated commit's `parents` reference only commits
+        /// emitted earlier in the sequence, so the result is acyclic.
+        #[derive(Debug)]
+        struct ArbitraryCommits {
+            commits: Vec<LooseCommit>,
+        }
+
+        impl<'a> arbitrary::Arbitrary<'a> for ArbitraryCommits {
+            fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                let sedimentree_id = SedimentreeId::arbitrary(u)?;
+                let num_commits: u32 = u.int_in_range(0..=20)?;
+                let mut frontier: Vec<CommitId> = Vec::new();
+                let mut commits = Vec::with_capacity(num_commits as usize);
+                let mut rng = SmallRng::seed_from_u64(u.arbitrary()?);
+
+                for _ in 0..num_commits {
+                    let head = CommitId::new(rng.r#gen());
+                    let mut parents = BTreeSet::new();
+                    let n_parents = u.int_in_range(0..=frontier.len().min(3))?;
+                    let mut available: Vec<usize> = (0..frontier.len()).collect();
+                    for _ in 0..n_parents {
+                        if available.is_empty() {
+                            break;
+                        }
+                        let pick = u.choose_index(available.len())?;
+                        let idx = available.remove(pick);
+                        #[allow(clippy::expect_used)]
+                        let parent = frontier
+                            .get(idx)
+                            .copied()
+                            .expect("idx came from 0..frontier.len() and frontier doesn't shrink");
+                        parents.insert(parent);
+                    }
+                    let blob_meta = BlobMeta::arbitrary(u)?;
+                    commits.push(LooseCommit::new(sedimentree_id, head, parents, blob_meta));
+                    frontier.push(head);
+                }
+
+                Ok(ArbitraryCommits { commits })
+            }
+        }
+
+        fn shuffle<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
+            use rand::seq::SliceRandom;
+            let mut v: Vec<T> = items.to_vec();
+            let mut rng = SmallRng::seed_from_u64(seed);
+            v.shuffle(&mut rng);
+            v
+        }
+
+        /// `simplify` output is independent of commit insertion order.
+        /// Guards against `add_edge`'s per-node adjacency-list order
+        /// leaking into observable behaviour.
+        #[test]
+        fn simplify_invariant_under_input_order() {
+            bolero::check!()
+                .with_arbitrary::<(ArbitraryCommits, u64)>()
+                .for_each(|(ArbitraryCommits { commits }, shuffle_seed)| {
+                    let dag1 = CommitDag::from_commits(commits.iter());
+                    let shuffled = shuffle(commits, *shuffle_seed);
+                    let dag2 = CommitDag::from_commits(shuffled.iter());
+
+                    let s1 = dag1.simplify(&[], &CountLeadingZeroBytes);
+                    let s2 = dag2.simplify(&[], &CountLeadingZeroBytes);
+
+                    assert_eq!(
+                        s1,
+                        s2,
+                        "simplify output depends on input order: {} commits",
+                        commits.len()
+                    );
+                });
+        }
+
+        /// `heads` is independent of commit insertion order. The
+        /// current implementation walks `node.children.is_none()` so
+        /// this is trivially true today; the test guards against future
+        /// changes.
+        #[test]
+        fn heads_invariant_under_input_order() {
+            bolero::check!()
+                .with_arbitrary::<(ArbitraryCommits, u64)>()
+                .for_each(|(ArbitraryCommits { commits }, shuffle_seed)| {
+                    let dag1 = CommitDag::from_commits(commits.iter());
+                    let shuffled = shuffle(commits, *shuffle_seed);
+                    let dag2 = CommitDag::from_commits(shuffled.iter());
+
+                    let h1: Set<CommitId> = dag1.heads().collect();
+                    let h2: Set<CommitId> = dag2.heads().collect();
+
+                    assert_eq!(h1, h2, "heads depends on input order");
+                });
+        }
+
+        /// `contains_commit` is independent of insertion order.
+        /// Trivially true (a `node_map` lookup), included as a baseline.
+        #[test]
+        fn contains_commit_invariant_under_input_order() {
+            bolero::check!()
+                .with_arbitrary::<(ArbitraryCommits, u64)>()
+                .for_each(|(ArbitraryCommits { commits }, shuffle_seed)| {
+                    let dag1 = CommitDag::from_commits(commits.iter());
+                    let shuffled = shuffle(commits, *shuffle_seed);
+                    let dag2 = CommitDag::from_commits(shuffled.iter());
+
+                    for c in commits {
+                        let id = c.head();
+                        assert_eq!(
+                            dag1.contains_commit(&id),
+                            dag2.contains_commit(&id),
+                            "contains_commit disagrees on {id:?}"
+                        );
+                    }
+                });
+        }
+
+        /// `simplify` with arbitrary fragments is independent of
+        /// insertion order. Exercises the precomputed-coverage path
+        /// across non-empty `fragments` slices.
+        #[test]
+        fn simplify_with_fragments_invariant_under_input_order() {
+            bolero::check!()
+                .with_arbitrary::<(ArbitraryCommits, Vec<Fragment>, u64)>()
+                .for_each(|(ArbitraryCommits { commits }, fragments, shuffle_seed)| {
+                    let dag1 = CommitDag::from_commits(commits.iter());
+                    let shuffled = shuffle(commits, *shuffle_seed);
+                    let dag2 = CommitDag::from_commits(shuffled.iter());
+
+                    let s1 = dag1.simplify(fragments, &CountLeadingZeroBytes);
+                    let s2 = dag2.simplify(fragments, &CountLeadingZeroBytes);
+
+                    assert_eq!(s1, s2);
+                });
+        }
     }
 }

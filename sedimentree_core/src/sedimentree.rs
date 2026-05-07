@@ -510,68 +510,97 @@ impl Sedimentree {
 
     /// Prune a [`Sedimentree`].
     ///
-    /// Minimize the [`Sedimentree`] by removing any fragments that are
-    /// fully supported by other fragments, and removing any loose commits
-    /// that are not needed to support the remaining fragments.
+    /// Minimize the [`Sedimentree`] by removing fragments that are
+    /// individually subsumed by some strictly-deeper kept fragment, and
+    /// removing loose commits whose data is recoverable from a kept
+    /// fragment's blob.
     ///
-    /// Uses a group-by-depth algorithm (Option B) that processes fragments
-    /// from deepest to shallowest. Deeper fragments are always kept, and
-    /// shallower fragments are discarded if their entire range (head + boundary)
-    /// is supported by already-accepted deeper fragments.
+    /// Uses a group-by-depth algorithm processing fragments from deepest
+    /// to shallowest. A fragment `F` is dropped iff some already-kept
+    /// fragment `G` with `depth(G) > depth(F)` satisfies
+    /// [`Fragment::supports`] for `F`'s summary (i.e. `F.head` and every
+    /// `F.boundary` element fall within `G`'s range). Same-depth peers
+    /// cannot dominate each other; collective coverage by multiple
+    /// deeper fragments does not count either, since each fragment's
+    /// blob contains only its own members.
     ///
-    /// Complexity: `O(|M| × avg_checkpoints)` where M = total fragments.
+    /// Complexity: `O(|M|² × avg_boundary)` worst-case for the
+    /// fragment-minimization pass (each candidate is checked against
+    /// each kept deeper fragment, and `Fragment::supports` walks the
+    /// candidate's boundary). Loose-commit pruning is `O(|C| + |F|)`
+    /// after the precomputed coverage set in `CommitDag::simplify`.
+    /// In practice `|M|` is small (depth distribution is geometric in
+    /// the metric) and the deepest-first sweep prunes early.
     #[must_use]
     pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
-        // 1. Group fragments by depth
+        // Sort fragments by head bytes before grouping so the iteration
+        // order is independent of the underlying `Map`'s. With the `std`
+        // feature `Map = HashMap`, whose iteration order is hasher-state-
+        // dependent (so per-process). Without this sort, different
+        // processes pick different representatives among equivalent
+        // fragments, violating `design/sedimentree.md`'s "two trees with
+        // the same content will have identical minimal representations"
+        // and breaking `MinimalTreeHash` / fingerprint stability for sync.
+        let mut sorted_frags: Vec<&Fragment> = self.fragments.values().collect();
+        sorted_frags.sort_by_key(|f| *f.head().as_bytes());
+
         let mut by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
-        for fragment in self.fragments.values() {
+        for fragment in sorted_frags {
             by_depth
                 .entry(fragment.depth(depth_metric))
                 .or_default()
                 .push(fragment);
         }
 
-        // 2. Collect depths and sort descending (deepest first)
         let mut depths: Vec<Depth> = by_depth.keys().copied().collect();
-        depths.sort_by(|a, b| b.cmp(a)); // Descending
+        depths.sort_by(|a, b| b.cmp(a));
 
-        // 3. Process deepest first, building supported set
+        // Drop a candidate fragment iff some *strictly deeper* kept
+        // fragment individually supports it (head + boundary within its
+        // range, per `Fragment::supports`). Same-depth peers must NOT
+        // dominate each other: in merge-heavy DAGs many depth-N fragments
+        // cross-reference each other's heads in their boundaries, but
+        // each fragment's blob contains only its own members — dropping
+        // any of them silently drops change data.
+        //
+        // No exact-equality dedup needed: `self.fragments` is keyed by
+        // `Fragment::head()` and `Fragment: PartialEq` includes the head,
+        // so distinct map entries cannot be equal.
         let mut minimized_fragments = Vec::<Fragment>::new();
-        let mut supported: Set<Checkpoint> = Set::new();
+        let mut kept_fragments_by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
 
         for depth in depths {
-            if let Some(group) = by_depth.remove(&depth) {
-                for fragment in group {
-                    // Check if this fragment is fully supported by deeper fragments
-                    let dominated = supported.contains(&Checkpoint::new(fragment.head()))
-                        && fragment
-                            .summary()
-                            .boundary()
+            let Some(group) = by_depth.remove(&depth) else {
+                continue;
+            };
+            for fragment in group {
+                let dominated_by_deeper = kept_fragments_by_depth
+                    .iter()
+                    .filter(|(d, _)| **d > depth)
+                    .any(|(_, peers)| {
+                        peers
                             .iter()
-                            .all(|b| supported.contains(&Checkpoint::new(*b)));
+                            .any(|deeper| deeper.supports(fragment.summary(), depth_metric))
+                    });
 
-                    if !dominated {
-                        // Accept this fragment and add its commits to supported set
-                        supported.insert(Checkpoint::new(fragment.head()));
-                        supported.extend(fragment.checkpoints().iter().copied());
-                        for b in fragment.summary().boundary() {
-                            supported.insert(Checkpoint::new(*b));
-                        }
-
-                        minimized_fragments.push(fragment.clone());
-                    }
+                if !dominated_by_deeper {
+                    minimized_fragments.push(fragment.clone());
+                    kept_fragments_by_depth
+                        .entry(depth)
+                        .or_default()
+                        .push(fragment);
                 }
             }
         }
 
-        // 4. Simplify loose commits relative to minimized fragments
+        // Prune loose commits whose ranges are covered by kept fragments.
         let dag = commit_dag::CommitDag::from_commits(self.commits.values());
-        let simplified_dag = dag.simplify(&minimized_fragments, depth_metric);
+        let keepers = dag.simplify(&minimized_fragments, depth_metric);
 
         let commits = self
             .commits
             .values()
-            .filter(|c| simplified_dag.contains_commit(&c.head()))
+            .filter(|c| keepers.contains(&c.head()))
             .cloned()
             .collect();
 
@@ -789,12 +818,18 @@ impl Sedimentree {
     pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<CommitId> {
         let minimized = self.minimize(depth_metric);
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.values());
+
+        // Precompute boundary union once: O(F) instead of an O(F²)
+        // `any()` scan inside the fragment loop.
+        let all_fragment_boundaries: Set<CommitId> = minimized
+            .fragments
+            .values()
+            .flat_map(|f| f.boundary().iter().copied())
+            .collect();
+
         let mut heads = Vec::<CommitId>::new();
         for fragment in minimized.fragments.values() {
-            if !minimized
-                .fragments
-                .values()
-                .any(|s| s.boundary().contains(&fragment.head()))
+            if !all_fragment_boundaries.contains(&fragment.head())
                 && fragment
                     .boundary()
                     .iter()
@@ -1372,6 +1407,34 @@ mod tests {
                     let tree = Sedimentree::new(vec![], commits.clone());
                     let minimized = tree.minimize(&CountLeadingZeroBytes);
                     assert_eq!(tree, minimized);
+                });
+        }
+
+        /// `minimize` is idempotent on trees that contain fragments.
+        ///
+        /// Companion to [`minimized_loose_commit_dag_doesnt_change`]
+        /// (which only covers the no-fragments case). Exercises the
+        /// fragment-minimization step by generating arbitrary
+        /// `Sedimentree`s with fragments, minimizing once, and asserting
+        /// that a second minimize yields the same tree.
+        ///
+        /// Regression test for the cross-process determinism bug fixed
+        /// alongside `perf/minimize`: previously, re-minimizing a
+        /// freshly-minimized tree could pick a different mutual-dominance
+        /// representative due to `HashMap` iteration order, dropping a
+        /// fragment the first pass kept.
+        #[test]
+        fn minimize_with_fragments_is_idempotent() {
+            use crate::test_utils::ArbitraryDag;
+            bolero::check!()
+                .with_arbitrary::<ArbitraryDag>()
+                .for_each(|ArbitraryDag { tree }| {
+                    let once = tree.minimize(&CountLeadingZeroBytes);
+                    let twice = once.minimize(&CountLeadingZeroBytes);
+                    assert_eq!(
+                        once, twice,
+                        "minimize on tree-with-fragments is not idempotent"
+                    );
                 });
         }
 
@@ -2152,9 +2215,15 @@ mod tests {
             assert_eq!(fragments.len(), 2);
         }
 
+        /// Synthetic input where two deep fragments' checkpoints
+        /// together cover a shallow fragment but neither does
+        /// individually. Impossible from `build_fragment_store` (a real
+        /// depth-3 fragment walks every shallower ancestor as a member),
+        /// so this can only arise from malformed input. Pins safe
+        /// behaviour: shallow is kept, because each deep fragment's blob
+        /// contains only its own members.
         #[test]
-        fn minimize_collective_support() {
-            // Two deep fragments together support a shallow one
+        fn minimize_synthetic_collective_support_keeps_shallow() {
             let shallow_head = commit_id_with_depth(2, 1);
             let shallow_boundary = commit_id_with_depth(1, 101);
 
@@ -2175,11 +2244,10 @@ mod tests {
             let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
-            // Shallow should be discarded (collectively supported by deep1 + deep2)
-            assert_eq!(fragments.len(), 2);
+            assert_eq!(fragments.len(), 3);
             assert!(fragments.contains(&deep1));
             assert!(fragments.contains(&deep2));
-            assert!(!fragments.contains(&shallow));
+            assert!(fragments.contains(&shallow));
         }
 
         #[test]

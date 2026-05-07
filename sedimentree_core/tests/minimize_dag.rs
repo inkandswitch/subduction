@@ -308,9 +308,21 @@ fn fragment_boundary_at_merge() {
     );
 }
 
-/// Multiple deep fragments collectively support a shallow one.
+/// Synthetic input: two depth-3 fragments whose checkpoints together
+/// span a depth-2 fragment's head and boundary, but where neither
+/// individually covers both.
+///
+/// This is impossible from `build_fragment_store` — a real depth-3
+/// fragment walks every `depth<3` ancestor as a member, so a single
+/// depth-3 fragment would carry both `shallow_head` and
+/// `shallow_boundary` in its checkpoints. Only malformed input
+/// (hand-crafted, Byzantine, or corrupted) produces this shape.
+///
+/// We pin the safe behaviour: shallow is kept. Each deep fragment's
+/// blob contains only its own members, so dropping shallow on
+/// "collective" coverage would lose its data.
 #[test]
-fn collective_support_from_multiple_deep() {
+fn collective_support_from_multiple_deep_keeps_shallow() {
     let sedimentree_id = make_sedimentree_id(1);
     let shallow_head = sedimentree_core::test_utils::commit_id_with_depth(2, 1);
     let shallow_boundary = sedimentree_core::test_utils::commit_id_with_depth(1, 100);
@@ -351,13 +363,11 @@ fn collective_support_from_multiple_deep() {
         vec![],
     );
 
-    // Use CountLeadingZeroBytes since digests were created with commit_id_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
-    // Shallow should be pruned (collectively supported by deep1 + deep2)
-    assert_eq!(fragments.len(), 2);
+    assert_eq!(fragments.len(), 3);
     assert!(fragments.contains(&deep1));
     assert!(fragments.contains(&deep2));
-    assert!(!fragments.contains(&shallow));
+    assert!(fragments.contains(&shallow));
 }

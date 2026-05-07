@@ -515,6 +515,329 @@ fn fingerprint_summary_includes_all_items_after_ingestion() {
     );
 }
 
+/// Ingest → minimize → reassemble round-trip. The most direct
+/// correctness test for `Sedimentree::minimize` in the Automerge use
+/// case: `minimize` must never drop a fragment whose blob data isn't
+/// physically contained in some kept fragment's blob.
+fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
+    let doc = Automerge::load(bytes).expect(name);
+    let original_heads = doc.get_heads();
+    let original_count = doc.get_changes(&[]).len();
+
+    let sed_id = sed_id(bytes);
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+    let minimized = result.sedimentree.minimize(&CountLeadingZeroBytes);
+
+    // `minimize` only prunes Sedimentree entries; blob storage is
+    // unaffected, so all blobs collected during ingest are still
+    // addressable.
+    let blob_by_digest: Map<Digest<Blob>, &[u8]> = result
+        .blobs
+        .iter()
+        .map(|blob| (Digest::hash(blob), blob.as_slice()))
+        .collect();
+
+    let kept_fragments: Vec<_> = minimized.fragments().collect();
+    let kept_loose: Vec<_> = minimized.loose_commits().collect();
+
+    // Every kept item must reference a blob we have. A miss means
+    // `minimize` orphaned data.
+    for f in &kept_fragments {
+        let d = f.summary().blob_meta().digest();
+        assert!(
+            blob_by_digest.contains_key(&d),
+            "{name}: minimized fragment references blob {d:?} we don't have",
+        );
+    }
+    for c in &kept_loose {
+        let d = c.blob_meta().digest();
+        assert!(
+            blob_by_digest.contains_key(&d),
+            "{name}: minimized loose commit references blob {d:?} we don't have",
+        );
+    }
+
+    let order = minimized
+        .topsorted_blob_order()
+        .expect("no cycles in minimized tree");
+
+    let mut buf = Vec::new();
+    for item in &order {
+        let digest = match item {
+            SedimentreeItem::Fragment(i) => kept_fragments[*i].summary().blob_meta().digest(),
+            SedimentreeItem::LooseCommit(i) => kept_loose[*i].blob_meta().digest(),
+        };
+        let raw = blob_by_digest
+            .get(&digest)
+            .unwrap_or_else(|| panic!("{name}: blob not found for {item:?}"));
+        buf.extend_from_slice(raw);
+    }
+
+    let mut rebuilt = Automerge::new();
+    rebuilt
+        .load_incremental(&buf)
+        .expect("load minimized blobs");
+
+    assert_eq!(
+        rebuilt.get_heads(),
+        original_heads,
+        "{name}: heads diverged after minimize round-trip \
+         (ingest produced {} fragments / {} loose; \
+          after minimize {} fragments / {} loose)",
+        result.fragment_count,
+        result.loose_count,
+        kept_fragments.len(),
+        kept_loose.len(),
+    );
+    assert_eq!(
+        rebuilt.get_changes(&[]).len(),
+        original_count,
+        "{name}: change count diverged after minimize round-trip \
+         (original={original_count}, rebuilt={})",
+        rebuilt.get_changes(&[]).len(),
+    );
+
+    let orig_keys: Vec<_> = doc.keys(&ROOT).collect();
+    let rebuilt_keys: Vec<_> = rebuilt.keys(&ROOT).collect();
+    assert_eq!(
+        orig_keys, rebuilt_keys,
+        "{name}: root keys diverged after minimize round-trip",
+    );
+}
+
+#[test]
+fn ingest_minimize_roundtrip_s1() {
+    ingest_minimize_roundtrip("S1", include_bytes!("../test-vectors/S1.am"));
+}
+
+#[test]
+fn ingest_minimize_roundtrip_s2() {
+    ingest_minimize_roundtrip("S2", include_bytes!("../test-vectors/S2.am"));
+}
+
+#[test]
+fn ingest_minimize_roundtrip_s3() {
+    ingest_minimize_roundtrip("S3", include_bytes!("../test-vectors/S3.am"));
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
+fn ingest_minimize_roundtrip_a1() {
+    ingest_minimize_roundtrip("A1", include_bytes!("../test-vectors/A1.am"));
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
+fn ingest_minimize_roundtrip_a2() {
+    ingest_minimize_roundtrip("A2", include_bytes!("../test-vectors/A2.am"));
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
+fn ingest_minimize_roundtrip_c1() {
+    ingest_minimize_roundtrip("C1", include_bytes!("../test-vectors/C1.am"));
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "too slow in debug mode")]
+fn ingest_minimize_roundtrip_c2() {
+    ingest_minimize_roundtrip("C2", include_bytes!("../test-vectors/C2.am"));
+}
+
+/// Pins (`change_count`, `fragment_count`, `uncovered_count`) for each
+/// egwalker vector. Drift signals a behavioural change in
+/// `ingest_automerge` or `build_fragment_store`/`CountLeadingZeroBytes`.
+/// Update the table when shifting numbers intentionally.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "needs get_changes; release-only")]
+fn egwalker_vector_snapshots() {
+    /// `(name, bytes, expected_changes, expected_fragments, expected_uncovered)`
+    const SNAPSHOTS: &[(&str, &[u8], usize, usize, usize)] = &[
+        ("S1", include_bytes!("../test-vectors/S1.am"), 2, 0, 2),
+        ("S2", include_bytes!("../test-vectors/S2.am"), 2, 0, 2),
+        ("S3", include_bytes!("../test-vectors/S3.am"), 2, 0, 2),
+        ("A1", include_bytes!("../test-vectors/A1.am"), 956, 7, 184),
+        ("A2", include_bytes!("../test-vectors/A2.am"), 3_208, 8, 228),
+        (
+            "C1",
+            include_bytes!("../test-vectors/C1.am"),
+            93_152,
+            380,
+            564,
+        ),
+        (
+            "C2",
+            include_bytes!("../test-vectors/C2.am"),
+            134_477,
+            542,
+            0,
+        ),
+    ];
+
+    for (name, bytes, exp_changes, exp_fragments, exp_uncovered) in SNAPSHOTS {
+        let doc = Automerge::load(bytes).expect(name);
+        let d = decompose_meta(&doc);
+        assert_eq!(
+            d.change_count, *exp_changes,
+            "{name}: change_count drift (got {} expected {exp_changes})",
+            d.change_count
+        );
+        assert_eq!(
+            d.fragment_count, *exp_fragments,
+            "{name}: fragment_count drift (got {} expected {exp_fragments})",
+            d.fragment_count
+        );
+        assert_eq!(
+            d.uncovered_count, *exp_uncovered,
+            "{name}: uncovered_count drift (got {} expected {exp_uncovered})",
+            d.uncovered_count
+        );
+    }
+}
+
+/// Pins `MinimalTreeHash` for each egwalker vector after ingest +
+/// minimize. The strongest sync-correctness regression test:
+/// `MinimalTreeHash` is the canonical content-addressed identity, so
+/// two peers with identical content must compute identical values.
+/// Also catches determinism regressions, since the hash depends on
+/// `minimize`'s output. Update the table when intentional behaviour
+/// changes shift these.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "needs get_changes; release-only")]
+fn egwalker_minimal_hash_snapshots() {
+    use sedimentree_core::sedimentree::MinimalTreeHash;
+
+    /// `(name, bytes, expected_hash_hex)` — pinned post-fix.
+    /// If `minimize` ever changes its output for these vectors,
+    /// update the table and explain why in the commit message.
+    const SNAPSHOTS: &[(&str, &[u8], &str)] = &[
+        (
+            "S1",
+            include_bytes!("../test-vectors/S1.am"),
+            "eb4edf5719382f067537124deec2696937125cb11ba0fd7f4e54d9abf36282ad",
+        ),
+        (
+            "S2",
+            include_bytes!("../test-vectors/S2.am"),
+            "455c9e3a257f1eae359403408e22347c6856ae60fe00262ddc7a8e7da5c619bd",
+        ),
+        (
+            "S3",
+            include_bytes!("../test-vectors/S3.am"),
+            "ea65d7e84b1b1cc0b0a536ab4d02cbedace6d21aaa033c626ad768fad275bc6b",
+        ),
+        (
+            "A1",
+            include_bytes!("../test-vectors/A1.am"),
+            "55cd0bf902a8f515b50ab8353c8668a89dd1c0a2f38b4e7992ee052eba0b9959",
+        ),
+        (
+            "A2",
+            include_bytes!("../test-vectors/A2.am"),
+            "813d197c265e3d72ab7147491ad2d735dc5c5bfad9c351f57891dad45eb6bcfd",
+        ),
+        (
+            "C1",
+            include_bytes!("../test-vectors/C1.am"),
+            "1aeb3a9f1f7220af7dc91dcdc62e96005d15a78091e115292d0584e7b0e421ec",
+        ),
+        (
+            "C2",
+            include_bytes!("../test-vectors/C2.am"),
+            "c2af810d5ceabd50154ed26f81d9f313962de4d9fade24d332d54a9884c3a480",
+        ),
+    ];
+
+    for (name, bytes, expected_hex) in SNAPSHOTS {
+        let doc = Automerge::load(bytes).expect(name);
+        let sed_id = sed_id(bytes);
+        let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+
+        // Determinism within a single ingest result.
+        let h1: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
+        let h2: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
+        assert_eq!(
+            h1.as_bytes(),
+            h2.as_bytes(),
+            "{name}: minimal_hash differs across consecutive calls within one process \
+             — DETERMINISM REGRESSION",
+        );
+
+        // Determinism across re-ingest of the same document bytes.
+        let result2 =
+            automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("re-ingest");
+        let h3: MinimalTreeHash = result2.sedimentree.minimal_hash(&CountLeadingZeroBytes);
+        assert_eq!(
+            h1.as_bytes(),
+            h3.as_bytes(),
+            "{name}: minimal_hash differs across re-ingest in one process \
+             — DETERMINISM REGRESSION",
+        );
+
+        let mut hex = String::with_capacity(64);
+        for b in h1.as_bytes() {
+            use core::fmt::Write;
+            write!(&mut hex, "{b:02x}").unwrap();
+        }
+        assert_eq!(
+            hex, *expected_hex,
+            "{name}: minimal_hash drift from pinned snapshot. \
+             If this is intentional, update the SNAPSHOTS table and explain why."
+        );
+    }
+}
+
+/// Minimize twice, then round-trip. Pins idempotence at the Automerge
+/// level — regression coverage for the determinism fix.
+#[test]
+fn ingest_double_minimize_roundtrip_s1() {
+    let bytes = include_bytes!("../test-vectors/S1.am");
+    let doc = Automerge::load(bytes).expect("S1");
+    let original_heads = doc.get_heads();
+
+    let sed_id = sed_id(bytes);
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+
+    let once = result.sedimentree.minimize(&CountLeadingZeroBytes);
+    let twice = once.minimize(&CountLeadingZeroBytes);
+    assert_eq!(
+        once, twice,
+        "minimize is not idempotent on real Automerge document",
+    );
+
+    let blob_by_digest: Map<Digest<Blob>, &[u8]> = result
+        .blobs
+        .iter()
+        .map(|blob| (Digest::hash(blob), blob.as_slice()))
+        .collect();
+
+    let kept_fragments: Vec<_> = twice.fragments().collect();
+    let kept_loose: Vec<_> = twice.loose_commits().collect();
+
+    let order = twice.topsorted_blob_order().expect("no cycles");
+    let mut buf = Vec::new();
+    for item in &order {
+        let digest = match item {
+            SedimentreeItem::Fragment(i) => kept_fragments[*i].summary().blob_meta().digest(),
+            SedimentreeItem::LooseCommit(i) => kept_loose[*i].blob_meta().digest(),
+        };
+        let raw = blob_by_digest
+            .get(&digest)
+            .expect("blob not found after double minimize");
+        buf.extend_from_slice(raw);
+    }
+
+    let mut rebuilt = Automerge::new();
+    rebuilt
+        .load_incremental(&buf)
+        .expect("load double-minimized");
+    assert_eq!(
+        rebuilt.get_heads(),
+        original_heads,
+        "heads diverged after double minimize"
+    );
+}
+
 /// Ingest A2 (3,208 changes) via the production `ingest_automerge` API
 /// and verify the roundtrip: topsorted reassembly must produce the same
 /// document heads and change count.
