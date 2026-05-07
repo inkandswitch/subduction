@@ -524,11 +524,12 @@ mod tests {
     /// receives commits. Consumers (`simplify`, `heads`, `contains_commit`)
     /// must be insensitive to that order.
     ///
-    /// Gated on `bolero` because the module uses `bolero::check!`,
-    /// `arbitrary::Arbitrary` (transitively pulled in by `bolero`), and
-    /// `rand` (which is only a dependency under `test_utils`, itself
-    /// pulled in by the dev-dependency self-link with `bolero` enabled).
-    #[cfg(feature = "bolero")]
+    /// Gated on both `bolero` (for `bolero::check!` and the
+    /// `arbitrary::Arbitrary` impl) and `test_utils` (which is what
+    /// enables the `rand` optional dependency this module uses).
+    /// `cargo test -p sedimentree_core --features bolero` alone is not
+    /// sufficient — `rand` would be unresolved.
+    #[cfg(all(feature = "bolero", feature = "test_utils"))]
     mod proptests {
         use alloc::vec::Vec;
         use rand::{Rng, SeedableRng, rngs::SmallRng};

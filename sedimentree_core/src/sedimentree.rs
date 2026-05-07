@@ -551,12 +551,9 @@ impl Sedimentree {
 
         // 3. Process deepest first.
         //
-        // A candidate fragment is dominated (and may be dropped) when:
-        // - it is *exactly equal* to some already-kept fragment
-        //   (deduplication), OR
-        // - some *strictly deeper* kept fragment supports it (per
-        //   `Fragment::supports`: head + boundary fall within the deeper
-        //   fragment's range).
+        // A candidate fragment is dropped when some *strictly deeper*
+        // kept fragment supports it (per `Fragment::supports`: head +
+        // boundary fall within the deeper fragment's range).
         //
         // We must NOT allow a same-depth peer to dominate a candidate.
         // In a merge-heavy DAG (typical Automerge workload), many depth-N
@@ -569,6 +566,11 @@ impl Sedimentree {
         // Tracking the kept fragments themselves (rather than a flat
         // `Set<Checkpoint>` union) lets us enforce the strict-deeper rule
         // and check `Fragment::supports` directly.
+        //
+        // We don't need an exact-equality dedup pass: `self.fragments` is
+        // a `Map<CommitId, Fragment>` keyed by head, and `Fragment`
+        // equality includes the head, so two distinct map entries cannot
+        // be equal.
         let mut minimized_fragments = Vec::<Fragment>::new();
         let mut kept_fragments_by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
 
@@ -577,15 +579,6 @@ impl Sedimentree {
                 continue;
             };
             for fragment in group {
-                // (1) Exact dedup against already-kept fragments at this depth.
-                let already_present = kept_fragments_by_depth
-                    .get(&depth)
-                    .is_some_and(|peers| peers.contains(&fragment));
-                if already_present {
-                    continue;
-                }
-
-                // (2) Strict-deeper dominance: some kept fragment with depth > our depth supports us.
                 let dominated_by_deeper = kept_fragments_by_depth
                     .iter()
                     .filter(|(d, _)| **d > depth)
