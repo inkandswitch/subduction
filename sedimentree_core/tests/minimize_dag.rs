@@ -308,9 +308,25 @@ fn fragment_boundary_at_merge() {
     );
 }
 
-/// Multiple deep fragments collectively support a shallow one.
+/// Synthetic input: two depth-3 fragments whose checkpoints together
+/// span a depth-2 fragment's head and boundary, but where neither
+/// individually covers both.
+///
+/// This configuration is impossible to produce from `build_fragment_store`
+/// (a real depth-3 fragment walks back through every depth<3 ancestor as
+/// a member, so the same depth-3 fragment would carry both shallow_head
+/// AND shallow_boundary in its checkpoints). It can only arise from
+/// malformed input — hand-crafted in tests, Byzantine peers, or storage
+/// corruption.
+///
+/// We pin the safe behavior: the shallow fragment is kept. Its data is
+/// not recoverable from the union of deep1's and deep2's blobs in
+/// general, because each deep fragment's blob contains only its own
+/// members. Pre-fix `minimize` dropped shallow on the (unsound)
+/// assumption that collective structural coverage implies recoverable
+/// content.
 #[test]
-fn collective_support_from_multiple_deep() {
+fn collective_support_from_multiple_deep_keeps_shallow() {
     let sedimentree_id = make_sedimentree_id(1);
     let shallow_head = sedimentree_core::test_utils::commit_id_with_depth(2, 1);
     let shallow_boundary = sedimentree_core::test_utils::commit_id_with_depth(1, 100);
@@ -351,13 +367,14 @@ fn collective_support_from_multiple_deep() {
         vec![],
     );
 
-    // Use CountLeadingZeroBytes since digests were created with commit_id_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
-    // Shallow should be pruned (collectively supported by deep1 + deep2)
-    assert_eq!(fragments.len(), 2);
+    // All three are kept: collective coverage is unsound at the blob
+    // level. Shallow's data lives only in shallow's blob; dropping
+    // shallow would lose data.
+    assert_eq!(fragments.len(), 3);
     assert!(fragments.contains(&deep1));
     assert!(fragments.contains(&deep2));
-    assert!(!fragments.contains(&shallow));
+    assert!(fragments.contains(&shallow));
 }
