@@ -1559,6 +1559,76 @@ where
         Ok(())
     }
 
+    /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads
+    /// alongside their blobs, signing each, then minimize once and broadcast.
+    ///
+    /// This is the underlying "do everything in one round-trip" entrypoint used
+    /// by callers that already have payloads in their canonical, post-truncation
+    /// form (notably the Wasm bindings, which carry [`Fragment`] values whose
+    /// checkpoints are already truncated). Unlike
+    /// [`add_commits_batch`](Self::add_commits_batch) and
+    /// [`add_fragments_batch`](Self::add_fragments_batch), this method also
+    /// performs a single [`sync_with_all_peers`](Self::sync_with_all_peers) at
+    /// the end so callers don't need to follow up with a separate broadcast.
+    ///
+    /// Commits are inserted before fragments. Passing two empty vectors is a
+    /// no-op (no minimize, no broadcast).
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] if a storage error occurs.
+    /// * [`WriteError::Io(IoError::BlobMismatch)`] if any provided blob's
+    ///   digest does not match its payload's claimed [`BlobMeta`].
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    pub async fn add_built_batch(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        if commits.is_empty() && fragments.is_empty() {
+            return Ok(());
+        }
+
+        let putter = self.storage.local_putter::<F>(id);
+        let commit_count = commits.len();
+        let fragment_count = fragments.len();
+        tracing::info!(
+            "bulk-inserting {commit_count} commits and {fragment_count} fragments \
+             into sedimentree {id:?}"
+        );
+
+        for (commit, blob) in commits {
+            let verified_sig = Signed::seal::<F, _>(&self.signer, commit).await;
+            let verified_meta = VerifiedMeta::new(verified_sig, blob)
+                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
+
+            self.insert_commit_locally(&putter, verified_meta)
+                .await
+                .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+        }
+
+        for (fragment, blob) in fragments {
+            let verified_sig = Signed::seal::<F, _>(&self.signer, fragment).await;
+            let verified_meta = VerifiedMeta::new(verified_sig, blob)
+                .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
+
+            self.insert_fragment_locally(&putter, verified_meta)
+                .await
+                .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+        }
+
+        self.minimize_tree(id).await;
+        self.sync_with_all_peers(id, true, None).await?;
+        tracing::info!(
+            "bulk-insert of {commit_count} commits and {fragment_count} fragments \
+             complete, tree minimized and broadcast"
+        );
+        Ok(())
+    }
+
     /// Request a batch sync from a given peer for a given sedimentree ID.
     ///
     /// # Returns

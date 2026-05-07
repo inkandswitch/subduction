@@ -995,6 +995,75 @@ impl WasmSubduction {
         Ok(())
     }
 
+    /// Bulk-insert commits and fragments into a sedimentree, then broadcast.
+    ///
+    /// Unlike [`add_commit`](Self::add_commit) and
+    /// [`add_fragment`](Self::add_fragment) — which each re-minimize the tree
+    /// and broadcast to peers per call — this method inserts everything first,
+    /// runs `minimize_tree` once at the end, and then performs a single
+    /// `sync_with_all_peers` to propagate the new state. For workloads that
+    /// add many commits or fragments at once this avoids `O(N²)` minimize work
+    /// and `N` redundant broadcasts.
+    ///
+    /// `commits` and `commit_blobs` (likewise `fragments` and `fragment_blobs`)
+    /// are parallel arrays: the *i*th blob is the payload for the *i*th
+    /// commit/fragment. Either pair may be empty; passing two empty pairs is a
+    /// no-op (no minimize, no broadcast).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage,
+    /// networking, or policy fail during insert/broadcast.
+    ///
+    /// # Panics
+    ///
+    /// Panics (as a JS exception) if `commits.len() != commit_blobs.len()` or
+    /// `fragments.len() != fragment_blobs.len()` — these are caller-side
+    /// invariants that indicate a bug in the JS code building the batch.
+    #[wasm_bindgen(js_name = addBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn add_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        commits: Vec<WasmLooseCommit>,
+        commit_blobs: Vec<Uint8Array>,
+        fragments: Vec<WasmFragment>,
+        fragment_blobs: Vec<Uint8Array>,
+    ) -> Result<(), WasmWriteError> {
+        use sedimentree_core::{blob::Blob, fragment::Fragment, loose_commit::LooseCommit};
+
+        assert_eq!(
+            commits.len(),
+            commit_blobs.len(),
+            "addBatch: commits and commit_blobs must be parallel arrays"
+        );
+        assert_eq!(
+            fragments.len(),
+            fragment_blobs.len(),
+            "addBatch: fragments and fragment_blobs must be parallel arrays"
+        );
+
+        let core_id: SedimentreeId = id.clone().into();
+
+        let core_commits: Vec<(LooseCommit, Blob)> = commits
+            .into_iter()
+            .map(LooseCommit::from)
+            .zip(commit_blobs.into_iter().map(|b| Blob::from(b.to_vec())))
+            .collect();
+
+        let core_fragments: Vec<(Fragment, Blob)> = fragments
+            .into_iter()
+            .map(Fragment::from)
+            .zip(fragment_blobs.into_iter().map(|b| Blob::from(b.to_vec())))
+            .collect();
+
+        self.core
+            .add_built_batch(core_id, core_commits, core_fragments)
+            .await?;
+        Ok(())
+    }
+
     /// Request blobs by their digests from connected peers for a specific sedimentree.
     #[wasm_bindgen(js_name = requestBlobs)]
     pub async fn request_blobs(&self, id: &WasmSedimentreeId, digests: Vec<JsDigest>) {
