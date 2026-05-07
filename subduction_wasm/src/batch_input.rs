@@ -70,7 +70,12 @@ impl WasmCommitInput {
     /// Consume the input into the (`LooseCommit`, `Blob`) pair the
     /// `subduction_core` bulk-write paths expect.
     #[must_use]
-    pub fn into_core(self) -> (sedimentree_core::loose_commit::LooseCommit, sedimentree_core::blob::Blob) {
+    pub fn into_core(
+        self,
+    ) -> (
+        sedimentree_core::loose_commit::LooseCommit,
+        sedimentree_core::blob::Blob,
+    ) {
         (
             sedimentree_core::loose_commit::LooseCommit::from(self.commit),
             sedimentree_core::blob::Blob::from(self.blob),
@@ -127,7 +132,12 @@ impl WasmFragmentInput {
     /// Consume the input into the (`Fragment`, `Blob`) pair the
     /// `subduction_core` bulk-write paths expect.
     #[must_use]
-    pub fn into_core(self) -> (sedimentree_core::fragment::Fragment, sedimentree_core::blob::Blob) {
+    pub fn into_core(
+        self,
+    ) -> (
+        sedimentree_core::fragment::Fragment,
+        sedimentree_core::blob::Blob,
+    ) {
         (
             sedimentree_core::fragment::Fragment::from(self.fragment),
             sedimentree_core::blob::Blob::from(self.blob),

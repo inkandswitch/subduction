@@ -1517,8 +1517,7 @@ where
 
         // Sign every commit and fragment first; defer all storage I/O so we
         // can hit the adapter exactly once via `save_batch`.
-        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> =
-            Vec::with_capacity(commit_count);
+        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> = Vec::with_capacity(commit_count);
         let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(commit_count);
         for (commit, blob) in commits {
             let verified_sig = Signed::seal::<F, _>(&self.signer, commit).await;
