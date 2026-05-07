@@ -51,7 +51,7 @@ impl WasmCommitInput {
         }
     }
 
-    /// Borrow the underlying unsigned commit.
+    /// A copy of the underlying unsigned commit.
     #[must_use]
     #[wasm_bindgen(getter)]
     pub fn commit(&self) -> WasmLooseCommit {
@@ -113,7 +113,7 @@ impl WasmFragmentInput {
         }
     }
 
-    /// Borrow the underlying unsigned fragment.
+    /// A copy of the underlying unsigned fragment.
     #[must_use]
     #[wasm_bindgen(getter)]
     pub fn fragment(&self) -> WasmFragment {

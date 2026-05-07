@@ -1360,7 +1360,11 @@ where
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] if a storage error occurs.
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
+    ///   backends `save_batch` may have persisted some commits before
+    ///   surfacing an error; this method then returns early and leaves the
+    ///   in-memory tree behind the on-disk state until rehydrate.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -1418,7 +1422,11 @@ where
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] if a storage error occurs.
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
+    ///   backends `save_batch` may have persisted some fragments before
+    ///   surfacing an error; this method then returns early and leaves the
+    ///   in-memory tree behind the on-disk state until rehydrate.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -1490,7 +1498,11 @@ where
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] if a storage error occurs.
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
+    ///   backends `save_batch` may have persisted some items before
+    ///   surfacing an error; this method then returns early and leaves the
+    ///   in-memory tree behind the on-disk state until rehydrate.
     /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
     ///   digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
@@ -1702,9 +1714,18 @@ where
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] if a storage error occurs.
-    /// * [`WriteError::Io(IoError::BlobMismatch)`] if any provided blob's
-    ///   digest does not match its payload's claimed [`BlobMeta`].
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
+    ///   backends `save_batch` may have persisted some items before
+    ///   surfacing an error; in that case this method returns early and
+    ///   leaves the in-memory tree behind the on-disk state until rehydrate.
+    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
+    ///   digest does not match its payload's claimed
+    ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
+    /// * [`WriteError::Io`] (`IoError::ConnSend` / `ConnRecv` / `ConnCall`)
+    ///   if the post-write `sync_with_all_peers` broadcast fails. Storage
+    ///   has already been updated successfully when this variant is
+    ///   returned.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -2502,7 +2523,9 @@ where
         let id = putter.sedimentree_id();
         tracing::debug!("adding sedimentree with id {:?}", id);
 
-        putter.save_sedimentree_id().await?;
+        // ID registration happens inside `save_batch` per the
+        // `Storage::save_batch` contract — no explicit
+        // `save_sedimentree_id` call needed here.
 
         // Extract payloads for the in-memory tree before moving the verified
         // metas into a single `save_batch` call.

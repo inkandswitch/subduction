@@ -208,6 +208,28 @@ pub trait Storage<K: FutureForm + ?Sized> {
     /// Save a batch of commits and fragments with their blobs.
     ///
     /// Returns the total count of items saved (commits + fragments).
+    ///
+    /// # Contract
+    ///
+    /// Implementations **must** register `sedimentree_id` for the writes
+    /// (the moral equivalent of [`save_sedimentree_id`](Self::save_sedimentree_id))
+    /// before — or as part of — persisting any commits or fragments. Callers
+    /// rely on this so that
+    /// [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids) sees
+    /// sedimentrees created exclusively via batch insert. Both an empty
+    /// `commits` and empty `fragments` is a degenerate input but the ID
+    /// registration is still expected to happen.
+    ///
+    /// # Atomicity
+    ///
+    /// Atomicity across the commit and fragment writes is **not** guaranteed
+    /// by this trait. Backends with native transactional support (e.g.
+    /// `IndexedDB`) commit all-or-nothing; backends without it (e.g. plain
+    /// filesystem) may persist some items before erroring. Callers that
+    /// require all-or-nothing semantics across the batch must layer their
+    /// own reconciliation on top — for example by treating any error as a
+    /// signal to discard in-memory state and rehydrate from storage, which
+    /// recovers the partial state without divergence.
     fn save_batch(
         &self,
         sedimentree_id: SedimentreeId,

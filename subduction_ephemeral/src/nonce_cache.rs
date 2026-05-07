@@ -21,8 +21,10 @@ struct NonceBucket {
 }
 
 impl NonceBucket {
-    // `Set::new()` resolves to `HashMap::new()` under the `std` feature, which
-    // is not `const`. Cannot make this `const fn`.
+    // Cannot be `const fn`: under the `std` feature, `Set` aliases to
+    // `HashSet`, whose `::new()` is not `const`. (It would be `const`-able
+    // under `no_std` where `Set` aliases to `BTreeSet`, but the lint fires
+    // on the `std` build and would fail to compile if applied unconditionally.)
     #[allow(clippy::missing_const_for_fn)]
     fn new(now: TimestampSeconds) -> Self {
         Self {
@@ -49,8 +51,10 @@ pub struct EphemeralNonceCache {
 
 impl EphemeralNonceCache {
     /// Create a new nonce cache with the given window duration.
-    // `Map::new()` resolves to `HashMap::new()` under the `std` feature, which
-    // is not `const`. Cannot make this `const fn`.
+    // Cannot be `const fn`: under the `std` feature, `Map` aliases to
+    // `HashMap`, whose `::new()` is not `const`. (It would be `const`-able
+    // under `no_std` where `Map` aliases to `BTreeMap`, but the lint fires
+    // on the `std` build and would fail to compile if applied unconditionally.)
     #[must_use]
     #[allow(clippy::missing_const_for_fn)]
     pub fn new(window_duration: Duration) -> Self {
