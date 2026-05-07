@@ -6,17 +6,15 @@
 
 #![allow(clippy::expect_used)]
 
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
-use future_form::Sendable;
-use sedimentree_core::id::SedimentreeId;
-use subduction_core::{authenticated::Authenticated, peer::id::PeerId};
+use subduction_core::peer::id::PeerId;
 
 #[path = "common.rs"]
 mod common;
 
 use common::{
-    Conn, SETTLE, blob, commit_id, connect_local_pair, connect_sendable_pair, make_local_node,
+    SETTLE, blob, commit_id, connect_local_pair, connect_sendable_pair, make_local_node,
     make_sendable_node, populate_linear_chain_local, populate_linear_chain_sendable, sed_id,
     signer,
 };
@@ -96,20 +94,4 @@ async fn workload_helpers_are_deterministic() {
     assert_eq!(b.contents().len(), 64);
 }
 
-// Sanity: the type aliases line up with what `Subduction::add_connection`
-// expects. If this doesn't compile, the alias drift has gotten out of
-// hand and the larger stress files won't compile either.
-#[allow(dead_code, clippy::type_complexity)]
-fn _types_compile(node: &common::SendableNode) -> impl FnOnce() {
-    let n = node.clone();
-    move || {
-        // Just demonstrate that we have the right add_connection signature.
-        let _ = n.peer_id();
-        let _build_a_conn = || -> Authenticated<Conn, Sendable> {
-            // Not constructed; signature only.
-            unimplemented!()
-        };
-        let _ = sed_id(0);
-        let _ = BTreeSet::<sedimentree_core::loose_commit::id::CommitId>::new();
-    }
-}
+

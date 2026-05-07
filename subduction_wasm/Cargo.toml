@@ -80,7 +80,9 @@ features = [
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.2"
+# Version pinned to match the workspace `wasm-bindgen = =0.2.118` pin.
+# `wasm-bindgen-test 0.3.68` is the matching paired release.
+wasm-bindgen-test = "=0.3.68"
 
 [features]
 default = ["console_error_panic_hook", "standalone"]

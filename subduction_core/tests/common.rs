@@ -1,11 +1,11 @@
 //! Shared helpers for stress tests.
 //!
-//! This module is included as `#[path = "common/mod.rs"] mod common;` from
-//! each stress-test integration file. It centralizes the wiring needed to
-//! spin up `Subduction` instances against in-memory storage and an in-process
-//! channel transport, plus a small set of workload generators.
+//! Each stress-test integration file pulls this in via
+//! `#[path = "common.rs"] mod common;`. It centralizes the wiring needed
+//! to spin up `Subduction` instances against in-memory storage and an
+//! in-process channel transport, plus a small set of workload generators.
 //!
-//! Each helper is generic over `K: FutureForm` so the same scaffolding
+//! Helpers come in `_sendable` / `_local` pairs so the same scaffolding
 //! serves both the multithreaded (`Sendable`) tokio path and the
 //! single-threaded (`Local`) path used by the wasm bindings.
 
@@ -22,7 +22,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     authenticated::Authenticated,
-    connection::test_utils::{ChannelTransport, InstantTimeout, TestSpawn, TokioSpawn},
+    connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -139,16 +139,20 @@ pub(crate) async fn connect_sendable_pair(
 
 // ─── Local (single-threaded) nodes ──────────────────────────────────────────
 
-/// Spin up a single `Local` `Subduction` against `MemoryStorage`. Spawns the
-/// listener and connection-manager futures onto the current
-/// `tokio::task::LocalSet` via [`tokio::task::spawn_local`]; callers must
-/// run their test inside `LocalSet::run_until` for the spawn to be valid.
+/// Spin up a single `Local` `Subduction` against `MemoryStorage`.
+///
+/// Spawns the listener, connection-manager, and per-connection tasks onto
+/// the current `tokio::task::LocalSet` via [`tokio::task::spawn_local`].
+/// Callers MUST run their test inside `LocalSet::run_until(...)` (or
+/// `LocalSet::block_on(...)`); calling this outside a `LocalSet` will
+/// panic when `TokioSpawn` tries to `spawn_local` for the
+/// connection_manager's per-connection tasks.
 #[must_use]
 pub(crate) fn make_local_node(seed: u32) -> LocalNode {
     let (sd, _handler, listener, manager) = SubductionBuilder::new()
         .signer(signer(seed))
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-        .spawner(TestSpawn)
+        .spawner(TokioSpawn)
         .timer(InstantTimeout)
         .build::<Local, Conn>();
 
