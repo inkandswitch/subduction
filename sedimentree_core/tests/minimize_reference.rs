@@ -56,8 +56,8 @@ use sedimentree_core::{
 /// For each commit `c`, walk all paths toward children, recording for each
 /// terminal path either:
 /// - "rangeless" if the path reaches a tip without crossing any boundary,
-/// - the first boundary commit `B` encountered otherwise (B is `c`'s
-///   range_head along that path).
+/// - the first boundary commit `B` encountered otherwise (`B` is `c`'s
+///   `range_head` along that path).
 ///
 /// `c` is kept iff there is at least one rangeless path, OR at least one
 /// path whose first boundary is uncovered.
@@ -234,7 +234,7 @@ fn minimize_preserves_known_commit_ids() {
         .for_each(|ArbitraryDag { tree }| {
             let prod = tree.minimize(&CountLeadingZeroBytes);
 
-            let known_before = knowable_checkpoints(&tree);
+            let known_before = knowable_checkpoints(tree);
             let known_after = knowable_checkpoints(&prod);
 
             // We require: known_before is a subset of known_after.
@@ -304,7 +304,7 @@ fn all_reachable_commit_ids_remain_knowable() {
         .for_each(|ArbitraryDag { tree }| {
             let prod = tree.minimize(&CountLeadingZeroBytes);
 
-            let reachable_before = reachable_commit_ids(&tree);
+            let reachable_before = reachable_commit_ids(tree);
             let known_after = knowable_checkpoints(&prod);
 
             for id in &reachable_before {
@@ -380,7 +380,7 @@ fn reachable_commit_ids(tree: &Sedimentree) -> BTreeSet<CommitId> {
 /// `Checkpoint`-truncated) of the kept set must equal that of the input
 /// set. Otherwise minimization would lose information.
 ///
-/// This is order-independent and so passes regardless of HashMap
+/// This is order-independent and so passes regardless of `HashMap`
 /// iteration order.
 #[test]
 fn fragment_minimization_preserves_coverage() {

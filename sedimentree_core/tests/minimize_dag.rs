@@ -313,11 +313,11 @@ fn fragment_boundary_at_merge() {
 /// individually covers both.
 ///
 /// This configuration is impossible to produce from `build_fragment_store`
-/// (a real depth-3 fragment walks back through every depth<3 ancestor as
-/// a member, so the same depth-3 fragment would carry both shallow_head
-/// AND shallow_boundary in its checkpoints). It can only arise from
-/// malformed input — hand-crafted in tests, Byzantine peers, or storage
-/// corruption.
+/// (a real depth-3 fragment walks back through every `depth<3` ancestor
+/// as a member, so the same depth-3 fragment would carry both
+/// `shallow_head` AND `shallow_boundary` in its checkpoints). It can
+/// only arise from malformed input — hand-crafted in tests, Byzantine
+/// peers, or storage corruption.
 ///
 /// We pin the safe behavior: the shallow fragment is kept. Its data is
 /// not recoverable from the union of deep1's and deep2's blobs in

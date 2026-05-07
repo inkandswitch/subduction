@@ -580,7 +580,7 @@ impl Sedimentree {
                 // (1) Exact dedup against already-kept fragments at this depth.
                 let already_present = kept_summaries_by_depth
                     .get(&depth)
-                    .is_some_and(|peers| peers.iter().any(|kept| *kept == fragment));
+                    .is_some_and(|peers| peers.contains(&fragment));
                 if already_present {
                     continue;
                 }
