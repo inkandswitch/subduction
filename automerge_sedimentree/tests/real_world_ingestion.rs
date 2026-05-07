@@ -662,7 +662,7 @@ fn ingest_minimize_roundtrip_c2() {
 
 /// Snapshot of structural metrics for each test vector.
 ///
-/// Pins the expected (change_count, fragment_count, uncovered_count)
+/// Pins the expected (`change_count`, `fragment_count`, `uncovered_count`)
 /// triple for the egwalker vectors. Drift in any of these signals a
 /// behavioural change in `ingest_automerge` or its dependencies
 /// (`build_fragment_store`, `CountLeadingZeroBytes`).
@@ -678,18 +678,18 @@ fn egwalker_vector_snapshots() {
         ("S2", include_bytes!("../test-vectors/S2.am"), 2, 0, 2),
         ("S3", include_bytes!("../test-vectors/S3.am"), 2, 0, 2),
         ("A1", include_bytes!("../test-vectors/A1.am"), 956, 7, 184),
-        ("A2", include_bytes!("../test-vectors/A2.am"), 3208, 8, 228),
+        ("A2", include_bytes!("../test-vectors/A2.am"), 3_208, 8, 228),
         (
             "C1",
             include_bytes!("../test-vectors/C1.am"),
-            93152,
+            93_152,
             380,
             564,
         ),
         (
             "C2",
             include_bytes!("../test-vectors/C2.am"),
-            134477,
+            134_477,
             542,
             0,
         ),
