@@ -575,9 +575,30 @@ fn bench_concurrent_clients(c: &mut Criterion) {
     group.finish();
 }
 
+/// Construct the [`Criterion`] used by every bench in this file.
+///
+/// The `e2e` benches each spin up a fresh WebSocket server + client per
+/// iteration — so wall-clock time is dominated by per-iteration setup, not
+/// the measured operation. Default Criterion settings (100 samples, 3 s
+/// warm-up, 5 s measurement) end up budget-overrunning on shared CI
+/// runners where the per-iteration setup is ~10× slower than developer
+/// hardware.
+///
+/// We cap sample size at 20 and warm-up at 1 s. That preserves enough
+/// statistical signal for regression spotting while keeping the total
+/// suite well inside the 60-minute job budget configured in
+/// `.github/workflows/benches.yml`.
+fn ci_friendly_criterion() -> Criterion {
+    Criterion::default()
+        .with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)))
+        .sample_size(20)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(5))
+}
+
 criterion_group! {
     name = benches;
-    config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
+    config = ci_friendly_criterion();
     targets =
         bench_handshake,
         bench_single_commit_sync,
