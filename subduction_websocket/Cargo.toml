@@ -1,6 +1,6 @@
 [package]
 name = "subduction_websocket"
-version = "0.9.2"
+version = "0.10.0"
 description = "WebSocket transport layer for the Subduction sync protocol"
 
 categories = ["web-programming"]
