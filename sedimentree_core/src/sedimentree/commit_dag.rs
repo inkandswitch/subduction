@@ -523,6 +523,12 @@ mod tests {
     /// internal edge storage order depends on the order `from_commits`
     /// receives commits. Consumers (`simplify`, `heads`, `contains_commit`)
     /// must be insensitive to that order.
+    ///
+    /// Gated on `bolero` because the module uses `bolero::check!`,
+    /// `arbitrary::Arbitrary` (transitively pulled in by `bolero`), and
+    /// `rand` (which is only a dependency under `test_utils`, itself
+    /// pulled in by the dev-dependency self-link with `bolero` enabled).
+    #[cfg(feature = "bolero")]
     mod proptests {
         use alloc::vec::Vec;
         use rand::{Rng, SeedableRng, rngs::SmallRng};

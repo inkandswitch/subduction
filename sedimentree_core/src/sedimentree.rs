@@ -570,7 +570,7 @@ impl Sedimentree {
         // `Set<Checkpoint>` union) lets us enforce the strict-deeper rule
         // and check `Fragment::supports` directly.
         let mut minimized_fragments = Vec::<Fragment>::new();
-        let mut kept_summaries_by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
+        let mut kept_fragments_by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
 
         for depth in depths {
             let Some(group) = by_depth.remove(&depth) else {
@@ -578,7 +578,7 @@ impl Sedimentree {
             };
             for fragment in group {
                 // (1) Exact dedup against already-kept fragments at this depth.
-                let already_present = kept_summaries_by_depth
+                let already_present = kept_fragments_by_depth
                     .get(&depth)
                     .is_some_and(|peers| peers.contains(&fragment));
                 if already_present {
@@ -586,7 +586,7 @@ impl Sedimentree {
                 }
 
                 // (2) Strict-deeper dominance: some kept fragment with depth > our depth supports us.
-                let dominated_by_deeper = kept_summaries_by_depth
+                let dominated_by_deeper = kept_fragments_by_depth
                     .iter()
                     .filter(|(d, _)| **d > depth)
                     .any(|(_, peers)| {
@@ -597,7 +597,7 @@ impl Sedimentree {
 
                 if !dominated_by_deeper {
                     minimized_fragments.push(fragment.clone());
-                    kept_summaries_by_depth
+                    kept_fragments_by_depth
                         .entry(depth)
                         .or_default()
                         .push(fragment);
