@@ -1,6 +1,6 @@
 [package]
 name = "subduction_wasm"
-version = "0.11.0"
+version = "0.12.0"
 description = "Wasm/JavaScript bindings for Subduction (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
@@ -89,7 +89,7 @@ subduction_crypto = { workspace = true, features = ["std", "test_utils"] }
 wasm-bindgen-test = "0.3"
 
 [features]
-default = ["console_error_panic_hook", "standalone"]
+default = ["console_error_panic_hook", "idb", "standalone"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 # Enable the #[wasm_bindgen(start)] entry point. Disable when using
 # subduction_wasm as a dependency of another cdylib crate that defines

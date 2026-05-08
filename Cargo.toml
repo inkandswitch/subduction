@@ -50,7 +50,7 @@ subduction_http_longpoll = { version = "0.7.0", path = "subduction_http_longpoll
 subduction_iroh = { version = "0.6.0", path = "subduction_iroh" }
 subduction_keyhive = { version = "0.3.0", path = "subduction_keyhive" }
 subduction_keyhive_policy = { version = "0.7.0", path = "subduction_keyhive_policy" }
-subduction_wasm = { version = "0.11.0", path = "subduction_wasm", default-features = false }
+subduction_wasm = { version = "0.12.0", path = "subduction_wasm", default-features = false }
 subduction_websocket = { version = "0.9.0", path = "subduction_websocket", default-features = false }
 
 # External crates

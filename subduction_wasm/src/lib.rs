@@ -47,3 +47,14 @@ pub mod timer;
 pub mod topic;
 pub mod transport;
 pub mod wire;
+
+// Re-export `IndexedDbStorage` from `sedimentree_wasm` so it appears in this
+// crate's wasm-bindgen bundle. Without the `pub use` the linker drops the
+// symbol from the cdylib, leaving the JS bindings without an
+// `IndexedDbStorage` class even though `sedimentree_wasm` defines one.
+//
+// `MemoryStorage` is already pulled in transitively via existing call sites
+// (`subduction.rs` constructs `MemoryStorage` in its public surface), so it
+// does not need an explicit re-export.
+#[cfg(feature = "idb")]
+pub use sedimentree_wasm::storage::idb::WasmIndexedDbStorage;
