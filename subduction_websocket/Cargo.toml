@@ -67,6 +67,13 @@ required-features = ["tokio_server", "tokio_client"]
 
 [features]
 default = ["std"]
+# Enable `criterion_pprof` flamegraph generation in benches. Off by default
+# because pprof's SIGPROF signal handler adds overhead and a small failure
+# surface in CI; opt in for local profiling sessions:
+# `cargo bench -p subduction_websocket --features tokio_client,tokio_server,pprof-profile --bench e2e`.
+# The `criterion_pprof` crate is always linked into bench builds (it's a
+# dev-dependency) but its profiler is only activated when this feature is set.
+pprof-profile = []
 futures-timer = ["std", "dep:futures-timer"]
 std = [
   "async-channel/std",

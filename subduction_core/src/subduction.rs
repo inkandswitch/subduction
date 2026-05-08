@@ -693,6 +693,86 @@ where
      * CONNECTIONS *
      ***************/
 
+    /// Gracefully shut down the manager and listener background tasks,
+    /// allowing any in-flight handler work to drain to completion.
+    ///
+    /// This is the polite cousin of [`Drop`]. Where the destructor calls
+    /// [`AbortHandle::abort`](futures::stream::AbortHandle::abort) on the
+    /// listener and manager — yanking them out of whatever `await` they
+    /// happen to be parked on — `shutdown` instead **closes the channels
+    /// they read from**, which makes their `select!` arms fall through
+    /// the existing graceful-exit path:
+    ///
+    /// - Closing `msg_queue` causes the listener's bias-3 arm to drain
+    ///   the `FuturesUnordered` of in-flight `Handler::handle` futures
+    ///   to completion before `break`ing.
+    /// - Closing `manager_channel` causes the manager's
+    ///   `while let Ok(cmd) = commands.recv().await` loop to exit at its
+    ///   next iteration. Per-connection tasks the manager spawned will
+    ///   then exit on their next `send` (because `msg_queue` is closed,
+    ///   send returns `Err`, `connection_loop` `break`s).
+    ///
+    /// We deliberately do **not** close `response_queue` or
+    /// `connection_closed` from `shutdown`: those have higher priority in
+    /// the listener's `select_biased!` than `msg_queue`, and closing
+    /// them would race the in-flight drain. They will close naturally
+    /// when their senders (held by the manager and its per-connection
+    /// tasks) drop on shutdown.
+    ///
+    /// # When to call this
+    ///
+    /// Call `shutdown().await` when you want **work that has already
+    /// been received from the network to complete** before teardown.
+    /// Examples:
+    ///
+    /// - A test or benchmark harness that wants deterministic teardown
+    ///   between iterations without losing storage writes that handlers
+    ///   are mid-flight on.
+    /// - A server doing a clean restart that needs to finish processing
+    ///   any messages it has already accepted.
+    ///
+    /// # When _not_ to call this
+    ///
+    /// Don't call `shutdown` if you only need to release resources and
+    /// don't care about in-flight messages — just drop the `Subduction`.
+    /// The `Drop` impl aborts the same loops without waiting for drain.
+    ///
+    /// # Idempotency
+    ///
+    /// Idempotent: subsequent calls are no-ops because the channels are
+    /// already closed.
+    ///
+    /// # Relationship to `disconnect_all`
+    ///
+    /// `shutdown` does **not** send graceful disconnect frames to peers.
+    /// Peers will observe the connection going away when the underlying
+    /// transport channel closes. If a peer-visible graceful disconnect
+    /// is required, call [`disconnect_all`](Self::disconnect_all) first,
+    /// then `shutdown`.
+    ///
+    /// # Returns
+    ///
+    /// Returns once the close signals have been delivered. The listener
+    /// and manager futures (held by the caller as `JoinHandle`s) will
+    /// resolve to `Ok(())` shortly afterward — `await` them if you need
+    /// a hard guarantee that all in-flight work has drained.
+    pub async fn shutdown(&self) {
+        // Closing the manager's command channel causes its
+        // `while let Ok(cmd) = commands.recv().await` loop to exit on
+        // its next iteration. New `add_connection` calls become no-ops
+        // (their sends will error).
+        self.manager_channel.close();
+
+        // Closing `msg_queue` makes the listener's bias-3 arm fire
+        // `Err` on its next select iteration. The arm's else-branch
+        // awaits every in-flight handler task to completion before
+        // breaking out of the listen loop — this is what makes
+        // `shutdown` "graceful". `response_queue` and `connection_closed`
+        // will close naturally when their senders drop on manager exit;
+        // we don't close them here to avoid racing the bias-2 arm.
+        self.msg_queue.close();
+    }
+
     /// Gracefully shut down a specific connection.
     ///
     /// # Errors
