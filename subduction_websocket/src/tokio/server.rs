@@ -159,6 +159,9 @@ where
 
                                 let task_subduction = inner_subduction.clone();
                                 let task_discovery_audience = discovery_audience;
+                                // Clone for the spawned task; the outer loop keeps its own
+                                // copy for the `cancelled()` arm above.
+                                let task_cancel = child_cancellation_token.clone();
                                 conns.spawn({
                                     async move {
                                         let mut ws_config = WebSocketConfig::default();
@@ -179,6 +182,15 @@ where
                                         // Step 2: Subduction handshake and connection setup
                                         // Accepts either Audience::Known(peer_id) or discovery audience
                                         let now = TimestampSeconds::now();
+                                        // Per-connection cancellation tokens, children of the
+                                        // server-wide one. When `stop()` cancels the parent,
+                                        // every per-connection listener and sender task
+                                        // observes it and exits, releasing its
+                                        // `Arc<WebSocket>` and TCP socket. Without this, the
+                                        // spawned tasks here were detached and leaked across
+                                        // server restarts (e.g., per-iteration bench teardown).
+                                        let listen_cancel = task_cancel.child_token();
+                                        let sender_cancel = task_cancel.child_token();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
                                             |ws_handshake, peer_id| {
@@ -188,17 +200,33 @@ where
                                                     peer_id,
                                                 );
 
-                                                // Start listener and sender tasks
+                                                // Start listener and sender tasks. Each races
+                                                // its inner future against the per-connection
+                                                // cancel so server shutdown propagates here.
                                                 let listen_ws = ws.clone();
                                                 tokio::spawn(async move {
-                                                    if let Err(e) = listen_ws.listen().await {
-                                                        tracing::info!("WebSocket listener disconnected: {e}");
+                                                    tokio::select! {
+                                                        () = listen_cancel.cancelled() => {
+                                                            tracing::debug!("WebSocket listener cancelled");
+                                                        }
+                                                        result = listen_ws.listen() => {
+                                                            if let Err(e) = result {
+                                                                tracing::info!("WebSocket listener disconnected: {e}");
+                                                            }
+                                                        }
                                                     }
                                                 });
 
                                                 tokio::spawn(async move {
-                                                    if let Err(e) = sender_fut.await {
-                                                        tracing::info!("WebSocket sender disconnected: {e}");
+                                                    tokio::select! {
+                                                        () = sender_cancel.cancelled() => {
+                                                            tracing::debug!("WebSocket sender cancelled");
+                                                        }
+                                                        result = sender_fut => {
+                                                            if let Err(e) = result {
+                                                                tracing::info!("WebSocket sender disconnected: {e}");
+                                                            }
+                                                        }
                                                     }
                                                 });
 
