@@ -58,7 +58,7 @@ automerge = "0.8.0"
 axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
-bijou64 = { version = "0.2.0", default-features = false }
+bijou64 = { version = "0.2.1", default-features = false }
 blake3 = { version = "1.8", default-features = false }
 bolero = "0.13.4"
 ciborium = { version = "0.2", default-features = false }
