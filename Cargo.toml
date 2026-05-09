@@ -5,7 +5,6 @@ members = [
   "automerge_sedimentree_wasm",
   "automerge_subduction_ingest",
   "automerge_subduction_wasm",
-  "bijou64",
   "sedimentree_core",
   "sedimentree_fs_storage",
   "sedimentree_wasm",
@@ -36,7 +35,6 @@ authors = [
 automerge_sedimentree = { version = "0.10.0", path = "automerge_sedimentree", default-features = false }
 automerge_sedimentree_wasm = { version = "0.11.0", path = "automerge_sedimentree_wasm" }
 automerge_subduction_wasm = { version = "0.11.0", path = "automerge_subduction_wasm", default-features = false }
-bijou64 = { version = "0.2.0", path = "bijou64", default-features = false }
 sedimentree_core = { version = "0.11.0", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.10.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.12.0", path = "sedimentree_wasm", default-features = false }
@@ -60,6 +58,7 @@ automerge = "0.8.0"
 axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+bijou64 = { version = "0.2.1", default-features = false }
 blake3 = { version = "1.8", default-features = false }
 bolero = "0.13.4"
 ciborium = { version = "0.2", default-features = false }

@@ -244,7 +244,7 @@ All multi-byte integers are **big-endian** (network byte order):
 | `u16`     | 2 bytes, big-endian                                               |
 | `u32`     | 4 bytes, big-endian                                               |
 | `u64`     | 8 bytes, big-endian                                               |
-| `bijou64` | 1–9 bytes, bijective variable-length ([spec](../bijou64/SPEC.md)) |
+| `bijou64` | 1–9 bytes, bijective variable-length ([spec](https://github.com/inkandswitch/bijou/blob/main/bijou64/SPEC.md)) |
 | `[u8; N]` | N bytes, raw                                                      |
 
 ### Array Encoding
@@ -335,7 +335,7 @@ Schema: `STC\x00` (Sedimentree Commit, version 0)
 | SedimentreeId | 32 bytes     | Document identifier (binds commit to document)                         |
 | BlobDigest    | 32 bytes     | BLAKE3 hash of the blob content                                        |
 | ParentCnt     | 1 byte       | Number of parent commits (max 255, sufficient for realistic workloads) |
-| BlobSize      | 1–9 bytes    | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md))                |
+| BlobSize      | 1–9 bytes    | Size of blob in bytes ([`bijou64`](https://github.com/inkandswitch/bijou/blob/main/bijou64/SPEC.md))                |
 | Parents       | N × 32 bytes | Parent commit digests, **sorted ascending**                            |
 | Signature     | 64 bytes     | Ed25519 signature over bytes `[0..len-64]`                             |
 
@@ -361,7 +361,7 @@ Schema: `STF\x00` (Sedimentree Fragment, version 0)
 | BlobDigest    | 32 bytes     | BLAKE3 hash of the fragment blob                            |
 | BndryCnt      | 1 byte       | Number of boundary commits (0-255)                          |
 | CkptCnt       | 2 bytes      | Number of checkpoints (big-endian u16, 0-65535)             |
-| BlobSize      | 1–9 bytes    | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md))     |
+| BlobSize      | 1–9 bytes    | Size of blob in bytes ([`bijou64`](https://github.com/inkandswitch/bijou/blob/main/bijou64/SPEC.md))     |
 | Boundary      | N × 32 bytes | Boundary commit digests, **sorted ascending**               |
 | Checkpoints   | M × 12 bytes | Truncated CommitId bytes (96-bit), **sorted ascending** |
 | Signature     | 64 bytes     | Ed25519 signature over bytes `[0..len-64]`                  |
@@ -485,7 +485,7 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ╚═══════════════╩═════════════════════╩═════════╩══════════╝
 ```
 
-BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
+BlobLen is encoded as [`bijou64`](https://github.com/inkandswitch/bijou/blob/main/bijou64/SPEC.md).
 
 ### Fragment Message (Tag 0x01)
 
@@ -496,7 +496,7 @@ BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
 ╚═══════════════╩══════════════════╩═════════╩══════════╝
 ```
 
-BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
+BlobLen is encoded as [`bijou64`](https://github.com/inkandswitch/bijou/blob/main/bijou64/SPEC.md).
 
 ### BlobsRequest (Tag 0x02)
 
@@ -625,7 +625,7 @@ Signed payloads use a custom codec (not CBOR) to guarantee determinism:
 
 - Fixed field order defined by `EncodeFields` implementation
 - Big-endian integers (no smallest-encoding ambiguity)
-- [`bijou64`](../bijou64/SPEC.md) for blob size fields (canonical by construction — bijective encoding eliminates overlong forms structurally)
+- [`bijou64`](https://github.com/inkandswitch/bijou/blob/main/bijou64/SPEC.md) for blob size fields (canonical by construction — bijective encoding eliminates overlong forms structurally)
 - Sorted arrays with no duplicates
 - No optional fields or default values
 
