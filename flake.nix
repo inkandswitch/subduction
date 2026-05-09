@@ -182,19 +182,6 @@
           { commands = projectCommands; packages = []; }
         ];
 
-        # Python environment for benchmark chart generation (analyze.py)
-        bench-charts-python = pkgs.python3.withPackages (ps: [
-          ps.matplotlib
-          ps.numpy
-          ps.pandas
-          ps.plotly
-          ps.seaborn
-        ]);
-
-        bench-charts = pkgs.writeShellScriptBin "bench-charts" ''
-          exec "${bench-charts-python}/bin/python3" "$WORKSPACE_ROOT/bijou64/charts/analyze.py" "$@"
-        '';
-
         grafana =
           let
             pluginsDir = pkgs.linkFarm "grafana-plugins" [
@@ -262,11 +249,6 @@
           };
 
           default = packages.subduction_cli;
-        };
-
-        apps.bench-charts = {
-          type = "app";
-          program = "${bench-charts}/bin/bench-charts";
         };
 
         devShells.default = pkgs.mkShell {

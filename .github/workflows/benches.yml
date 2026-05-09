@@ -29,10 +29,6 @@ jobs:
             package: subduction_core
             features: std
             bench: subduction
-          - name: bijou64-shootout
-            package: bijou64
-            features: ""
-            bench: shootout
           - name: e2e-websocket
             package: subduction_websocket
             features: tokio_client,tokio_server
