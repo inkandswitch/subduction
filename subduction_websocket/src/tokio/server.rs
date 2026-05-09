@@ -182,15 +182,15 @@ where
                                         // Step 2: Subduction handshake and connection setup
                                         // Accepts either Audience::Known(peer_id) or discovery audience
                                         let now = TimestampSeconds::now();
-                                        // Per-connection cancellation tokens, children of the
-                                        // server-wide one. When `stop()` cancels the parent,
-                                        // every per-connection listener and sender task
-                                        // observes it and exits, releasing its
-                                        // `Arc<WebSocket>` and TCP socket. Without this, the
-                                        // spawned tasks here were detached and leaked across
-                                        // server restarts (e.g., per-iteration bench teardown).
-                                        let listen_cancel = task_cancel.child_token();
-                                        let sender_cancel = task_cancel.child_token();
+                                        // Clones of the server-wide cancellation token for
+                                        // each per-connection task. When `stop()` cancels
+                                        // the server token, every clone observes it and the
+                                        // tasks exit, releasing their `Arc<WebSocket>` and
+                                        // TCP socket. Without these, the spawned tasks were
+                                        // detached and leaked across server restarts (e.g.,
+                                        // per-iteration bench teardown).
+                                        let listen_cancel = task_cancel.clone();
+                                        let sender_cancel = task_cancel.clone();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
                                             |ws_handshake, peer_id| {
