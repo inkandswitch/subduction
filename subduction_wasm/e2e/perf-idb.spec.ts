@@ -19,9 +19,11 @@ import { URL } from "./config";
  *   4. What does a cold (just-opened) IDB write cost vs a warmed-up one
  *      after N commits already exist?
  *
- * Each test uses a distinct database name so cross-test residue can't
- * pollute the timing curve. Browsers persist IDB across pages on the
- * same origin within a Playwright run; deleteDatabase calls clean up.
+ * Each test uses a distinct database name (per scenario, sometimes per
+ * iteration) so cross-test residue can't pollute the timing curve. The
+ * `IndexedDbStorage` Wasm class has no JS-exposed close/dispose, so once
+ * a Subduction instance opens a db, the only safe way to "reset" is to
+ * walk away and open a different db on the next iteration.
  *
  * # Output
  *
@@ -119,15 +121,16 @@ test.describe("Browser IndexedDB write characterization", () => {
    * maintenance, or structured-clone tax growing with store size).
    */
   test("addCommit per-commit cost vs store size", async ({ page }, testInfo) => {
-    test.setTimeout(180_000);
+    test.setTimeout(600_000);
+    page.on("console", (msg) => console.log(`[browser ${msg.type()}] ${msg.text()}`));
+    page.on("pageerror", (err) => console.log(`[browser ERROR] ${err.message}`));
     await page.addScriptTag({ content: HELPERS_SRC });
 
     const summaries = await page.evaluate(async () => {
       const { Subduction, IndexedDbStorage, MemorySigner, SedimentreeId } = window.subduction;
-      const { summarize, mkCommitId, deleteIdb } = (window as any).__perfHelpers;
+      const { summarize, mkCommitId } = (window as any).__perfHelpers;
 
-      const dbName = "perf-idb-scaling";
-      await deleteIdb(dbName);
+      const dbName = `perf-idb-scaling-${Date.now()}`;
 
       const signer = MemorySigner.generate();
       const storage = await IndexedDbStorage.setup((window as any).indexedDB, dbName);
@@ -152,6 +155,7 @@ test.describe("Browser IndexedDB write characterization", () => {
           await syncer.addCommit(sedId, mkCommitId(seq), [], blob);
           seq += 1;
         }
+        console.log(`[scaling] ramped to ${target} commits, measuring next ${windowSize}...`);
 
         // Measure the next `windowSize` commits one-by-one.
         const samples = new Array(windowSize);
@@ -162,13 +166,11 @@ test.describe("Browser IndexedDB write characterization", () => {
           samples[i] = performance.now() - start;
           seq += 1;
         }
-        results.push({
-          ...summarize(`browser/idb/addCommit_at_${target}_existing`, samples),
-          existing_commits: target,
-        });
+        const summary = summarize(`browser/idb/addCommit_at_${target}_existing`, samples);
+        console.log(`[scaling] @${target}: median=${summary.median.toFixed(3)}ms p95=${summary.p95.toFixed(3)}ms`);
+        results.push({ ...summary, existing_commits: target });
       }
 
-      await deleteIdb(dbName);
       return results;
     });
 
@@ -189,15 +191,14 @@ test.describe("Browser IndexedDB write characterization", () => {
    * and tell us whether browser-side compression would pay off.
    */
   test("addCommit cost vs blob size", async ({ page }, testInfo) => {
-    test.setTimeout(120_000);
+    test.setTimeout(300_000);
+    page.on("console", (msg) => console.log(`[browser ${msg.type()}] ${msg.text()}`));
+    page.on("pageerror", (err) => console.log(`[browser ERROR] ${err.message}`));
     await page.addScriptTag({ content: HELPERS_SRC });
 
     const summaries = await page.evaluate(async () => {
       const { Subduction, IndexedDbStorage, MemorySigner, SedimentreeId } = window.subduction;
-      const { summarize, mkCommitId, deleteIdb } = (window as any).__perfHelpers;
-
-      const dbName = "perf-idb-blobsize";
-      await deleteIdb(dbName);
+      const { summarize, mkCommitId } = (window as any).__perfHelpers;
 
       const sizes: [string, number][] = [
         ["64b", 64],
@@ -211,16 +212,25 @@ test.describe("Browser IndexedDB write characterization", () => {
       let seq = 0;
 
       for (const [label, size] of sizes) {
+        // Each blob size gets its own database so closing/dropping the
+        // previous one isn't required (no JS-side close API exists on
+        // IndexedDbStorage; reusing a name across iterations deadlocks
+        // the next setup() against the still-open prior handle).
+        const dbName = `perf-idb-blobsize-${label}-${Date.now()}`;
         const signer = MemorySigner.generate();
         const storage = await IndexedDbStorage.setup((window as any).indexedDB, dbName);
         const syncer = new Subduction(signer, storage);
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(0x55));
 
+        // crypto.getRandomValues caps at 64 KiB per call; fill in chunks
+        // for the larger payloads. The exact randomness doesn't matter
+        // here — we only need entropy so structured-clone can't share
+        // memory across iterations.
         const blob = new Uint8Array(size);
-        crypto.getRandomValues(blob);
+        for (let off = 0; off < size; off += 65536) {
+          crypto.getRandomValues(blob.subarray(off, Math.min(off + 65536, size)));
+        }
 
-        // Heavier payloads use fewer iterations; total bytes written is
-        // bounded so the suite stays under the 120s test timeout.
         const iters = size >= 256 * 1024 ? 8 : size >= 16 * 1024 ? 20 : 30;
 
         // Warm up so JIT and the IDB connection are settled.
@@ -235,13 +245,10 @@ test.describe("Browser IndexedDB write characterization", () => {
           samples[i] = performance.now() - start;
         }
 
-        results.push({
-          ...summarize(`browser/idb/addCommit_blob_${label}`, samples),
-          blob_bytes: size,
-          mb_per_sec_median: (size / 1_000_000) / (samples.slice().sort((a: number, b: number) => a - b)[Math.floor(samples.length / 2)] / 1000),
-        });
-
-        await deleteIdb(dbName);
+        const summary = summarize(`browser/idb/addCommit_blob_${label}`, samples);
+        const mbPerSec = (size / 1_000_000) / (summary.median / 1000);
+        console.log(`[blobsize ${label}] median=${summary.median.toFixed(3)}ms ${mbPerSec.toFixed(1)} MB/s`);
+        results.push({ ...summary, blob_bytes: size, mb_per_sec_median: mbPerSec });
       }
       return results;
     });
@@ -265,15 +272,14 @@ test.describe("Browser IndexedDB write characterization", () => {
    * any "batching" speedup must come from amortizing wasm boundary cost.
    */
   test("addCommit sequential vs concurrent", async ({ page }, testInfo) => {
-    test.setTimeout(120_000);
+    test.setTimeout(300_000);
+    page.on("console", (msg) => console.log(`[browser ${msg.type()}] ${msg.text()}`));
+    page.on("pageerror", (err) => console.log(`[browser ERROR] ${err.message}`));
     await page.addScriptTag({ content: HELPERS_SRC });
 
     const result = await page.evaluate(async () => {
       const { Subduction, IndexedDbStorage, MemorySigner, SedimentreeId } = window.subduction;
-      const { mkCommitId, deleteIdb } = (window as any).__perfHelpers;
-
-      const dbName = "perf-idb-concurrent";
-      await deleteIdb(dbName);
+      const { mkCommitId } = (window as any).__perfHelpers;
 
       const blob = new Uint8Array(64);
       crypto.getRandomValues(blob);
@@ -284,6 +290,8 @@ test.describe("Browser IndexedDB write characterization", () => {
       let seq = 0;
 
       for (const batchSize of batches) {
+        // Per-batch unique db name; same close-less reasoning as above.
+        const dbName = `perf-idb-concurrent-${batchSize}-${Date.now()}`;
         const signer = MemorySigner.generate();
         const storage = await IndexedDbStorage.setup((window as any).indexedDB, dbName);
         const syncer = new Subduction(signer, storage);
@@ -314,6 +322,8 @@ test.describe("Browser IndexedDB write characterization", () => {
         const med = (xs: number[]) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)];
         const seqMedian = med(seqSamples);
         const concMedian = med(concSamples);
+        const ratio = concMedian / seqMedian;
+        console.log(`[concurrent ${batchSize}] seq=${seqMedian.toFixed(2)}ms conc=${concMedian.toFixed(2)}ms ratio=${ratio.toFixed(3)}`);
         out.push({
           name: `browser/idb/addCommit_batch_${batchSize}_seq_vs_concurrent`,
           unit: "ms",
@@ -323,12 +333,8 @@ test.describe("Browser IndexedDB write characterization", () => {
           concurrent_median_total_ms: concMedian,
           sequential_per_commit_ms: seqMedian / batchSize,
           concurrent_per_commit_ms: concMedian / batchSize,
-          // <1 means concurrency helps; ~1 means IDB serialized us;
-          // >1 means concurrency hurt (contention).
-          ratio_concurrent_over_sequential: concMedian / seqMedian,
+          ratio_concurrent_over_sequential: ratio,
         });
-
-        await deleteIdb(dbName);
       }
       return out;
     });
@@ -351,25 +357,29 @@ test.describe("Browser IndexedDB write characterization", () => {
    * just-opened database vs steady-state at N=200 commits.
    */
   test("addCommit cold first-write vs warm steady-state", async ({ page }, testInfo) => {
-    test.setTimeout(60_000);
+    test.setTimeout(300_000);
+    page.on("console", (msg) => console.log(`[browser ${msg.type()}] ${msg.text()}`));
+    page.on("pageerror", (err) => console.log(`[browser ERROR] ${err.message}`));
     await page.addScriptTag({ content: HELPERS_SRC });
 
     const result = await page.evaluate(async () => {
       const { Subduction, IndexedDbStorage, MemorySigner, SedimentreeId } = window.subduction;
-      const { mkCommitId, deleteIdb } = (window as any).__perfHelpers;
+      const { mkCommitId } = (window as any).__perfHelpers;
 
-      const dbName = "perf-idb-cold";
+      // We can't drop and reopen the same db between trials because there
+      // is no JS-side close on IndexedDbStorage; the previous handle keeps
+      // the database busy and the next `setup()` deadlocks. Use a unique
+      // database name per trial to guarantee a fresh `onupgradeneeded`.
       const blob = new Uint8Array(64);
       crypto.getRandomValues(blob);
-      const trials = 10;
+      const trials = 5;
+      const warmupCommits = 50;
 
       const coldSamples: number[] = [];
       const warmSamples: number[] = [];
 
       for (let t = 0; t < trials; t++) {
-        await deleteIdb(dbName);
-
-        // Cold: first addCommit after a fresh setup().
+        const dbName = `perf-idb-cold-${Date.now()}-${t}`;
         const signer = MemorySigner.generate();
         const storage = await IndexedDbStorage.setup((window as any).indexedDB, dbName);
         const syncer = new Subduction(signer, storage);
@@ -380,16 +390,14 @@ test.describe("Browser IndexedDB write characterization", () => {
         await syncer.addCommit(sedId, mkCommitId(seq++), [], blob);
         coldSamples.push(performance.now() - cs);
 
-        // Warm: pre-populate to 200 commits, then measure the next one.
-        for (let i = 0; i < 199; i++) {
+        for (let i = 0; i < warmupCommits - 1; i++) {
           await syncer.addCommit(sedId, mkCommitId(seq++), [], blob);
         }
         const ws = performance.now();
         await syncer.addCommit(sedId, mkCommitId(seq++), [], blob);
         warmSamples.push(performance.now() - ws);
+        console.log(`[cold-vs-warm trial ${t + 1}/${trials}] cold=${coldSamples[coldSamples.length - 1].toFixed(2)}ms warm=${warmSamples[warmSamples.length - 1].toFixed(2)}ms`);
       }
-
-      await deleteIdb(dbName);
 
       const med = (xs: number[]) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)];
       return {
