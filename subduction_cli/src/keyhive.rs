@@ -312,22 +312,16 @@ async fn run_keyhive(
 
     let kh_id: Identifier = keyhive.id().into();
     let peer_id = KeyhivePeerId::from_bytes(kh_id.to_bytes());
-    // Stable, per-instance storage key for the consolidated keyhive
-    // archive.
-    let keyhive_storage_id = StorageHash::new(*blake3::hash(peer_id.verifying_key()).as_bytes());
 
     let shared = Arc::new(Mutex::new(keyhive));
     let policy_keyhive = Arc::clone(&shared);
-    let mut protocol =
+    let protocol =
         KeyhiveProtocol::<_, Vec<u8>, Vec<u8>, _, _, _, CliConnKeyhiveAdapter, _, Local>::new(
             shared,
             storage,
             peer_id,
             contact_card,
         );
-    if let Some(threshold) = config.archive_threshold {
-        protocol = protocol.with_archive_threshold(threshold, keyhive_storage_id);
-    }
     let orchestrator = Arc::new(SubductionKeyhiveOrchestrator::new(
         Arc::new(protocol),
         config,

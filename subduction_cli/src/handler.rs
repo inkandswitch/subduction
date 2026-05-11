@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::{
-    keyhive::CliKeyhiveHandle, policy::LegacyRelayPolicy, transport::UnifiedTransport,
+    keyhive::CliKeyhiveHandle, policy::CliKeyhivePolicyHandle, transport::UnifiedTransport,
     wire::CliWireMessage,
 };
 use future_form::Sendable;
@@ -48,7 +48,7 @@ pub(crate) struct CliHandler {
             Sendable,
             MetricsStorage<FsStorage>,
             CliConn,
-            LegacyRelayPolicy,
+            CliKeyhivePolicyHandle,
             CountLeadingZeroBytes,
         >,
     >,

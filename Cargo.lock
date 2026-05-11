@@ -5166,7 +5166,6 @@ dependencies = [
  "async-lock",
  "async-tungstenite",
  "axum",
- "blake3",
  "ciborium",
  "clap",
  "color-eyre",

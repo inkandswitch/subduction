@@ -43,7 +43,7 @@ use crate::{
     key,
     keyhive::{CliConnKeyhiveAdapter, CliKeyhiveHandle},
     metrics,
-    policy::{CliKeyhivePolicyHandle, LegacyRelayPolicy},
+    policy::CliKeyhivePolicyHandle,
     transport::UnifiedTransport,
 };
 
@@ -55,7 +55,7 @@ type CliSubduction = Arc<
         MetricsStorage<FsStorage>,
         CliConn,
         CliHandler,
-        LegacyRelayPolicy,
+        CliKeyhivePolicyHandle,
         MemorySigner,
         FuturesTimerTimeout,
         CountLeadingZeroBytes,
@@ -250,8 +250,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let sites_keyhive_handle: CliKeyhiveHandle = keyhive_handle.clone();
 
     let (policy_handle, policy_rx) = CliKeyhivePolicyHandle::channel();
-    let legacy_policy = Arc::new(LegacyRelayPolicy::new(policy_handle));
-    let legacy_policy_for_driver = Arc::clone(&legacy_policy);
+    let storage_policy = Arc::new(policy_handle);
 
     crate::keyhive::spawn_keyhive_thread(
         keyhive_rx,
@@ -265,7 +264,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
     let builder = subduction_core::subduction::builder::SubductionBuilder::new()
         .signer(signer.clone())
-        .storage(storage, legacy_policy)
+        .storage(storage, storage_policy)
         .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout);
 
@@ -309,45 +308,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
 
     let server_peer_id = subduction.peer_id();
-
-    // Relay driver: fan out sync_with_peer to all peers for legacy doc fetches.
-    {
-        use futures::FutureExt;
-        let subduction_weak = Arc::downgrade(&subduction);
-        let relay_cancel = token.clone();
-        legacy_policy_for_driver.install_relay_driver(Arc::new(
-            move |id: sedimentree_core::id::SedimentreeId| {
-                let weak = subduction_weak.clone();
-                let cancel = relay_cancel.clone();
-                async move {
-                    let Some(sub) = weak.upgrade() else {
-                        return;
-                    };
-                    let peers = sub.connected_peer_ids().await;
-                    if peers.is_empty() {
-                        tracing::debug!(?id, "legacy relay: no connected peers to ask");
-                        return;
-                    }
-                    for peer in peers {
-                        tokio::select! {
-                            () = cancel.cancelled() => return,
-                            result = sub.sync_with_peer(&peer, id, true, None) => {
-                                if let Err(e) = result {
-                                    tracing::debug!(
-                                        ?peer,
-                                        ?id,
-                                        error = %e,
-                                        "legacy relay fetch from peer failed",
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                .boxed()
-            },
-        ));
-    }
 
     // Set up the HTTP long-poll handler (uses its own NonceCache)
     let lp_handler = LongPollHandler::new(
