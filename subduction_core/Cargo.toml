@@ -46,6 +46,10 @@ tokio = { workspace = true, features = ["rt", "macros", "time"] }
 name = "subduction"
 harness = false
 
+[[bench]]
+name = "stress"
+harness = false
+
 [features]
 default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary", "subduction_crypto/arbitrary"]
