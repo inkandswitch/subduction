@@ -11,6 +11,8 @@ use tokio::net::TcpListener;
 /// Initialize the metrics recorder and return a handle for the HTTP endpoint.
 ///
 /// This must be called once at startup before any metrics are recorded.
+/// Also registers HELP/TYPE descriptions for every metric this workspace
+/// emits, so the `/metrics` output is self-documenting.
 ///
 /// # Panics
 ///
@@ -18,9 +20,16 @@ use tokio::net::TcpListener;
 #[must_use]
 pub fn init_metrics() -> PrometheusHandle {
     #[allow(clippy::expect_used)]
-    PrometheusBuilder::new()
+    let handle = PrometheusBuilder::new()
         .install_recorder()
-        .expect("failed to install Prometheus recorder")
+        .expect("failed to install Prometheus recorder");
+
+    // Register HELP and TYPE metadata for every metric. Must happen after
+    // the recorder is installed (so the descriptions reach the right
+    // registry). Idempotent if accidentally called twice.
+    subduction_core::metrics::describe_all();
+
+    handle
 }
 
 /// Start the metrics HTTP server on the given address.

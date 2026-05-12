@@ -526,8 +526,25 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     }
                     _ = interval.tick() => {
                         let timeout = Some(Duration::from_secs(10));
+                        let round_start = std::time::Instant::now();
                         let (had_success, _stats, call_errs, io_errs) =
                             sync_subduction.full_sync_with_all_peers(timeout).await;
+                        subduction_core::metrics::background_sync_duration(
+                            round_start.elapsed().as_secs_f64(),
+                        );
+                        // Counters use `u64::try_from` rather than `as u64`
+                        // to avoid sign-loss warnings; in practice `len()` is
+                        // already non-negative `usize`.
+                        if !call_errs.is_empty() {
+                            subduction_core::metrics::background_sync_call_errors(
+                                call_errs.len() as u64,
+                            );
+                        }
+                        if !io_errs.is_empty() {
+                            subduction_core::metrics::background_sync_io_errors(
+                                io_errs.len() as u64,
+                            );
+                        }
                         if had_success {
                             tracing::debug!("iroh: background full_sync completed");
                         }

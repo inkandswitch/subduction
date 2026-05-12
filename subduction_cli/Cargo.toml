@@ -21,7 +21,7 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
-console-subscriber = { workspace = true }
+console-subscriber = { workspace = true, optional = true }
 eyre = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
@@ -50,7 +50,7 @@ tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true, default-features = true }
 tracing-loki = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, default-features = true }
+tracing-subscriber = { workspace = true, default-features = true, features = ["env-filter"] }
 tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
 
@@ -83,6 +83,14 @@ rustls = [
   "subduction_websocket/tokio_client_rustls",
   "subduction_websocket/tokio_server_rustls",
 ]
+# Compile in `console-subscriber` support. When this feature is enabled and
+# the `TOKIO_CONSOLE` env var is set at runtime, the tokio-console layer is
+# installed so a `tokio-console` client can attach for live task/resource
+# inspection. When the feature is OFF (default), the `console-subscriber`
+# crate is not linked at all — smaller binary, no per-task Span allocation
+# from the runtime instrumentation hooks. Useful for production builds where
+# tokio-console is never wanted; useful as a dev feature for ad-hoc debugging.
+tokio-console = ["dep:console-subscriber"]
 
 [lints]
 workspace = true
