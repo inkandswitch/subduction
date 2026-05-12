@@ -126,26 +126,34 @@ where
             address,
             handshake_max_drift,
             max_message_size,
+            crate::DEFAULT_KEEPALIVE_INTERVAL,
             subduction,
             TaskTracker::new(),
         )
         .await
     }
 
-    /// Like [`new`](Self::new) but uses a caller-supplied [`TaskTracker`].
-    /// Pass the same tracker to the [`Subduction`] builder (via
-    /// [`TrackedTokioSpawn`][crate::tokio::TrackedTokioSpawn]) and a single
-    /// [`Self::stop_and_drain`] will await every server- and Subduction-side
-    /// task — including per-peer `connection_loop`s.
+    /// Like [`new`](Self::new) but uses a caller-supplied [`TaskTracker`]
+    /// and an explicit keepalive interval. Pass the same tracker to
+    /// the [`Subduction`] builder (via
+    /// [`TrackedTokioSpawn`][crate::tokio::TrackedTokioSpawn]) and a
+    /// single [`Self::stop_and_drain`] will await every server- and
+    /// Subduction-side task — including per-peer `connection_loop`s.
+    ///
+    /// `keepalive_interval` is the period between server-emitted Ping
+    /// frames. Use a short interval (e.g. 500 ms) in tests so a
+    /// proxy idle timeout cannot fire; use the default
+    /// [`crate::DEFAULT_KEEPALIVE_INTERVAL`] in production.
     ///
     /// # Errors
     ///
     /// Returns [`tungstenite::Error`] if binding the socket fails.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub async fn new_with_tracker(
         address: SocketAddr,
         handshake_max_drift: Duration,
         max_message_size: usize,
+        keepalive_interval: Duration,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
         tasks: TaskTracker,
     ) -> Result<Self, tungstenite::Error> {
@@ -216,8 +224,10 @@ where
                                         let now = TimestampSeconds::now();
                                         let listen_cancel = task_cancel.clone();
                                         let sender_cancel = task_cancel.clone();
+                                        let keepalive_cancel = task_cancel.clone();
                                         let listen_tracker = task_tracker.clone();
                                         let sender_tracker = task_tracker.clone();
+                                        let keepalive_tracker = task_tracker.clone();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
                                             move |ws_handshake, peer_id| {
@@ -253,6 +263,13 @@ where
                                                         }
                                                     }
                                                 });
+
+                                                let keepalive_ws = ws.clone();
+                                                keepalive_tracker.spawn(run_keepalive(
+                                                    keepalive_ws,
+                                                    keepalive_cancel,
+                                                    keepalive_interval,
+                                                ));
 
                                                 (UnifiedWebSocket::Accepted(ws), ())
                                             },
@@ -363,6 +380,7 @@ where
             address,
             handshake_max_drift,
             max_message_size,
+            crate::DEFAULT_KEEPALIVE_INTERVAL,
             subduction,
             tasks,
         )
@@ -459,6 +477,7 @@ where
         let cancel_token = self.cancellation_token.clone();
         let listen_tracker = self.tasks.clone();
         let sender_tracker = self.tasks.clone();
+        let keepalive_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
@@ -483,7 +502,7 @@ where
                     }
                 });
 
-                let sender_cancel = cancel_token;
+                let sender_cancel = cancel_token.clone();
                 sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
@@ -496,6 +515,14 @@ where
                         }
                     }
                 });
+
+                let keepalive_ws = ws.clone();
+                let keepalive_cancel = cancel_token;
+                keepalive_tracker.spawn(run_keepalive(
+                    keepalive_ws,
+                    keepalive_cancel,
+                    crate::DEFAULT_KEEPALIVE_INTERVAL,
+                ));
 
                 (ws_conn, ())
             },
@@ -571,6 +598,7 @@ where
         let cancel_token = self.cancellation_token.clone();
         let listen_tracker = self.tasks.clone();
         let sender_tracker = self.tasks.clone();
+        let keepalive_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
@@ -595,7 +623,7 @@ where
                     }
                 });
 
-                let sender_cancel = cancel_token;
+                let sender_cancel = cancel_token.clone();
                 sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
@@ -608,6 +636,14 @@ where
                         }
                     }
                 });
+
+                let keepalive_ws = ws.clone();
+                let keepalive_cancel = cancel_token;
+                keepalive_tracker.spawn(run_keepalive(
+                    keepalive_ws,
+                    keepalive_cancel,
+                    crate::DEFAULT_KEEPALIVE_INTERVAL,
+                ));
 
                 (ws_conn, ())
             },
@@ -671,6 +707,33 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
         M,
     >,
 >;
+
+/// Periodically send Ping frames over `ws` so an idle reverse proxy
+/// (Caddy, nginx, cloud LB, etc.) doesn't drop the connection. Exits
+/// when `cancel` fires or the underlying sender task has stopped.
+pub async fn run_keepalive<T, K>(
+    ws: WebSocket<T, K>,
+    cancel: CancellationToken,
+    interval: Duration,
+) where
+    T: futures::AsyncRead + futures::AsyncWrite + Unpin,
+    K: future_form::FutureForm,
+{
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => {
+                tracing::debug!(peer_id = %ws.peer_id(), "keepalive cancelled");
+                return;
+            }
+            () = tokio::time::sleep(interval) => {
+                if ws.send_ping().await.is_err() {
+                    tracing::debug!(peer_id = %ws.peer_id(), "keepalive: sender task stopped, exiting");
+                    return;
+                }
+            }
+        }
+    }
+}
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]

@@ -780,6 +780,19 @@ async fn handle_websocket(
                 }
             });
 
+            // Periodic Ping so reverse proxies (Caddy etc.) don't
+            // idle-close the connection. Exits if the underlying
+            // sender task has died.
+            let keepalive_ws = ws.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(subduction_websocket::DEFAULT_KEEPALIVE_INTERVAL).await;
+                    if keepalive_ws.send_ping().await.is_err() {
+                        return;
+                    }
+                }
+            });
+
             let unified_ws = UnifiedWebSocket::Accepted(ws);
             (
                 MessageTransport::new(UnifiedTransport::WebSocket(unified_ws)),
@@ -952,6 +965,7 @@ async fn try_connect_ws(
     let listen_uri = uri_str.clone();
     let sender_uri = uri_str.clone();
     let listen_cancel = cancel.clone();
+    let keepalive_cancel = cancel.clone();
 
     let (authenticated, ()) = handshake::initiate::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
@@ -983,6 +997,22 @@ async fn try_connect_ws(
                     result = sender_fut => {
                         if let Err(e) = result {
                             tracing::info!("WebSocket sender disconnected for {sender_uri}: {e}");
+                        }
+                    }
+                }
+            });
+
+            // Periodic Ping so reverse proxies don't idle-close the
+            // connection. Exits on cancel or sender-task death.
+            let keepalive_ws = ws.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        () = keepalive_cancel.cancelled() => return,
+                        () = tokio::time::sleep(subduction_websocket::DEFAULT_KEEPALIVE_INTERVAL) => {
+                            if keepalive_ws.send_ping().await.is_err() {
+                                return;
+                            }
                         }
                     }
                 }

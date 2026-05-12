@@ -45,7 +45,7 @@ subduction_core = { workspace = true, features = ["test_utils"] }
 subduction_crypto = { workspace = true }
 subduction_ephemeral = { workspace = true, features = ["std"] }
 testresult = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "time"] }
 tokio-test = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"] }
 
@@ -63,6 +63,10 @@ required-features = ["tokio_server", "tokio_client"]
 
 [[test]]
 name = "ephemeral_e2e"
+required-features = ["tokio_server", "tokio_client"]
+
+[[test]]
+name = "disconnect_repro"
 required-features = ["tokio_server", "tokio_client"]
 
 [features]

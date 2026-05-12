@@ -203,18 +203,58 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
         self.peer_id
     }
 
+    /// Queue a WebSocket Ping frame on the outbound channel.
+    ///
+    /// Use this for application-driven keepalives so an idle proxy
+    /// (e.g. Caddy / nginx) does not idle-close the connection. The
+    /// frame is sent by the dedicated sender task; this returns
+    /// `Err(SendError)` if that task has already exited.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SendError`] if the outbound channel is closed.
+    pub async fn send_ping(&self) -> Result<(), SendError> {
+        self.outbound_tx
+            .send(tungstenite::Message::Ping(Vec::new().into()))
+            .await
+            .map_err(|_| SendError)
+    }
+
     /// Listen for incoming messages and forward them to the inbound channel.
     ///
     /// Raw bytes from the WebSocket are forwarded to the inbound channel
     /// without decoding. Response routing is handled by
     /// [`Subduction::listen`](subduction_core::subduction::Subduction::listen).
     ///
+    /// When this returns (either cleanly or with an error), the
+    /// inbound and outbound channels are closed. Closing the inbound
+    /// channel causes any in-flight `recv()` on cloned
+    /// [`WebSocket`]s to return `Err`, which propagates to
+    /// `connection_loop` (in `subduction_core::connection::manager`).
+    /// That triggers the standard close-handler cascade: the loop
+    /// breaks, the connection is removed from `Subduction`'s map, and
+    /// `handler.on_peer_disconnect` runs. Without this explicit
+    /// channel close, a TCP-level reset would silently kill _this_
+    /// task but leave every other [`WebSocket`] clone (held by the
+    /// connection map) believing the connection is still alive —
+    /// causing every subsequent broadcast attempt to log
+    /// "peer X disconnected: sender task stopped".
+    ///
     /// # Errors
     ///
     /// If there is an error reading from the WebSocket or processing messages.
-    #[allow(clippy::too_many_lines)]
     pub async fn listen(&self) -> Result<(), RunError> {
         tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
+        let result = self.listen_inner().await;
+        // Force-propagate the disconnect through both channels so the
+        // rest of the system can react promptly.
+        self.inbound_writer.close();
+        self.outbound_tx.close();
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn listen_inner(&self) -> Result<(), RunError> {
         let mut in_chan = self.ws_reader.lock().await;
         while let Some(ws_msg) = in_chan.next().await {
             tracing::debug!(
@@ -242,16 +282,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                     tracing::warn!("unexpected text message: {}", text);
                 }
                 Ok(tungstenite::Message::Ping(p)) => {
-                    tracing::debug!(size = p.len(), "received ping");
-                    self.outbound_tx
-                        .send(tungstenite::Message::Pong(p))
-                        .await
-                        .unwrap_or_else(|_| {
-                            tracing::error!("failed to send pong");
-                        });
+                    // Tungstenite auto-queues a Pong response on
+                    // `read`/`write`/`flush`; no manual reply needed.
+                    tracing::trace!(size = p.len(), "received ping");
                 }
                 Ok(tungstenite::Message::Pong(p)) => {
-                    tracing::warn!("unexpected pong message: {:x?}", p);
+                    tracing::trace!(size = p.len(), "received pong");
                 }
                 Ok(tungstenite::Message::Frame(f)) => {
                     tracing::warn!("unexpected frame: {:x?}", f);
@@ -261,11 +297,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                     break;
                 }
                 Err(e) => {
-                    // Distinguish between expected disconnects and real errors
+                    let kind = ws_error_kind(&e);
                     if is_expected_disconnect(&e) {
-                        tracing::debug!("connection closed: {}", e);
+                        tracing::debug!(peer_id = %self.peer_id, kind, "connection closed: {e}");
                     } else {
-                        tracing::error!("error reading from websocket: {}", e);
+                        tracing::error!(peer_id = %self.peer_id, kind, "error reading from websocket: {e}");
                     }
                     Err(e)?;
                 }
@@ -288,6 +324,28 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
             | Error::AlreadyClosed
             | Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)
     )
+}
+
+/// Short, stable name for a [`tungstenite::Error`] variant. Lets log
+/// triage on "WebSocket listener disconnected" line filter by category
+/// without parsing the full error display.
+#[must_use]
+pub const fn ws_error_kind(e: &tungstenite::Error) -> &'static str {
+    use tungstenite::Error;
+    match e {
+        Error::ConnectionClosed => "connection_closed",
+        Error::AlreadyClosed => "already_closed",
+        Error::Io(_) => "io",
+        Error::Tls(_) => "tls",
+        Error::Capacity(_) => "capacity",
+        Error::Protocol(_) => "protocol",
+        Error::WriteBufferFull(_) => "write_buffer_full",
+        Error::Utf8(_) => "utf8",
+        Error::AttackAttempt => "attack_attempt",
+        Error::Url(_) => "url",
+        Error::Http(_) => "http",
+        Error::HttpFormat(_) => "http_format",
+    }
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> Clone for WebSocket<T, K> {
