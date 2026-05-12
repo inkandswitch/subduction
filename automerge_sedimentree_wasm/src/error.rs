@@ -35,18 +35,35 @@ impl From<WasmFromBase58Error> for JsValue {
 
 /// An error that can occur while computing fragment states.
 #[derive(Debug, Error)]
-#[error(transparent)]
-pub struct WasmFragmentError(#[from] FragmentError<'static, WasmSedimentreeAutomerge>);
+pub enum WasmFragmentError {
+    /// Underlying fragment-construction error from `sedimentree_core`.
+    #[error(transparent)]
+    Fragment(#[from] FragmentError<'static, WasmSedimentreeAutomerge>),
 
-impl From<WasmFragmentError> for FragmentError<'static, WasmSedimentreeAutomerge> {
-    fn from(err: WasmFragmentError) -> Self {
-        err.0
-    }
+    /// The [`FragmentStateStore`](crate::fragment::WasmFragmentStateStore) is
+    /// already in use by another in-progress fragment computation.
+    ///
+    /// Triggered when a JS callback (e.g. `Automerge.getChangeMetaByHash`)
+    /// re-enters the Wasm module and attempts to access the same
+    /// `FragmentStateStore` while a `fragment` or `buildFragmentStore`
+    /// call is still walking it. The fix is for JS callers not to share
+    /// a `FragmentStateStore` between concurrent fragment computations,
+    /// or to avoid re-entering the store from within a `getChangeMetaByHash`
+    /// callback.
+    ///
+    /// This error replaces what would otherwise be a tab-killing
+    /// "already borrowed" panic.
+    #[error(
+        "FragmentStateStore is already in use by an in-progress fragment \
+         computation; do not access the same store from a getChangeMetaByHash \
+         callback or share it between concurrent computations"
+    )]
+    StoreBusy,
 }
 
 impl From<WasmFragmentError> for JsValue {
     fn from(err: WasmFragmentError) -> Self {
-        let js_err = js_sys::Error::new(&err.0.to_string());
+        let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("FragmentError");
         js_err.into()
     }

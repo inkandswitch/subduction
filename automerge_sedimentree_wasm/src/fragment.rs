@@ -123,6 +123,10 @@ impl From<Map<WasmCommitId, Set<WasmCommitId>>> for WasmBoundary {
 /// Uses interior mutability (`RefCell`) so that `wasm_bindgen` only takes
 /// a shared borrow across the JS boundary, avoiding "recursive use of
 /// an object" panics when JS callbacks re-enter during `buildFragmentStore`.
+///
+/// All public methods use `try_borrow`/`try_borrow_mut` so a re-entrant
+/// JS callback that calls back into the same store gets a typed error
+/// (returned as `Err` to JS) rather than panicking the Wasm module.
 #[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
 pub struct WasmFragmentStateStore(
@@ -139,15 +143,50 @@ impl WasmFragmentStateStore {
     }
 
     /// Insert a fragment state into the store.
-    pub fn insert(&self, commit_id: &WasmCommitId, state: &WasmFragmentState) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is already locked by an in-flight
+    /// `fragment` or `buildFragmentStore` call (e.g. when called from
+    /// inside a `getChangeMetaByHash` JS callback). This replaces what
+    /// would otherwise be a tab-killing "already borrowed" panic.
+    pub fn insert(
+        &self,
+        commit_id: &WasmCommitId,
+        state: &WasmFragmentState,
+    ) -> Result<(), JsValue> {
         let id = CommitId::from(commit_id);
-        self.0.borrow_mut().insert(id, state.0.clone());
+        let mut guard = self.0.try_borrow_mut().map_err(|_| {
+            let err = js_sys::Error::new(
+                "FragmentStateStore.insert: store is already in use by an in-progress \
+                 fragment computation; do not call insert from inside a getChangeMetaByHash \
+                 callback",
+            );
+            err.set_name("FragmentError");
+            JsValue::from(err)
+        })?;
+        guard.insert(id, state.0.clone());
+        Ok(())
     }
 
     /// Get a fragment state from the store.
-    pub fn get(&self, commit_id: &WasmCommitId) -> Option<WasmFragmentState> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is already locked by an in-flight
+    /// mutating operation. (Concurrent reads via `get` from inside a
+    /// callback are safe and will succeed.)
+    pub fn get(&self, commit_id: &WasmCommitId) -> Result<Option<WasmFragmentState>, JsValue> {
         let id = CommitId::from(commit_id);
-        self.0.borrow().get(&id).cloned().map(WasmFragmentState)
+        let guard = self.0.try_borrow().map_err(|_| {
+            let err = js_sys::Error::new(
+                "FragmentStateStore.get: store is currently being mutated by an in-progress \
+                 buildFragmentStore call",
+            );
+            err.set_name("FragmentError");
+            JsValue::from(err)
+        })?;
+        Ok(guard.get(&id).cloned().map(WasmFragmentState))
     }
 }
 
@@ -155,5 +194,125 @@ impl WasmFragmentStateStore {
 impl From<WasmFragmentStateStore> for Map<CommitId, FragmentState<WasmParents>> {
     fn from(store: WasmFragmentStateStore) -> Self {
         store.0.into_inner()
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────
+//
+// These exercise the `try_borrow` / `try_borrow_mut` re-entrancy
+// fix without requiring a wasm-bindgen-test runtime. The semantic
+// bug is purely Rust-level: holding a `RefCell` borrow across an
+// operation that triggers a callback into the same store. We reproduce
+// the conflict directly by holding a borrow and attempting another.
+//
+// Note: we cannot exercise `WasmFragmentStateStore::insert` / `get`
+// natively because their error paths call `js_sys::Error::new`, which
+// panics on non-wasm32 targets. Instead we exercise the underlying
+// `RefCell`'s `try_borrow*` semantics, which are exactly what the
+// fix relies on. The wasm-bindgen layer is a thin wrapper that
+// converts the `try_borrow*` `Err` into a `JsError`.
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use sedimentree_core::{collections::Map as ScMap, loose_commit::id::CommitId};
+
+    fn empty_state(byte: u8) -> FragmentState<WasmParents> {
+        FragmentState::new(
+            CommitId::new([byte; 32]),
+            sedimentree_core::collections::Set::new(),
+            sedimentree_core::collections::Set::new(),
+            ScMap::new(),
+        )
+    }
+
+    /// Sanity: the `RefCell` accepts insertion and lookup when free.
+    #[test]
+    fn insert_and_get_when_free() {
+        let store = WasmFragmentStateStore::new();
+        let id = CommitId::new([1; 32]);
+        let state = empty_state(1);
+
+        // Mirror the body of `insert`:
+        store
+            .0
+            .try_borrow_mut()
+            .expect("free store accepts mut borrow")
+            .insert(id, state);
+
+        // Mirror the body of `get`:
+        let got = store
+            .0
+            .try_borrow()
+            .expect("free store accepts shared borrow")
+            .get(&id)
+            .cloned();
+        assert!(got.is_some());
+    }
+
+    /// The bug fix: holding a shared borrow across a re-entrant
+    /// mutating operation must return `Err`, not panic. Pre-fix, the
+    /// production code path was `borrow_mut()` which would panic with
+    /// "already mutably borrowed" — fatal in Wasm. Post-fix, it's
+    /// `try_borrow_mut()` which returns `Err`, surfaced to JS as a
+    /// `FragmentError`.
+    #[test]
+    fn try_borrow_mut_fails_during_active_shared_borrow() {
+        let store = WasmFragmentStateStore::new();
+        let id = CommitId::new([2; 32]);
+        let state = empty_state(2);
+
+        // Simulate `js_fragment` holding the shared borrow during the
+        // entire `fragment` traversal; the JS callback re-enters and
+        // attempts to insert.
+        let _guard = store.0.try_borrow().expect("first shared borrow");
+
+        let mut_result = store.0.try_borrow_mut();
+        assert!(
+            mut_result.is_err(),
+            "try_borrow_mut during shared borrow must return Err, not panic"
+        );
+
+        // After releasing the guard, mut borrow succeeds normally.
+        drop(_guard);
+        store
+            .0
+            .try_borrow_mut()
+            .expect("mut borrow after shared released")
+            .insert(id, state);
+    }
+
+    /// Holding a mutable borrow across a re-entrant shared operation
+    /// returns `Err` rather than panicking.
+    #[test]
+    fn try_borrow_fails_during_active_mut_borrow() {
+        let store = WasmFragmentStateStore::new();
+
+        let _guard = store.0.try_borrow_mut().expect("first mut borrow");
+
+        let shared_result = store.0.try_borrow();
+        assert!(
+            shared_result.is_err(),
+            "try_borrow during mut borrow must return Err, not panic"
+        );
+
+        drop(_guard);
+        store
+            .0
+            .try_borrow()
+            .expect("shared borrow after mut released");
+    }
+
+    /// Concurrent shared borrows coexist — only mutable-vs-anything
+    /// conflicts trigger the error path. (This is the property that
+    /// makes `js_fragment`'s `try_borrow` cheap: read-only re-entry
+    /// into the store from a callback is still allowed.)
+    #[test]
+    fn multiple_shared_borrows_coexist() {
+        let store = WasmFragmentStateStore::new();
+        let _guard1 = store.0.try_borrow().expect("first shared borrow");
+        let _guard2 = store.0.try_borrow().expect("second shared borrow coexists");
+        let _guard3 = store.0.try_borrow().expect("third shared borrow coexists");
     }
 }

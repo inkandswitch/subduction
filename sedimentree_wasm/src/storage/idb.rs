@@ -22,6 +22,7 @@ use web_sys::{
 };
 
 use crate::{
+    alloc_cap::cap_array_length,
     commit_id::WasmCommitId,
     digest::WasmInvalidDigest,
     fragment::WasmFragmentWithBlob,
@@ -29,6 +30,15 @@ use crate::{
     sedimentree_id::WasmSedimentreeId,
     signed::{WasmSignedFragment, WasmSignedLooseCommit},
 };
+
+/// Maximum reservation when pre-allocating a `Vec` for an IDB-driven
+/// load of all loose commits or fragments.
+///
+/// Same rationale as `crate::storage::MAX_LOAD_RESERVATION`: we cap
+/// only the initial reservation, not the eventual `Vec` size. The
+/// IDB-side `getAll` could return any number of records; we just
+/// don't trust the reported `Array.length()` to size our reservation.
+const MAX_LOAD_RESERVATION: usize = 16 * 1024 * 1024;
 
 /// The version number of the [`IndexedDB`] database schema.
 pub const DB_VERSION: u32 = 1;
@@ -429,7 +439,11 @@ impl WasmIndexedDbStorage {
 
         let vals = await_idb(&req).await?;
         let arr = js_sys::Array::from(&vals);
-        let mut result = Vec::with_capacity(arr.length() as usize);
+        // Cap the pre-allocation; see `MAX_LOAD_RESERVATION` doc comment.
+        let mut result = Vec::with_capacity(cap_array_length(
+            arr.length() as usize,
+            MAX_LOAD_RESERVATION,
+        ));
 
         for js_val in arr.iter() {
             let signed_val = js_sys::Reflect::get(&js_val, &RECORD_FIELD_SIGNED.into())
@@ -624,7 +638,11 @@ impl WasmIndexedDbStorage {
 
         let vals = await_idb(&req).await?;
         let arr = js_sys::Array::from(&vals);
-        let mut result = Vec::with_capacity(arr.length() as usize);
+        // Cap the pre-allocation; see `MAX_LOAD_RESERVATION` doc comment.
+        let mut result = Vec::with_capacity(cap_array_length(
+            arr.length() as usize,
+            MAX_LOAD_RESERVATION,
+        ));
 
         for js_val in arr.iter() {
             let signed_val = js_sys::Reflect::get(&js_val, &RECORD_FIELD_SIGNED.into())

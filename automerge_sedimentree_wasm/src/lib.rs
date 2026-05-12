@@ -24,9 +24,33 @@ use sedimentree_core::{
     hex::decode_hex,
     loose_commit::id::CommitId,
 };
-use sedimentree_wasm::commit_id::{JsCommitId, WasmCommitId};
+use sedimentree_wasm::{
+    alloc_cap::cap_array_length,
+    commit_id::{JsCommitId, WasmCommitId},
+};
 use subduction_wasm::subduction::WasmHashMetric;
 use wasm_bindgen::prelude::*;
+
+/// Maximum reservation when pre-allocating a `Vec` for an Automerge
+/// change's `deps` array.
+///
+/// Each entry in `deps` is the parent of an Automerge change. In real
+/// workloads a single change has at most a handful of parents (one
+/// per concurrent author). The 16384 cap exists only to neutralise an
+/// adversarial / corrupted JS Automerge object reporting a fabricated
+/// huge length — it would have to represent thousands of concurrent
+/// authors to even approach this bound legitimately.
+const MAX_DEPS_RESERVATION: usize = 16 * 1024;
+
+/// Maximum reservation when pre-allocating a `Vec` for the inner
+/// per-dep byte array (when a JS Automerge object encodes a `ChangeHash`
+/// as `Array<number>` instead of `Uint8Array`).
+///
+/// A `ChangeHash` is exactly 32 bytes by Automerge specification. We
+/// cap the reservation at 64 (2× headroom) — anything longer is
+/// rejected by the subsequent `bytes.len() != 32` check anyway, but
+/// pre-allocating 64 bytes per dep is cheap and obviously safe.
+const MAX_INNER_HASH_RESERVATION: usize = 64;
 
 /// A Wasm wrapper around a duck-typed `Automerge` instance.
 #[wasm_bindgen(js_name = SedimentreeAutomerge)]
@@ -48,7 +72,12 @@ impl WasmSedimentreeAutomerge {
     ///
     /// # Errors
     ///
-    /// Returns a `WasmFragmentError` if building the fragment state fails.
+    /// Returns [`WasmFragmentError::StoreBusy`] if the same
+    /// `FragmentStateStore` is already locked by an in-flight fragment
+    /// computation (e.g. a `getChangeMetaByHash` JS callback re-entered
+    /// this method on the same store). Returns
+    /// [`WasmFragmentError::Fragment`] if fragment construction itself
+    /// fails.
     #[wasm_bindgen(js_name = fragment)]
     pub fn js_fragment(
         &self,
@@ -57,8 +86,15 @@ impl WasmSedimentreeAutomerge {
         hash_metric: &WasmHashMetric,
     ) -> Result<WasmFragmentState, WasmFragmentError> {
         let head_id = CommitId::from(head);
+        // `try_borrow` rather than `borrow` so that a re-entrant JS
+        // callback that attempts to mutate the same store returns a
+        // typed error instead of panicking the Wasm module.
+        let known = known_states
+            .0
+            .try_borrow()
+            .map_err(|_| WasmFragmentError::StoreBusy)?;
         Ok(self
-            .fragment(head_id, &known_states.0.borrow(), hash_metric)
+            .fragment(head_id, &known, hash_metric)
             .map(WasmFragmentState)?)
     }
 
@@ -67,7 +103,10 @@ impl WasmSedimentreeAutomerge {
     ///
     /// # Errors
     ///
-    /// Returns a `WasmFragmentError` if building the fragment store fails.
+    /// Returns [`WasmFragmentError::StoreBusy`] if the same
+    /// `FragmentStateStore` is already locked by an in-flight fragment
+    /// computation. Returns [`WasmFragmentError::Fragment`] if
+    /// fragment construction itself fails.
     #[wasm_bindgen(js_name = buildFragmentStore)]
     pub fn js_build_fragment_store(
         &self,
@@ -80,8 +119,17 @@ impl WasmSedimentreeAutomerge {
             .map(|js_id| CommitId::from(WasmCommitId::from(&js_id)))
             .collect();
 
+        // `try_borrow_mut` for the same reason as above. The borrow is
+        // held for the duration of `build_fragment_store`, which calls
+        // `CommitStore::lookup` (and therefore the user-supplied JS
+        // `getChangeMetaByHash` callback) — re-entering through that
+        // callback would otherwise panic.
+        let mut known = known_fragment_states
+            .0
+            .try_borrow_mut()
+            .map_err(|_| WasmFragmentError::StoreBusy)?;
         let fresh = self
-            .build_fragment_store(&heads, &mut known_fragment_states.0.borrow_mut(), strategy)?
+            .build_fragment_store(&heads, &mut known, strategy)?
             .into_iter()
             .cloned()
             .map(WasmFragmentState)
@@ -141,7 +189,12 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
         }
 
         let deps_arr = js_sys::Array::from(&deps_val);
-        let mut deps = Vec::with_capacity(deps_arr.length() as usize);
+        // Cap the pre-allocation against MAX_DEPS_RESERVATION; see
+        // doc comment for rationale.
+        let mut deps = Vec::with_capacity(cap_array_length(
+            deps_arr.length() as usize,
+            MAX_DEPS_RESERVATION,
+        ));
 
         for i in 0..deps_arr.length() {
             let item = deps_arr.get(i);
@@ -151,7 +204,14 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
                 Uint8Array::new(&item).to_vec()
             } else if Array::is_array(&item) {
                 let a = Array::from(&item);
-                let mut v = Vec::with_capacity(a.length() as usize);
+                // Cap the inner-array pre-allocation. A valid
+                // ChangeHash is exactly 32 bytes; the
+                // `bytes.len() != 32` check below rejects anything
+                // else, but we cap reservation defensively.
+                let mut v = Vec::with_capacity(cap_array_length(
+                    a.length() as usize,
+                    MAX_INNER_HASH_RESERVATION,
+                ));
                 for i in 0..a.length() {
                     let raw = a.get(i);
                     let b = raw

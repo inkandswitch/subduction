@@ -25,6 +25,7 @@ use wasm_bindgen_futures::JsFuture;
 use from_js_ref::FromJsRef;
 
 use crate::{
+    alloc_cap::cap_array_length,
     commit_id::{JsCommitId, WasmCommitId},
     fragment::WasmFragmentWithBlob,
     loose_commit::WasmCommitWithBlob,
@@ -34,6 +35,21 @@ use crate::{
     },
     signed::{JsSignedFragment, JsSignedLooseCommit, WasmSignedFragment, WasmSignedLooseCommit},
 };
+
+/// Maximum reservation when pre-allocating a `Vec` for a JS-array-driven
+/// load of loose commits or fragments.
+///
+/// This is the cap on `Vec::with_capacity`, *not* on the actual number
+/// of elements that can be loaded — the `Vec` will grow naturally past
+/// this bound if real data warrants it. The cap exists only to neutralise
+/// adversarial or buggy JS storage adapters that report a fake billion-item
+/// `Array.length()`, which would otherwise trigger a Wasm memory-grow
+/// trap on `Vec::with_capacity` before any data has even been read.
+///
+/// 16 million is several orders of magnitude above any plausible
+/// real-world document (a 1M-commit Sedimentree is already an extreme
+/// case).
+const MAX_LOAD_RESERVATION: usize = 16 * 1024 * 1024;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
@@ -287,7 +303,13 @@ impl Storage<Local> for JsStorage {
                 .map_err(JsStorageError::JsError)?;
 
             let array = js_sys::Array::from(&js_value);
-            let mut result = Vec::with_capacity(array.length() as usize);
+            // Cap the pre-allocation against MAX_LOAD_RESERVATION to
+            // protect against adversarial/buggy JS storage adapters
+            // that report a fabricated billion-item length.
+            let mut result = Vec::with_capacity(cap_array_length(
+                array.length() as usize,
+                MAX_LOAD_RESERVATION,
+            ));
 
             for i in 0..array.length() {
                 let item = array.get(i);
@@ -478,7 +500,12 @@ impl Storage<Local> for JsStorage {
                 .map_err(JsStorageError::JsError)?;
 
             let array = js_sys::Array::from(&js_value);
-            let mut result = Vec::with_capacity(array.length() as usize);
+            // Cap the pre-allocation against MAX_LOAD_RESERVATION; see
+            // comment on the corresponding line in `load_loose_commits`.
+            let mut result = Vec::with_capacity(cap_array_length(
+                array.length() as usize,
+                MAX_LOAD_RESERVATION,
+            ));
 
             for i in 0..array.length() {
                 let item = array.get(i);
