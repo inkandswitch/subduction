@@ -52,6 +52,7 @@ use keyhive_crypto::{
 };
 
 use crate::{
+    cache::PeriodicEventCache,
     collections::{Map, Set},
     connection::KeyhiveConnection,
     error::{ProtocolError, SigningError, StorageError, VerificationError},
@@ -61,6 +62,7 @@ use crate::{
     storage::{KeyhiveStorage, StorageHash},
     storage_ops,
     storage_ops::{bincode_deserialize, bincode_serialize},
+    syncpoints::SyncpointMap,
 };
 
 /// Shared keyhive instance behind a mutex.
@@ -149,6 +151,8 @@ where
     peers: Mutex<Map<KeyhivePeerId, Conn>>,
     contact_card: ContactCard,
     archive_config: Option<(usize, StorageHash)>,
+    syncpoints: Mutex<SyncpointMap>,
+    cache: Mutex<PeriodicEventCache>,
     _marker: core::marker::PhantomData<K>,
 }
 
@@ -200,6 +204,8 @@ where
             peers: Mutex::new(Map::new()),
             contact_card,
             archive_config: None,
+            syncpoints: Mutex::new(SyncpointMap::new()),
+            cache: Mutex::new(PeriodicEventCache::new()),
             _marker: core::marker::PhantomData,
         }
     }
@@ -221,8 +227,9 @@ where
         self.peers.lock().await.insert(peer_id, conn);
     }
 
-    /// Unregister a peer connection.
+    /// Unregister a peer connection and drop its syncpoint.
     pub async fn remove_peer(&self, peer_id: &KeyhivePeerId) {
+        self.syncpoints.lock().await.remove(peer_id);
         self.peers.lock().await.remove(peer_id);
     }
 
@@ -437,36 +444,19 @@ where
         &self,
         target: Option<&KeyhivePeerId>,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        self.sync_keyhive_with_cache(target, None).await
-    }
-
-    /// Like [`sync_keyhive`](Self::sync_keyhive) but with a pre-computed pair cache.
-    ///
-    /// # Errors
-    /// Returns [`ProtocolError`] on signing or send failure.
-    pub async fn sync_keyhive_with_cache(
-        &self,
-        target: Option<&KeyhivePeerId>,
-        cached_target_pair: Option<&AgentHashMap>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let peer_ids = match target {
             Some(t) => vec![t.clone()],
             None => self.peer_ids().await,
         };
-        let single_peer = peer_ids.len() == 1;
 
         for target_id in &peer_ids {
             if target_id.same_identity(&self.peer_id) {
                 continue;
             }
 
-            let cached = if single_peer {
-                cached_target_pair
-            } else {
-                None
-            };
+            let cached = self.cached_pair_for(target_id).await;
             let computed;
-            let pair = if let Some(c) = cached {
+            let pair = if let Some(ref c) = cached {
                 Some(c)
             } else {
                 match self.get_hashes_for_peer_pair(target_id).await {
@@ -502,8 +492,6 @@ where
 
                 self.sign_and_send(target_id, message, false).await?;
             } else {
-                // We don't have an agent for this peer. Request their
-                // contact card so we can sync next time.
                 tracing::debug!(
                     target = %target_id,
                     "requesting contact card"
@@ -535,23 +523,7 @@ where
         target: &KeyhivePeerId,
         our_syncpoint_for_target: u64,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        self.sync_check_keyhive_with_cache(target, our_syncpoint_for_target, None)
-            .await
-    }
-
-    /// Like [`sync_check_keyhive`](Self::sync_check_keyhive) with a pre-computed pair cache.
-    ///
-    /// # Errors
-    /// Returns [`ProtocolError`] on signing or send failure.
-    pub async fn sync_check_keyhive_with_cache(
-        &self,
-        target: &KeyhivePeerId,
-        our_syncpoint_for_target: u64,
-        cached_target_pair: Option<&AgentHashMap>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let our_total = self
-            .compute_total_for_peer_using(target, cached_target_pair)
-            .await?;
+        let our_total = self.compute_total_for_peer(target).await?;
         let msg = Message::SyncCheck {
             sender_id: self.peer_id.clone(),
             target_id: target.clone(),
@@ -579,29 +551,7 @@ where
         sender_syncpoint: u64,
         local_syncpoint_for_sender: u64,
     ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
-        self.resolve_sync_check_with_cache(
-            peer,
-            sender_total,
-            sender_syncpoint,
-            local_syncpoint_for_sender,
-            None,
-        )
-        .await
-    }
-
-    /// Like [`resolve_sync_check`](Self::resolve_sync_check) with a pre-computed pair cache.
-    ///
-    /// # Errors
-    /// Returns [`ProtocolError`] on total computation or fallback sync failure.
-    pub async fn resolve_sync_check_with_cache(
-        &self,
-        peer: &KeyhivePeerId,
-        sender_total: u64,
-        sender_syncpoint: u64,
-        local_syncpoint_for_sender: u64,
-        cached_pair: Option<&AgentHashMap>,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
-        let our_total = self.compute_total_for_peer_using(peer, cached_pair).await?;
+        let our_total = self.compute_total_for_peer(peer).await?;
 
         let in_sync = local_syncpoint_for_sender == sender_total && sender_syncpoint == our_total;
 
@@ -620,8 +570,7 @@ where
                 local_syncpoint_for_sender,
                 "sync check mismatch, falling back to full sync"
             );
-            self.sync_keyhive_with_cache(Some(peer), cached_pair)
-                .await?;
+            self.sync_keyhive(Some(peer)).await?;
             Ok(SyncOutcome::SyncCheckFallback { peer: peer.clone() })
         }
     }
@@ -634,13 +583,12 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if hash or pending computation fails.
-    async fn compute_total_for_peer_using(
+    async fn compute_total_for_peer(
         &self,
         peer: &KeyhivePeerId,
-        cached: Option<&AgentHashMap>,
     ) -> Result<u64, ProtocolError<Conn::SendError>> {
-        let hash_count = if let Some(map) = cached {
-            map.len()
+        let hash_count = if let Some(cached) = self.cached_pair_for(peer).await {
+            cached.len()
         } else {
             self.get_hashes_for_peer_pair(peer)
                 .await?
@@ -667,19 +615,7 @@ where
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
     ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
-        self.handle_message_with_cache(from, signed_msg, None).await
-    }
-
-    /// Like [`handle_message`](Self::handle_message) with a pre-computed pair cache.
-    ///
-    /// # Errors
-    /// Returns [`ProtocolError`] on verification or message handling failure.
-    pub async fn handle_message_with_cache(
-        &self,
-        from: &KeyhivePeerId,
-        signed_msg: SignedMessage,
-        cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+        let cached_sender_pair = self.cached_pair_for(from).await;
         let verified = signed_msg.verify(from)?;
 
         if let Some(contact_card) = &verified.contact_card {
@@ -700,10 +636,12 @@ where
 
         match &message {
             Message::SyncRequest { .. } => {
-                self.handle_sync_request(message, cached_sender_pair).await
+                self.handle_sync_request(message, cached_sender_pair.as_ref())
+                    .await
             }
             Message::SyncResponse { .. } => {
-                self.handle_sync_response(message, cached_sender_pair).await
+                self.handle_sync_response(message, cached_sender_pair.as_ref())
+                    .await
             }
             Message::SyncOps { .. } => self.handle_sync_ops(message).await,
             Message::RequestContactCard { .. } => self.handle_request_contact_card(message).await,
@@ -1295,6 +1233,123 @@ where
         storage_ops::ingest_from_storage(&keyhive, &self.storage).await?;
         Ok(())
     }
+
+    async fn cached_pair_for(
+        &self,
+        peer: &KeyhivePeerId,
+    ) -> Option<AgentHashMap> {
+        let cache = self.cache.lock().await;
+        let local = self.peer_id();
+        let map = cache.hashes_for_peer_pair(&local, peer);
+        (!map.is_empty()).then_some(map)
+    }
+
+    /// Handle an inbound keyhive message with syncpoint and cache management.
+    ///
+    /// Auto-registers unknown peers on [`SyncOutcome::SyncCheckReceived`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if the protocol rejects the message or
+    /// the follow-up sync-check resolution fails.
+    pub async fn handle_inbound(
+        &self,
+        peer: &KeyhivePeerId,
+        conn: Conn,
+        msg: SignedMessage,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
+        let total_before = self.total_ops().await;
+
+        let outcome = self.handle_message(peer, msg).await?;
+
+        if let SyncOutcome::SyncCheckReceived {
+            peer: check_peer,
+            sender_total,
+            sender_syncpoint,
+        } = &outcome
+        {
+            if !self.has_peer(check_peer).await {
+                self.add_peer(check_peer.clone(), conn).await;
+            }
+            let local_syncpoint_for_sender =
+                self.syncpoints.lock().await.get(check_peer).unwrap_or(0);
+            let resolve_outcome = self
+                .resolve_sync_check(
+                    check_peer,
+                    *sender_total,
+                    *sender_syncpoint,
+                    local_syncpoint_for_sender,
+                )
+                .await?;
+            let mut map = self.syncpoints.lock().await;
+            apply_outcome_to_syncpoints(resolve_outcome, &mut map, false);
+            return Ok(());
+        }
+
+        let total_after = self.total_ops().await;
+        let advanced = total_after != total_before;
+
+        let mut map = self.syncpoints.lock().await;
+        apply_outcome_to_syncpoints(outcome, &mut map, advanced);
+
+        Ok(())
+    }
+
+    /// Send a lightweight sync check (or full sync) to a peer.
+    ///
+    /// Uses the recorded syncpoint when available; otherwise falls back
+    /// to a full sync.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if the protocol call fails.
+    pub async fn sync_check_peer(
+        &self,
+        peer: &KeyhivePeerId,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
+        let syncpoint = self.syncpoints.lock().await.get(peer);
+
+        match syncpoint {
+            Some(sp) => self.sync_check_keyhive(peer, sp).await,
+            None => self.sync_keyhive(Some(peer)).await,
+        }
+    }
+
+    /// Refresh the periodic event cache from the underlying keyhive.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if any per-agent walk fails.
+    pub async fn refresh_cache(&self) -> Result<(), ProtocolError<Conn::SendError>> {
+        let mut cache = self.cache.lock().await;
+        cache.refresh(self).await.map(|_| ())
+    }
+}
+
+fn apply_outcome_to_syncpoints(outcome: SyncOutcome, map: &mut SyncpointMap, advanced: bool) {
+    match outcome {
+        SyncOutcome::ConfirmationReceived {
+            peer,
+            confirmer_total,
+        } => {
+            map.set(peer, confirmer_total);
+        }
+        SyncOutcome::ConfirmationSent { peer, peer_total } => {
+            if advanced {
+                map.invalidate_all();
+            }
+            map.set(peer, peer_total);
+        }
+        SyncOutcome::OpsIngested { .. } => {
+            if advanced {
+                map.invalidate_all();
+            }
+        }
+        SyncOutcome::Ok
+        | SyncOutcome::InSync { .. }
+        | SyncOutcome::SyncCheckFallback { .. }
+        | SyncOutcome::SyncCheckReceived { .. } => {}
+    }
 }
 
 /// Get sync-relevant events for an agent: membership, prekey, and CGKA operations.
@@ -1586,7 +1641,7 @@ mod tests {
         let signed_msg = SignedMessage::new(signed_bytes);
 
         let err = alice
-            .handle_message_with_cache(&alice_id, signed_msg, None)
+            .handle_message(&alice_id, signed_msg)
             .await
             .expect_err("should reject forged inner sender_id");
         assert!(
@@ -4102,5 +4157,446 @@ mod tests {
         assert_eq!(encoded_len, 65536);
         assert_eq!(cbor.len(), 5 + 65536);
         assert_eq!(ciborium_decode_byte_string(&cbor), input);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod syncpoint_effect_tests {
+    use super::*;
+    use crate::syncpoints::SyncpointMap;
+
+    fn peer(seed: u8) -> KeyhivePeerId {
+        KeyhivePeerId::from_bytes([seed; 32])
+    }
+
+    fn populated_map() -> SyncpointMap {
+        let mut map = SyncpointMap::new();
+        map.set(peer(1), 1);
+        map.set(peer(2), 2);
+        map.set(peer(3), 3);
+        map
+    }
+
+    #[test]
+    fn apply_outcome_confirmation_received_sets_syncpoint() {
+        let mut map = SyncpointMap::new();
+        apply_outcome_to_syncpoints(
+            SyncOutcome::ConfirmationReceived {
+                peer: peer(1),
+                confirmer_total: 42,
+            },
+            &mut map,
+            false,
+        );
+        assert_eq!(map.get(&peer(1)), Some(42));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn apply_outcome_confirmation_sent_when_advanced_invalidates_then_sets() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(
+            SyncOutcome::ConfirmationSent {
+                peer: peer(1),
+                peer_total: 99,
+            },
+            &mut map,
+            true,
+        );
+        assert_eq!(map.get(&peer(1)), Some(99));
+        assert_eq!(map.get(&peer(2)), None);
+        assert_eq!(map.get(&peer(3)), None);
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn apply_outcome_confirmation_sent_when_not_advanced_keeps_other_peers() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(
+            SyncOutcome::ConfirmationSent {
+                peer: peer(1),
+                peer_total: 99,
+            },
+            &mut map,
+            false,
+        );
+        assert_eq!(map.get(&peer(1)), Some(99), "current peer's syncpoint set");
+        assert_eq!(map.get(&peer(2)), Some(2), "peer 2's syncpoint preserved");
+        assert_eq!(map.get(&peer(3)), Some(3), "peer 3's syncpoint preserved");
+    }
+
+    #[test]
+    fn apply_outcome_ops_ingested_when_advanced_invalidates_all() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(SyncOutcome::OpsIngested { peer: peer(1) }, &mut map, true);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn apply_outcome_ops_ingested_when_not_advanced_is_noop() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(SyncOutcome::OpsIngested { peer: peer(1) }, &mut map, false);
+        assert_eq!(map.len(), 3, "no-op when total_ops didn't advance");
+    }
+
+    #[test]
+    fn apply_outcome_ok_is_noop() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(SyncOutcome::Ok, &mut map, true);
+        assert_eq!(map.get(&peer(1)), Some(1));
+        assert_eq!(map.get(&peer(2)), Some(2));
+        assert_eq!(map.get(&peer(3)), Some(3));
+    }
+
+    #[test]
+    fn apply_outcome_in_sync_is_noop() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(SyncOutcome::InSync { peer: peer(1) }, &mut map, true);
+        assert_eq!(map.get(&peer(1)), Some(1));
+        assert_eq!(map.get(&peer(2)), Some(2));
+        assert_eq!(map.get(&peer(3)), Some(3));
+    }
+
+    #[test]
+    fn apply_outcome_sync_check_fallback_is_noop() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(
+            SyncOutcome::SyncCheckFallback { peer: peer(1) },
+            &mut map,
+            true,
+        );
+        assert_eq!(map.get(&peer(1)), Some(1));
+        assert_eq!(map.get(&peer(2)), Some(2));
+        assert_eq!(map.get(&peer(3)), Some(3));
+    }
+
+    #[test]
+    fn apply_outcome_sync_check_received_is_noop() {
+        let mut map = populated_map();
+        apply_outcome_to_syncpoints(
+            SyncOutcome::SyncCheckReceived {
+                peer: peer(1),
+                sender_total: 10,
+                sender_syncpoint: 5,
+            },
+            &mut map,
+            true,
+        );
+        assert_eq!(map.get(&peer(1)), Some(1));
+        assert_eq!(map.get(&peer(2)), Some(2));
+        assert_eq!(map.get(&peer(3)), Some(3));
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::missing_panics_doc
+)]
+mod orchestration_behavioural {
+    use alloc::{sync::Arc, vec::Vec};
+
+    use super::*;
+    use crate::test_utils::{
+        ChannelConnection, TwoPeerHarness, create_group_with_read_members,
+        exchange_contact_cards_and_setup, run_sync_round,
+    };
+
+    fn deserialize_message(signed: &SignedMessage, expected_sender: &KeyhivePeerId) -> Message {
+        let verified = signed
+            .clone()
+            .verify(expected_sender)
+            .expect("verify signed message");
+        ciborium::from_reader(verified.payload.as_slice()).expect("cbor decode message")
+    }
+
+    fn drain_channel(conn: &ChannelConnection, expected_sender: &KeyhivePeerId) -> Vec<Message> {
+        core::iter::from_fn(|| conn.inbound_rx.try_recv().ok())
+            .map(|msg| deserialize_message(&msg, expected_sender))
+            .collect()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_check_peer_with_no_syncpoint_does_full_sync() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_id,
+            bob_id,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        let alice_proto = Arc::new(alice_proto);
+
+        alice_proto
+            .sync_check_peer(&bob_id)
+            .await
+            .expect("sync_check_peer");
+
+        let messages = drain_channel(&bob_conn, &alice_id);
+        assert!(
+            matches!(messages.first(), Some(Message::SyncRequest { .. })),
+            "expected SyncRequest, got {messages:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_check_peer_with_syncpoint_does_sync_check() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_id,
+            bob_id,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        let alice_proto = Arc::new(alice_proto);
+
+        alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
+
+        alice_proto
+            .sync_check_peer(&bob_id)
+            .await
+            .expect("sync_check_peer");
+
+        let messages = drain_channel(&bob_conn, &alice_id);
+        assert!(
+            matches!(messages.first(), Some(Message::SyncCheck { .. })),
+            "expected SyncCheck, got {messages:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_inbound_sync_check_received_resolves_via_protocol() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+        drop(
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+            .await,
+        );
+        drop(drain_channel(&alice_conn, &bob_id));
+        drop(drain_channel(&bob_conn, &alice_id));
+
+        let alice_proto = Arc::new(alice_proto);
+        let alice_total = alice_proto.total_ops().await;
+        alice_proto
+            .syncpoints
+            .lock()
+            .await
+            .set(bob_id.clone(), alice_total);
+
+        bob_proto
+            .sync_check_keyhive(&alice_id, alice_total)
+            .await
+            .expect("bob sync_check_keyhive");
+
+        let inbound = alice_conn
+            .inbound_rx
+            .try_recv()
+            .expect("alice should receive sync-check");
+
+        alice_proto
+            .handle_inbound(&bob_id, bob_conn.clone(), inbound)
+            .await
+            .expect("handle_inbound sync check");
+
+        let alice_messages = drain_channel(&bob_conn, &alice_id);
+        assert!(
+            alice_messages.is_empty(),
+            "expected no outbound messages (in-sync), got {alice_messages:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_inbound_auto_registers_unknown_peer_on_sync_check() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_id,
+            bob_id,
+            alice_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        let alice_proto = Arc::new(alice_proto);
+
+        alice_proto.remove_peer(&bob_id).await;
+        assert!(!alice_proto.has_peer(&bob_id).await);
+
+        bob_proto
+            .sync_check_keyhive(&alice_id, 0)
+            .await
+            .expect("bob sync_check_keyhive");
+        let inbound = alice_conn
+            .inbound_rx
+            .try_recv()
+            .expect("alice should receive sync-check");
+
+        alice_proto
+            .handle_inbound(&bob_id, alice_conn.clone(), inbound)
+            .await
+            .expect("handle_inbound sync check");
+
+        assert!(
+            alice_proto.has_peer(&bob_id).await,
+            "auto-register should have added bob to the protocol's peer registry"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cache_refresh_populates_then_early_returns_on_unchanged() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+        drop(
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+            .await,
+        );
+
+        let alice_proto = Arc::new(alice_proto);
+
+        alice_proto.refresh_cache().await.expect("first refresh");
+        let (total_after_first, agent_count_after_first, public_hash_count_after_first) = {
+            let cache = alice_proto.cache.lock().await;
+            assert!(!cache.is_empty(), "cache populated after first refresh");
+            let agent_count = cache.agent_count();
+            assert!(agent_count >= 1, "at least the local agent is tracked");
+            let total = cache
+                .last_total_ops()
+                .expect("last_total_ops should be Some after refresh");
+            let public_count = cache.public_hashes().len();
+            (total, agent_count, public_count)
+        };
+
+        alice_proto.refresh_cache().await.expect("second refresh");
+        let cache = alice_proto.cache.lock().await;
+        assert_eq!(cache.last_total_ops(), Some(total_after_first));
+        assert_eq!(
+            cache.agent_count(),
+            agent_count_after_first,
+            "agent count unchanged"
+        );
+        assert_eq!(
+            cache.public_hashes().len(),
+            public_hash_count_after_first,
+            "public hash count unchanged"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_inbound_preserves_other_peers_when_ingest_is_noop() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        {
+            let kh = bob_kh.lock().await;
+            create_group_with_read_members(&kh, &[&alice_id]).await;
+        }
+        drop(
+            run_sync_round(
+                &bob_proto,
+                &alice_proto,
+                &bob_id,
+                &alice_id,
+                &bob_conn,
+                &alice_conn,
+            )
+            .await,
+        );
+        drop(drain_channel(&alice_conn, &bob_id));
+        drop(drain_channel(&bob_conn, &alice_id));
+
+        let alice_proto = Arc::new(alice_proto);
+
+        let carol_id = KeyhivePeerId::from_bytes([0xCC; 32]);
+        alice_proto.syncpoints.lock().await.set(carol_id.clone(), 42);
+
+        alice_proto
+            .sync_keyhive(Some(&bob_id))
+            .await
+            .expect("alice sync_keyhive");
+
+        let sync_request = bob_conn
+            .inbound_rx
+            .try_recv()
+            .expect("bob should receive sync request");
+        bob_proto
+            .handle_message(&alice_id, sync_request)
+            .await
+            .expect("bob handle sync request");
+
+        let sync_response = alice_conn
+            .inbound_rx
+            .try_recv()
+            .expect("alice should receive sync response");
+        alice_proto
+            .handle_inbound(&bob_id, bob_conn.clone(), sync_response)
+            .await
+            .expect("alice handle sync response");
+
+        drop(drain_channel(&bob_conn, &alice_id));
+        drop(drain_channel(&alice_conn, &bob_id));
+
+        let map = alice_proto.syncpoints.lock().await;
+        assert!(
+            map.get(&bob_id).is_some(),
+            "alice should record a syncpoint for bob after the round"
+        );
+        assert_eq!(
+            map.get(&carol_id),
+            Some(42),
+            "carol's syncpoint should survive: ingest was a no-op so \
+             total_ops didn't advance and invalidation should be skipped"
+        );
     }
 }

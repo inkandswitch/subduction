@@ -22,10 +22,14 @@ ciborium = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 future_form = { workspace = true }
+subduction_core = { workspace = true, optional = true }
+subduction_crypto = { workspace = true, optional = true }
 keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true }
 sedimentree_core = { workspace = true }
 rand = "0.8.5"
+tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
+tokio-util = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_bytes = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
@@ -35,6 +39,8 @@ tracing = { workspace = true }
 [features]
 default = []
 bolero = ["dep:bolero"]
+handler = ["dep:async-channel", "dep:subduction_core", "dep:subduction_crypto", "std"]
+runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
 serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "std"]
 std = ["thiserror/std"]
 test-utils = ["dep:async-channel", "serde"]
@@ -42,6 +48,9 @@ test-utils = ["dep:async-channel", "serde"]
 [dev-dependencies]
 async-channel = { workspace = true }
 nonempty = "0.10.0"
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
+subduction_crypto = { workspace = true }
+testresult = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

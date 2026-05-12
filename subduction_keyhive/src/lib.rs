@@ -10,6 +10,12 @@ mod collections;
 
 pub mod connection;
 pub mod error;
+#[cfg(feature = "handler")]
+pub mod handler;
+#[cfg(feature = "handler")]
+pub mod policy;
+#[cfg(feature = "runtime")]
+pub mod runtime;
 pub mod message;
 pub mod peer_id;
 pub mod signed_message;
@@ -19,11 +25,15 @@ pub mod wire;
 #[cfg(feature = "serde")]
 pub mod all_agent_events;
 #[cfg(feature = "serde")]
+mod cache;
+#[cfg(feature = "serde")]
 pub mod protocol;
 #[cfg(feature = "serde")]
 mod serde_compat;
 #[cfg(feature = "serde")]
 pub mod storage_ops;
+#[cfg(feature = "serde")]
+mod syncpoints;
 
 #[cfg(any(test, feature = "test-utils"))]
 #[allow(

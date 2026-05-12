@@ -1,7 +1,8 @@
 //! Subduction policy for the CLI server.
 //!
 //! Same actor-bridge pattern as `keyhive.rs`: a `Send + Sync` handle forwards
-//! `authorize_*` calls to the keyhive thread.
+//! `authorize_*` calls to the keyhive thread. Legacy (zero-padded) doc IDs are
+//! always allowed.
 
 use std::sync::Arc;
 
@@ -14,14 +15,18 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
-use subduction_keyhive_policy::{
+use subduction_keyhive::policy::{
     ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError, authorize_connect_with,
     authorize_fetch_with, authorize_put_with, filter_authorized_fetch_with,
 };
 
-use crate::keyhive::CliKeyhive;
+use subduction_keyhive::runtime::RuntimeKeyhive;
 
 const POLICY_COMMAND_CAPACITY: usize = 1024;
+
+fn is_legacy(id: &SedimentreeId) -> bool {
+    id.as_bytes()[16..].iter().all(|&b| b == 0)
+}
 
 #[allow(missing_debug_implementations)]
 pub(crate) enum PolicyCommand {
@@ -118,6 +123,9 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+        if is_legacy(&sedimentree_id) {
+            return async { Ok(()) }.boxed();
+        }
         async move {
             let (reply_tx, reply_rx) = async_channel::bounded(1);
             self.tx
@@ -143,6 +151,9 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+        if is_legacy(&sedimentree_id) {
+            return async { Ok(()) }.boxed();
+        }
         async move {
             let (reply_tx, reply_rx) = async_channel::bounded(1);
             self.tx
@@ -168,21 +179,26 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        let (legacy, keyhive_ids): (Vec<_>, Vec<_>) =
+            ids.into_iter().partition(is_legacy);
+
         async move {
             let (reply_tx, reply_rx) = async_channel::bounded(1);
             if self
                 .tx
                 .send(PolicyCommand::FilterAuthorizedFetch {
                     peer,
-                    ids,
+                    ids: keyhive_ids,
                     reply: reply_tx,
                 })
                 .await
                 .is_err()
             {
-                return Vec::new();
+                return legacy;
             }
-            reply_rx.recv().await.unwrap_or_default()
+            let mut allowed = reply_rx.recv().await.unwrap_or_default();
+            allowed.extend(legacy);
+            allowed
         }
         .boxed()
     }
@@ -190,7 +206,7 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
 
 pub(crate) async fn run_policy_actor(
     rx: Receiver<PolicyCommand>,
-    keyhive: Arc<AsyncMutex<CliKeyhive>>,
+    keyhive: Arc<AsyncMutex<RuntimeKeyhive>>,
 ) {
     while let Ok(cmd) = rx.recv().await {
         match cmd {

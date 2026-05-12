@@ -1,29 +1,25 @@
 //! Keyhive setup for the CLI.
 //!
-//! `Keyhive` is `!Send`, so it can't live on the multi-threaded tokio runtime
-//! with the rest of the server. This module spawns a dedicated OS thread with a
-//! current-thread runtime and `LocalSet` hosting all keyhive state. The main
-//! runtime communicates via actor bridges (message and policy channels) defined in
-//! `subduction_keyhive_policy::handler`.
+//! CLI-specific types (filesystem storage, connection adapter) and the
+//! thin `spawn_keyhive_thread` wrapper that delegates to
+//! `subduction_keyhive::runtime`.
 
 use core::convert::Infallible;
-use std::{io, path::Path, sync::Arc};
+use std::{io, path::Path};
 
-use async_channel::Receiver;
-use async_lock::Mutex;
 use future_form::{Local, Sendable};
 use futures::{FutureExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
 use subduction_core::connection::Connection;
 use subduction_keyhive::{
-    KeyhiveMessage, KeyhivePeerId, KeyhiveProtocol, SignedMessage,
+    KeyhiveMessage, KeyhivePeerId, SignedMessage,
     connection::KeyhiveConnection,
+    handler::{KeyhiveCommand, KeyhiveProtocolHandle},
+    runtime::RuntimeConfig,
     signed_message::CborError,
     storage::{KeyhiveStorage, StorageHash},
 };
-use subduction_keyhive_orchestrator::{OrchestratorConfig, SubductionKeyhiveOrchestrator};
-use subduction_keyhive_policy::handler::{KeyhiveCommand, KeyhiveProtocolHandle, run_actor};
 
 use crate::{
     handler::CliConn,
@@ -205,189 +201,29 @@ impl KeyhiveConnection<Local> for CliConnKeyhiveAdapter {
 
 pub(crate) type CliKeyhiveHandle = KeyhiveProtocolHandle<CliConn, CliConnKeyhiveAdapter>;
 
-pub(crate) type CliKeyhive = keyhive_core::keyhive::Keyhive<
-    future_form::Local,
-    keyhive_crypto::signer::memory::MemorySigner,
-    Vec<u8>,
-    Vec<u8>,
-    keyhive_core::store::ciphertext::memory::MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
-    keyhive_core::listener::no_listener::NoListener,
-    rand::rngs::OsRng,
->;
-
 /// Spawn the dedicated keyhive thread with message and policy actors.
-///
-/// Awaits keyhive init, propagating errors so the caller never proceeds
-/// with dead channels.
 pub(crate) async fn spawn_keyhive_thread(
-    msg_rx: Receiver<KeyhiveCommand<CliConn, CliConnKeyhiveAdapter>>,
-    policy_rx: Receiver<PolicyCommand>,
+    msg_rx: async_channel::Receiver<KeyhiveCommand<CliConn, CliConnKeyhiveAdapter>>,
+    policy_rx: async_channel::Receiver<PolicyCommand>,
     data_dir: &Path,
     keyhive_signer: keyhive_crypto::signer::memory::MemorySigner,
-    config: OrchestratorConfig,
     cancel: CancellationToken,
 ) -> eyre::Result<()> {
     let keyhive_root = data_dir.join(".keyhive");
     tracing::info!("Initializing keyhive storage at {:?}", keyhive_root);
     let storage = FsKeyhiveStorage::new(keyhive_root)?;
 
-    let (init_tx, init_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-
-    std::thread::Builder::new()
-        .name("keyhive".into())
-        .spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let msg = format!("failed to build keyhive runtime: {e}");
-                    tracing::error!("{msg}");
-                    drop(init_tx.send(Err(msg)));
-                    return;
-                }
-            };
-            let local = tokio::task::LocalSet::new();
-            rt.block_on(local.run_until(run_keyhive(
-                msg_rx,
-                policy_rx,
-                storage,
-                keyhive_signer,
-                config,
-                cancel,
-                init_tx,
-            )));
-        })?;
-
-    // Wait until keyhive init completes.
-    match init_rx.await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(eyre::eyre!(e)),
-        Err(_) => Err(eyre::eyre!("keyhive thread panicked during initialization")),
-    }
-}
-
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-async fn run_keyhive(
-    msg_rx: Receiver<KeyhiveCommand<CliConn, CliConnKeyhiveAdapter>>,
-    policy_rx: Receiver<PolicyCommand>,
-    storage: FsKeyhiveStorage,
-    signer: keyhive_crypto::signer::memory::MemorySigner,
-    config: OrchestratorConfig,
-    cancel: CancellationToken,
-    init_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
-) {
-    use keyhive_core::{
-        keyhive::Keyhive, listener::no_listener::NoListener, principal::identifier::Identifier,
-        store::ciphertext::memory::MemoryCiphertextStore,
-    };
-
-    let keyhive = match Keyhive::generate(
-        signer,
-        MemoryCiphertextStore::<Vec<u8>, Vec<u8>>::new(),
-        NoListener,
-        rand::rngs::OsRng,
+    subduction_keyhive::runtime::spawn_keyhive_thread(
+        msg_rx,
+        storage,
+        keyhive_signer,
+        RuntimeConfig::default(),
+        CliConnKeyhiveAdapter::new,
+        move |keyhive| {
+            tokio::task::spawn_local(run_policy_actor(policy_rx, keyhive));
+        },
+        cancel,
     )
     .await
-    {
-        Ok(kh) => kh,
-        Err(e) => {
-            let msg = format!("failed to generate keyhive: {e}");
-            tracing::error!("{msg}");
-            drop(init_tx.send(Err(msg)));
-            return;
-        }
-    };
-
-    let contact_card = match keyhive.contact_card().await {
-        Ok(cc) => cc,
-        Err(e) => {
-            let msg = format!("failed to generate keyhive contact card: {e}");
-            tracing::error!("{msg}");
-            drop(init_tx.send(Err(msg)));
-            return;
-        }
-    };
-
-    let kh_id: Identifier = keyhive.id().into();
-    let peer_id = KeyhivePeerId::from_bytes(kh_id.to_bytes());
-
-    let shared = Arc::new(Mutex::new(keyhive));
-    let policy_keyhive = Arc::clone(&shared);
-    let protocol =
-        KeyhiveProtocol::<_, Vec<u8>, Vec<u8>, _, _, _, CliConnKeyhiveAdapter, _, Local>::new(
-            shared,
-            storage,
-            peer_id,
-            contact_card,
-        );
-    let orchestrator = Arc::new(SubductionKeyhiveOrchestrator::new(
-        Arc::new(protocol),
-        config,
-    ));
-
-    if let Err(e) = orchestrator.ingest_from_storage().await {
-        tracing::warn!("keyhive ingest_from_storage failed: {e}");
-    }
-
-    // Signal init success.
-    drop(init_tx.send(Ok(())));
-
-    let process_orch = Arc::clone(&orchestrator);
-    let connect_orch = Arc::clone(&orchestrator);
-    let disconnect_orch = Arc::clone(&orchestrator);
-    tokio::task::spawn_local(run_actor(
-        msg_rx,
-        move |peer, c, msg| {
-            let orch = Arc::clone(&process_orch);
-            async move {
-                let keyhive_peer = KeyhivePeerId::from_bytes(*peer.as_bytes());
-                let adapter = CliConnKeyhiveAdapter::new(keyhive_peer, c);
-                orch.handle_inbound(peer, adapter, msg)
-                    .await
-                    .map_err(|e| e.to_string())
-            }
-        },
-        move |peer, conn| {
-            let orch = Arc::clone(&connect_orch);
-            async move {
-                orch.on_peer_connect(peer, conn).await;
-            }
-        },
-        move |peer| {
-            let orch = Arc::clone(&disconnect_orch);
-            async move {
-                orch.on_peer_disconnect(peer).await;
-            }
-        },
-    ));
-
-    tokio::task::spawn_local(run_policy_actor(policy_rx, policy_keyhive));
-
-    let refresh_orch = Arc::clone(&orchestrator);
-    let refresh_cancel = cancel.clone();
-    let refresh_interval = refresh_orch.config().cache_refresh_interval;
-    tokio::task::spawn_local(async move {
-        let mut tick = tokio::time::interval(refresh_interval);
-        // Discard the immediate first tick so the first refresh runs
-        // one interval after startup, not at t=0.
-        tick.tick().await;
-        loop {
-            tokio::select! {
-                () = refresh_cancel.cancelled() => break,
-                _ = tick.tick() => {
-                    if let Err(e) = refresh_orch.refresh_cache().await {
-                        tracing::warn!(error = %e, "refresh_cache failed");
-                    }
-                }
-            }
-        }
-        tracing::debug!("keyhive cache refresh task shutting down");
-    });
-
-    tracing::info!("keyhive actor + policy actor + cache refresh started");
-
-    cancel.cancelled().await;
-    tracing::debug!("keyhive actors shutting down");
+    .map_err(|e| eyre::eyre!(e))
 }

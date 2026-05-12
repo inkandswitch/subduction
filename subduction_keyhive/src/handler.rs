@@ -14,14 +14,14 @@
 //! run_actor (runs on LocalSet, calls !Send KeyhiveProtocol)
 //!   |  loops on KeyhiveCommand
 //!   v
-//! KeyhiveProtocol::handle_message(...)
+//! KeyhiveProtocol::handle_inbound(...)
 //! ```
 //!
 //! When `keyhive_core` becomes `Send`, the actor can be removed and
 //! the handle can call `KeyhiveProtocol` directly.
 //!
 //! [`Handler`]: subduction_core::handler::Handler
-//! [`KeyhiveProtocol`]: subduction_keyhive::KeyhiveProtocol
+//! [`KeyhiveProtocol`]: crate::KeyhiveProtocol
 
 extern crate alloc;
 
@@ -30,7 +30,8 @@ use alloc::string::String;
 use async_channel::{Receiver, Sender};
 use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{authenticated::Authenticated, handler::Handler, peer::id::PeerId};
-use subduction_keyhive::{KeyhiveMessage, SignedMessage, signed_message::CborError};
+
+use crate::{KeyhiveMessage, SignedMessage, signed_message::CborError};
 
 // ── Command enum ────────────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ use subduction_keyhive::{KeyhiveMessage, SignedMessage, signed_message::CborErro
 /// * `C` is the [`Handler`] trait's connection payload, forwarded over
 ///   `HandleInbound` so the actor can auto-register unknown peers.
 /// * `Conn` is the per-peer keyhive connection passed to
-///   [`KeyhiveProtocol::add_peer`](subduction_keyhive::KeyhiveProtocol::add_peer).
+///   [`KeyhiveProtocol::add_peer`](crate::KeyhiveProtocol::add_peer).
 #[allow(missing_debug_implementations)]
 pub enum KeyhiveCommand<C, Conn> {
     /// Handle an inbound keyhive message from a peer.
@@ -172,9 +173,9 @@ impl<C, Conn> KeyhiveProtocolHandle<C, Conn> {
 /// * `on_disconnect` — callback for peer cleanup (calls
 ///   [`KeyhiveProtocol::remove_peer`])
 ///
-/// [`KeyhiveProtocol::handle_message`]: subduction_keyhive::KeyhiveProtocol::handle_message
-/// [`KeyhiveProtocol::add_peer`]: subduction_keyhive::KeyhiveProtocol::add_peer
-/// [`KeyhiveProtocol::remove_peer`]: subduction_keyhive::KeyhiveProtocol::remove_peer
+/// [`KeyhiveProtocol::handle_message`]: crate::KeyhiveProtocol::handle_message
+/// [`KeyhiveProtocol::add_peer`]: crate::KeyhiveProtocol::add_peer
+/// [`KeyhiveProtocol::remove_peer`]: crate::KeyhiveProtocol::remove_peer
 pub async fn run_actor<C, Conn, F, Fut, A, AFut, D, DFut>(
     rx: Receiver<KeyhiveCommand<C, Conn>>,
     process: F,
@@ -270,7 +271,7 @@ where
 mod tests {
     use alloc::{string::ToString, vec};
 
-    use subduction_keyhive::SignedMessage;
+    use crate::SignedMessage;
     use testresult::TestResult;
 
     use super::*;

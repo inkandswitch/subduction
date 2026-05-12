@@ -1,17 +1,15 @@
 //! Per-peer syncpoint tracking.
 //!
 //! A syncpoint is the last confirmed per-pair operation total with a
-//! given peer. When present, the orchestrator can send a lightweight
+//! given peer. When present, the protocol can send a lightweight
 //! [`Message::SyncCheck`] instead of a full sync request. When absent
 //! (or invalidated by new ingestions) it falls back to a full sync.
 //!
-//! This module provides the storage. Update rules live in [`crate::orchestrator`].
-//!
-//! [`Message::SyncCheck`]: subduction_keyhive::Message::SyncCheck
+//! [`Message::SyncCheck`]: crate::Message
 
 use alloc::collections::BTreeMap;
 
-use subduction_keyhive::KeyhivePeerId;
+use crate::peer_id::KeyhivePeerId;
 
 /// Per-peer syncpoint map.
 ///
@@ -19,32 +17,30 @@ use subduction_keyhive::KeyhivePeerId;
 /// last successful sync exchange. Entries are removed on peer
 /// disconnect and cleared globally when local state advances.
 #[derive(Debug, Default)]
-pub struct SyncpointMap {
+pub(crate) struct SyncpointMap {
     inner: BTreeMap<KeyhivePeerId, u64>,
 }
 
 impl SyncpointMap {
     /// Create an empty [`SyncpointMap`].
-    #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             inner: BTreeMap::new(),
         }
     }
 
     /// Get the syncpoint for a peer, if any.
-    #[must_use]
-    pub fn get(&self, peer: &KeyhivePeerId) -> Option<u64> {
+    pub(crate) fn get(&self, peer: &KeyhivePeerId) -> Option<u64> {
         self.inner.get(peer).copied()
     }
 
     /// Set the syncpoint for a peer.
-    pub fn set(&mut self, peer: KeyhivePeerId, total: u64) {
+    pub(crate) fn set(&mut self, peer: KeyhivePeerId, total: u64) {
         self.inner.insert(peer, total);
     }
 
     /// Drop the syncpoint for a single peer.
-    pub fn remove(&mut self, peer: &KeyhivePeerId) {
+    pub(crate) fn remove(&mut self, peer: &KeyhivePeerId) {
         self.inner.remove(peer);
     }
 
@@ -52,19 +48,19 @@ impl SyncpointMap {
     ///
     /// Called when new ops are ingested locally, since any cached
     /// totals from prior exchanges are now potentially stale.
-    pub fn invalidate_all(&mut self) {
+    pub(crate) fn invalidate_all(&mut self) {
         self.inner.clear();
     }
 
     /// Number of peers with a recorded syncpoint.
-    #[must_use]
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.inner.len()
     }
 
     /// Whether no peer has a recorded syncpoint.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 }

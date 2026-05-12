@@ -1,11 +1,9 @@
-//! Keyhive-based authorization policy and handler for Subduction connections.
-
-#![cfg_attr(not(feature = "std"), no_std)]
-
-pub mod handler;
-
-#[cfg(feature = "std")]
-extern crate std;
+//! Keyhive-based authorization policy for Subduction connections.
+//!
+//! Provides [`SubductionKeyhive`], a wrapper around [`Keyhive`] that implements
+//! [`ConnectionPolicy`] and [`StoragePolicy`], plus standalone `authorize_*`
+//! functions for callers that hold a `&Keyhive` directly (e.g. an actor on a
+//! `LocalSet`).
 
 extern crate alloc;
 
@@ -484,8 +482,8 @@ pub fn try_sedimentree_id_to_document_id(sedimentree_id: SedimentreeId) -> Optio
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
-
     use super::*;
     use ed25519_dalek::SigningKey;
 

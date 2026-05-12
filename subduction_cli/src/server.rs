@@ -245,7 +245,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
     let (keyhive_handle, keyhive_rx) =
-        subduction_keyhive_policy::handler::KeyhiveProtocolHandle::channel();
+        subduction_keyhive::handler::KeyhiveProtocolHandle::channel();
 
     let sites_keyhive_handle: CliKeyhiveHandle = keyhive_handle.clone();
 
@@ -257,7 +257,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         policy_rx,
         &data_dir,
         keyhive_signer,
-        subduction_keyhive_orchestrator::OrchestratorConfig::default(),
         token.clone(),
     )
     .await?;
