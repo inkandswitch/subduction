@@ -99,7 +99,7 @@ testresult = "0.4.1"
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.46", features = ["macros", "net", "rt-multi-thread", "sync"] }
 tokio-test = "0.4.4"
-tokio-util = "0.7.16"
+tokio-util = { version = "0.7.16", features = ["rt"] }
 tracing = { version = "0.1.41", default-features = false }
 tracing-loki = "0.2"
 tracing-subscriber = { version = "0.3.2", default-features = false }

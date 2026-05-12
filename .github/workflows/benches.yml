@@ -7,6 +7,8 @@ on:
   workflow_dispatch:
 
 concurrency:
+  # Include the PR number / branch ref so concurrent PRs don't cancel
+  # each other, but pushes to the same ref still cancel in-progress runs.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -33,6 +35,10 @@ jobs:
             package: subduction_websocket
             features: tokio_client,tokio_server
             bench: e2e
+            # Slim sweep: drop 256 KiB / 1 MiB blobs, 4 / 8 concurrent
+            # clients, 100-commit batches. Avoids OOM-kill of the
+            # GitHub-hosted runner. See subduction_websocket/benches/e2e.rs.
+            ci_slim: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +58,10 @@ jobs:
           cache-all-crates: true
 
       - name: Run ${{ matrix.name }} benchmarks
+        env:
+          # Bench files (currently only e2e.rs) read this to decide
+          # whether to run the slim sweep. Empty string = full sweep.
+          SUBDUCTION_BENCH_CI_SLIM: ${{ matrix.ci_slim || '' }}
         run: |
           if [ -n "${{ matrix.features }}" ]; then
             cargo bench \

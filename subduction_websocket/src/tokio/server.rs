@@ -30,12 +30,8 @@ use subduction_core::{
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 
-use crate::tokio::TokioSpawn;
-use tokio::{
-    net::TcpListener,
-    task::{JoinHandle, JoinSet},
-};
-use tokio_util::sync::CancellationToken;
+use tokio::{net::TcpListener, task::JoinSet};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
 // NOTE: `O: Timeout<Sendable>` remains on the server type because
@@ -57,8 +53,12 @@ pub struct TokioWebSocketServer<
 {
     subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     address: SocketAddr,
-    accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
+    /// Tracks the accept loop, the per-connection WebSocket
+    /// listener/sender, and (in [`Self::setup`]) the [`Subduction`]
+    /// listener/manager futures. [`Self::stop_and_drain`] awaits all
+    /// of them.
+    tasks: TaskTracker,
     /// Tungstenite max message size used for outbound connections
     /// (`try_connect` / `try_connect_discover`). The incoming accept loop
     /// already receives this value as a local variable — storing it here
@@ -82,8 +82,8 @@ where
         Self {
             subduction: self.subduction.clone(),
             address: self.address,
-            accept_task: self.accept_task.clone(),
             cancellation_token: self.cancellation_token.clone(),
+            tasks: self.tasks.clone(),
             max_message_size: self.max_message_size,
         }
     }
@@ -116,12 +116,38 @@ where
     /// # Errors
     ///
     /// Returns [`tungstenite::Error`] if there is a problem binding the socket.
-    #[allow(clippy::too_many_lines)]
     pub async fn new(
         address: SocketAddr,
         handshake_max_drift: Duration,
         max_message_size: usize,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+    ) -> Result<Self, tungstenite::Error> {
+        Self::new_with_tracker(
+            address,
+            handshake_max_drift,
+            max_message_size,
+            subduction,
+            TaskTracker::new(),
+        )
+        .await
+    }
+
+    /// Like [`new`](Self::new) but uses a caller-supplied [`TaskTracker`].
+    /// Pass the same tracker to the [`Subduction`] builder (via
+    /// [`TrackedTokioSpawn`][crate::tokio::TrackedTokioSpawn]) and a single
+    /// [`Self::stop_and_drain`] will await every server- and Subduction-side
+    /// task — including per-peer `connection_loop`s.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tungstenite::Error`] if binding the socket fails.
+    #[allow(clippy::too_many_lines)]
+    pub async fn new_with_tracker(
+        address: SocketAddr,
+        handshake_max_drift: Duration,
+        max_message_size: usize,
+        subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+        tasks: TaskTracker,
     ) -> Result<Self, tungstenite::Error> {
         let server_peer_id = subduction.peer_id();
         tracing::info!(
@@ -144,7 +170,8 @@ where
         }
 
         let inner_subduction = subduction.clone();
-        let accept_task: JoinHandle<()> = tokio::spawn(async move {
+        let accept_loop_tracker = tasks.clone();
+        tasks.spawn(async move {
             let mut conns = JoinSet::new();
             loop {
                 tokio::select! {
@@ -159,8 +186,16 @@ where
 
                                 let task_subduction = inner_subduction.clone();
                                 let task_discovery_audience = discovery_audience;
-                                conns.spawn({
-                                    async move {
+                                // Clone for the spawned task; the outer loop keeps its own
+                                // copy for the `cancelled()` arm above.
+                                let task_cancel = child_cancellation_token.clone();
+                                let task_tracker = accept_loop_tracker.clone();
+                                let outer_cancel = task_cancel.clone();
+                                conns.spawn(async move {
+                                    // `accept_hdr_async_with_config` and `handshake::respond`
+                                    // are not cancellation-aware; race against the token so
+                                    // a stalled client can't block server teardown.
+                                    let handshake_fut = async {
                                         let mut ws_config = WebSocketConfig::default();
                                         ws_config.max_message_size = Some(max_message_size);
                                         ws_config.max_frame_size = Some(max_message_size);
@@ -179,26 +214,43 @@ where
                                         // Step 2: Subduction handshake and connection setup
                                         // Accepts either Audience::Known(peer_id) or discovery audience
                                         let now = TimestampSeconds::now();
+                                        let listen_cancel = task_cancel.clone();
+                                        let sender_cancel = task_cancel.clone();
+                                        let listen_tracker = task_tracker.clone();
+                                        let sender_tracker = task_tracker.clone();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
-                                            |ws_handshake, peer_id| {
+                                            move |ws_handshake, peer_id| {
                                                 // Create WebSocket wrapper with verified PeerId
                                                 let (ws, sender_fut) = WebSocket::new(
                                                     ws_handshake.into_inner(),
                                                     peer_id,
                                                 );
 
-                                                // Start listener and sender tasks
                                                 let listen_ws = ws.clone();
-                                                tokio::spawn(async move {
-                                                    if let Err(e) = listen_ws.listen().await {
-                                                        tracing::info!("WebSocket listener disconnected: {e}");
+                                                listen_tracker.spawn(async move {
+                                                    tokio::select! {
+                                                        () = listen_cancel.cancelled() => {
+                                                            tracing::debug!("WebSocket listener cancelled");
+                                                        }
+                                                        result = listen_ws.listen() => {
+                                                            if let Err(e) = result {
+                                                                tracing::info!("WebSocket listener disconnected: {e}");
+                                                            }
+                                                        }
                                                     }
                                                 });
 
-                                                tokio::spawn(async move {
-                                                    if let Err(e) = sender_fut.await {
-                                                        tracing::info!("WebSocket sender disconnected: {e}");
+                                                sender_tracker.spawn(async move {
+                                                    tokio::select! {
+                                                        () = sender_cancel.cancelled() => {
+                                                            tracing::debug!("WebSocket sender cancelled");
+                                                        }
+                                                        result = sender_fut => {
+                                                            if let Err(e) = result {
+                                                                tracing::info!("WebSocket sender disconnected: {e}");
+                                                            }
+                                                        }
                                                     }
                                                 });
 
@@ -231,6 +283,13 @@ where
                                         if let Err(e) = task_subduction.add_connection(auth_mt).await {
                                             tracing::error!("Failed to add connection: {e}");
                                         }
+                                    };
+
+                                    tokio::select! {
+                                        () = outer_cancel.cancelled() => {
+                                            tracing::debug!("per-connection handshake task cancelled (server shutdown)");
+                                        }
+                                        () = handshake_fut => {}
                                     }
                                 });
                             }
@@ -246,8 +305,8 @@ where
         Ok(Self {
             address: assigned_address,
             subduction,
-            accept_task: Arc::new(accept_task),
             cancellation_token,
+            tasks,
             max_message_size,
         })
     }
@@ -279,10 +338,16 @@ where
     {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
 
+        // Shared tracker: Subduction's `connection_loop`s spawn via
+        // `TrackedTokioSpawn`; the server's accept loop and per-WS tasks
+        // spawn directly. `stop_and_drain` awaits all of them.
+        let tasks = TaskTracker::new();
+        let spawner = crate::tokio::TrackedTokioSpawn::new(tasks.clone());
+
         let mut builder = SubductionBuilder::new()
             .signer(signer)
             .storage(storage, Arc::new(policy))
-            .spawner(TokioSpawn)
+            .spawner(spawner)
             .timer(timeout.clone())
             .nonce_cache(nonce_cache)
             .depth_metric(depth_metric);
@@ -294,23 +359,25 @@ where
         let (subduction, _handler, listener_fut, manager_fut) =
             builder.build::<Sendable, MessageTransport<UnifiedWebSocket>>();
 
-        let server = Self::new(address, handshake_max_drift, max_message_size, subduction).await?;
+        let server = Self::new_with_tracker(
+            address,
+            handshake_max_drift,
+            max_message_size,
+            subduction,
+            tasks,
+        )
+        .await?;
 
-        let actor_cancel = server.cancellation_token.clone();
-        let listener_cancel = server.cancellation_token.clone();
-
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = manager_fut => {},
-                () = actor_cancel.cancelled() => {}
-            }
+        // Spawned directly (no `select!`-against-token wrapper): the
+        // token race always loses to `cancel()`, dropping `manager_fut`
+        // before its `connection_loop`-abort cleanup can run.
+        // `stop_and_drain` instead calls `subduction.shutdown()` first
+        // so both futures exit via their channel-close paths.
+        server.tasks.spawn(async move {
+            let _ = manager_fut.await;
         });
-
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = listener_fut => {},
-                () = listener_cancel.cancelled() => {}
-            }
+        server.tasks.spawn(async move {
+            let _ = listener_fut.await;
         });
 
         Ok(server)
@@ -390,6 +457,8 @@ where
         let nonce = Nonce::random();
 
         let cancel_token = self.cancellation_token.clone();
+        let listen_tracker = self.tasks.clone();
+        let sender_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
@@ -401,7 +470,7 @@ where
 
                 let listen_ws = ws.clone();
                 let listener_cancel = cancel_token.clone();
-                tokio::spawn(async move {
+                listen_tracker.spawn(async move {
                     tokio::select! {
                         () = listener_cancel.cancelled() => {
                             tracing::debug!("Shutting down listener for peer {listen_uri_str}");
@@ -415,7 +484,7 @@ where
                 });
 
                 let sender_cancel = cancel_token;
-                tokio::spawn(async move {
+                sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
                             tracing::debug!("Shutting down sender for peer {sender_uri_str}");
@@ -500,6 +569,8 @@ where
         let nonce = Nonce::random();
 
         let cancel_token = self.cancellation_token.clone();
+        let listen_tracker = self.tasks.clone();
+        let sender_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
@@ -511,7 +582,7 @@ where
 
                 let listen_ws = ws.clone();
                 let listener_cancel = cancel_token.clone();
-                tokio::spawn(async move {
+                listen_tracker.spawn(async move {
                     tokio::select! {
                         () = listener_cancel.cancelled() => {
                             tracing::debug!("Shutting down listener for peer {listen_uri_str}");
@@ -525,7 +596,7 @@ where
                 });
 
                 let sender_cancel = cancel_token;
-                tokio::spawn(async move {
+                sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
                             tracing::debug!("Shutting down sender for peer {sender_uri_str}");
@@ -560,10 +631,30 @@ where
         Ok(server_id)
     }
 
-    /// Graceful shutdown: cancel and await tasks.
+    /// Signal graceful shutdown without waiting. Closes the Subduction
+    /// channels (so the listener/manager exit on their next poll),
+    /// cancels the [`CancellationToken`] (so the accept loop and
+    /// per-connection tasks exit via their `select!` arms), and closes
+    /// the [`TaskTracker`] (so [`stop_and_drain`](Self::stop_and_drain)
+    /// can `wait` afterwards). For deterministic teardown that releases
+    /// every `Arc<Subduction>` before returning, use `stop_and_drain`.
+    ///
+    /// Order is load-bearing: `subduction.shutdown()` must run before
+    /// `cancel()`, otherwise `manager_fut` is dropped mid-execution
+    /// (before its `connection_loop`-abort cleanup runs) and any
+    /// later `tracker.wait()` deadlocks on parked `connection_loop`s.
+    ///
+    /// Idempotent.
     pub fn stop(&mut self) {
+        self.subduction.shutdown();
         self.cancellation_token.cancel();
-        self.accept_task.abort();
+        self.tasks.close();
+    }
+
+    /// [`Self::stop`] plus `await` every tracked task.
+    pub async fn stop_and_drain(&mut self) {
+        self.stop();
+        self.tasks.wait().await;
     }
 }
 

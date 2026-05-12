@@ -195,6 +195,7 @@ impl<K: FutureForm + RunManager<C, M>, C, M: Encode + Decode, S: Spawn<K> + Send
     Local where C: Connection<Local, M> + Clone + 'static, M: 'static
 )]
 impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
+    #[allow(clippy::too_many_lines)]
     fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, C, M, S>,
     ) -> Self::Future<'static, ()> {
@@ -305,6 +306,19 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
                 }
             }
             tracing::debug!("ConnectionManager: command channel closed, shutting down");
+
+            // Abort outstanding `connection_loop`s and drop our `C` clones
+            // so transports with `Clone`d channel senders (e.g. WebSocket)
+            // can close their inbound channels.
+            let mut tasks_guard = manager.tasks.lock().await;
+            let n = tasks_guard.len();
+            if n > 0 {
+                tracing::debug!("ConnectionManager: aborting {n} connection_loop tasks");
+                for (_, _, handle, _) in tasks_guard.iter() {
+                    handle.abort();
+                }
+                tasks_guard.clear();
+            }
         })
     }
 }

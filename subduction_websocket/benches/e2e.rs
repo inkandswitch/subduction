@@ -24,6 +24,16 @@
 //! - Bidirectional sync (both peers have unique data)
 //! - Incremental sync (pre-synced peers, one new commit)
 //! - Concurrent client fan-in (N clients syncing with one server)
+//!
+//! ## CI Slim Mode
+//!
+//! GitHub-hosted Ubuntu runners cap at ~7 GiB of RAM. The full sweep
+//! (256 KiB / 1 MiB blobs, 4 / 8 concurrent clients, 100-commit batches)
+//! pushes the runner past that cap by the time the heavier blob cases
+//! run, due to per-iteration accumulation of WebSocket / `MemoryStorage`
+//! state. Set `SUBDUCTION_BENCH_CI_SLIM=1` in the bench environment to
+//! drop the heaviest cases. The workflow at `.github/workflows/benches.yml`
+//! sets this for the e2e-websocket matrix leg.
 
 #![allow(
     clippy::expect_used,
@@ -37,6 +47,7 @@
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+#[cfg(feature = "pprof-profile")]
 use criterion_pprof::criterion::{Output, PProfProfiler};
 use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
@@ -56,11 +67,21 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
-    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
+    tokio::{
+        TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    },
 };
+use tokio_util::task::TaskTracker;
 
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether to run the slim CI sweep. Controlled by the
+/// `SUBDUCTION_BENCH_CI_SLIM` environment variable: empty or unset
+/// runs the full sweep, any non-empty value enables slim mode.
+fn ci_slim() -> bool {
+    std::env::var_os("SUBDUCTION_BENCH_CI_SLIM").is_some_and(|v| !v.is_empty())
+}
 
 fn signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
@@ -108,7 +129,14 @@ async fn fresh_server(seed: u8) -> (ServerGuard, PeerId, SocketAddr) {
     .expect("server setup");
 
     let bound = server.address();
-    (ServerGuard(server), peer_id, bound)
+    (
+        ServerGuard {
+            server,
+            rt: tokio::runtime::Handle::current(),
+        },
+        peer_id,
+        bound,
+    )
 }
 
 type ClientSubduction = Arc<
@@ -130,21 +158,23 @@ type ClientSubduction = Arc<
     >,
 >;
 
-/// RAII guard that calls [`TokioWebSocketServer::stop`] on drop to ensure the
-/// accept loop and associated tasks are cleaned up between benchmark iterations.
-struct ServerGuard(
-    TokioWebSocketServer<
+/// RAII wrapper that runs [`TokioWebSocketServer::stop_and_drain`] on
+/// drop. `rt` is captured at construction because `Handle::current()`
+/// panics outside an active `block_on`.
+struct ServerGuard {
+    server: TokioWebSocketServer<
         MemoryStorage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
         TimeoutTokio,
     >,
-);
+    rt: tokio::runtime::Handle,
+}
 
 impl Drop for ServerGuard {
     fn drop(&mut self) {
-        self.0.stop();
+        self.rt.block_on(self.server.stop_and_drain());
     }
 }
 
@@ -158,7 +188,111 @@ impl std::ops::Deref for ServerGuard {
     >;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.server
+    }
+}
+
+/// RAII guard that gracefully tears down a [`ClientSubduction`] on drop:
+/// shuts it down, aborts the WebSocket transport tasks, awaits everything,
+/// and drains the connection-manager tracker. `rt` is captured because
+/// `Handle::current()` panics outside an active `block_on`.
+struct ClientGuard {
+    client: ClientSubduction,
+    rt: tokio::runtime::Handle,
+    listener_task: Option<tokio::task::JoinHandle<Result<(), futures_util::future::Aborted>>>,
+    manager_task: Option<tokio::task::JoinHandle<Result<(), futures_util::future::Aborted>>>,
+    // `Option` so `Drop` can `take()` them without needing a runtime in
+    // scope (unlike `mem::replace(_, tokio::spawn(_))`).
+    ws_listener_task: Option<tokio::task::JoinHandle<()>>,
+    ws_sender_task: Option<tokio::task::JoinHandle<()>>,
+    // Tracks `connection_loop`s spawned by the client's `ConnectionManager`.
+    tasks: TaskTracker,
+}
+
+/// Max time to wait for tasks to drain before falling back to `abort()`.
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        let Some(listener_task) = self.listener_task.take() else {
+            return;
+        };
+        let Some(manager_task) = self.manager_task.take() else {
+            return;
+        };
+        let Some(ws_listener_task) = self.ws_listener_task.take() else {
+            return;
+        };
+        let Some(ws_sender_task) = self.ws_sender_task.take() else {
+            return;
+        };
+
+        // Dropping a `tokio::task::JoinHandle` does NOT abort the task
+        // (unlike `async-std`); capture the handles up front so we can
+        // explicitly abort if the timeout fires.
+        let listener_abort = listener_task.abort_handle();
+        let manager_abort = manager_task.abort_handle();
+
+        let client = self.client.clone();
+        let tracker = self.tasks.clone();
+
+        client.shutdown();
+
+        self.rt.block_on(async move {
+            // WS tasks are parked on the tungstenite stream; abort to
+            // unpark, then await below so their captured `Arc<WebSocket>`
+            // is released before we return.
+            ws_listener_task.abort();
+            ws_sender_task.abort();
+
+            let (l_res, m_res, _, _) = futures::future::join4(
+                tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, listener_task),
+                tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, manager_task),
+                tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, ws_listener_task),
+                tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, ws_sender_task),
+            )
+            .await;
+
+            if l_res.is_err() {
+                tracing::warn!("ClientGuard: listener didn't drain, aborting");
+                listener_abort.abort();
+            }
+            if m_res.is_err() {
+                tracing::warn!("ClientGuard: manager didn't drain, aborting");
+                manager_abort.abort();
+            }
+
+            tracker.close();
+            if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, tracker.wait())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "ClientGuard: {} connection_loop task(s) didn't drain",
+                    tracker.len()
+                );
+            }
+        });
+    }
+}
+
+impl std::ops::Deref for ClientGuard {
+    type Target = ClientSubduction;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+impl ClientGuard {
+    /// Clone the inner `Arc<Subduction<…>>` for sharing across tasks.
+    ///
+    /// The guard itself is intentionally not `Clone`: only one guard per
+    /// connection should run its abort-on-drop, since aborting the same
+    /// `JoinHandle` twice is harmless but cloning the guard fields would
+    /// double-count.
+    fn inner(&self) -> ClientSubduction {
+        self.client.clone()
     }
 }
 
@@ -198,25 +332,33 @@ fn assert_full_sync(
     assert!(had_success, "full_sync reported no successful syncs");
 }
 
-/// Create a `Subduction` client, connect to the server, start background tasks.
+/// Create a `Subduction` client, connect to the server, start background
+/// tasks. Returns a [`ClientGuard`] which owns every spawned `JoinHandle`
+/// and aborts them all on drop. See [`ClientGuard`] for the rationale —
+/// the leak this prevents is the proximate cause of bench-CI OOM-kills.
 async fn connected_client(
     seed: u8,
     server_peer_id: PeerId,
     server_addr: SocketAddr,
-) -> ClientSubduction {
+) -> ClientGuard {
     let client_signer = signer(seed);
+
+    // Shared with the `Subduction` builder via `TrackedTokioSpawn` so
+    // teardown can await every spawned `connection_loop`.
+    let tasks = TaskTracker::new();
+    let spawner = TrackedTokioSpawn::new(tasks.clone());
 
     let (client, _handler, listener_fut, manager_fut) = SubductionBuilder::new()
         .signer(client_signer.clone())
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
+        .spawner(spawner)
         .timer(TimeoutTokio)
         .build::<Sendable, TokioWebSocketClient<MemorySigner>>();
 
     // `listener_fut` already runs `Subduction::listen()` internally —
     // do NOT spawn an additional `client.listen()` call.
-    tokio::spawn(manager_fut);
-    tokio::spawn(listener_fut);
+    let manager_task = tokio::spawn(manager_fut);
+    let listener_task = tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", server_addr.ip(), server_addr.port())
         .parse()
@@ -227,12 +369,12 @@ async fn connected_client(
             .await
             .expect("client connect");
 
-    tokio::spawn(async {
+    let ws_listener_task = tokio::spawn(async {
         if let Err(e) = ws_listener.await {
             tracing::error!("ws_listener task failed: {e:?}");
         }
     });
-    tokio::spawn(async {
+    let ws_sender_task = tokio::spawn(async {
         if let Err(e) = ws_sender.await {
             tracing::error!("ws_sender task failed: {e:?}");
         }
@@ -242,7 +384,16 @@ async fn connected_client(
         .add_connection(client_ws)
         .await
         .expect("add_connection");
-    client
+
+    ClientGuard {
+        client,
+        rt: tokio::runtime::Handle::current(),
+        listener_task: Some(listener_task),
+        manager_task: Some(manager_task),
+        ws_listener_task: Some(ws_listener_task),
+        ws_sender_task: Some(ws_sender_task),
+        tasks,
+    }
 }
 
 // ─── Handshake ───────────────────────────────────────────────────────────────
@@ -266,16 +417,19 @@ fn bench_handshake(c: &mut Criterion) {
                             .parse()
                             .expect("valid uri");
 
-                    let (_ws, listener, sender) = TokioWebSocketClient::new(
+                    // `TokioWebSocketClient::new` awaits the handshake
+                    // internally before returning. The returned `listener`
+                    // / `sender` futures only matter for post-handshake
+                    // message I/O, which this bench doesn't exercise — so
+                    // we drop them immediately along with the connection
+                    // rather than leaking spawn handles per iteration.
+                    let (_ws, _listener, _sender) = TokioWebSocketClient::new(
                         uri,
                         client_signer,
                         Audience::known(server_peer_id),
                     )
                     .await
                     .expect("connect");
-
-                    tokio::spawn(async { listener.await.ok() });
-                    tokio::spawn(async { sender.await.ok() });
                 });
             },
             BatchSize::PerIteration,
@@ -326,7 +480,14 @@ fn bench_batch_sync(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("sync/batch");
 
-    for count in [1, 10, 50, 100] {
+    // Skip the 100-commit case in CI slim mode: setup builds 100 commits
+    // per iteration, multiplying per-iter memory pressure.
+    let counts: &[u64] = if ci_slim() {
+        &[1, 10, 50]
+    } else {
+        &[1, 10, 50, 100]
+    };
+    for &count in counts {
         group.throughput(Throughput::Elements(count));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
             b.iter_batched(
@@ -369,12 +530,20 @@ fn bench_large_blob_sync(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("sync/blob_size");
 
-    for &(label, size) in &[
-        ("1KB", 1_024),
-        ("64KB", 64 * 1_024),
-        ("256KB", 256 * 1_024),
-        ("1MB", 1_024 * 1_024),
-    ] {
+    // The 256 KiB and 1 MiB cases reproducibly OOM-kill GitHub-hosted
+    // runners (7 GiB RAM) once accumulated state from prior benches is
+    // factored in. Drop them in CI slim mode.
+    let cases: &[(&str, usize)] = if ci_slim() {
+        &[("1KB", 1_024), ("64KB", 64 * 1_024)]
+    } else {
+        &[
+            ("1KB", 1_024),
+            ("64KB", 64 * 1_024),
+            ("256KB", 256 * 1_024),
+            ("1MB", 1_024 * 1_024),
+        ]
+    };
+    for &(label, size) in cases {
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::new("blob", label), &size, |b, &size| {
             b.iter_batched(
@@ -517,7 +686,11 @@ fn bench_concurrent_clients(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("sync/concurrent_clients");
 
-    for num_clients in [1, 2, 4, 8] {
+    // 4- and 8-client cases each spawn that many parallel `connected_client`
+    // setups per iteration, multiplying every per-iter resource cost.
+    // Drop them in CI slim mode.
+    let counts: &[u64] = if ci_slim() { &[1, 2] } else { &[1, 2, 4, 8] };
+    for &num_clients in counts {
         group.throughput(Throughput::Elements(num_clients));
         group.bench_with_input(
             BenchmarkId::from_parameter(num_clients),
@@ -553,7 +726,7 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                         rt.block_on(async {
                             let mut handles = Vec::new();
                             for client in &clients {
-                                let c = client.clone();
+                                let c = client.inner();
                                 handles.push(tokio::spawn(async move {
                                     assert_full_sync(
                                         c.full_sync_with_all_peers(Some(TIMEOUT)).await,
@@ -589,11 +762,13 @@ fn bench_concurrent_clients(c: &mut Criterion) {
 /// suite well inside the 60-minute job budget configured in
 /// `.github/workflows/benches.yml`.
 fn ci_friendly_criterion() -> Criterion {
-    Criterion::default()
-        .with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)))
+    let crit = Criterion::default()
         .sample_size(20)
         .warm_up_time(Duration::from_secs(1))
-        .measurement_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(5));
+    #[cfg(feature = "pprof-profile")]
+    let crit = crit.with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
+    crit
 }
 
 criterion_group! {

@@ -693,6 +693,15 @@ where
      * CONNECTIONS *
      ***************/
 
+    /// Gracefully shut down the manager and listener loops by closing
+    /// the channels they read from. Unlike [`Drop`] (which aborts mid-
+    /// await), the listener drains its in-flight `Handler::handle`
+    /// `FuturesUnordered` before exiting. Idempotent.
+    pub fn shutdown(&self) {
+        self.manager_channel.close();
+        self.msg_queue.close();
+    }
+
     /// Gracefully shut down a specific connection.
     ///
     /// # Errors
