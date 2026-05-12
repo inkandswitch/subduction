@@ -86,10 +86,10 @@ pub mod names {
     /// Duration of a background `full_sync_with_all_peers` round trip in seconds.
     pub const BACKGROUND_SYNC_DURATION_SECONDS: &str =
         "subduction_background_sync_duration_seconds";
-    /// Number of call errors observed in the most recent background sync round.
+    /// Cumulative count of call errors across background sync rounds (since process start).
     pub const BACKGROUND_SYNC_CALL_ERRORS_TOTAL: &str =
         "subduction_background_sync_call_errors_total";
-    /// Number of I/O errors observed in the most recent background sync round.
+    /// Cumulative count of I/O errors across background sync rounds (since process start).
     pub const BACKGROUND_SYNC_IO_ERRORS_TOTAL: &str = "subduction_background_sync_io_errors_total";
 }
 

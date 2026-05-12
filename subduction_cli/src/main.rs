@@ -70,11 +70,11 @@ fn setup_tracing() {
     // Set `LOKI_URL=http://localhost:3100` to enable.
     //
     // WARNING: when Loki is configured, the layer's filter (default
-    // `LOKI_LOG=info`) determines which events ship over HTTP. With the
-    // dispatch-event downgrade in Phase B (handler/sync.rs::dispatch at
-    // DEBUG), per-message events stay local. If a future change reintroduces
-    // INFO-level per-message events, every message becomes a Loki HTTP entry
-    // — set `LOKI_LOG=warn` in that case.
+    // `LOKI_LOG=info`) determines which events ship over HTTP. Today the
+    // per-message dispatch event in `handler/sync.rs::dispatch` is at
+    // DEBUG, so per-message events stay local. If a future change
+    // reintroduces INFO-level per-message events, every message becomes
+    // a Loki HTTP entry — set `LOKI_LOG=warn` in that case.
     #[cfg(feature = "native-tls")]
     let (loki_layer, loki_task) = match std::env::var("LOKI_URL") {
         Ok(loki_url) => match setup_loki(&loki_url) {
