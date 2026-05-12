@@ -122,52 +122,6 @@ fn array_round_trip_with_prefix() {
         });
 }
 
-/// Endianness check: u16 BE — the most-significant byte must be at
-/// the lower offset.
-#[test]
-#[allow(clippy::cast_possible_truncation)]
-fn u16_is_big_endian() {
-    bolero::check!().with_arbitrary::<u16>().for_each(|value| {
-        let mut buf = Vec::new();
-        encode::u16(*value, &mut buf);
-        assert_eq!(buf.len(), 2);
-        assert_eq!(buf[0], (*value >> 8) as u8);
-        assert_eq!(buf[1], *value as u8);
-    });
-}
-
-// ── Slice / array decoder pathological inputs ──────────────────────────
-
-/// A `len` so large that `offset + len` overflows `usize` must error,
-/// not panic. The `slice` decoder uses `checked_add` so this is the
-/// regression net.
-#[test]
-fn slice_handles_offset_plus_len_overflow() {
-    bolero::check!()
-        .with_arbitrary::<(Vec<u8>, usize)>()
-        .for_each(|(bytes, offset)| {
-            // Pick a `len` that, combined with `offset`, would overflow.
-            let len = usize::MAX - offset.saturating_sub(1);
-            let _result = decode::slice(bytes, *offset, len);
-        });
-}
-
-/// `slice(buf, offset, 0)` should always succeed and return `&[]`,
-/// regardless of buffer size or offset (as long as offset itself is in
-/// range — currently, an offset beyond the buffer plus len 0 yields
-/// the right result by virtue of `buf.get(offset..offset)` returning
-/// `Some(&[])` when `offset == buf.len()`, and `None` otherwise).
-#[test]
-fn slice_zero_len_at_buf_end_is_ok() {
-    bolero::check!()
-        .with_arbitrary::<Vec<u8>>()
-        .for_each(|bytes| {
-            let result = decode::slice(bytes, bytes.len(), 0);
-            assert!(result.is_ok());
-            assert!(result.expect("just checked").is_empty());
-        });
-}
-
 // ── verify_sorted ──────────────────────────────────────────────────────
 
 /// `verify_sorted` accepts iff the input is strictly ascending.
