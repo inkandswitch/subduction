@@ -90,8 +90,7 @@ pub mod names {
     pub const BACKGROUND_SYNC_CALL_ERRORS_TOTAL: &str =
         "subduction_background_sync_call_errors_total";
     /// Number of I/O errors observed in the most recent background sync round.
-    pub const BACKGROUND_SYNC_IO_ERRORS_TOTAL: &str =
-        "subduction_background_sync_io_errors_total";
+    pub const BACKGROUND_SYNC_IO_ERRORS_TOTAL: &str = "subduction_background_sync_io_errors_total";
 }
 
 /// Record a new connection being established.
