@@ -83,13 +83,8 @@ rustls = [
   "subduction_websocket/tokio_client_rustls",
   "subduction_websocket/tokio_server_rustls",
 ]
-# Compile in `console-subscriber` support. When this feature is enabled and
-# the `TOKIO_CONSOLE` env var is set at runtime, the tokio-console layer is
-# installed so a `tokio-console` client can attach for live task/resource
-# inspection. When the feature is OFF (default), the `console-subscriber`
-# crate is not linked at all — smaller binary, no per-task Span allocation
-# from the runtime instrumentation hooks. Useful for production builds where
-# tokio-console is never wanted; useful as a dev feature for ad-hoc debugging.
+# Compile in `console-subscriber`. Off by default; set `TOKIO_CONSOLE=1` at
+# runtime when built with this feature to attach `tokio-console`.
 tokio-console = ["dep:console-subscriber"]
 
 [lints]

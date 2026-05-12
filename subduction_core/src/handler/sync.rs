@@ -326,13 +326,6 @@ impl<
         message: SyncMessage,
     ) -> Result<(), ListenError<F, S, C, SyncMessage>> {
         let from = conn.peer_id();
-        // Per-message dispatch event: DEBUG, not INFO. At production
-        // scale (sustained sync), this fires per inbound message; with
-        // `RUST_LOG=info` and a Loki layer attached, it would ship every
-        // message to Loki as an HTTP entry. The `subduction_messages_total`
-        // counter (`metrics::message_dispatched`) captures rates with
-        // bounded labels; the per-message log only adds value for
-        // interactive debugging.
         tracing::debug!(
             from = %from,
             message_type = message.variant_name(),

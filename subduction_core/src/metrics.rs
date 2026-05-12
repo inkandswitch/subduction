@@ -2,51 +2,13 @@
 //!
 //! This module is only available when the `metrics` feature is enabled.
 //!
-//! # Label cardinality rule
+//! # Label cardinality
 //!
-//! **All Prometheus label values must be bounded** — i.e. come from a
-//! small, fixed set of `&'static str` values known at compile time.
-//! Examples of acceptable labels:
-//!
-//! - `"type" => SyncMessage::variant_name()` (9 static strings)
-//! - `"operation" => "save_batch"` (16 static strings; see
-//!   [`storage_operation_duration`])
-//! - `"transport" => "websocket" | "longpoll" | "iroh"`
-//!
-//! Examples of **forbidden** labels (high cardinality):
-//!
-//! - `"sedimentree_id" => id.to_string()` — N grows with stored trees
-//! - `"peer_id" => id.to_string()` — N grows with peer count
-//! - `"commit_id" => id.to_string()` — N grows with content
-//! - `"url" => url.to_string()` — N grows per-callsite
-//!
-//! ## Why this matters
-//!
-//! The Prometheus exporter retains every label value it has ever
-//! observed in its internal registry. Each unique label combination
-//! creates a distinct metric series. Two compounding costs at scale:
-//!
-//! 1. **Refresh cost**: a periodic refresh task that registers gauges
-//!    per-entity takes the recorder's `RwLock` for write once per
-//!    entity. With N entities this is O(N) lock churn per refresh,
-//!    contending with concurrent scrapes.
-//! 2. **Scrape cost**: `PrometheusHandle::render()` walks every
-//!    registered series and clones each `Key` (which contains the
-//!    label strings). With N series, every Prometheus scrape costs
-//!    O(N) string clones plus the rendered text size.
-//!
-//! Stale entries never go away — there is no `unregister` API in
-//! the `metrics` / `metrics-exporter-prometheus` crates. Setting a
-//! gauge to 0 keeps the series alive in the registry.
-//!
-//! Production confirmed a single worker thread pegged at ~100% CPU
-//! with no incoming traffic when `subduction_storage_loose_commits`
-//! and `subduction_storage_fragments` carried `sedimentree_id` labels.
-//! See `~/Documents/Code/subduction/.ignore/DECISIONS.md` for the
-//! full post-mortem. **Do not reintroduce per-id label dimensions.**
-//! Per-entity counts should be exposed via on-demand endpoints
-//! (e.g. `Subduction::sedimentree_ids` + `get_commits`) rather than
-//! the metrics layer.
+//! All label values must come from a small, fixed set of `&'static str`
+//! known at compile time. Runtime-derived values (sedimentree IDs, peer
+//! IDs, commit IDs, URLs) are forbidden: each unique value creates a
+//! permanent series in the recorder registry and slows every scrape.
+//! Expose per-entity data via on-demand endpoints instead.
 
 /// Metric names used throughout the application.
 pub mod names {
@@ -66,12 +28,6 @@ pub mod names {
     pub const BATCH_SYNC_RESPONSES_TOTAL: &str = "subduction_batch_sync_responses_total";
 
     // Storage metrics (gauges - refreshed periodically from actual state).
-    //
-    // Per-sedimentree-id gauges (`subduction_storage_loose_commits`,
-    // `subduction_storage_fragments`) were removed 2026-05-08 due to
-    // unbounded label cardinality causing CPU thrashing on the Prometheus
-    // recorder rwlock. The aggregate `_total` gauges below are sufficient
-    // for storage health monitoring. See module-level docs.
     /// Current number of sedimentrees in storage.
     pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
     /// Total loose commits across all sedimentrees.
@@ -171,17 +127,6 @@ pub fn set_storage_sedimentrees(count: usize) {
     metrics::gauge!(names::STORAGE_SEDIMENTREES).set(count as f64);
 }
 
-// `set_storage_loose_commits` and `set_storage_fragments` (per-sedimentree-id
-// gauges) were removed 2026-05-08 due to unbounded label cardinality. They
-// emitted one Prometheus series per distinct sedimentree, which caused
-// O(N) write-lock contention on the recorder rwlock during refresh and
-// O(N) `Cow<Key>::clone()` per scrape. The bounded-cardinality
-// `set_storage_loose_commits_total` and `set_storage_fragments_total` below
-// remain; per-sedimentree counts can be obtained on demand via the
-// `Subduction::sedimentree_ids()` / `get_commits()` APIs.
-//
-// See the module-level docs for the cardinality rule that this enforces.
-
 /// Set the total number of loose commits across all sedimentrees.
 #[inline]
 #[allow(clippy::cast_precision_loss)]
@@ -203,13 +148,6 @@ pub fn storage_operation_duration(operation: &'static str, duration_secs: f64) {
         .record(duration_secs);
 }
 
-// Background sync metrics — bounded, no labels.
-//
-// Surfaces visibility into the periodic `full_sync_with_all_peers` task
-// driven by the iroh transport (and any future periodic-sync transport).
-// Without these, a sync that takes longer than its tick interval piles
-// up silently.
-
 /// Record the duration of a background `full_sync_with_all_peers` round.
 #[inline]
 pub fn background_sync_duration(duration_secs: f64) {
@@ -230,13 +168,7 @@ pub fn background_sync_io_errors(n: u64) {
 
 /// Register HELP/TYPE metadata for every metric this crate emits.
 ///
-/// Call once at recorder init (after `init_metrics()`). Without this,
-/// the Prometheus `/metrics` output lacks `HELP` and `TYPE` lines, which
-/// makes the metrics harder to discover and document via standard
-/// Prometheus tooling.
-///
-/// This is a one-shot setup call; subsequent invocations are idempotent
-/// but wasteful.
+/// Call once at recorder init.
 pub fn describe_all() {
     metrics::describe_gauge!(
         names::CONNECTIONS_ACTIVE,

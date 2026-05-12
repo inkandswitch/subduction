@@ -532,15 +532,11 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                         subduction_core::metrics::background_sync_duration(
                             round_start.elapsed().as_secs_f64(),
                         );
-                        // `as u64` is safe: `Vec::len()` returns `usize`,
-                        // which on any supported target fits in `u64`.
-                        #[allow(clippy::cast_possible_truncation)]
                         if !call_errs.is_empty() {
                             subduction_core::metrics::background_sync_call_errors(
                                 call_errs.len() as u64,
                             );
                         }
-                        #[allow(clippy::cast_possible_truncation)]
                         if !io_errs.is_empty() {
                             subduction_core::metrics::background_sync_io_errors(
                                 io_errs.len() as u64,

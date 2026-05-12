@@ -81,11 +81,6 @@ impl<S: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S> {
         for sedimentree_id in &sedimentree_ids {
             // Count items per tree via identity listing.
             // With subdirectory-based storage, this is a cheap directory scan.
-            //
-            // No `metrics::*!` calls per sedimentree here — see the
-            // cardinality rule in `crate::metrics`'s module-level docs.
-            // Per-tree counts are queryable on demand via
-            // `Subduction::sedimentree_ids()` and `get_commits()`.
             let commit_ids =
                 Storage::<Sendable>::list_commit_ids(&self.inner, *sedimentree_id).await?;
             let fragment_ids =

@@ -199,10 +199,6 @@ where
 
             match self.timer.timeout(time_limit, rx.boxed()).await {
                 Ok(Ok(resp)) => {
-                    // DEBUG, not INFO: completions are not interesting in
-                    // production and fire per `BatchSyncRequest` round trip.
-                    // The `subduction_batch_sync_responses_total` counter
-                    // already covers this in a bounded form.
                     tracing::debug!("request {req_id:?} completed");
                     Ok(resp)
                 }
@@ -271,10 +267,6 @@ where
 
             match self.timer.timeout(time_limit, rx.boxed_local()).await {
                 Ok(Ok(resp)) => {
-                    // DEBUG, not INFO: completions are not interesting in
-                    // production and fire per `BatchSyncRequest` round trip.
-                    // The `subduction_batch_sync_responses_total` counter
-                    // already covers this in a bounded form.
                     tracing::debug!("request {req_id:?} completed");
                     Ok(resp)
                 }

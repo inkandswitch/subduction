@@ -46,11 +46,7 @@ fn setup_tracing() {
     let registry = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter));
 
-    // tokio-console layer (only available when built with `--features tokio-console`).
-    // Activated at runtime when the TOKIO_CONSOLE env var is set. The dep
-    // itself is not linked in default builds, keeping the binary smaller
-    // and eliminating the per-task `Span` allocation overhead from tokio's
-    // tracing hooks for production.
+    // Optionally add tokio-console layer (requires `--features tokio-console`).
     #[cfg(feature = "tokio-console")]
     let console_layer = if std::env::var("TOKIO_CONSOLE").is_ok() {
         let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
@@ -65,16 +61,8 @@ fn setup_tracing() {
     #[cfg(not(feature = "tokio-console"))]
     let console_layer: Option<tracing_subscriber::layer::Identity> = None;
 
-    // Optionally add Loki layer (native-tls only).
-    //
-    // Set `LOKI_URL=http://localhost:3100` to enable.
-    //
-    // WARNING: when Loki is configured, the layer's filter (default
-    // `LOKI_LOG=info`) determines which events ship over HTTP. Today the
-    // per-message dispatch event in `handler/sync.rs::dispatch` is at
-    // DEBUG, so per-message events stay local. If a future change
-    // reintroduces INFO-level per-message events, every message becomes
-    // a Loki HTTP entry — set `LOKI_LOG=warn` in that case.
+    // Optionally add Loki layer (native-tls only). Set LOKI_URL to enable.
+    // LOKI_LOG (default `info`) controls which events ship.
     #[cfg(feature = "native-tls")]
     let (loki_layer, loki_task) = match std::env::var("LOKI_URL") {
         Ok(loki_url) => match setup_loki(&loki_url) {
