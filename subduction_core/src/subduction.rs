@@ -697,11 +697,6 @@ where
     /// the channels they read from. Unlike [`Drop`] (which aborts mid-
     /// await), the listener drains its in-flight `Handler::handle`
     /// `FuturesUnordered` before exiting. Idempotent.
-    ///
-    /// Does not send disconnect frames to peers; call
-    /// [`disconnect_all`](Self::disconnect_all) first if you need that.
-    /// `response_queue` and `connection_closed` are intentionally left
-    /// open — they close naturally when their senders drop.
     pub fn shutdown(&self) {
         self.manager_channel.close();
         self.msg_queue.close();
