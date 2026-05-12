@@ -14,7 +14,7 @@
 //! run_actor (runs on LocalSet, calls !Send KeyhiveProtocol)
 //!   |  loops on KeyhiveCommand
 //!   v
-//! KeyhiveProtocol::handle_inbound(...)
+//! KeyhiveProtocol::handle_message(...)
 //! ```
 //!
 //! When `keyhive_core` becomes `Send`, the actor can be removed and
@@ -50,9 +50,9 @@ pub enum KeyhiveCommand<C, Conn> {
         /// Subduction peer ID of the sender.
         peer_id: PeerId,
         /// Connection payload from the inbound `Authenticated<C>`. The
-        /// orchestrator converts this to a `Conn` and uses it to
-        /// auto-register the peer when a sync-check arrives before any
-        /// explicit `AddPeer`.
+        /// actor converts this to a `Conn` and passes it to
+        /// `handle_message` for auto-registering the peer when a
+        /// sync-check arrives before any explicit `AddPeer`.
         c: C,
         /// The keyhive wire message.
         message: KeyhiveMessage,

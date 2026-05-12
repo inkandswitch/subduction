@@ -2,8 +2,7 @@
 //!
 //! This module implements the keyhive synchronization protocol, which enables
 //! peers to reconcile their keyhive operations (delegations, revocations,
-//! prekey operations, CGKA operations). The protocol is stateless. An external
-//! orchestrator owns timing, caching, and syncpoint storage.
+//! prekey operations, CGKA operations). T
 //!
 //! ## Full sync exchange
 //!
@@ -18,7 +17,7 @@
 //!
 //! ## Lightweight sync check
 //!
-//! When the orchestrator has an established syncpoint for a peer, it can send
+//! When we have an established syncpoint for a peer, we can send
 //! a **Sync Check** instead of a full request. The check carries the sender's
 //! total and its syncpoint for the target. If both sides' totals match their
 //! respective syncpoints, no full sync is needed. Otherwise the protocol falls
@@ -68,67 +67,7 @@ use crate::{
 /// Shared keyhive instance behind a mutex.
 type SharedKeyhive<K, Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<K, Signer, T, P, C, L, R>>>;
 
-/// Outcome of handling a keyhive sync message.
-///
-/// Returned from [`KeyhiveProtocol::handle_message`] to communicate what
-/// happened to the orchestrator, which manages syncpoints and timing.
-/// The protocol is stateless with respect to sync history.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncOutcome {
-    /// Message handled normally. No action needed from the orchestrator.
-    Ok,
-
-    /// A [`Message::SyncCheck`] was received. The orchestrator should look up
-    /// its local syncpoint for the sender and call
-    /// [`KeyhiveProtocol::resolve_sync_check`].
-    SyncCheckReceived {
-        /// The peer that sent the sync check.
-        peer: KeyhivePeerId,
-        /// The sender's total operation count for this peer pair.
-        sender_total: u64,
-        /// The sender's syncpoint for us (last confirmed total).
-        sender_syncpoint: u64,
-    },
-
-    /// A [`Message::SyncConfirmation`] was received. The orchestrator should
-    /// set its syncpoint for this peer to `confirmer_total`.
-    ConfirmationReceived {
-        /// The peer that sent the confirmation.
-        peer: KeyhivePeerId,
-        /// The confirmer's total operation count.
-        confirmer_total: u64,
-    },
-
-    /// The protocol sent a [`Message::SyncConfirmation`] after completing a
-    /// sync exchange. The orchestrator should set its syncpoint for this peer
-    /// to `peer_total` (the remote peer's total from the exchange metadata).
-    ConfirmationSent {
-        /// The peer the confirmation was sent to.
-        peer: KeyhivePeerId,
-        /// The remote peer's total. Store as the local syncpoint for them.
-        peer_total: u64,
-    },
-
-    /// A sync check determined both sides are in sync. No sync needed.
-    InSync {
-        /// The peer that is in sync.
-        peer: KeyhivePeerId,
-    },
-
-    /// A sync check found a mismatch. A full sync request was sent.
-    SyncCheckFallback {
-        /// The peer that needs a full sync.
-        peer: KeyhivePeerId,
-    },
-
-    /// Local state advanced but the round is not yet closed.
-    OpsIngested {
-        /// The peer whose message caused the ingest.
-        peer: KeyhivePeerId,
-    },
-}
-
-/// Main keyhive sync protocol handler.
+/// Keyhive sync protocol handler.
 ///
 /// Manages peer connections and implements the keyhive sync protocol for
 /// reconciling operations between peers. All keyhive access is serialized
@@ -244,7 +183,7 @@ where
         self.peer_id.clone()
     }
 
-    /// Whether the given peer is registered.
+    /// Whether the provided peer is registered.
     pub async fn has_peer(&self, peer_id: &KeyhivePeerId) -> bool {
         self.peers.lock().await.contains_key(peer_id)
     }
@@ -263,7 +202,7 @@ where
     ///
     /// # Errors
     /// Returns [`ProtocolError`] on serialization failure.
-    pub async fn get_hashes_for_agent(
+    pub async fn get_events_for_agent(
         &self,
         peer_id: &KeyhivePeerId,
     ) -> Result<Option<BTreeMap<EventHash, (EventBytes, CborBytes)>>, ProtocolError<Conn::SendError>>
@@ -286,7 +225,7 @@ where
     ///
     /// # Errors
     /// Returns [`ProtocolError`] on serialization failure.
-    pub async fn get_hashes_for_public_agent(
+    pub async fn get_events_for_public_agent(
         &self,
     ) -> Result<BTreeMap<EventHash, (EventBytes, CborBytes)>, ProtocolError<Conn::SendError>> {
         let events = {
@@ -454,12 +393,12 @@ where
                 continue;
             }
 
-            let cached = self.cached_pair_for(target_id).await;
+            let cached = self.cached_events_for_pair_with_peer(target_id).await;
             let computed;
             let pair = if let Some(ref c) = cached {
                 Some(c)
             } else {
-                match self.get_hashes_for_peer_pair(target_id).await {
+                match self.get_events_for_peer_pair(target_id).await {
                     Ok(p) => {
                         computed = p;
                         computed.as_ref()
@@ -511,8 +450,8 @@ where
 
     /// Send a lightweight sync check to a peer.
     ///
-    /// The orchestrator calls this instead of [`sync_keyhive`](Self::sync_keyhive)
-    /// when it has an established syncpoint for the target. Computes the local
+    /// This is called instead of [`sync_keyhive`](Self::sync_keyhive)
+    /// when there is an established syncpoint for the target. Computes the local
     /// total and sends a [`Message::SyncCheck`].
     ///
     /// # Errors
@@ -533,24 +472,13 @@ where
         self.sign_and_send(target, msg, false).await
     }
 
-    /// Resolve a sync check received from a peer.
-    ///
-    /// The orchestrator calls this after receiving
-    /// [`SyncOutcome::SyncCheckReceived`], providing its local syncpoint for
-    /// the sender. The protocol applies the comparison rule: if both sides'
-    /// totals match their respective syncpoints, the peers are in sync.
-    /// Otherwise, falls back to a full sync request.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProtocolError`] if total computation or fallback sync fails.
-    pub async fn resolve_sync_check(
+    async fn resolve_sync_check(
         &self,
         peer: &KeyhivePeerId,
         sender_total: u64,
         sender_syncpoint: u64,
         local_syncpoint_for_sender: u64,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let our_total = self.compute_total_for_peer(peer).await?;
 
         let in_sync = local_syncpoint_for_sender == sender_total && sender_syncpoint == our_total;
@@ -560,7 +488,6 @@ where
                 peer = %peer,
                 "sync check passed, peers are in sync"
             );
-            Ok(SyncOutcome::InSync { peer: peer.clone() })
         } else {
             tracing::debug!(
                 peer = %peer,
@@ -571,40 +498,18 @@ where
                 "sync check mismatch, falling back to full sync"
             );
             self.sync_keyhive(Some(peer)).await?;
-            Ok(SyncOutcome::SyncCheckFallback { peer: peer.clone() })
         }
-    }
-
-    /// Compute the total operation count for a peer pair.
-    ///
-    /// This is the number of intersection hashes plus pending hashes,
-    /// used for sync check/confirmation metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProtocolError`] if hash or pending computation fails.
-    async fn compute_total_for_peer(
-        &self,
-        peer: &KeyhivePeerId,
-    ) -> Result<u64, ProtocolError<Conn::SendError>> {
-        let hash_count = if let Some(cached) = self.cached_pair_for(peer).await {
-            cached.len()
-        } else {
-            self.get_hashes_for_peer_pair(peer)
-                .await?
-                .map_or(0, |h| h.len())
-        };
-        let pending_count = self.get_pending_hashes().await?.len();
-        Ok((hash_count + pending_count) as u64)
+        Ok(())
     }
 
     /// Handle an incoming signed message from a peer.
     ///
     /// Verifies the message signature, optionally ingests a contact card,
     /// and dispatches to the appropriate handler based on message type.
+    /// Updates syncpoints internally.
     ///
-    /// Returns a [`SyncOutcome`] indicating what happened, so the orchestrator
-    /// can update its state (e.g. syncpoints) accordingly.
+    /// The optional `conn` is used to auto-register unknown peers when a
+    /// `SyncCheck` arrives before any explicit `add_peer` call.
     ///
     /// # Errors
     ///
@@ -614,8 +519,9 @@ where
         &self,
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
-        let cached_sender_pair = self.cached_pair_for(from).await;
+        conn: Option<Conn>,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
+        let cached_sender_pair = self.cached_events_for_pair_with_peer(from).await;
         let verified = signed_msg.verify(from)?;
 
         if let Some(contact_card) = &verified.contact_card {
@@ -651,19 +557,33 @@ where
                 sender_total,
                 sender_syncpoint,
                 ..
-            } => Ok(SyncOutcome::SyncCheckReceived {
-                peer: sender_id.clone(),
-                sender_total: *sender_total,
-                sender_syncpoint: *sender_syncpoint,
-            }),
+            } => {
+                if !self.has_peer(sender_id).await
+                    && let Some(c) = conn
+                {
+                    self.add_peer(sender_id.clone(), c).await;
+                }
+                let local_syncpoint_for_sender =
+                    self.syncpoints.lock().await.get(sender_id).unwrap_or(0);
+                self.resolve_sync_check(
+                    sender_id,
+                    *sender_total,
+                    *sender_syncpoint,
+                    local_syncpoint_for_sender,
+                )
+                .await
+            }
             Message::SyncConfirmation {
                 sender_id,
                 confirmer_total,
                 ..
-            } => Ok(SyncOutcome::ConfirmationReceived {
-                peer: sender_id.clone(),
-                confirmer_total: *confirmer_total,
-            }),
+            } => {
+                self.syncpoints
+                    .lock()
+                    .await
+                    .set(sender_id.clone(), *confirmer_total);
+                Ok(())
+            }
         }
     }
 
@@ -672,7 +592,7 @@ where
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::SyncRequest {
             sender_id,
             found: peer_found,
@@ -694,10 +614,10 @@ where
         );
 
         let computed;
-        let local_hashes = if let Some(c) = cached_sender_pair {
+        let local_events = if let Some(c) = cached_sender_pair {
             c
         } else {
-            let Some(c) = self.get_hashes_for_peer_pair(&sender_id).await? else {
+            let Some(c) = self.get_events_for_peer_pair(&sender_id).await? else {
                 // We don't know this peer. Request their contact card.
                 tracing::debug!(from = %sender_id, "no agent found, requesting contact card");
                 let msg = Message::RequestContactCard {
@@ -705,7 +625,7 @@ where
                     target_id: sender_id.clone(),
                 };
                 self.sign_and_send(&sender_id, msg, true).await?;
-                return Ok(SyncOutcome::Ok);
+                return Ok(());
             };
             computed = c;
             &computed
@@ -714,18 +634,18 @@ where
         let our_pending_hashes = self.get_pending_hashes().await?;
 
         // Compute totals from the original collections before building sets.
-        let sync_responder_total = (local_hashes.len() + our_pending_hashes.len()) as u64;
+        let sync_responder_total = (local_events.len() + our_pending_hashes.len()) as u64;
         let sync_requester_total = (peer_found.len() + peer_pending.len()) as u64;
 
         // Build sets for comparison.
         let peer_found_set: Set<EventHash> = peer_found.iter().copied().collect();
         let peer_pending_set: Set<EventHash> = peer_pending.iter().copied().collect();
-        let local_set: Set<EventHash> = local_hashes.keys().copied().collect();
+        let local_set: Set<EventHash> = local_events.keys().copied().collect();
         let our_pending_set: Set<EventHash> = our_pending_hashes.iter().copied().collect();
 
         // Ops to send = local - (peer_found U peer_pending)
         let mut found_ops: Vec<EventBytes> = Vec::new();
-        for (h, (event_bytes, _)) in local_hashes {
+        for (h, (event_bytes, _)) in local_events {
             if !peer_found_set.contains(h) && !peer_pending_set.contains(h) {
                 found_ops.push(event_bytes.clone());
             }
@@ -754,20 +674,19 @@ where
         };
 
         self.sign_and_send(&sender_id, response, false).await?;
-        Ok(SyncOutcome::Ok)
+        Ok(())
     }
 
     /// Handle a `SyncResponse`: ingest events we received and send any
     /// requested ops back.
     ///
     /// If ops are sent back, the other side will confirm in `handle_sync_ops`.
-    /// If no ops are sent, we send a confirmation and return
-    /// [`SyncOutcome::ConfirmationSent`].
+    /// If no ops are sent, we send a confirmation and establish a syncpoint.
     async fn handle_sync_response(
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::SyncResponse {
             sender_id,
             requested: requested_hashes,
@@ -790,10 +709,15 @@ where
             "handling sync response"
         );
 
+        let total_before = self.total_ops().await;
+
         let ingested = !found_events.is_empty();
         if ingested {
             self.ingest_events(&found_events).await?;
         }
+
+        let total_after = self.total_ops().await;
+        let advanced = total_after != total_before;
 
         // Send requested ops.
         if !requested_hashes.is_empty() {
@@ -818,11 +742,10 @@ where
 
                 self.sign_and_send(&sender_id, msg, false).await?;
                 // The other side will send a confirmation after ingesting.
-                return Ok(if ingested {
-                    SyncOutcome::OpsIngested { peer: sender_id }
-                } else {
-                    SyncOutcome::Ok
-                });
+                if advanced {
+                    self.syncpoints.lock().await.invalidate_all();
+                }
+                return Ok(());
             }
         }
 
@@ -835,17 +758,22 @@ where
         };
         self.sign_and_send(&sender_id, confirmation, false).await?;
 
-        Ok(SyncOutcome::ConfirmationSent {
-            peer: sender_id,
-            peer_total: sync_responder_total,
-        })
+        {
+            let mut map = self.syncpoints.lock().await;
+            if advanced {
+                map.invalidate_all();
+            }
+            map.set(sender_id, sync_responder_total);
+        }
+
+        Ok(())
     }
 
     /// Handle `SyncOps`: ingest received operations and send confirmation.
     async fn handle_sync_ops(
         &self,
         message: Message,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::SyncOps {
             sender_id,
             ops,
@@ -866,9 +794,14 @@ where
             "handling sync ops"
         );
 
+        let total_before = self.total_ops().await;
+
         if !ops.is_empty() {
             self.ingest_events(&ops).await?;
         }
+
+        let total_after = self.total_ops().await;
+        let advanced = total_after != total_before;
 
         // Send confirmation after ingesting ops.
         // Our total is sync_responder_total (we are the responder).
@@ -879,10 +812,15 @@ where
         };
         self.sign_and_send(&sender_id, confirmation, false).await?;
 
-        Ok(SyncOutcome::ConfirmationSent {
-            peer: sender_id,
-            peer_total: sync_requester_total,
-        })
+        {
+            let mut map = self.syncpoints.lock().await;
+            if advanced {
+                map.invalidate_all();
+            }
+            map.set(sender_id, sync_requester_total);
+        }
+
+        Ok(())
     }
 
     /// Handle `RequestContactCard`: send our contact card to the requesting
@@ -890,7 +828,7 @@ where
     async fn handle_request_contact_card(
         &self,
         message: Message,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::RequestContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "RequestContactCard",
@@ -909,7 +847,7 @@ where
         };
 
         self.sign_and_send(&sender_id, msg, true).await?;
-        Ok(SyncOutcome::Ok)
+        Ok(())
     }
 
     /// Handle `MissingContactCard`: the contact card was already ingested in
@@ -917,7 +855,7 @@ where
     async fn handle_missing_contact_card(
         &self,
         message: Message,
-    ) -> Result<SyncOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::MissingContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "MissingContactCard",
@@ -931,7 +869,7 @@ where
         );
 
         self.sync_keyhive(Some(&sender_id)).await?;
-        Ok(SyncOutcome::Ok)
+        Ok(())
     }
 
     /// Sign a message and send it to a peer.
@@ -977,7 +915,7 @@ where
     /// Get the intersection of event hashes accessible to both us and a peer.
     ///
     /// Returns `None` if the peer is unknown (no agent found in keyhive).
-    async fn get_hashes_for_peer_pair(
+    async fn get_events_for_peer_pair(
         &self,
         peer_id: &KeyhivePeerId,
     ) -> Result<Option<AgentHashMap>, ProtocolError<Conn::SendError>> {
@@ -1055,7 +993,7 @@ where
         let pair = if let Some(c) = cached_pair {
             c
         } else {
-            let Some(c) = self.get_hashes_for_peer_pair(sender_id).await? else {
+            let Some(c) = self.get_events_for_peer_pair(sender_id).await? else {
                 return Ok(Vec::new());
             };
             computed = c;
@@ -1234,76 +1172,46 @@ where
         Ok(())
     }
 
-    async fn cached_pair_for(
-        &self,
-        peer: &KeyhivePeerId,
-    ) -> Option<AgentHashMap> {
+    /// Look up cached events for us paired with the provided peer
+    async fn cached_events_for_pair_with_peer(&self, peer: &KeyhivePeerId) -> Option<AgentHashMap> {
         let cache = self.cache.lock().await;
         let local = self.peer_id();
-        let map = cache.hashes_for_peer_pair(&local, peer);
+        let map = cache.events_for_peer_pair(&local, peer);
         (!map.is_empty()).then_some(map)
     }
 
-    /// Handle an inbound keyhive message with syncpoint and cache management.
+    /// Compute the total operation count for a peer pair.
     ///
-    /// Auto-registers unknown peers on [`SyncOutcome::SyncCheckReceived`].
+    /// This is the number of intersection hashes plus pending hashes,
+    /// used for sync check/confirmation metadata.
     ///
     /// # Errors
     ///
-    /// Returns [`ProtocolError`] if the protocol rejects the message or
-    /// the follow-up sync-check resolution fails.
-    pub async fn handle_inbound(
+    /// Returns [`ProtocolError`] if hash or pending computation fails.
+    async fn compute_total_for_peer(
         &self,
         peer: &KeyhivePeerId,
-        conn: Conn,
-        msg: SignedMessage,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let total_before = self.total_ops().await;
-
-        let outcome = self.handle_message(peer, msg).await?;
-
-        if let SyncOutcome::SyncCheckReceived {
-            peer: check_peer,
-            sender_total,
-            sender_syncpoint,
-        } = &outcome
-        {
-            if !self.has_peer(check_peer).await {
-                self.add_peer(check_peer.clone(), conn).await;
-            }
-            let local_syncpoint_for_sender =
-                self.syncpoints.lock().await.get(check_peer).unwrap_or(0);
-            let resolve_outcome = self
-                .resolve_sync_check(
-                    check_peer,
-                    *sender_total,
-                    *sender_syncpoint,
-                    local_syncpoint_for_sender,
-                )
-                .await?;
-            let mut map = self.syncpoints.lock().await;
-            apply_outcome_to_syncpoints(resolve_outcome, &mut map, false);
-            return Ok(());
-        }
-
-        let total_after = self.total_ops().await;
-        let advanced = total_after != total_before;
-
-        let mut map = self.syncpoints.lock().await;
-        apply_outcome_to_syncpoints(outcome, &mut map, advanced);
-
-        Ok(())
+    ) -> Result<u64, ProtocolError<Conn::SendError>> {
+        let hash_count = if let Some(cached) = self.cached_events_for_pair_with_peer(peer).await {
+            cached.len()
+        } else {
+            self.get_events_for_peer_pair(peer)
+                .await?
+                .map_or(0, |h| h.len())
+        };
+        let pending_count = self.get_pending_hashes().await?.len();
+        Ok((hash_count + pending_count) as u64)
     }
 
-    /// Send a lightweight sync check (or full sync) to a peer.
+    /// Sync with a peer using the best available strategy.
     ///
-    /// Uses the recorded syncpoint when available; otherwise falls back
-    /// to a full sync.
+    /// Sends a lightweight sync check when a syncpoint exists for the
+    /// peer; otherwise falls back to a full sync.
     ///
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if the protocol call fails.
-    pub async fn sync_check_peer(
+    pub async fn initiate_sync_with_peer(
         &self,
         peer: &KeyhivePeerId,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
@@ -1323,32 +1231,6 @@ where
     pub async fn refresh_cache(&self) -> Result<(), ProtocolError<Conn::SendError>> {
         let mut cache = self.cache.lock().await;
         cache.refresh(self).await.map(|_| ())
-    }
-}
-
-fn apply_outcome_to_syncpoints(outcome: SyncOutcome, map: &mut SyncpointMap, advanced: bool) {
-    match outcome {
-        SyncOutcome::ConfirmationReceived {
-            peer,
-            confirmer_total,
-        } => {
-            map.set(peer, confirmer_total);
-        }
-        SyncOutcome::ConfirmationSent { peer, peer_total } => {
-            if advanced {
-                map.invalidate_all();
-            }
-            map.set(peer, peer_total);
-        }
-        SyncOutcome::OpsIngested { .. } => {
-            if advanced {
-                map.invalidate_all();
-            }
-        }
-        SyncOutcome::Ok
-        | SyncOutcome::InSync { .. }
-        | SyncOutcome::SyncCheckFallback { .. }
-        | SyncOutcome::SyncCheckReceived { .. } => {}
     }
 }
 
@@ -1641,7 +1523,7 @@ mod tests {
         let signed_msg = SignedMessage::new(signed_bytes);
 
         let err = alice
-            .handle_message(&alice_id, signed_msg)
+            .handle_message(&alice_id, signed_msg, None)
             .await
             .expect_err("should reject forged inner sender_id");
         assert!(
@@ -1763,7 +1645,7 @@ mod tests {
 
         // Bob handles alice's RequestContactCard
         bob_proto
-            .handle_message(&alice_id, signed_msg1)
+            .handle_message(&alice_id, signed_msg1, None)
             .await
             .unwrap();
 
@@ -1785,7 +1667,7 @@ mod tests {
         // Alice handles Bob's MissingContactCard (which includes Bob's contact card)
         // This should trigger Alice to initiate a sync
         alice_proto
-            .handle_message(&bob_id, signed_msg2)
+            .handle_message(&bob_id, signed_msg2, None)
             .await
             .unwrap();
 
@@ -1839,7 +1721,7 @@ mod tests {
 
         // Bob handles the SyncRequest
         bob_proto
-            .handle_message(&alice_id, signed_msg1)
+            .handle_message(&alice_id, signed_msg1, None)
             .await
             .unwrap();
 
@@ -1855,7 +1737,7 @@ mod tests {
 
         // Alice handles the SyncResponse
         alice_proto
-            .handle_message(&bob_id, signed_msg2)
+            .handle_message(&bob_id, signed_msg2, None)
             .await
             .unwrap();
 
@@ -1913,28 +1795,37 @@ mod tests {
 
         let sync_request = a_to_b_rx.recv().await.unwrap();
         bob_proto
-            .handle_message(&alice_id, sync_request)
+            .handle_message(&alice_id, sync_request, None)
             .await
             .unwrap();
 
         // Forward SyncResponse to Alice
         let sync_response = b_to_a_rx.recv().await.unwrap();
         alice_proto
-            .handle_message(&bob_id, sync_response)
+            .handle_message(&bob_id, sync_response, None)
             .await
             .unwrap();
 
         // If Alice sent SyncOps, forward those too
         if let Ok(sync_ops) = a_to_b_rx.try_recv() {
-            bob_proto.handle_message(&alice_id, sync_ops).await.unwrap();
+            bob_proto
+                .handle_message(&alice_id, sync_ops, None)
+                .await
+                .unwrap();
         }
 
         // Handle any confirmation messages before next round
         while let Ok(msg) = a_to_b_rx.try_recv() {
-            bob_proto.handle_message(&alice_id, msg).await.unwrap();
+            bob_proto
+                .handle_message(&alice_id, msg, None)
+                .await
+                .unwrap();
         }
         while let Ok(msg) = b_to_a_rx.try_recv() {
-            alice_proto.handle_message(&bob_id, msg).await.unwrap();
+            alice_proto
+                .handle_message(&bob_id, msg, None)
+                .await
+                .unwrap();
         }
 
         // Now Bob → Alice sync
@@ -1942,29 +1833,35 @@ mod tests {
 
         let sync_request2 = b_to_a_rx.recv().await.unwrap();
         alice_proto
-            .handle_message(&bob_id, sync_request2)
+            .handle_message(&bob_id, sync_request2, None)
             .await
             .unwrap();
 
         let sync_response2 = a_to_b_rx.recv().await.unwrap();
         bob_proto
-            .handle_message(&alice_id, sync_response2)
+            .handle_message(&alice_id, sync_response2, None)
             .await
             .unwrap();
 
         if let Ok(sync_ops2) = b_to_a_rx.try_recv() {
             alice_proto
-                .handle_message(&bob_id, sync_ops2)
+                .handle_message(&bob_id, sync_ops2, None)
                 .await
                 .unwrap();
         }
 
         // Handle any remaining confirmation messages
         while let Ok(msg) = a_to_b_rx.try_recv() {
-            bob_proto.handle_message(&alice_id, msg).await.unwrap();
+            bob_proto
+                .handle_message(&alice_id, msg, None)
+                .await
+                .unwrap();
         }
         while let Ok(msg) = b_to_a_rx.try_recv() {
-            alice_proto.handle_message(&bob_id, msg).await.unwrap();
+            alice_proto
+                .handle_message(&bob_id, msg, None)
+                .await
+                .unwrap();
         }
 
         // After bidirectional sync, both should have the same pending state
@@ -2027,7 +1924,7 @@ mod tests {
         // Pull real event bytes off Bob's agent (these are the kind of
         // events that arrive over the wire from a real peer).
         let pair = protocol
-            .get_hashes_for_agent(&bob_id)
+            .get_events_for_agent(&bob_id)
             .await
             .unwrap()
             .expect("bob should resolve to an agent");
@@ -2077,7 +1974,7 @@ mod tests {
             .with_archive_threshold(10_000, storage_id);
 
         let pair = protocol
-            .get_hashes_for_agent(&bob_id)
+            .get_events_for_agent(&bob_id)
             .await
             .unwrap()
             .unwrap();
@@ -2106,7 +2003,7 @@ mod tests {
         // Subduction (see
         // `~/dev/prg/sync-server/keyhive-sync-protocol-ts-vs-rust-comparison.md`).
         //
-        // Pre-fix, `handle_sync_response` ignored the orchestrator's
+        // Pre-fix, `handle_sync_response` ignored the protocol's
         // cached pair entirely and walked our own active agent's
         // reachable set via `sync_events_for_agent`. That silently
         // dropped any hash advertised via public-agent reachability,
@@ -2150,18 +2047,10 @@ mod tests {
             sync_requester_total: 0,
         };
 
-        let outcome = alice_proto
+        alice_proto
             .handle_sync_response(msg, Some(&cached_pair))
             .await
             .expect("alice handle_sync_response with cached pair");
-
-        // Alice should have emitted a SyncOps to Bob, not a
-        // confirmation. With ops to send, the handler returns
-        // SyncOutcome::Ok (no ingest happened since `found` was empty).
-        assert!(
-            matches!(outcome, SyncOutcome::Ok),
-            "expected SyncOutcome::Ok (ops sent, no ingest), got {outcome:?}"
-        );
 
         // Drain Bob's inbound channel and verify Alice sent SyncOps
         // carrying the cached bytes.
@@ -2213,7 +2102,7 @@ mod tests {
         // Create a SignedMessage with junk data
         let junk = SignedMessage::new(vec![0xFF, 0xFE, 0xFD]);
 
-        let result = protocol.handle_message(&fake_sender, junk).await;
+        let result = protocol.handle_message(&fake_sender, junk, None).await;
         assert!(result.is_err(), "junk data should fail verification");
     }
 
@@ -2764,7 +2653,7 @@ mod tests {
             create_group_with_read_members(&kh, &[&bob_id]).await;
         }
 
-        let result = run_sync_round(
+        run_sync_round(
             &alice_proto,
             &bob_proto,
             &alice_id,
@@ -2774,34 +2663,17 @@ mod tests {
         )
         .await;
 
-        // The totals in ConfirmationSent and ConfirmationReceived should be > 0
+        // Both sides should have established syncpoints with non-zero totals
         // (there are ops from the group creation).
-        let mut found_confirmation_sent = false;
-        let mut found_confirmation_received = false;
-        for outcome in &result.outcomes {
-            match outcome {
-                SyncOutcome::ConfirmationSent { peer_total, .. } => {
-                    assert!(*peer_total > 0, "peer_total should be > 0");
-                    found_confirmation_sent = true;
-                }
-                SyncOutcome::ConfirmationReceived {
-                    confirmer_total, ..
-                } => {
-                    assert!(*confirmer_total > 0, "confirmer_total should be > 0");
-                    found_confirmation_received = true;
-                }
-                _ => {}
-            }
-        }
+        let alice_sp = alice_proto.syncpoints.lock().await.get(&bob_id);
+        let bob_sp = bob_proto.syncpoints.lock().await.get(&alice_id);
         assert!(
-            found_confirmation_sent,
-            "sync round should produce ConfirmationSent, got: {:?}",
-            result.outcomes
+            alice_sp.is_some_and(|v| v > 0),
+            "alice should have a non-zero syncpoint for bob, got: {alice_sp:?}"
         );
         assert!(
-            found_confirmation_received,
-            "sync round should produce ConfirmationReceived, got: {:?}",
-            result.outcomes
+            bob_sp.is_some_and(|v| v > 0),
+            "bob should have a non-zero syncpoint for alice, got: {bob_sp:?}"
         );
     }
 
@@ -2833,25 +2705,7 @@ mod tests {
         // `requested` field. Without this, each peer's prekey/contact-card
         // history that the other doesn't yet know about causes the round
         // to take the SyncOps path instead.
-        drop(
-            run_sync_round(
-                &alice_proto,
-                &bob_proto,
-                &alice_id,
-                &bob_id,
-                &alice_conn,
-                &bob_conn,
-            )
-            .await,
-        );
-
-        // Now Bob alone gets new ops. Alice has no new ops to offer back.
-        {
-            let kh = bob_kh.lock().await;
-            create_group_with_read_members(&kh, &[&alice_id]).await;
-        }
-
-        let result = run_sync_round(
+        run_sync_round(
             &alice_proto,
             &bob_proto,
             &alice_id,
@@ -2861,64 +2715,35 @@ mod tests {
         )
         .await;
 
-        // The round must produce ConfirmationSent on Alice's side (she
-        // ingested Bob's ops and closed the round) and ConfirmationReceived
-        // on Bob's side. SyncOps must NOT appear: the bug-of-interest is
-        // that the empty-requested path is the *only* one that closes the
-        // round here.
-        let mut alice_sent_confirmation_to_bob = false;
-        let mut bob_received_confirmation_from_alice = false;
-        let mut saw_ops_ingested = false;
-        for outcome in &result.outcomes {
-            match outcome {
-                SyncOutcome::ConfirmationSent { peer, peer_total } => {
-                    if peer == &bob_id {
-                        assert!(
-                            *peer_total > 0,
-                            "alice's recorded total for bob should be > 0"
-                        );
-                        alice_sent_confirmation_to_bob = true;
-                    }
-                }
-                SyncOutcome::ConfirmationReceived {
-                    peer,
-                    confirmer_total,
-                } => {
-                    if peer == &alice_id {
-                        assert!(
-                            *confirmer_total > 0,
-                            "bob's recorded total for alice should be > 0"
-                        );
-                        bob_received_confirmation_from_alice = true;
-                    }
-                }
-                SyncOutcome::OpsIngested { .. } => {
-                    saw_ops_ingested = true;
-                }
-                _ => {}
-            }
+        // Now Bob alone gets new ops. Alice has no new ops to offer back.
+        {
+            let kh = bob_kh.lock().await;
+            create_group_with_read_members(&kh, &[&alice_id]).await;
         }
 
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // Both sides should have established syncpoints with non-zero totals.
+        // The empty-requested path (Alice has nothing to send back) should
+        // close via direct SyncConfirmation, establishing syncpoints.
+        let alice_sp = alice_proto.syncpoints.lock().await.get(&bob_id);
+        let bob_sp = bob_proto.syncpoints.lock().await.get(&alice_id);
         assert!(
-            alice_sent_confirmation_to_bob,
-            "alice's handle_sync_response should emit ConfirmationSent when \
-             requested.is_empty(), got: {:?}",
-            result.outcomes
+            alice_sp.is_some_and(|v| v > 0),
+            "alice should have a non-zero syncpoint for bob after the \
+             empty-requested round, got: {alice_sp:?}"
         );
         assert!(
-            bob_received_confirmation_from_alice,
-            "bob should observe ConfirmationReceived from alice, got: {:?}",
-            result.outcomes
-        );
-        // Sanity check: this round shouldn't include a SyncOps step
-        // (which is the path covered by the existing test). If it does,
-        // the test setup isn't actually exercising the empty-requested
-        // branch.
-        assert!(
-            !saw_ops_ingested,
-            "this scenario should close via direct confirmation, not SyncOps; \
-             got: {:?}",
-            result.outcomes
+            bob_sp.is_some_and(|v| v > 0),
+            "bob should have a non-zero syncpoint for alice, got: {bob_sp:?}"
         );
     }
 
@@ -2942,20 +2767,18 @@ mod tests {
         }
 
         // Run a full sync round so Bob's keyhive learns about Alice's ops.
-        drop(
-            run_sync_round(
-                &alice_proto,
-                &bob_proto,
-                &alice_id,
-                &bob_id,
-                &alice_conn,
-                &bob_conn,
-            )
-            .await,
-        );
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
 
         let alice_hashes = alice_proto
-            .get_hashes_for_agent(&alice_id)
+            .get_events_for_agent(&alice_id)
             .await
             .expect("alice get_hashes_for_agent")
             .expect("alice agent exists");
@@ -2985,7 +2808,7 @@ mod tests {
         let unknown = KeyhivePeerId::from_bytes([0xAA; 32]);
         assert!(
             alice_proto
-                .get_hashes_for_agent(&unknown)
+                .get_events_for_agent(&unknown)
                 .await
                 .expect("get_hashes_for_agent for unknown peer")
                 .is_none()
@@ -3008,54 +2831,6 @@ mod tests {
             after > before,
             "total_ops should increase after creating a group: {before} -> {after}"
         );
-    }
-
-    /// Extract syncpoints from a sync round's outcomes.
-    ///
-    /// Returns `(alice_syncpoint_for_bob, bob_syncpoint_for_alice)`.
-    /// Syncpoints come from `ConfirmationSent` (the sender's syncpoint for
-    /// the peer) and `ConfirmationReceived` (the receiver's syncpoint for
-    /// the sender).
-    fn extract_syncpoints(
-        outcomes: &[SyncOutcome],
-        alice_id: &KeyhivePeerId,
-        bob_id: &KeyhivePeerId,
-    ) -> (Option<u64>, Option<u64>) {
-        let mut alice_sp_for_bob: Option<u64> = None;
-        let mut bob_sp_for_alice: Option<u64> = None;
-
-        for outcome in outcomes {
-            match outcome {
-                // ConfirmationSent: the protocol sent a confirmation to `peer`.
-                // The sender's syncpoint for `peer` is `peer_total`.
-                SyncOutcome::ConfirmationSent { peer, peer_total } => {
-                    if peer == bob_id {
-                        // Alice sent confirmation to Bob → Alice's syncpoint for Bob
-                        alice_sp_for_bob = Some(*peer_total);
-                    } else if peer == alice_id {
-                        // Bob sent confirmation to Alice → Bob's syncpoint for Alice
-                        bob_sp_for_alice = Some(*peer_total);
-                    }
-                }
-                // ConfirmationReceived: the protocol received a confirmation from `peer`.
-                // The receiver's syncpoint for `peer` is `confirmer_total`.
-                SyncOutcome::ConfirmationReceived {
-                    peer,
-                    confirmer_total,
-                } => {
-                    if peer == alice_id {
-                        // Bob received confirmation from Alice → Bob's syncpoint for Alice
-                        bob_sp_for_alice = Some(*confirmer_total);
-                    } else if peer == bob_id {
-                        // Alice received confirmation from Bob → Alice's syncpoint for Bob
-                        alice_sp_for_bob = Some(*confirmer_total);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        (alice_sp_for_bob, bob_sp_for_alice)
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3088,12 +2863,10 @@ mod tests {
         )
         .await;
 
-        // Second sync round with no new ops — this is the steady state
-        // where syncpoints are established and valid. An orchestrator would
-        // invalidate syncpoints after the first round (which ingested ops),
-        // so the first round's syncpoints aren't usable. The second round
-        // exchanges zero ops, so its syncpoints remain valid.
-        let result = run_sync_round(
+        // Second sync round with no new ops — establishes stable syncpoints.
+        // The first round ingested ops (invalidating syncpoints), so the
+        // second round's zero-op exchange produces usable syncpoints.
+        run_sync_round(
             &alice_proto,
             &bob_proto,
             &alice_id,
@@ -3103,9 +2876,12 @@ mod tests {
         )
         .await;
 
-        let (alice_sp, bob_sp) = extract_syncpoints(&result.outcomes, &alice_id, &bob_id);
-        let alice_sp = alice_sp.expect("should have Alice's syncpoint for Bob");
-        let bob_sp = bob_sp.expect("should have Bob's syncpoint for Alice");
+        let alice_sp = alice_proto
+            .syncpoints
+            .lock()
+            .await
+            .get(&bob_id)
+            .expect("should have Alice's syncpoint for Bob");
 
         // Now Alice sends a sync check to Bob
         alice_proto
@@ -3113,36 +2889,21 @@ mod tests {
             .await
             .expect("sync_check_keyhive failed");
 
-        // Bob receives the sync check
+        // Bob receives the sync check — handle_message resolves it internally
         let check_msg = bob_conn
             .inbound_rx
             .recv()
             .await
             .expect("failed to receive sync check");
-        let outcome = bob_proto
-            .handle_message(&alice_id, check_msg)
+        bob_proto
+            .handle_message(&alice_id, check_msg, None)
             .await
             .expect("bob failed to handle sync check");
 
-        // Should be SyncCheckReceived — Bob needs to resolve it
-        let (sender_total, sender_syncpoint) = match outcome {
-            SyncOutcome::SyncCheckReceived {
-                sender_total,
-                sender_syncpoint,
-                ..
-            } => (sender_total, sender_syncpoint),
-            other => panic!("expected SyncCheckReceived, got: {other:?}"),
-        };
-
-        // Bob resolves with his syncpoint for Alice
-        let resolve_outcome = bob_proto
-            .resolve_sync_check(&alice_id, sender_total, sender_syncpoint, bob_sp)
-            .await
-            .expect("resolve_sync_check failed");
-
+        // In-sync means no fallback SyncRequest was sent
         assert!(
-            matches!(resolve_outcome, SyncOutcome::InSync { .. }),
-            "peers should be in sync, got: {resolve_outcome:?}"
+            alice_conn.inbound_rx.try_recv().is_err(),
+            "no outbound messages expected when peers are in sync"
         );
     }
 
@@ -3177,7 +2938,7 @@ mod tests {
         .await;
 
         // Second sync to establish stable syncpoints (no ops exchanged)
-        let result = run_sync_round(
+        run_sync_round(
             &alice_proto,
             &bob_proto,
             &alice_id,
@@ -3187,9 +2948,12 @@ mod tests {
         )
         .await;
 
-        let (alice_sp, bob_sp) = extract_syncpoints(&result.outcomes, &alice_id, &bob_id);
-        let alice_sp = alice_sp.expect("should have Alice's syncpoint for Bob");
-        let bob_sp = bob_sp.expect("should have Bob's syncpoint for Alice");
+        let alice_sp = alice_proto
+            .syncpoints
+            .lock()
+            .await
+            .get(&bob_id)
+            .expect("should have Alice's syncpoint for Bob");
 
         // Alice creates ANOTHER group with Bob (changes her state without syncing)
         {
@@ -3209,53 +2973,24 @@ mod tests {
             .recv()
             .await
             .expect("failed to receive sync check");
-        let outcome = bob_proto
-            .handle_message(&alice_id, check_msg)
+
+        // handle_message resolves the sync check internally and falls back
+        bob_proto
+            .handle_message(&alice_id, check_msg, None)
             .await
             .expect("bob failed to handle sync check");
 
-        let (sender_total, sender_syncpoint) = match outcome {
-            SyncOutcome::SyncCheckReceived {
-                sender_total,
-                sender_syncpoint,
-                ..
-            } => (sender_total, sender_syncpoint),
-            other => panic!("expected SyncCheckReceived, got: {other:?}"),
-        };
-
-        // Alice's sender_total should differ from Bob's syncpoint (she has new ops)
-        assert_ne!(
-            sender_total, bob_sp,
-            "Alice's total should have changed after creating a new group"
-        );
-
-        // Bob resolves — should fall back because totals don't match
-        let resolve_outcome = bob_proto
-            .resolve_sync_check(&alice_id, sender_total, sender_syncpoint, bob_sp)
-            .await
-            .expect("resolve_sync_check failed");
-
-        assert!(
-            matches!(resolve_outcome, SyncOutcome::SyncCheckFallback { .. }),
-            "should fall back to full sync, got: {resolve_outcome:?}"
-        );
-
-        // Bob should have sent a full SyncRequest (which is now in Alice's channel)
+        // Bob should have sent a full SyncRequest (fallback).
+        // Use try_recv so the test fails fast instead of hanging if
+        // the fallback didn't fire.
         let fallback_msg = alice_conn
             .inbound_rx
-            .recv()
-            .await
-            .expect("should have received fallback SyncRequest");
-        let fallback_outcome = alice_proto
-            .handle_message(&bob_id, fallback_msg)
+            .try_recv()
+            .expect("should have received fallback SyncRequest from bob");
+        alice_proto
+            .handle_message(&bob_id, fallback_msg, None)
             .await
             .expect("alice failed to handle fallback message");
-
-        // Alice should handle it normally (SyncRequest → Ok)
-        assert!(
-            matches!(fallback_outcome, SyncOutcome::Ok),
-            "fallback message should be handled as SyncRequest, got: {fallback_outcome:?}"
-        );
     }
 
     // ── Revocation chain regression tests ──────────────────────────────
@@ -3540,7 +3275,7 @@ mod tests {
     }
 
     /// Verifies the `all_agent_events()` cache path (used by the
-    /// orchestrator's `PeriodicEventCache`) produces a dependency-
+    /// `PeriodicEventCache`) produces a dependency-
     /// complete public hash set after the revocation chain synced
     /// through the protocol.
     #[tokio::test(flavor = "current_thread")]
@@ -4161,142 +3896,13 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-mod syncpoint_effect_tests {
-    use super::*;
-    use crate::syncpoints::SyncpointMap;
-
-    fn peer(seed: u8) -> KeyhivePeerId {
-        KeyhivePeerId::from_bytes([seed; 32])
-    }
-
-    fn populated_map() -> SyncpointMap {
-        let mut map = SyncpointMap::new();
-        map.set(peer(1), 1);
-        map.set(peer(2), 2);
-        map.set(peer(3), 3);
-        map
-    }
-
-    #[test]
-    fn apply_outcome_confirmation_received_sets_syncpoint() {
-        let mut map = SyncpointMap::new();
-        apply_outcome_to_syncpoints(
-            SyncOutcome::ConfirmationReceived {
-                peer: peer(1),
-                confirmer_total: 42,
-            },
-            &mut map,
-            false,
-        );
-        assert_eq!(map.get(&peer(1)), Some(42));
-        assert_eq!(map.len(), 1);
-    }
-
-    #[test]
-    fn apply_outcome_confirmation_sent_when_advanced_invalidates_then_sets() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(
-            SyncOutcome::ConfirmationSent {
-                peer: peer(1),
-                peer_total: 99,
-            },
-            &mut map,
-            true,
-        );
-        assert_eq!(map.get(&peer(1)), Some(99));
-        assert_eq!(map.get(&peer(2)), None);
-        assert_eq!(map.get(&peer(3)), None);
-        assert_eq!(map.len(), 1);
-    }
-
-    #[test]
-    fn apply_outcome_confirmation_sent_when_not_advanced_keeps_other_peers() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(
-            SyncOutcome::ConfirmationSent {
-                peer: peer(1),
-                peer_total: 99,
-            },
-            &mut map,
-            false,
-        );
-        assert_eq!(map.get(&peer(1)), Some(99), "current peer's syncpoint set");
-        assert_eq!(map.get(&peer(2)), Some(2), "peer 2's syncpoint preserved");
-        assert_eq!(map.get(&peer(3)), Some(3), "peer 3's syncpoint preserved");
-    }
-
-    #[test]
-    fn apply_outcome_ops_ingested_when_advanced_invalidates_all() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(SyncOutcome::OpsIngested { peer: peer(1) }, &mut map, true);
-        assert!(map.is_empty());
-    }
-
-    #[test]
-    fn apply_outcome_ops_ingested_when_not_advanced_is_noop() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(SyncOutcome::OpsIngested { peer: peer(1) }, &mut map, false);
-        assert_eq!(map.len(), 3, "no-op when total_ops didn't advance");
-    }
-
-    #[test]
-    fn apply_outcome_ok_is_noop() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(SyncOutcome::Ok, &mut map, true);
-        assert_eq!(map.get(&peer(1)), Some(1));
-        assert_eq!(map.get(&peer(2)), Some(2));
-        assert_eq!(map.get(&peer(3)), Some(3));
-    }
-
-    #[test]
-    fn apply_outcome_in_sync_is_noop() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(SyncOutcome::InSync { peer: peer(1) }, &mut map, true);
-        assert_eq!(map.get(&peer(1)), Some(1));
-        assert_eq!(map.get(&peer(2)), Some(2));
-        assert_eq!(map.get(&peer(3)), Some(3));
-    }
-
-    #[test]
-    fn apply_outcome_sync_check_fallback_is_noop() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(
-            SyncOutcome::SyncCheckFallback { peer: peer(1) },
-            &mut map,
-            true,
-        );
-        assert_eq!(map.get(&peer(1)), Some(1));
-        assert_eq!(map.get(&peer(2)), Some(2));
-        assert_eq!(map.get(&peer(3)), Some(3));
-    }
-
-    #[test]
-    fn apply_outcome_sync_check_received_is_noop() {
-        let mut map = populated_map();
-        apply_outcome_to_syncpoints(
-            SyncOutcome::SyncCheckReceived {
-                peer: peer(1),
-                sender_total: 10,
-                sender_syncpoint: 5,
-            },
-            &mut map,
-            true,
-        );
-        assert_eq!(map.get(&peer(1)), Some(1));
-        assert_eq!(map.get(&peer(2)), Some(2));
-        assert_eq!(map.get(&peer(3)), Some(3));
-    }
-}
-
-#[cfg(test)]
 #[allow(
     clippy::expect_used,
     clippy::panic,
     clippy::unwrap_used,
     clippy::missing_panics_doc
 )]
-mod orchestration_behavioural {
+mod protocol_behavioural {
     use alloc::{sync::Arc, vec::Vec};
 
     use super::*;
@@ -4320,7 +3926,7 @@ mod orchestration_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_check_peer_with_no_syncpoint_does_full_sync() {
+    async fn initiate_sync_with_peer_with_no_syncpoint_does_full_sync() {
         let TwoPeerHarness {
             alice_proto,
             alice_id,
@@ -4332,9 +3938,9 @@ mod orchestration_behavioural {
         let alice_proto = Arc::new(alice_proto);
 
         alice_proto
-            .sync_check_peer(&bob_id)
+            .initiate_sync_with_peer(&bob_id)
             .await
-            .expect("sync_check_peer");
+            .expect("initiate_sync_with_peer");
 
         let messages = drain_channel(&bob_conn, &alice_id);
         assert!(
@@ -4344,7 +3950,7 @@ mod orchestration_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn sync_check_peer_with_syncpoint_does_sync_check() {
+    async fn initiate_sync_with_peer_with_syncpoint_does_sync_check() {
         let TwoPeerHarness {
             alice_proto,
             alice_id,
@@ -4358,9 +3964,9 @@ mod orchestration_behavioural {
         alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
 
         alice_proto
-            .sync_check_peer(&bob_id)
+            .initiate_sync_with_peer(&bob_id)
             .await
-            .expect("sync_check_peer");
+            .expect("initiate_sync_with_peer");
 
         let messages = drain_channel(&bob_conn, &alice_id);
         assert!(
@@ -4370,7 +3976,7 @@ mod orchestration_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn handle_inbound_sync_check_received_resolves_via_protocol() {
+    async fn sync_check_received_resolves_via_protocol() {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -4386,17 +3992,15 @@ mod orchestration_behavioural {
             let kh = alice_kh.lock().await;
             create_group_with_read_members(&kh, &[&bob_id]).await;
         }
-        drop(
-            run_sync_round(
-                &alice_proto,
-                &bob_proto,
-                &alice_id,
-                &bob_id,
-                &alice_conn,
-                &bob_conn,
-            )
-            .await,
-        );
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
         drop(drain_channel(&alice_conn, &bob_id));
         drop(drain_channel(&bob_conn, &alice_id));
 
@@ -4419,9 +4023,9 @@ mod orchestration_behavioural {
             .expect("alice should receive sync-check");
 
         alice_proto
-            .handle_inbound(&bob_id, bob_conn.clone(), inbound)
+            .handle_message(&bob_id, inbound, Some(bob_conn.clone()))
             .await
-            .expect("handle_inbound sync check");
+            .expect("handle_message sync check");
 
         let alice_messages = drain_channel(&bob_conn, &alice_id);
         assert!(
@@ -4431,7 +4035,7 @@ mod orchestration_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn handle_inbound_auto_registers_unknown_peer_on_sync_check() {
+    async fn auto_registers_unknown_peer_on_sync_check() {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -4456,9 +4060,9 @@ mod orchestration_behavioural {
             .expect("alice should receive sync-check");
 
         alice_proto
-            .handle_inbound(&bob_id, alice_conn.clone(), inbound)
+            .handle_message(&bob_id, inbound, Some(alice_conn.clone()))
             .await
-            .expect("handle_inbound sync check");
+            .expect("handle_message sync check");
 
         assert!(
             alice_proto.has_peer(&bob_id).await,
@@ -4483,17 +4087,15 @@ mod orchestration_behavioural {
             let kh = alice_kh.lock().await;
             create_group_with_read_members(&kh, &[&bob_id]).await;
         }
-        drop(
-            run_sync_round(
-                &alice_proto,
-                &bob_proto,
-                &alice_id,
-                &bob_id,
-                &alice_conn,
-                &bob_conn,
-            )
-            .await,
-        );
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
 
         let alice_proto = Arc::new(alice_proto);
 
@@ -4526,7 +4128,7 @@ mod orchestration_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn handle_inbound_preserves_other_peers_when_ingest_is_noop() {
+    async fn preserves_other_peers_when_ingest_is_noop() {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -4542,24 +4144,26 @@ mod orchestration_behavioural {
             let kh = bob_kh.lock().await;
             create_group_with_read_members(&kh, &[&alice_id]).await;
         }
-        drop(
-            run_sync_round(
-                &bob_proto,
-                &alice_proto,
-                &bob_id,
-                &alice_id,
-                &bob_conn,
-                &alice_conn,
-            )
-            .await,
-        );
+        run_sync_round(
+            &bob_proto,
+            &alice_proto,
+            &bob_id,
+            &alice_id,
+            &bob_conn,
+            &alice_conn,
+        )
+        .await;
         drop(drain_channel(&alice_conn, &bob_id));
         drop(drain_channel(&bob_conn, &alice_id));
 
         let alice_proto = Arc::new(alice_proto);
 
         let carol_id = KeyhivePeerId::from_bytes([0xCC; 32]);
-        alice_proto.syncpoints.lock().await.set(carol_id.clone(), 42);
+        alice_proto
+            .syncpoints
+            .lock()
+            .await
+            .set(carol_id.clone(), 42);
 
         alice_proto
             .sync_keyhive(Some(&bob_id))
@@ -4571,7 +4175,7 @@ mod orchestration_behavioural {
             .try_recv()
             .expect("bob should receive sync request");
         bob_proto
-            .handle_message(&alice_id, sync_request)
+            .handle_message(&alice_id, sync_request, None)
             .await
             .expect("bob handle sync request");
 
@@ -4580,7 +4184,7 @@ mod orchestration_behavioural {
             .try_recv()
             .expect("alice should receive sync response");
         alice_proto
-            .handle_inbound(&bob_id, bob_conn.clone(), sync_response)
+            .handle_message(&bob_id, sync_response, None)
             .await
             .expect("alice handle sync response");
 
@@ -4597,6 +4201,88 @@ mod orchestration_behavioural {
             Some(42),
             "carol's syncpoint should survive: ingest was a no-op so \
              total_ops didn't advance and invalidation should be skipped"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invalidates_other_peers_when_ops_ingested() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        // Initial sync so both sides share the baseline.
+        run_sync_round(
+            &bob_proto,
+            &alice_proto,
+            &bob_id,
+            &alice_id,
+            &bob_conn,
+            &alice_conn,
+        )
+        .await;
+        drop(drain_channel(&alice_conn, &bob_id));
+        drop(drain_channel(&bob_conn, &alice_id));
+
+        // Bob creates new ops AFTER the initial sync.
+        {
+            let kh = bob_kh.lock().await;
+            create_group_with_read_members(&kh, &[&alice_id]).await;
+        }
+
+        let alice_proto = Arc::new(alice_proto);
+
+        let carol_id = KeyhivePeerId::from_bytes([0xCC; 32]);
+        alice_proto
+            .syncpoints
+            .lock()
+            .await
+            .set(carol_id.clone(), 42);
+
+        // Alice initiates sync — Bob has new ops so Alice will ingest,
+        // advancing total_ops.
+        alice_proto
+            .sync_keyhive(Some(&bob_id))
+            .await
+            .expect("alice sync_keyhive");
+
+        let sync_request = bob_conn
+            .inbound_rx
+            .try_recv()
+            .expect("bob should receive sync request");
+        bob_proto
+            .handle_message(&alice_id, sync_request, None)
+            .await
+            .expect("bob handle sync request");
+
+        let sync_response = alice_conn
+            .inbound_rx
+            .try_recv()
+            .expect("alice should receive sync response");
+        alice_proto
+            .handle_message(&bob_id, sync_response, None)
+            .await
+            .expect("alice handle sync response");
+
+        drop(drain_channel(&bob_conn, &alice_id));
+        drop(drain_channel(&alice_conn, &bob_id));
+
+        let map = alice_proto.syncpoints.lock().await;
+        assert!(
+            map.get(&bob_id).is_some(),
+            "alice should record a syncpoint for bob after the round"
+        );
+        assert_eq!(
+            map.get(&carol_id),
+            None,
+            "carol's syncpoint should be invalidated: alice ingested new \
+             ops so total_ops advanced and all stale syncpoints are cleared"
         );
     }
 }

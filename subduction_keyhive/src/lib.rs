@@ -12,12 +12,12 @@ pub mod connection;
 pub mod error;
 #[cfg(feature = "handler")]
 pub mod handler;
+pub mod message;
+pub mod peer_id;
 #[cfg(feature = "handler")]
 pub mod policy;
 #[cfg(feature = "runtime")]
 pub mod runtime;
-pub mod message;
-pub mod peer_id;
 pub mod signed_message;
 pub mod storage;
 pub mod wire;
@@ -59,7 +59,7 @@ pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 #[cfg(feature = "serde")]
 pub use all_agent_events::AllAgentEvents;
 #[cfg(feature = "serde")]
-pub use protocol::{KeyhiveProtocol, SyncOutcome};
+pub use protocol::KeyhiveProtocol;
 #[cfg(feature = "serde")]
 pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,

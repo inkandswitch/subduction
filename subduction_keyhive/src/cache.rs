@@ -12,6 +12,7 @@ use alloc::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use keyhive_core::{
     listener::membership::MembershipListener,
+    principal::public::Public,
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
@@ -89,7 +90,7 @@ impl PeriodicEventCache {
     /// Every event the public agent can see is unconditionally included,
     /// plus events reachable to *both* `a` and `b`. Returns a map keyed
     /// by hash with `(EventBytes, CborBytes)` cloned from the byte stores.
-    pub(crate) fn hashes_for_peer_pair(
+    pub(crate) fn events_for_peer_pair(
         &self,
         a: &KeyhivePeerId,
         b: &KeyhivePeerId,
@@ -148,17 +149,16 @@ impl PeriodicEventCache {
         }
 
         let known: alloc::collections::BTreeSet<_> = self.event_data.keys().copied().collect();
-        let snapshot = protocol.all_agent_events(&known).await?;
+        let all_agent_events = protocol.all_agent_events(&known).await?;
 
-        for (h, data) in snapshot.event_data {
+        for (h, data) in all_agent_events.event_data {
             self.event_data.entry(h).or_insert(data);
         }
 
         // The public set is unioned unconditionally into every pair
         // query, so it lives in its own field.
-        let mut new_agent_hashes = snapshot.agent_hashes;
-        let public_peer =
-            KeyhivePeerId::from_identifier(&keyhive_core::principal::public::Public.id());
+        let mut new_agent_hashes = all_agent_events.agent_hashes;
+        let public_peer = KeyhivePeerId::from_identifier(&Public.id());
         let new_public = new_agent_hashes.remove(&public_peer).unwrap_or_default();
 
         self.agent_hashes = new_agent_hashes;
@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn hashes_for_peer_pair_returns_only_public_when_peers_unknown() {
+    fn events_for_peer_pair_returns_only_public_when_peers_unknown() {
         let mut cache = PeriodicEventCache::new();
         let h: EventHash = [9; 32];
         cache
@@ -188,13 +188,13 @@ mod tests {
             .insert(h, (vec![1, 2, 3], vec![0x43, 1, 2, 3]));
         cache.public_hashes.insert(h);
 
-        let result = cache.hashes_for_peer_pair(&peer(1), &peer(2));
+        let result = cache.events_for_peer_pair(&peer(1), &peer(2));
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&h));
     }
 
     #[test]
-    fn hashes_for_peer_pair_intersects_known_peers() {
+    fn events_for_peer_pair_intersects_known_peers() {
         let mut cache = PeriodicEventCache::new();
         let public_h: EventHash = [9; 32];
         let shared_h: EventHash = [1; 32];
@@ -217,7 +217,7 @@ mod tests {
         bob.insert(bob_only);
         cache.agent_hashes.insert(peer(2), bob);
 
-        let result = cache.hashes_for_peer_pair(&peer(1), &peer(2));
+        let result = cache.events_for_peer_pair(&peer(1), &peer(2));
         assert!(result.contains_key(&public_h), "public hash present");
         assert!(result.contains_key(&shared_h), "shared hash present");
         assert!(!result.contains_key(&alice_only), "alice-only excluded");

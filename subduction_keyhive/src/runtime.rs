@@ -9,8 +9,7 @@ use core::time::Duration;
 
 use async_lock::Mutex as AsyncMutex;
 use keyhive_core::{
-    keyhive::Keyhive, listener::no_listener::NoListener,
-    principal::identifier::Identifier,
+    keyhive::Keyhive, listener::no_listener::NoListener, principal::identifier::Identifier,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -39,7 +38,6 @@ pub type RuntimeKeyhive = Keyhive<
 pub struct RuntimeConfig {
     /// Interval between periodic cache refreshes.
     pub cache_refresh_interval: Duration,
-
     // /// Minimum interval between outbound sync requests to the same peer.
     // ///
     // TODO: Implement
@@ -208,14 +206,17 @@ async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
 
     let shared = Arc::new(AsyncMutex::new(keyhive));
     let policy_keyhive = Arc::clone(&shared);
-    let protocol = Arc::new(
-        KeyhiveProtocol::<_, Vec<u8>, Vec<u8>, _, _, _, Conn, Store, future_form::Local>::new(
-            shared,
-            storage,
-            peer_id,
-            contact_card,
-        ),
-    );
+    let protocol = Arc::new(KeyhiveProtocol::<
+        _,
+        Vec<u8>,
+        Vec<u8>,
+        _,
+        _,
+        _,
+        Conn,
+        Store,
+        future_form::Local,
+    >::new(shared, storage, peer_id, contact_card));
 
     if let Err(e) = protocol.ingest_from_storage().await {
         tracing::warn!("keyhive ingest_from_storage failed: {e}");
@@ -234,7 +235,7 @@ async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
             async move {
                 let keyhive_peer = conn.peer_id();
                 proto
-                    .handle_inbound(&keyhive_peer, conn, msg)
+                    .handle_message(&keyhive_peer, msg, Some(conn))
                     .await
                     .map_err(|e| e.to_string())
             }

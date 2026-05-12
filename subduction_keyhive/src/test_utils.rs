@@ -18,11 +18,8 @@ use keyhive_crypto::signer::memory::MemorySigner;
 use rand::rngs::OsRng;
 
 use crate::{
-    connection::KeyhiveConnection,
-    peer_id::KeyhivePeerId,
-    protocol::{KeyhiveProtocol, SyncOutcome},
-    signed_message::SignedMessage,
-    storage::MemoryKeyhiveStorage,
+    connection::KeyhiveConnection, peer_id::KeyhivePeerId, protocol::KeyhiveProtocol,
+    signed_message::SignedMessage, storage::MemoryKeyhiveStorage,
 };
 
 /// Type alias for the simple keyhive type used in tests.
@@ -165,12 +162,6 @@ pub async fn make_protocol_with_shared_keyhive(
     (protocol, shared, storage)
 }
 
-/// Result of a sync round, including all outcomes from handled messages.
-pub struct SyncRoundResult {
-    /// All [`SyncOutcome`]s returned by `handle_message` during this round.
-    pub outcomes: Vec<SyncOutcome>,
-}
-
 /// Run a complete sync round from initiator to responder.
 ///
 /// Executes the sync protocol:
@@ -178,8 +169,6 @@ pub struct SyncRoundResult {
 /// 2. Responder replies with `SyncResponse`
 /// 3. Initiator sends `SyncOps` (if any were requested)
 /// 4. Confirmation messages are forwarded and handled
-///
-/// Returns a [`SyncRoundResult`] with all outcomes.
 pub async fn run_sync_round(
     initiator_proto: &TestProtocol,
     responder_proto: &TestProtocol,
@@ -187,9 +176,7 @@ pub async fn run_sync_round(
     responder_id: &KeyhivePeerId,
     initiator_conn: &ChannelConnection,
     responder_conn: &ChannelConnection,
-) -> SyncRoundResult {
-    let mut outcomes = Vec::new();
-
+) {
     // 1. Initiator sends SyncRequest
     initiator_proto
         .sync_keyhive(Some(responder_id))
@@ -202,11 +189,10 @@ pub async fn run_sync_round(
         .recv()
         .await
         .expect("failed to receive sync request");
-    let outcome = responder_proto
-        .handle_message(initiator_id, sync_request)
+    responder_proto
+        .handle_message(initiator_id, sync_request, None)
         .await
         .expect("responder failed to handle sync request");
-    outcomes.push(outcome);
 
     // 3. Forward SyncResponse to initiator
     let sync_response = initiator_conn
@@ -214,11 +200,10 @@ pub async fn run_sync_round(
         .recv()
         .await
         .expect("failed to receive sync response");
-    let outcome = initiator_proto
-        .handle_message(responder_id, sync_response)
+    initiator_proto
+        .handle_message(responder_id, sync_response, None)
         .await
         .expect("initiator failed to handle sync response");
-    outcomes.push(outcome);
 
     // 4. Forward any remaining messages (SyncOps, then confirmations)
     //    until both channels are empty.
@@ -226,22 +211,18 @@ pub async fn run_sync_round(
         let mut handled = false;
 
         if let Ok(msg) = responder_conn.inbound_rx.try_recv() {
-            let outcome = responder_proto
-                .handle_message(initiator_id, msg)
+            responder_proto
+                .handle_message(initiator_id, msg, None)
                 .await
                 .expect("responder failed to handle message");
-            outcomes.push(outcome);
-
             handled = true;
         }
 
         if let Ok(msg) = initiator_conn.inbound_rx.try_recv() {
-            let outcome = initiator_proto
-                .handle_message(responder_id, msg)
+            initiator_proto
+                .handle_message(responder_id, msg, None)
                 .await
                 .expect("initiator failed to handle message");
-            outcomes.push(outcome);
-
             handled = true;
         }
 
@@ -249,8 +230,6 @@ pub async fn run_sync_round(
             break;
         }
     }
-
-    SyncRoundResult { outcomes }
 }
 
 /// Run `rounds` bidirectional sync exchanges between two peers.

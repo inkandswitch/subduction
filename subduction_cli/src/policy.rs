@@ -179,8 +179,7 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
-        let (legacy, keyhive_ids): (Vec<_>, Vec<_>) =
-            ids.into_iter().partition(is_legacy);
+        let (legacy, keyhive_ids): (Vec<_>, Vec<_>) = ids.into_iter().partition(is_legacy);
 
         async move {
             let (reply_tx, reply_rx) = async_channel::bounded(1);

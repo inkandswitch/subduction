@@ -141,7 +141,7 @@ pub enum Message {
 
     /// Lightweight sync check.
     ///
-    /// Sent instead of a full `SyncRequest` when the orchestrator has an
+    /// Sent instead of a full `SyncRequest` when the protocol has an
     /// established syncpoint for the target. Carries the sender's total
     /// operation count and its syncpoint (the last confirmed total for the
     /// target). If both sides' counts match their respective syncpoints,
