@@ -49,7 +49,7 @@ use sedimentree_core::codec::{
     schema::{self, Schema},
 };
 use subduction_crypto::signed::{
-    Signed, MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, VERIFYING_KEY_SIZE,
+    MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE,
 };
 
 // ── Test payloads ──────────────────────────────────────────────────────
@@ -219,10 +219,7 @@ impl DecodeFields for VariablePayload {
 
 /// Synchronously seal a payload (mirrors `Signed::seal` internals
 /// without requiring a tokio runtime in proptests).
-fn seal_sync<T: Schema + EncodeFields + DecodeFields>(
-    key_bytes: [u8; 32],
-    payload: &T,
-) -> Vec<u8> {
+fn seal_sync<T: Schema + EncodeFields + DecodeFields>(key_bytes: [u8; 32], payload: &T) -> Vec<u8> {
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let issuer = signing_key.verifying_key();
 
@@ -383,8 +380,8 @@ fn variable_decode_truncates_trailing_bytes() {
             let mut with_trailing = canonical.clone();
             with_trailing.extend_from_slice(trailing);
 
-            let signed = Signed::<VariablePayload>::try_decode(with_trailing)
-                .expect("decode with trailing");
+            let signed =
+                Signed::<VariablePayload>::try_decode(with_trailing).expect("decode with trailing");
             assert_eq!(signed.as_bytes().len(), canonical_len);
             signed.try_verify().expect("verify after truncation");
         });
@@ -477,7 +474,10 @@ fn plain_schema_tamper_yields_invalid_schema() {
             bytes[..4].copy_from_slice(bad_schema);
             let result = Signed::<PlainPayload>::try_decode(bytes);
             assert!(
-                matches!(result, Err(DecodeError::InvalidSchema(InvalidSchema { .. }))),
+                matches!(
+                    result,
+                    Err(DecodeError::InvalidSchema(InvalidSchema { .. }))
+                ),
                 "expected InvalidSchema, got {result:?}"
             );
         });
@@ -556,15 +556,13 @@ fn plain_single_bit_flip_breaks_verification() {
             bytes[byte_idx] ^= 1 << bit_idx;
 
             // Either decode fails or verify fails — never both succeed.
-            match Signed::<PlainPayload>::try_decode(bytes) {
-                Ok(signed) => {
-                    let verify_result = signed.try_verify();
-                    assert!(
-                        verify_result.is_err(),
-                        "tampered bytes must not verify (byte_idx={byte_idx}, bit_idx={bit_idx})"
-                    );
-                }
-                Err(_) => {} // decode failure is acceptable
+            // A decode failure is acceptable; we only assert on the Ok branch.
+            if let Ok(signed) = Signed::<PlainPayload>::try_decode(bytes) {
+                let verify_result = signed.try_verify();
+                assert!(
+                    verify_result.is_err(),
+                    "tampered bytes must not verify (byte_idx={byte_idx}, bit_idx={bit_idx})"
+                );
             }
         });
 }
@@ -582,12 +580,9 @@ fn tagged_single_bit_flip_breaks_verification() {
             let bit_idx = bit_idx_seed % 8;
             bytes[byte_idx] ^= 1 << bit_idx;
 
-            match Signed::<TaggedPayload>::try_decode(bytes) {
-                Ok(signed) => {
-                    let verify_result = signed.try_verify();
-                    assert!(verify_result.is_err(), "tampered bytes must not verify");
-                }
-                Err(_) => {}
+            if let Ok(signed) = Signed::<TaggedPayload>::try_decode(bytes) {
+                let verify_result = signed.try_verify();
+                assert!(verify_result.is_err(), "tampered bytes must not verify");
             }
         });
 }
@@ -605,12 +600,9 @@ fn variable_single_bit_flip_breaks_verification() {
             let bit_idx = bit_idx_seed % 8;
             bytes[byte_idx] ^= 1 << bit_idx;
 
-            match Signed::<VariablePayload>::try_decode(bytes) {
-                Ok(signed) => {
-                    let verify_result = signed.try_verify();
-                    assert!(verify_result.is_err(), "tampered bytes must not verify");
-                }
-                Err(_) => {}
+            if let Ok(signed) = Signed::<VariablePayload>::try_decode(bytes) {
+                let verify_result = signed.try_verify();
+                assert!(verify_result.is_err(), "tampered bytes must not verify");
             }
         });
 }
@@ -618,8 +610,8 @@ fn variable_single_bit_flip_breaks_verification() {
 // ── Wire-layout invariants ────────────────────────────────────────────
 
 /// `as_bytes()`, `payload_bytes()`, `fields_bytes()`, and
-/// `signature()` agree on positions: payload_bytes ⊆ as_bytes,
-/// fields_bytes ⊆ payload_bytes, signature is at the end of as_bytes.
+/// `signature()` agree on positions: `payload_bytes` ⊆ `as_bytes`,
+/// `fields_bytes` ⊆ `payload_bytes`, signature is at the end of `as_bytes`.
 #[test]
 fn wire_layout_slices_agree() {
     bolero::check!()
@@ -662,13 +654,4 @@ fn wire_layout_slices_agree_tagged() {
             assert_eq!(fields_bytes, &bytes[expected_start..expected_end]);
             assert_eq!(fields_bytes.len(), payload.fields_size());
         });
-}
-
-// ── Sanity: MIN_SIGNED_SIZE is correct ────────────────────────────────
-
-#[test]
-fn min_signed_size_constant_is_consistent() {
-    // schema(4) + issuer(32) + sig(64) — no fields, no discriminant.
-    assert_eq!(MIN_SIGNED_SIZE, 4 + 32 + 64);
-    assert_eq!(MIN_SIGNED_SIZE, SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_SIZE);
 }

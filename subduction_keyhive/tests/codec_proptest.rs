@@ -32,7 +32,7 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema, SizeMismatch},
 };
-use subduction_keyhive::wire::{KeyhiveMessage, KEYHIVE_SCHEMA};
+use subduction_keyhive::wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 // ── Round-trip ────────────────────────────────────────────────────────
 
@@ -179,7 +179,10 @@ fn keyhive_wrong_schema_rejected() {
 
             let result = KeyhiveMessage::try_decode(&encoded);
             assert!(
-                matches!(result, Err(DecodeError::InvalidSchema(InvalidSchema { .. }))),
+                matches!(
+                    result,
+                    Err(DecodeError::InvalidSchema(InvalidSchema { .. }))
+                ),
                 "wrong schema must yield InvalidSchema, got {result:?}"
             );
         });

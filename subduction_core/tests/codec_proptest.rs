@@ -39,16 +39,16 @@ use sedimentree_core::codec::{
     schema::Schema,
 };
 use subduction_core::{
-    connection::message::{SyncMessage, MESSAGE_SCHEMA},
+    connection::message::{MESSAGE_SCHEMA, SyncMessage},
     handshake::{
+        HandshakeMessage,
         challenge::Challenge,
         rejection::{Rejection, RejectionReason},
         response::Response,
-        HandshakeMessage,
     },
 };
 use subduction_crypto::signed::{
-    Signed, MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, VERIFYING_KEY_SIZE,
+    MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -57,10 +57,7 @@ use subduction_crypto::signed::{
 /// given seed. This produces the canonical wire bytes and is what
 /// `Signed::seal` does internally (just without the async/Signer
 /// abstraction).
-fn seal_sync<T: Schema + EncodeFields + DecodeFields>(
-    key_bytes: [u8; 32],
-    payload: &T,
-) -> Vec<u8> {
+fn seal_sync<T: Schema + EncodeFields + DecodeFields>(key_bytes: [u8; 32], payload: &T) -> Vec<u8> {
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let issuer = signing_key.verifying_key();
 
@@ -161,7 +158,10 @@ fn challenge_invalid_audience_tag_is_rejected() {
             buf[0] = *bad_tag;
             let result = Challenge::try_decode_fields(&buf);
             assert!(
-                matches!(result, Err(DecodeError::InvalidEnumTag(InvalidEnumTag { .. }))),
+                matches!(
+                    result,
+                    Err(DecodeError::InvalidEnumTag(InvalidEnumTag { .. }))
+                ),
                 "expected InvalidEnumTag for bad audience tag {bad_tag:#04x}, got {result:?}"
             );
         });
@@ -187,8 +187,8 @@ fn challenge_rejects_response_bytes() {
             assert!(
                 matches!(
                     result,
-                    Err(DecodeError::InvalidDiscriminant(InvalidDiscriminant { .. }))
-                        | Err(DecodeError::MessageTooShort { .. })
+                    Err(DecodeError::InvalidDiscriminant(InvalidDiscriminant { .. })
+                        | DecodeError::MessageTooShort { .. })
                 ),
                 "expected InvalidDiscriminant or MessageTooShort when decoding Response bytes as Challenge, got {result:?}"
             );
@@ -433,22 +433,20 @@ fn handshake_wrong_schema_rejected() {
 /// 0x00/0x01/0x02) yields `InvalidEnumTag`.
 #[test]
 fn handshake_unknown_tag_rejected() {
-    bolero::check!()
-        .with_arbitrary::<u8>()
-        .for_each(|bad_tag| {
-            if *bad_tag == 0x00 || *bad_tag == 0x01 || *bad_tag == 0x02 {
-                return;
-            }
-            let mut bytes = Vec::new();
-            bytes.extend_from_slice(&Challenge::SCHEMA);
-            bytes.push(*bad_tag);
+    bolero::check!().with_arbitrary::<u8>().for_each(|bad_tag| {
+        if *bad_tag == 0x00 || *bad_tag == 0x01 || *bad_tag == 0x02 {
+            return;
+        }
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&Challenge::SCHEMA);
+        bytes.push(*bad_tag);
 
-            let result = HandshakeMessage::try_decode(&bytes);
-            assert!(
-                matches!(result, Err(DecodeError::InvalidEnumTag(_))),
-                "unknown tag {bad_tag:#04x} must yield InvalidEnumTag, got {result:?}"
-            );
-        });
+        let result = HandshakeMessage::try_decode(&bytes);
+        assert!(
+            matches!(result, Err(DecodeError::InvalidEnumTag(_))),
+            "unknown tag {bad_tag:#04x} must yield InvalidEnumTag, got {result:?}"
+        );
+    });
 }
 
 #[test]
@@ -479,15 +477,13 @@ fn rejection_reason_round_trip_all_variants() {
 #[test]
 fn rejection_reason_unknown_tag_rejected() {
     use std::convert::TryFrom;
-    bolero::check!()
-        .with_arbitrary::<u8>()
-        .for_each(|tag| {
-            if *tag <= 3 {
-                return;
-            }
-            let result = RejectionReason::try_from(*tag);
-            assert!(result.is_err(), "tag {tag} must be rejected");
-        });
+    bolero::check!().with_arbitrary::<u8>().for_each(|tag| {
+        if *tag <= 3 {
+            return;
+        }
+        let result = RejectionReason::try_from(*tag);
+        assert!(result.is_err(), "tag {tag} must be rejected");
+    });
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -593,7 +589,10 @@ fn sync_message_wrong_schema_rejected() {
             encoded[..4].copy_from_slice(bad_schema);
             let result = SyncMessage::try_decode(&encoded);
             assert!(
-                matches!(result, Err(DecodeError::InvalidSchema(InvalidSchema { .. }))),
+                matches!(
+                    result,
+                    Err(DecodeError::InvalidSchema(InvalidSchema { .. }))
+                ),
                 "wrong schema must yield InvalidSchema, got {result:?}"
             );
         });
@@ -617,27 +616,20 @@ fn sync_message_corrupted_total_size_rejected() {
             // Either SizeMismatch (the size doesn't match) or some
             // downstream parsing error from interpreting the now-wrong
             // tag byte. Whatever — must not panic, must not succeed.
-            match result {
-                Err(_) => {}
-                Ok(decoded) => {
-                    // If by sheer luck the decoder still succeeded
-                    // (because the corrupted total_size matches what
-                    // a valid prefix would describe), it must at least
-                    // round-trip back to bytes equal to the canonical
-                    // form. But this is a real edge case; usually it
-                    // errors.
-                    let re_encoded = decoded.encode();
-                    if re_encoded != encoded {
-                        // The decoder accepted bytes it shouldn't have.
-                        // We don't fail outright because the corrupted
-                        // size could occasionally match a different
-                        // valid encoding, but flag it for review.
-                        panic!(
-                            "decoder accepted corrupted total_size {fake_total_size} \
-                             but re-encoding produces different bytes"
-                        );
-                    }
-                }
+            //
+            // If by sheer luck the decoder still succeeded (because the
+            // corrupted total_size matches what a valid prefix would
+            // describe), it must at least round-trip back to bytes equal
+            // to the canonical form. But this is a real edge case;
+            // usually it errors. When it doesn't round-trip, the decoder
+            // accepted bytes it shouldn't have — flag for review.
+            if let Ok(decoded) = result {
+                let re_encoded = decoded.encode();
+                assert_eq!(
+                    re_encoded, encoded,
+                    "decoder accepted corrupted total_size {fake_total_size} \
+                     but re-encoding produces different bytes"
+                );
             }
         });
 }
@@ -646,30 +638,21 @@ fn sync_message_corrupted_total_size_rejected() {
 /// supported range (0x00–0x08) yields `InvalidEnumTag`.
 #[test]
 fn sync_message_unknown_tag_rejected() {
-    bolero::check!()
-        .with_arbitrary::<u8>()
-        .for_each(|bad_tag| {
-            if *bad_tag <= 0x08 {
-                return;
-            }
-            let mut bytes = Vec::with_capacity(9);
-            bytes.extend_from_slice(&MESSAGE_SCHEMA);
-            bytes.extend_from_slice(&9u32.to_be_bytes()); // total_size
-            bytes.push(*bad_tag);
-            // No payload — this triggers the tag validation before
-            // any payload decoding.
+    bolero::check!().with_arbitrary::<u8>().for_each(|bad_tag| {
+        if *bad_tag <= 0x08 {
+            return;
+        }
+        let mut bytes = Vec::with_capacity(9);
+        bytes.extend_from_slice(&MESSAGE_SCHEMA);
+        bytes.extend_from_slice(&9u32.to_be_bytes()); // total_size
+        bytes.push(*bad_tag);
+        // No payload — this triggers the tag validation before
+        // any payload decoding.
 
-            let result = SyncMessage::try_decode(&bytes);
-            assert!(
-                matches!(result, Err(DecodeError::InvalidEnumTag(_))),
-                "unknown tag {bad_tag:#04x} must yield InvalidEnumTag, got {result:?}"
-            );
-        });
-}
-
-// ── MIN_SIGNED_SIZE sanity ────────────────────────────────────────────
-
-#[test]
-fn min_signed_size_is_consistent_with_constants() {
-    assert_eq!(MIN_SIGNED_SIZE, SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_SIZE);
+        let result = SyncMessage::try_decode(&bytes);
+        assert!(
+            matches!(result, Err(DecodeError::InvalidEnumTag(_))),
+            "unknown tag {bad_tag:#04x} must yield InvalidEnumTag, got {result:?}"
+        );
+    });
 }

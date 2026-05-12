@@ -38,9 +38,9 @@ use sedimentree_core::codec::{
     schema::Schema,
 };
 use subduction_core::timestamp::TimestampSeconds;
-use subduction_crypto::signed::{Signed, SCHEMA_SIZE, SIGNATURE_SIZE, VERIFYING_KEY_SIZE};
+use subduction_crypto::signed::{SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE};
 use subduction_ephemeral::{
-    message::{EphemeralMessage, EphemeralPayload, EPHEMERAL_SCHEMA},
+    message::{EPHEMERAL_SCHEMA, EphemeralMessage, EphemeralPayload},
     topic::Topic,
 };
 
@@ -73,10 +73,7 @@ fn build_payload(inputs: &GenInputs) -> EphemeralPayload {
     }
 }
 
-fn seal_sync<T: Schema + EncodeFields + DecodeFields>(
-    key_bytes: [u8; 32],
-    payload: &T,
-) -> Vec<u8> {
+fn seal_sync<T: Schema + EncodeFields + DecodeFields>(key_bytes: [u8; 32], payload: &T) -> Vec<u8> {
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let issuer = signing_key.verifying_key();
 
@@ -360,7 +357,10 @@ fn ephemeral_message_wrong_schema_rejected() {
             encoded[..4].copy_from_slice(bad_schema);
             let result = EphemeralMessage::try_decode(&encoded);
             assert!(
-                matches!(result, Err(DecodeError::InvalidSchema(InvalidSchema { .. }))),
+                matches!(
+                    result,
+                    Err(DecodeError::InvalidSchema(InvalidSchema { .. }))
+                ),
                 "wrong schema must yield InvalidSchema, got {result:?}"
             );
         });
@@ -368,23 +368,21 @@ fn ephemeral_message_wrong_schema_rejected() {
 
 #[test]
 fn ephemeral_message_unknown_tag_rejected() {
-    bolero::check!()
-        .with_arbitrary::<u8>()
-        .for_each(|bad_tag| {
-            // Known tags are 0x00 (Ephemeral discriminant), 0x01, 0x02, 0x03.
-            if matches!(*bad_tag, 0x00 | 0x01 | 0x02 | 0x03) {
-                return;
-            }
-            let mut bytes = Vec::new();
-            bytes.extend_from_slice(&EPHEMERAL_SCHEMA);
-            bytes.push(*bad_tag);
+    bolero::check!().with_arbitrary::<u8>().for_each(|bad_tag| {
+        // Known tags are 0x00 (Ephemeral discriminant), 0x01, 0x02, 0x03.
+        if matches!(*bad_tag, 0x00..=0x03) {
+            return;
+        }
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&EPHEMERAL_SCHEMA);
+        bytes.push(*bad_tag);
 
-            let result = EphemeralMessage::try_decode(&bytes);
-            assert!(
-                matches!(result, Err(DecodeError::InvalidEnumTag(_))),
-                "unknown tag {bad_tag:#04x} must yield InvalidEnumTag, got {result:?}"
-            );
-        });
+        let result = EphemeralMessage::try_decode(&bytes);
+        assert!(
+            matches!(result, Err(DecodeError::InvalidEnumTag(_))),
+            "unknown tag {bad_tag:#04x} must yield InvalidEnumTag, got {result:?}"
+        );
+    });
 }
 
 /// Trailing bytes after a control-tag message yield `SizeMismatch`.

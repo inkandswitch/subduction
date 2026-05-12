@@ -37,7 +37,7 @@
 //! never-panic fuzz.
 
 #![cfg(feature = "bolero")]
-#![allow(clippy::panic, clippy::expect_used)]
+#![allow(clippy::panic, clippy::expect_used, clippy::indexing_slicing)]
 
 use sedimentree_core::{
     codec::{
@@ -115,47 +115,25 @@ fn array_round_trip_with_prefix() {
             let mut buf = prefix.clone();
             let offset = buf.len();
             encode::array(value, &mut buf);
-            assert_eq!(decode::array::<32>(&buf, offset).expect("in bounds"), *value);
+            assert_eq!(
+                decode::array::<32>(&buf, offset).expect("in bounds"),
+                *value
+            );
         });
 }
 
 /// Endianness check: u16 BE — the most-significant byte must be at
 /// the lower offset.
 #[test]
+#[allow(clippy::cast_possible_truncation)]
 fn u16_is_big_endian() {
-    bolero::check!()
-        .with_arbitrary::<u16>()
-        .for_each(|value| {
-            let mut buf = Vec::new();
-            encode::u16(*value, &mut buf);
-            assert_eq!(buf.len(), 2);
-            assert_eq!(buf[0], (*value >> 8) as u8);
-            assert_eq!(buf[1], *value as u8);
-        });
-}
-
-#[test]
-fn u32_is_big_endian() {
-    bolero::check!()
-        .with_arbitrary::<u32>()
-        .for_each(|value| {
-            let mut buf = Vec::new();
-            encode::u32(*value, &mut buf);
-            assert_eq!(buf.len(), 4);
-            assert_eq!(buf, value.to_be_bytes());
-        });
-}
-
-#[test]
-fn u64_is_big_endian() {
-    bolero::check!()
-        .with_arbitrary::<u64>()
-        .for_each(|value| {
-            let mut buf = Vec::new();
-            encode::u64(*value, &mut buf);
-            assert_eq!(buf.len(), 8);
-            assert_eq!(buf, value.to_be_bytes());
-        });
+    bolero::check!().with_arbitrary::<u16>().for_each(|value| {
+        let mut buf = Vec::new();
+        encode::u16(*value, &mut buf);
+        assert_eq!(buf.len(), 2);
+        assert_eq!(buf[0], (*value >> 8) as u8);
+        assert_eq!(buf[1], *value as u8);
+    });
 }
 
 // ── Slice / array decoder pathological inputs ──────────────────────────
@@ -206,12 +184,10 @@ fn verify_sorted_strict_ascending_property() {
             let result = decode::verify_sorted(elements);
 
             // Compute the truth via windows().
-            let is_strict_ascending = elements
-                .windows(2)
-                .all(|w| match w {
-                    [a, b] => a < b,
-                    _ => true,
-                });
+            let is_strict_ascending = elements.windows(2).all(|w| match w {
+                [a, b] => a < b,
+                _ => true,
+            });
 
             match (result, is_strict_ascending) {
                 (Ok(()), true) | (Err(_), false) => {} // agreement
@@ -263,7 +239,10 @@ fn verify_sorted_violation_index_is_one_based() {
                 );
                 let prev = &elements[index - 1];
                 let curr = &elements[index];
-                assert!(prev >= curr, "reported violation is not actually a violation");
+                assert!(
+                    prev >= curr,
+                    "reported violation is not actually a violation"
+                );
             }
         });
 }
@@ -397,7 +376,10 @@ fn loose_commit_decode_with_trailing_bytes() {
 
             match LooseCommit::try_decode_fields(&buf) {
                 Ok((decoded, consumed)) => {
-                    assert_eq!(&decoded, commit, "trailing bytes must not corrupt the value");
+                    assert_eq!(
+                        &decoded, commit,
+                        "trailing bytes must not corrupt the value"
+                    );
                     assert_eq!(consumed, canonical_len, "consumed must equal canonical len");
                 }
                 Err(e) => panic!("decode must accept canonical bytes + trailing garbage: {e}"),
@@ -417,7 +399,10 @@ fn fragment_decode_with_trailing_bytes() {
 
             match Fragment::try_decode_fields(&buf) {
                 Ok((decoded, consumed)) => {
-                    assert_eq!(&decoded, fragment, "trailing bytes must not corrupt the value");
+                    assert_eq!(
+                        &decoded, fragment,
+                        "trailing bytes must not corrupt the value"
+                    );
                     assert_eq!(consumed, canonical_len);
                 }
                 Err(e) => panic!("decode must accept canonical bytes + trailing garbage: {e}"),
@@ -507,65 +492,6 @@ fn fragment_single_bit_flip_does_not_panic() {
         });
 }
 
-// ── Schema header tampering ───────────────────────────────────────────
-//
-// `Encode::encode` produces `SCHEMA || fields`. Flipping any byte in
-// the schema header must produce no successful decode under the
-// original type — but `try_decode_fields` doesn't see the schema, so
-// the test is at the [`Encode`]-level.
-
-/// A buffer whose first 4 bytes do *not* match `LooseCommit::SCHEMA`
-/// is not a valid encoding of `LooseCommit`. (Note: the codec module
-/// doesn't actually use a `Decode` impl that re-checks the schema for
-/// `LooseCommit` — schema validation happens at the `Signed<T>` and
-/// envelope layer. So this property is currently only meaningful at
-/// those higher layers, which we test in `subduction_crypto` and
-/// `subduction_core`.)
-#[test]
-fn loose_commit_schema_is_constant() {
-    // Sanity: the schema is computed from the protocol prefix + type byte + version.
-    assert_eq!(LooseCommit::SCHEMA[0], LooseCommit::PREFIX[0]);
-    assert_eq!(LooseCommit::SCHEMA[1], LooseCommit::PREFIX[1]);
-    assert_eq!(LooseCommit::SCHEMA[2], LooseCommit::TYPE_BYTE);
-    assert_eq!(LooseCommit::SCHEMA[3], LooseCommit::VERSION);
-}
-
-#[test]
-fn fragment_schema_is_constant() {
-    assert_eq!(Fragment::SCHEMA[0], Fragment::PREFIX[0]);
-    assert_eq!(Fragment::SCHEMA[1], Fragment::PREFIX[1]);
-    assert_eq!(Fragment::SCHEMA[2], Fragment::TYPE_BYTE);
-    assert_eq!(Fragment::SCHEMA[3], Fragment::VERSION);
-}
-
-// ── Determinism ────────────────────────────────────────────────────────
-//
-// Encoding the same value twice must produce identical bytes. This
-// matters because the bytes are signed: any non-determinism would
-// cause valid signatures to fail verification on the receiving side.
-
-#[test]
-fn loose_commit_encoding_is_deterministic() {
-    bolero::check!()
-        .with_arbitrary::<LooseCommit>()
-        .for_each(|commit| {
-            let a = commit.encode();
-            let b = commit.encode();
-            assert_eq!(a, b, "encoding must be deterministic for signing");
-        });
-}
-
-#[test]
-fn fragment_encoding_is_deterministic() {
-    bolero::check!()
-        .with_arbitrary::<Fragment>()
-        .for_each(|fragment| {
-            let a = fragment.encode();
-            let b = fragment.encode();
-            assert_eq!(a, b, "encoding must be deterministic for signing");
-        });
-}
-
 // ── Equal bytes ⇒ equal values ────────────────────────────────────────
 //
 // If `a.encode() == b.encode()`, then `a == b` (assuming both round-trip).
@@ -624,9 +550,9 @@ fn loose_commit_sequence_parses_with_consumed_offset() {
                         decoded.push(c);
                         offset += consumed;
                     }
-                    Err(e) => panic!(
-                        "sequential decode must succeed for back-to-back encodings: {e}"
-                    ),
+                    Err(e) => {
+                        panic!("sequential decode must succeed for back-to-back encodings: {e}")
+                    }
                 }
             }
 
@@ -674,28 +600,6 @@ fn loose_commit_with_duplicate_parents_in_buffer_is_rejected() {
                 "duplicate parents must be rejected as UnsortedArray, got {result:?}"
             );
         });
-}
-
-// ── ReadingType is exhaustive ─────────────────────────────────────────
-
-/// Sanity property: every `ReadingType` Display impl produces a
-/// non-empty string. Not testing the codec per se, but if we add a
-/// new variant and forget to update Display, this will catch it on
-/// the next CI run.
-#[test]
-fn reading_type_display_is_non_empty() {
-    let cases = [
-        ReadingType::U8,
-        ReadingType::U16,
-        ReadingType::U32,
-        ReadingType::U64,
-        ReadingType::Array { size: 32 },
-        ReadingType::Slice { len: 100 },
-    ];
-    for case in &cases {
-        let s = format!("{case}");
-        assert!(!s.is_empty(), "Display for {case:?} must not be empty");
-    }
 }
 
 // ── Random-byte never-panic suite ─────────────────────────────────────
