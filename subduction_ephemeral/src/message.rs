@@ -356,13 +356,23 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
                     have: bytes.len(),
                 })?;
 
+            // Defensive: should be unreachable given the outer match
+            // arm, but we return a structured error rather than
+            // `unreachable!()` so a future refactor that reorders arms
+            // cannot turn this into a panic on adversarial input.
             let (min_size, type_name) = match tag {
                 tags::SUBSCRIBE => (min_sizes::SUBSCRIBE, "EphemeralSubscribe"),
                 tags::UNSUBSCRIBE => (min_sizes::UNSUBSCRIBE, "EphemeralUnsubscribe"),
                 tags::SUBSCRIBE_REJECTED => {
                     (min_sizes::SUBSCRIBE_REJECTED, "EphemeralSubscribeRejected")
                 }
-                _ => unreachable!(),
+                _ => {
+                    return Err(InvalidEnumTag {
+                        tag,
+                        type_name: "EphemeralMessage",
+                    }
+                    .into());
+                }
             };
 
             if payload.len() < min_size {
@@ -378,7 +388,11 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
                 tags::SUBSCRIBE => Ok(EphemeralMessage::Subscribe { topics }),
                 tags::UNSUBSCRIBE => Ok(EphemeralMessage::Unsubscribe { topics }),
                 tags::SUBSCRIBE_REJECTED => Ok(EphemeralMessage::SubscribeRejected { topics }),
-                _ => unreachable!(),
+                _ => Err(InvalidEnumTag {
+                    tag,
+                    type_name: "EphemeralMessage",
+                }
+                .into()),
             }
         }
         _ => Err(InvalidEnumTag {

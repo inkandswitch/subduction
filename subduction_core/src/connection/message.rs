@@ -669,6 +669,11 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
         });
     }
 
+    // The first match above already returned `InvalidEnumTag` for any
+    // unknown tag, so this dispatch is structurally exhaustive. We
+    // still emit a structured error rather than `unreachable!()` so a
+    // future refactor that desyncs the two match arms cannot turn
+    // into a panic on adversarial input.
     match tag {
         tags::LOOSE_COMMIT => decode_loose_commit(payload),
         tags::FRAGMENT => decode_fragment(payload),
@@ -679,7 +684,11 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
         tags::REMOVE_SUBSCRIPTIONS => decode_remove_subscriptions(payload),
         tags::DATA_REQUEST_REJECTED => decode_data_request_rejected(payload),
         tags::HEADS_UPDATE => decode_heads_update(payload),
-        _ => unreachable!("tag validated above"),
+        _ => Err(InvalidEnumTag {
+            tag,
+            type_name: "Message",
+        }
+        .into()),
     }
 }
 
