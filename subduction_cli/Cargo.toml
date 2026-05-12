@@ -21,7 +21,7 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
-console-subscriber = { workspace = true }
+console-subscriber = { workspace = true, optional = true }
 eyre = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
@@ -50,7 +50,7 @@ tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true, default-features = true }
 tracing-loki = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, default-features = true }
+tracing-subscriber = { workspace = true, default-features = true, features = ["env-filter"] }
 tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
 
@@ -83,6 +83,9 @@ rustls = [
   "subduction_websocket/tokio_client_rustls",
   "subduction_websocket/tokio_server_rustls",
 ]
+# Compile in `console-subscriber`. Off by default; set `TOKIO_CONSOLE=1` at
+# runtime when built with this feature to attach `tokio-console`.
+tokio-console = ["dep:console-subscriber"]
 
 [lints]
 workspace = true

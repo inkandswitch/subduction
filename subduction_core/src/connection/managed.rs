@@ -199,7 +199,7 @@ where
 
             match self.timer.timeout(time_limit, rx.boxed()).await {
                 Ok(Ok(resp)) => {
-                    tracing::info!("request {req_id:?} completed");
+                    tracing::debug!("request {req_id:?} completed");
                     Ok(resp)
                 }
                 Ok(Err(_)) => {
@@ -267,7 +267,7 @@ where
 
             match self.timer.timeout(time_limit, rx.boxed_local()).await {
                 Ok(Ok(resp)) => {
-                    tracing::info!("request {req_id:?} completed");
+                    tracing::debug!("request {req_id:?} completed");
                     Ok(resp)
                 }
                 Ok(Err(_)) => {

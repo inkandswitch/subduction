@@ -46,7 +46,8 @@ fn setup_tracing() {
     let registry = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter));
 
-    // Optionally add tokio-console layer
+    // Optionally add tokio-console layer (requires `--features tokio-console`).
+    #[cfg(feature = "tokio-console")]
     let console_layer = if std::env::var("TOKIO_CONSOLE").is_ok() {
         let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
         let layer = console_subscriber::ConsoleLayer::builder()
@@ -57,8 +58,11 @@ fn setup_tracing() {
         None
     };
 
-    // Optionally add Loki layer (native-tls only)
-    // Set LOKI_URL=http://localhost:3100 to enable
+    #[cfg(not(feature = "tokio-console"))]
+    let console_layer: Option<tracing_subscriber::layer::Identity> = None;
+
+    // Optionally add Loki layer (native-tls only). Set LOKI_URL to enable.
+    // LOKI_LOG (default `info`) controls which events ship.
     #[cfg(feature = "native-tls")]
     let (loki_layer, loki_task) = match std::env::var("LOKI_URL") {
         Ok(loki_url) => match setup_loki(&loki_url) {

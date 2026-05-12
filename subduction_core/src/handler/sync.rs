@@ -326,7 +326,7 @@ impl<
         message: SyncMessage,
     ) -> Result<(), ListenError<F, S, C, SyncMessage>> {
         let from = conn.peer_id();
-        tracing::info!(
+        tracing::debug!(
             from = %from,
             message_type = message.variant_name(),
             sedimentree_id = ?message.sedimentree_id(),
