@@ -307,30 +307,13 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
             }
             tracing::debug!("ConnectionManager: command channel closed, shutting down");
 
-            // Abort every outstanding `connection_loop` task and drop
-            // every `C` we've been holding for them. Without this the
-            // tasks remain parked in `conn.recv()`, retaining their
-            // captured `conn: C` (and therefore the transport's
-            // `Arc<WebSocket>` plus the channel sender that feeds
-            // `recv()`). Channels backed by `async_channel::Sender`
-            // only close when all senders drop, and clones we made
-            // for the manager's task list count toward that — so
-            // until we abort the loops and drop the list, the
-            // transport's inbound channel stays open indefinitely.
-            //
-            // After this completes the connection-loop tasks' futures
-            // are dropped, releasing every `conn.clone()` they held;
-            // the `swap_remove`-empty `Vec` here drops the last
-            // manager-side `C`; and the next consumer (`Subduction`
-            // drop, or any other holder) of the transport sees its
-            // refcount go to zero so the WebSocket's inbound channel
-            // closes naturally.
+            // Abort outstanding `connection_loop`s and drop our `C` clones
+            // so transports with `Clone`d channel senders (e.g. WebSocket)
+            // can close their inbound channels.
             let mut tasks_guard = manager.tasks.lock().await;
             let n = tasks_guard.len();
             if n > 0 {
-                tracing::debug!(
-                    "ConnectionManager: aborting {n} outstanding connection_loop tasks"
-                );
+                tracing::debug!("ConnectionManager: aborting {n} connection_loop tasks");
                 for (_, _, handle, _) in tasks_guard.iter() {
                     handle.abort();
                 }

@@ -54,24 +54,10 @@ pub struct TokioWebSocketServer<
     subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     address: SocketAddr,
     cancellation_token: CancellationToken,
-    /// Tracks every task the server owns:
-    /// - the TCP accept loop,
-    /// - the per-connection WebSocket listener and sender futures
-    ///   spawned inside the handshake closure,
-    /// - the [`Subduction`] listener and manager futures spawned in
-    ///   [`Self::setup`].
-    ///
-    /// All of these capture `Arc<Subduction>` (directly or via an
-    /// `Arc<WebSocket>` registered in the connections map). Previously
-    /// they were spawned via bare `tokio::spawn`, so their
-    /// `JoinHandle`s were dropped on the floor and the only way to
-    /// release their captures was for the runtime to eventually poll
-    /// them after [`CancellationToken::cancel`]. That polling didn't
-    /// happen before the next caller allocated a fresh peer, so RSS
-    /// climbed monotonically across iterations and OOM-killed
-    /// GitHub-hosted CI runners at `sync/batch/50`. Now
-    /// [`Self::stop_and_drain`] closes the tracker and awaits every
-    /// registered task to completion, guaranteeing a clean teardown.
+    /// Tracks the accept loop, the per-connection WebSocket
+    /// listener/sender, and (in [`Self::setup`]) the [`Subduction`]
+    /// listener/manager futures. [`Self::stop_and_drain`] awaits all
+    /// of them.
     tasks: TaskTracker,
     /// Tungstenite max message size used for outbound connections
     /// (`try_connect` / `try_connect_discover`). The incoming accept loop
@@ -146,22 +132,15 @@ where
         .await
     }
 
-    /// Like [`new`](Self::new) but uses a caller-supplied
-    /// [`TaskTracker`] for all server-owned tasks.
-    ///
-    /// When the same tracker is also passed to the
-    /// [`Subduction`][subduction_core::subduction::Subduction] builder
-    /// (via [`TrackedTokioSpawn`][crate::tokio::TrackedTokioSpawn]),
-    /// a single [`Self::stop_and_drain`] awaits every detached task
-    /// owned by either layer — including the `connection_loop` tasks
-    /// spawned per peer by the connection manager. This is required
-    /// for deterministic teardown in benches / tests where many
-    /// short-lived peers are created and disposed of.
+    /// Like [`new`](Self::new) but uses a caller-supplied [`TaskTracker`].
+    /// Pass the same tracker to the [`Subduction`] builder (via
+    /// [`TrackedTokioSpawn`][crate::tokio::TrackedTokioSpawn]) and a single
+    /// [`Self::stop_and_drain`] will await every server- and Subduction-side
+    /// task — including per-peer `connection_loop`s.
     ///
     /// # Errors
     ///
-    /// Returns [`tungstenite::Error`] if there is a problem binding
-    /// the listening socket.
+    /// Returns [`tungstenite::Error`] if binding the socket fails.
     #[allow(clippy::too_many_lines)]
     pub async fn new_with_tracker(
         address: SocketAddr,
@@ -192,11 +171,6 @@ where
 
         let inner_subduction = subduction.clone();
         let accept_loop_tracker = tasks.clone();
-        // Track the accept loop in the same `TaskTracker` as every
-        // other server-owned task so `stop_and_drain` awaits it. The
-        // accept loop's existing `tokio::select!` already drops out
-        // via the `child_cancellation_token.cancelled()` arm, so no
-        // explicit `.abort()` is needed.
         tasks.spawn(async move {
             let mut conns = JoinSet::new();
             loop {
@@ -236,20 +210,8 @@ where
                                         // Step 2: Subduction handshake and connection setup
                                         // Accepts either Audience::Known(peer_id) or discovery audience
                                         let now = TimestampSeconds::now();
-                                        // Clones of the server-wide cancellation token for
-                                        // each per-connection task. When `stop()` cancels
-                                        // the server token, every clone observes it and the
-                                        // tasks exit, releasing their `Arc<WebSocket>` and
-                                        // TCP socket. Without these, the spawned tasks were
-                                        // detached and leaked across server restarts (e.g.,
-                                        // per-iteration bench teardown).
                                         let listen_cancel = task_cancel.clone();
                                         let sender_cancel = task_cancel.clone();
-                                        // Register both per-connection futures with the
-                                        // server-level `TaskTracker` so `stop_and_drain`
-                                        // can await their completion. The closure runs
-                                        // synchronously inside `handshake::respond`, so
-                                        // we capture clones of the tracker by move.
                                         let listen_tracker = task_tracker.clone();
                                         let sender_tracker = task_tracker.clone();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
@@ -261,11 +223,6 @@ where
                                                     peer_id,
                                                 );
 
-                                                // Start listener and sender tasks. Each races
-                                                // its inner future against the per-connection
-                                                // cancel so server shutdown propagates here.
-                                                // Spawning through the `TaskTracker` ensures
-                                                // `stop_and_drain` will wait for them to exit.
                                                 let listen_ws = ws.clone();
                                                 listen_tracker.spawn(async move {
                                                     tokio::select! {
@@ -370,11 +327,9 @@ where
     {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
 
-        // Create a single `TaskTracker` shared between the
-        // `Subduction` connection manager's per-peer `connection_loop`
-        // tasks (via `TrackedTokioSpawn`) and the server's own accept
-        // loop + per-WebSocket listener/sender tasks. `stop_and_drain`
-        // then awaits everything under one tracker.
+        // Shared tracker: Subduction's `connection_loop`s spawn via
+        // `TrackedTokioSpawn`; the server's accept loop and per-WS tasks
+        // spawn directly. `stop_and_drain` awaits all of them.
         let tasks = TaskTracker::new();
         let spawner = crate::tokio::TrackedTokioSpawn::new(tasks.clone());
 
@@ -402,26 +357,11 @@ where
         )
         .await?;
 
-        // Register the `Subduction` listener and manager futures with
-        // the server's `TaskTracker` so `stop_and_drain` can await
-        // them. They are spawned **directly**, not inside a
-        // `tokio::select! { … = cancellation_token.cancelled() => … }`
-        // wrapper: the wrapper would race the graceful channel-close
-        // path against the token, and `cancel()` consistently wins
-        // (the cancelled future is immediately ready, while the
-        // manager's `recv().await` first has to be polled to observe
-        // the close). When the wrapper wins, `manager_fut` is dropped
-        // mid-execution and its `connection_loop`-abort cleanup never
-        // runs — leaving `Arc<WebSocket>` references parked in
-        // `connection_loop` tasks and deadlocking the tracker drain.
-        //
-        // `stop_and_drain` calls `subduction.shutdown()` first, which
-        // closes the manager command channel and the listener message
-        // queue. Both futures observe the close on their next
-        // `recv().await` and exit gracefully — manager runs its
-        // task-abort cleanup, listener drains its in-flight handler
-        // `FuturesUnordered` — releasing every `Arc<Subduction>`
-        // they hold.
+        // Spawned directly (no `select!`-against-token wrapper): the
+        // token race always loses to `cancel()`, dropping `manager_fut`
+        // before its `connection_loop`-abort cleanup can run.
+        // `stop_and_drain` instead calls `subduction.shutdown()` first
+        // so both futures exit via their channel-close paths.
         server.tasks.spawn(async move {
             let _ = manager_fut.await;
         });
@@ -676,53 +616,24 @@ where
         Ok(server_id)
     }
 
-    /// Signal graceful shutdown without waiting for it to complete.
-    ///
-    /// Cancels the server's [`CancellationToken`] (which every tracked
-    /// task selects on). The accept loop and per-connection tasks
-    /// observe the cancellation on their next poll, but this method
-    /// **does not wait for them to exit**. The `Arc<Subduction>`
-    /// references they hold remain alive until the runtime polls them.
-    ///
-    /// If you need the server (and its `Subduction` state) released
-    /// before the next allocation — e.g., in a per-iteration bench
-    /// teardown — use [`stop_and_drain`](Self::stop_and_drain) instead.
+    /// Signal graceful shutdown without waiting. The accept loop and
+    /// per-connection tasks observe the cancellation on their next
+    /// poll. For deterministic teardown (releases `Arc<Subduction>`
+    /// before returning), use [`stop_and_drain`](Self::stop_and_drain).
     pub fn stop(&mut self) {
         self.cancellation_token.cancel();
     }
 
-    /// Graceful shutdown that waits for every tracked task to complete.
+    /// Graceful shutdown, awaits every tracked task.
     ///
-    /// Order matters here:
+    /// Order is load-bearing: `subduction.shutdown()` must run before
+    /// `cancel()`, otherwise the manager future is dropped mid-execution
+    /// (before its `connection_loop`-abort cleanup runs) and the tracker
+    /// drain deadlocks on parked `connection_loop`s.
     ///
-    /// 1. Call [`Subduction::shutdown`] first. This closes the
-    ///    manager's command channel and the listener's message
-    ///    queue, which makes the `manager_fut` inner loop exit via
-    ///    its `while let Ok(_) = recv()` arm and run its
-    ///    `connection_loop`-abort cleanup. If we cancelled the token
-    ///    first, the manager-wrapper `select!` would drop
-    ///    `manager_fut` mid-execution before the cleanup code runs,
-    ///    leaving the per-peer `connection_loop` tasks parked in
-    ///    `conn.recv()` (and therefore the tracker `wait` below
-    ///    deadlocks).
-    ///
-    /// 2. Cancel the [`CancellationToken`]. The accept loop and
-    ///    per-WebSocket listener/sender tasks observe this via their
-    ///    `select!`s and exit. The Subduction listener/manager
-    ///    wrappers will already have exited via path (1).
-    ///
-    /// 3. Close the [`TaskTracker`] and await every previously-spawned
-    ///    task to completion. Every `Arc<Subduction>` and
-    ///    `Arc<WebSocket>` reference owned by a server-spawned task
-    ///    is released by the time this returns. Dropping the
-    ///    [`TokioWebSocketServer`] then releases the last reference
-    ///    and triggers `Subduction::drop`.
-    ///
-    /// Idempotent: subsequent calls are no-ops because the channels
-    /// are already closed, the token is already cancelled, and the
-    /// tracker already closed.
+    /// Idempotent.
     pub async fn stop_and_drain(&mut self) {
-        self.subduction.shutdown().await;
+        self.subduction.shutdown();
         self.cancellation_token.cancel();
         self.tasks.close();
         self.tasks.wait().await;

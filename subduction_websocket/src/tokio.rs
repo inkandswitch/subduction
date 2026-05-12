@@ -22,19 +22,9 @@ pub mod server;
 #[cfg(feature = "tokio_server_any")]
 pub mod unified;
 
-/// A spawner that uses tokio to spawn detached tasks.
-///
-/// Each spawned task runs to completion on the tokio runtime, but the
-/// returned [`AbortHandle`] is the only way to control it. The
-/// underlying `JoinHandle` is discarded, so callers cannot await
-/// completion. This is suitable for long-lived servers that don't
-/// need deterministic teardown of their connection tasks.
-///
-/// For short-lived peers (tests, benchmarks) that need to release
-/// `Arc<WebSocket>` and `Arc<Subduction>` references promptly between
-/// iterations, prefer [`TrackedTokioSpawn`] — it registers each
-/// spawned future with a [`TaskTracker`] so the owner can await every
-/// task to completion before allocating fresh resources.
+/// Detached `tokio::spawn` spawner. Tasks are controllable only via
+/// the returned [`AbortHandle`]; use [`TrackedTokioSpawn`] if you need
+/// to await completion.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokioSpawn;
 
@@ -48,21 +38,9 @@ impl Spawn<Sendable> for TokioSpawn {
     }
 }
 
-/// A spawner that registers every spawned task with a [`TaskTracker`].
-///
-/// Use this when you need to deterministically wait for every task
-/// spawned through the [`Subduction`][subduction_core::subduction::Subduction]
-/// connection manager — most commonly per-iteration bench teardown
-/// where leftover `connection_loop` tasks parked on a still-alive
-/// WebSocket `recv()` retain `Arc<WebSocket>` and pin everything in
-/// place.
-///
-/// The contained tracker is `Clone`able (it's reference-counted
-/// internally), so the same tracker can be shared with the
-/// [`crate::tokio::server::TokioWebSocketServer`] to await both
-/// Subduction-internal tasks (connection loops) and server-internal
-/// tasks (accept loop, per-WS listener/sender) under a single
-/// [`TaskTracker::wait`] call.
+/// Spawner that registers each task with a [`TaskTracker`] so the
+/// owner can deterministically await completion (e.g. per-iteration
+/// bench teardown).
 #[derive(Debug, Clone, Default)]
 pub struct TrackedTokioSpawn {
     tracker: TaskTracker,
@@ -75,10 +53,7 @@ impl TrackedTokioSpawn {
         Self { tracker }
     }
 
-    /// Return a clone of the underlying tracker.
-    ///
-    /// Useful when the owner of this spawner wants to share the
-    /// tracker with other systems (e.g., a `TokioWebSocketServer`).
+    /// Clone of the underlying tracker, for sharing with other owners.
     #[must_use]
     pub fn tracker(&self) -> TaskTracker {
         self.tracker.clone()

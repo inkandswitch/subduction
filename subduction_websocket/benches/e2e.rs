@@ -158,22 +158,9 @@ type ClientSubduction = Arc<
     >,
 >;
 
-/// RAII guard that drains every server-side task on drop.
-///
-/// `TokioWebSocketServer::stop` only _signals_ shutdown — it cancels the
-/// server's [`CancellationToken`] and aborts the accept loop, but does
-/// not wait for the per-connection listener/sender or the
-/// `Subduction` listener/manager wrappers to actually exit. Those
-/// tasks hold `Arc<Subduction>` and the entire `MemoryStorage`, so if
-/// the bench harness moves on to the next iteration before they're
-/// polled, the storage accumulates monotonically and OOM-kills the
-/// runner at `sync/batch/50`.
-///
-/// `stop_and_drain` cancels the token and then `await`s every tracked
-/// task to completion. We capture a runtime handle at construction so
-/// `Drop` can `block_on` the async tear-down without needing
-/// `Handle::current()` (which would panic outside an active
-/// `block_on`).
+/// RAII wrapper that runs [`TokioWebSocketServer::stop_and_drain`] on
+/// drop. `rt` is captured at construction because `Handle::current()`
+/// panics outside an active `block_on`.
 struct ServerGuard {
     server: TokioWebSocketServer<
         MemoryStorage,
@@ -187,9 +174,6 @@ struct ServerGuard {
 
 impl Drop for ServerGuard {
     fn drop(&mut self) {
-        // `stop_and_drain` is async and consumes the cancellation
-        // signal exactly once. Idempotent re-drops are harmless but
-        // unnecessary.
         self.rt.block_on(self.server.stop_and_drain());
     }
 }
@@ -208,87 +192,34 @@ impl std::ops::Deref for ServerGuard {
     }
 }
 
-/// RAII guard around a [`ClientSubduction`] that gracefully shuts it down
-/// and aborts every task spawned at construction time.
-///
-/// Without this, the bench harness leaked four tokio tasks per iteration
-/// (the `Subduction` listener and manager loops, plus the WebSocket
-/// listener and sender) across hundreds of `iter_batched(PerIteration)`
-/// iterations. Each leaked task held an `Arc<Subduction>` (and therefore
-/// an `Arc<MemoryStorage>` plus a tungstenite WebSocket buffer), so the
-/// runner's RSS grew monotonically until the GitHub-hosted Ubuntu host
-/// OOM-killed the runner agent — which manifested as
-/// `##[error]The runner has received a shutdown signal` partway through
-/// the 256 KiB blob bench.
-///
-/// On drop we:
-/// 1. Call [`Subduction::shutdown`] (graceful) on the captured tokio
-///    runtime, which closes the listener/manager input channels and
-///    drains in-flight handler work.
-/// 2. `await` the listener and manager `JoinHandle`s (with a small
-///    timeout) so the loops actually exit before we abort their
-///    transport-side dependencies.
-/// 3. `abort()` the four background `JoinHandle`s as a backstop in case
-///    anything is still polling.
-///
-/// Step (3) releases the `Arc<WebSocket>` the WS tasks were holding,
-/// allowing the underlying tungstenite stream to be reclaimed.
+/// RAII guard that gracefully tears down a [`ClientSubduction`] on drop:
+/// shuts it down, aborts the WebSocket transport tasks, awaits everything,
+/// and drains the connection-manager tracker. `rt` is captured because
+/// `Handle::current()` panics outside an active `block_on`.
 struct ClientGuard {
     client: ClientSubduction,
-    // Handle to the runtime that `connected_client` was called on. We
-    // capture this at construction time because `Drop` may run outside
-    // any active `block_on`, and `Handle::current()` would panic there.
     rt: tokio::runtime::Handle,
-    // The listener and manager futures returned by `SubductionBuilder::build`
-    // are wrapped in `futures::future::Abortable`, so their `JoinHandle`
-    // outputs are `Result<(), Aborted>`.
     listener_task: Option<tokio::task::JoinHandle<Result<(), futures_util::future::Aborted>>>,
     manager_task: Option<tokio::task::JoinHandle<Result<(), futures_util::future::Aborted>>>,
-    // `Option` so `Drop` can `take()` them and move them into the
-    // async teardown block (where we abort and `await`). `take()`
-    // works without a runtime in scope, unlike
-    // `std::mem::replace(_, tokio::spawn(_))`.
+    // `Option` so `Drop` can `take()` them without needing a runtime in
+    // scope (unlike `mem::replace(_, tokio::spawn(_))`).
     ws_listener_task: Option<tokio::task::JoinHandle<()>>,
     ws_sender_task: Option<tokio::task::JoinHandle<()>>,
-    // Tracks every `connection_loop` task the client's
-    // `ConnectionManager` spawns on `add_connection`. Without this,
-    // those tasks survive past `shutdown` because the manager loop
-    // simply exits on channel-close without awaiting its per-peer
-    // tasks — they stay parked in `conn.recv()` holding
-    // `Arc<WebSocket>` until the underlying tungstenite stream errors
-    // out, which is asynchronous and uncoordinated with the rest of
-    // teardown.
+    // Tracks `connection_loop`s spawned by the client's `ConnectionManager`.
     tasks: TaskTracker,
 }
 
-/// How long to wait for the listener / manager to drain before aborting them
-/// as a backstop. Generous: we don't expect to hit this in normal runs, but
-/// don't want a stuck handler to hang the bench teardown.
+/// Max time to wait for tasks to drain before falling back to `abort()`.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl Drop for ClientGuard {
     fn drop(&mut self) {
-        // Pull the listener/manager handles out so we can move them into
-        // the async block. `take()` lets us own them even though Drop
-        // only has `&mut self`.
         let Some(listener_task) = self.listener_task.take() else {
             return;
         };
         let Some(manager_task) = self.manager_task.take() else {
             return;
         };
-
-        // The two WS tasks need to be moved into the async block too,
-        // so we can `await` them after aborting. `JoinHandle::abort()`
-        // only sets the cancellation flag — the task isn't dropped (and
-        // therefore its captured `Arc<WebSocket>` isn't released) until
-        // the runtime polls it. If we abort without awaiting, the
-        // captured state lingers until the next runtime tick, which is
-        // typically after `ClientGuard::Drop` has already returned and
-        // the next iteration's setup is allocating fresh resources.
-        // That overlap accumulates `Arc<WebSocket>` references across
-        // iterations and is the dominant contribution to the 1.2 GiB
-        // RSS at `sync/batch/50`.
         let Some(ws_listener_task) = self.ws_listener_task.take() else {
             return;
         };
@@ -296,39 +227,25 @@ impl Drop for ClientGuard {
             return;
         };
 
-        let client = self.client.clone();
-
-        // Capture abort handles BEFORE moving the JoinHandles into the
-        // timeout futures. Dropping a `tokio::task::JoinHandle` does
-        // **not** abort the underlying task — that's `async-std` /
-        // `smol` semantics, but tokio detaches the task instead. If we
-        // don't explicitly `.abort()` after the timeout fires, the
-        // listener/manager keep running, retaining `Arc<Subduction>`
-        // (and its `MemoryStorage`, NonceCache, sharded connection map)
-        // across iterations.
+        // Dropping a `tokio::task::JoinHandle` does NOT abort the task
+        // (unlike `async-std`); capture the handles up front so we can
+        // explicitly abort if the timeout fires.
         let listener_abort = listener_task.abort_handle();
         let manager_abort = manager_task.abort_handle();
 
+        let client = self.client.clone();
         let tracker = self.tasks.clone();
 
-        self.rt.block_on(async move {
-            // 1. Signal graceful shutdown to the listener/manager.
-            client.shutdown().await;
+        client.shutdown();
 
-            // 2. Abort the WS transport tasks. They don't observe
-            //    channel closure — they're parked on the tungstenite
-            //    stream. Abort unparks them; the await below makes
-            //    sure they actually drop (releasing `Arc<WebSocket>`)
-            //    before we return.
+        self.rt.block_on(async move {
+
+            // WS tasks are parked on the tungstenite stream; abort to
+            // unpark, then await below so their captured `Arc<WebSocket>`
+            // is released before we return.
             ws_listener_task.abort();
             ws_sender_task.abort();
 
-            // 3. Await all four task handles (with a single timeout
-            //    budget). For aborted tasks the JoinHandle resolves
-            //    to `Err(JoinError::is_cancelled())`, which is fine.
-            //    For listener/manager the channel-close path returns
-            //    `Ok(Ok(()))`. Either way the future is dropped and
-            //    its captured state released.
             let (l_res, m_res, _, _) = futures::future::join4(
                 tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, listener_task),
                 tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, manager_task),
@@ -337,44 +254,22 @@ impl Drop for ClientGuard {
             )
             .await;
 
-            // 4. If listener/manager didn't drain via channel-close
-            //    (e.g., a handler hung), explicitly abort. The WS
-            //    tasks were already aborted in step 2.
             if l_res.is_err() {
-                tracing::warn!(
-                    "ClientGuard: listener task didn't drain in {SHUTDOWN_DRAIN_TIMEOUT:?}, aborting"
-                );
+                tracing::warn!("ClientGuard: listener didn't drain, aborting");
                 listener_abort.abort();
             }
             if m_res.is_err() {
-                tracing::warn!(
-                    "ClientGuard: manager task didn't drain in {SHUTDOWN_DRAIN_TIMEOUT:?}, aborting"
-                );
+                tracing::warn!("ClientGuard: manager didn't drain, aborting");
                 manager_abort.abort();
             }
 
-            // 5. Drain the `connection_loop` tasks spawned by the
-            //    connection manager. Closing the tracker prevents new
-            //    `add_connection` calls from spawning more (they'd
-            //    fail anyway since the manager loop has exited).
-            //    `wait` returns once every previously-spawned task
-            //    has completed — at which point every `Arc<WebSocket>`
-            //    captured by a `connection_loop` is released and the
-            //    `Subduction` can finally drop on the last `Arc` going
-            //    away. We bound this with a timeout matching the rest
-            //    of the teardown — if the connection_loop tasks
-            //    haven't exited within `SHUTDOWN_DRAIN_TIMEOUT`,
-            //    something is wedged badly enough that aborting
-            //    Subduction on its `Drop` (via its stored
-            //    `AbortHandle`s) is our last resort.
             tracker.close();
             if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, tracker.wait())
                 .await
                 .is_err()
             {
                 tracing::warn!(
-                    "ClientGuard tracker.wait timed out after {SHUTDOWN_DRAIN_TIMEOUT:?} \
-                     ({} tasks remaining); proceeding with hard drop",
+                    "ClientGuard: {} connection_loop task(s) didn't drain",
                     tracker.len()
                 );
             }
@@ -449,9 +344,8 @@ async fn connected_client(
 ) -> ClientGuard {
     let client_signer = signer(seed);
 
-    // Per-client `TaskTracker`. Shared with the `Subduction` connection
-    // manager via `TrackedTokioSpawn` so we can await every spawned
-    // `connection_loop` on teardown.
+    // Shared with the `Subduction` builder via `TrackedTokioSpawn` so
+    // teardown can await every spawned `connection_loop`.
     let tasks = TaskTracker::new();
     let spawner = TrackedTokioSpawn::new(tasks.clone());
 
