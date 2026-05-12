@@ -446,6 +446,8 @@ where
         let nonce = Nonce::random();
 
         let cancel_token = self.cancellation_token.clone();
+        let listen_tracker = self.tasks.clone();
+        let sender_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
@@ -457,7 +459,7 @@ where
 
                 let listen_ws = ws.clone();
                 let listener_cancel = cancel_token.clone();
-                tokio::spawn(async move {
+                listen_tracker.spawn(async move {
                     tokio::select! {
                         () = listener_cancel.cancelled() => {
                             tracing::debug!("Shutting down listener for peer {listen_uri_str}");
@@ -471,7 +473,7 @@ where
                 });
 
                 let sender_cancel = cancel_token;
-                tokio::spawn(async move {
+                sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
                             tracing::debug!("Shutting down sender for peer {sender_uri_str}");
@@ -556,6 +558,8 @@ where
         let nonce = Nonce::random();
 
         let cancel_token = self.cancellation_token.clone();
+        let listen_tracker = self.tasks.clone();
+        let sender_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
@@ -567,7 +571,7 @@ where
 
                 let listen_ws = ws.clone();
                 let listener_cancel = cancel_token.clone();
-                tokio::spawn(async move {
+                listen_tracker.spawn(async move {
                     tokio::select! {
                         () = listener_cancel.cancelled() => {
                             tracing::debug!("Shutting down listener for peer {listen_uri_str}");
@@ -581,7 +585,7 @@ where
                 });
 
                 let sender_cancel = cancel_token;
-                tokio::spawn(async move {
+                sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
                             tracing::debug!("Shutting down sender for peer {sender_uri_str}");

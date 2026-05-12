@@ -77,10 +77,10 @@ const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Whether to run the slim CI sweep. Controlled by the
-/// `SUBDUCTION_BENCH_CI_SLIM` environment variable. See the module-level
-/// docs for rationale.
+/// `SUBDUCTION_BENCH_CI_SLIM` environment variable: empty or unset
+/// runs the full sweep, any non-empty value enables slim mode.
 fn ci_slim() -> bool {
-    std::env::var_os("SUBDUCTION_BENCH_CI_SLIM").is_some()
+    std::env::var_os("SUBDUCTION_BENCH_CI_SLIM").is_some_and(|v| !v.is_empty())
 }
 
 fn signer(seed: u8) -> MemorySigner {
