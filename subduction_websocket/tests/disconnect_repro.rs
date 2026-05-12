@@ -511,8 +511,10 @@ async fn slow_consumer_no_sender_death() -> TestResult {
 /// simulating Caddy's silent connection close.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_proxy_close_repro_sender_stopped() -> TestResult {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
     let capture = init_capture();
     let pre_dc_count = capture.disconnect_lines().len();
     let pre_dc_count_all = capture
@@ -652,8 +654,10 @@ async fn idle_proxy_close_repro_sender_stopped() -> TestResult {
 /// should produce **zero** "sender task stopped" log lines.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_proxy_close_does_not_cascade() -> TestResult {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
     let capture = init_capture();
     let snapshot_before = capture.snapshot();
     let pre_sender_stopped: usize = snapshot_before
@@ -765,7 +769,10 @@ async fn idle_proxy_close_does_not_cascade() -> TestResult {
                 || l.contains("error reading from websocket")
         })
         .collect();
-    let user_visible: Vec<&&str> = dc_lines.iter().filter(|l| l.contains("disconnected")).collect();
+    let user_visible: Vec<&&str> = dc_lines
+        .iter()
+        .filter(|l| l.contains("disconnected"))
+        .collect();
 
     eprintln!(
         "\n=== cascade-suppression test: {new_sender_stopped} 'sender task stopped' line(s) ===\n"
@@ -796,12 +803,13 @@ async fn idle_proxy_close_does_not_cascade() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn keepalive_prevents_proxy_idle_cascade() -> TestResult {
     use future_form::Sendable;
-    use subduction_websocket::tokio::TrackedTokioSpawn;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use tokio_util::task::TaskTracker;
     use subduction_core::transport::message::MessageTransport;
-    use subduction_websocket::tokio::unified::UnifiedWebSocket;
+    use subduction_websocket::tokio::{TrackedTokioSpawn, unified::UnifiedWebSocket};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    use tokio_util::task::TaskTracker;
 
     let capture = init_capture();
     let snapshot_before = capture.snapshot();

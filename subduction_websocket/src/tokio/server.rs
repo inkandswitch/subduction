@@ -711,11 +711,8 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
 /// Periodically send Ping frames over `ws` so an idle reverse proxy
 /// (Caddy, nginx, cloud LB, etc.) doesn't drop the connection. Exits
 /// when `cancel` fires or the underlying sender task has stopped.
-pub async fn run_keepalive<T, K>(
-    ws: WebSocket<T, K>,
-    cancel: CancellationToken,
-    interval: Duration,
-) where
+pub async fn run_keepalive<T, K>(ws: WebSocket<T, K>, cancel: CancellationToken, interval: Duration)
+where
     T: futures::AsyncRead + futures::AsyncWrite + Unpin,
     K: future_form::FutureForm,
 {
