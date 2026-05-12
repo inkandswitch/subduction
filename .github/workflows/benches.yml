@@ -4,19 +4,6 @@ on:
   push:
     branches:
       - main
-  # Also run on pull requests so we can troubleshoot bench changes
-  # before they hit `main`. Path-filtered to keep CI cost down on
-  # PRs that don't touch any bench-relevant code.
-  pull_request:
-    paths:
-      - ".github/workflows/benches.yml"
-      - "**/benches/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "subduction_core/src/**"
-      - "subduction_websocket/src/**"
-      - "sedimentree_core/src/**"
-      - "bijou64/src/**"
   workflow_dispatch:
 
 concurrency:
