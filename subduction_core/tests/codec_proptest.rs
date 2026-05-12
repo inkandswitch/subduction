@@ -610,24 +610,10 @@ fn sync_message_corrupted_total_size_rejected() {
             }
             encoded[4..8].copy_from_slice(&fake_total_size.to_be_bytes());
             let result = SyncMessage::try_decode(&encoded);
-            // Either SizeMismatch (the size doesn't match) or some
-            // downstream parsing error from interpreting the now-wrong
-            // tag byte. Whatever — must not panic, must not succeed.
-            //
-            // If by sheer luck the decoder still succeeded (because the
-            // corrupted total_size matches what a valid prefix would
-            // describe), it must at least round-trip back to bytes equal
-            // to the canonical form. But this is a real edge case;
-            // usually it errors. When it doesn't round-trip, the decoder
-            // accepted bytes it shouldn't have — flag for review.
-            if let Ok(decoded) = result {
-                let re_encoded = decoded.encode();
-                assert_eq!(
-                    re_encoded, encoded,
-                    "decoder accepted corrupted total_size {fake_total_size} \
-                     but re-encoding produces different bytes"
-                );
-            }
+            assert!(
+                matches!(result, Err(DecodeError::SizeMismatch(SizeMismatch { .. }))),
+                "corrupted total_size {fake_total_size} must yield SizeMismatch, got {result:?}"
+            );
         });
 }
 

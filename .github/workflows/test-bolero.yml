@@ -58,14 +58,13 @@ jobs:
 
     - name: Run Property Tests (${{ matrix.label }})
       run: |
-        # Run all tests with bolero feature enabled
-        BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --lib
+        BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --tests
       env:
         RUST_BACKTRACE: 1
 
     - name: Run Property Tests on subduction_core
       working-directory: subduction_core
       run: |
-        BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --lib
+        BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --tests
       env:
         RUST_BACKTRACE: 1

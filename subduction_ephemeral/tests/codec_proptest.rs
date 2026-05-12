@@ -407,7 +407,11 @@ fn ephemeral_message_control_trailing_bytes_rejected() {
         });
 }
 
-/// An empty topic list (count=0) is rejected.
+/// An empty topic list (count=0) is rejected at `decode_topic_list`.
+///
+/// The buffer is padded past the outer `payload.len() >= min_size` guard
+/// (which is `count(2) + topic(32) = 34` bytes) so the inner `count == 0`
+/// check is the one that fires. The error's `type_name` is the discriminator.
 #[test]
 fn ephemeral_message_empty_topic_list_rejected() {
     for tag in [0x01u8, 0x02u8, 0x03u8] {
@@ -415,11 +419,18 @@ fn ephemeral_message_empty_topic_list_rejected() {
         buf.extend_from_slice(&EPHEMERAL_SCHEMA);
         buf.push(tag);
         buf.extend_from_slice(&0_u16.to_be_bytes()); // count = 0
+        buf.extend_from_slice(&[0u8; 32]); // padding to reach min_size
 
         let result = EphemeralMessage::try_decode(&buf);
         assert!(
-            matches!(result, Err(DecodeError::MessageTooShort { .. })),
-            "empty topic list (tag {tag:#04x}) must be rejected, got {result:?}"
+            matches!(
+                result,
+                Err(DecodeError::MessageTooShort {
+                    type_name: "EphemeralTopicList",
+                    ..
+                })
+            ),
+            "empty topic list (tag {tag:#04x}) must be rejected by decode_topic_list, got {result:?}"
         );
     }
 }
