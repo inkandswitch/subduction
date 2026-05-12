@@ -43,7 +43,7 @@ use sedimentree_core::{
     codec::{
         decode::{self, DecodeFields},
         encode::{self, Encode, EncodeFields},
-        error::{DecodeError, ReadingType, UnsortedArray},
+        error::{DecodeError, UnsortedArray},
         schema::Schema,
     },
     fragment::Fragment,

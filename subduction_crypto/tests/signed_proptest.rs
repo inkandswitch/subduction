@@ -48,9 +48,7 @@ use sedimentree_core::codec::{
     error::{DecodeError, InvalidDiscriminant, InvalidSchema},
     schema::{self, Schema},
 };
-use subduction_crypto::signed::{
-    MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE,
-};
+use subduction_crypto::signed::{SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE};
 
 // ── Test payloads ──────────────────────────────────────────────────────
 

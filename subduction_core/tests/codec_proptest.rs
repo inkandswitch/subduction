@@ -47,9 +47,7 @@ use subduction_core::{
         response::Response,
     },
 };
-use subduction_crypto::signed::{
-    MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE,
-};
+use subduction_crypto::signed::{SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE};
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
