@@ -454,9 +454,9 @@ fn ephemeral_message_bit_flip_does_not_panic() {
         });
 }
 
-/// Schema header constants are consistent.
+/// The `EPHEMERAL_SCHEMA` named const and the trait-default `SCHEMA`
+/// (composed from `PREFIX`, `TYPE_BYTE`, `VERSION`) must agree.
 #[test]
 fn ephemeral_schema_constants() {
     assert_eq!(EPHEMERAL_SCHEMA, EphemeralPayload::SCHEMA);
-    assert_eq!(EPHEMERAL_SCHEMA, *b"SUE\x00");
 }

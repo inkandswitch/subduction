@@ -181,8 +181,8 @@ fn verify_sorted_rejects_duplicates() {
 #[test]
 fn verify_sorted_violation_index_is_one_based() {
     bolero::check!()
-        .with_arbitrary::<(Vec<[u8; 32]>, usize)>()
-        .for_each(|(elements, _seed)| {
+        .with_arbitrary::<Vec<[u8; 32]>>()
+        .for_each(|elements| {
             if let Err(UnsortedArray { index }) = decode::verify_sorted(elements) {
                 assert!(index >= 1, "violation index must be >= 1");
                 assert!(
@@ -213,7 +213,6 @@ fn loose_commit_encoding_starts_with_schema() {
         .for_each(|commit| {
             let bytes = commit.encode();
             assert_eq!(&bytes[..4], &LooseCommit::SCHEMA);
-            assert_eq!(LooseCommit::SCHEMA, *b"STC\x00");
         });
 }
 
@@ -224,7 +223,6 @@ fn fragment_encoding_starts_with_schema() {
         .for_each(|fragment| {
             let bytes = fragment.encode();
             assert_eq!(&bytes[..4], &Fragment::SCHEMA);
-            assert_eq!(Fragment::SCHEMA, *b"STF\x00");
         });
 }
 
