@@ -190,8 +190,12 @@ where
                                 // copy for the `cancelled()` arm above.
                                 let task_cancel = child_cancellation_token.clone();
                                 let task_tracker = accept_loop_tracker.clone();
-                                conns.spawn({
-                                    async move {
+                                let outer_cancel = task_cancel.clone();
+                                conns.spawn(async move {
+                                    // `accept_hdr_async_with_config` and `handshake::respond`
+                                    // are not cancellation-aware; race against the token so
+                                    // a stalled client can't block server teardown.
+                                    let handshake_fut = async {
                                         let mut ws_config = WebSocketConfig::default();
                                         ws_config.max_message_size = Some(max_message_size);
                                         ws_config.max_frame_size = Some(max_message_size);
@@ -279,6 +283,13 @@ where
                                         if let Err(e) = task_subduction.add_connection(auth_mt).await {
                                             tracing::error!("Failed to add connection: {e}");
                                         }
+                                    };
+
+                                    tokio::select! {
+                                        () = outer_cancel.cancelled() => {
+                                            tracing::debug!("per-connection handshake task cancelled (server shutdown)");
+                                        }
+                                        () = handshake_fut => {}
                                     }
                                 });
                             }
@@ -620,26 +631,29 @@ where
         Ok(server_id)
     }
 
-    /// Signal graceful shutdown without waiting. The accept loop and
-    /// per-connection tasks observe the cancellation on their next
-    /// poll. For deterministic teardown (releases `Arc<Subduction>`
-    /// before returning), use [`stop_and_drain`](Self::stop_and_drain).
-    pub fn stop(&mut self) {
-        self.cancellation_token.cancel();
-    }
-
-    /// Graceful shutdown, awaits every tracked task.
+    /// Signal graceful shutdown without waiting. Closes the Subduction
+    /// channels (so the listener/manager exit on their next poll),
+    /// cancels the [`CancellationToken`] (so the accept loop and
+    /// per-connection tasks exit via their `select!` arms), and closes
+    /// the [`TaskTracker`] (so [`stop_and_drain`](Self::stop_and_drain)
+    /// can `wait` afterwards). For deterministic teardown that releases
+    /// every `Arc<Subduction>` before returning, use `stop_and_drain`.
     ///
     /// Order is load-bearing: `subduction.shutdown()` must run before
-    /// `cancel()`, otherwise the manager future is dropped mid-execution
-    /// (before its `connection_loop`-abort cleanup runs) and the tracker
-    /// drain deadlocks on parked `connection_loop`s.
+    /// `cancel()`, otherwise `manager_fut` is dropped mid-execution
+    /// (before its `connection_loop`-abort cleanup runs) and any
+    /// later `tracker.wait()` deadlocks on parked `connection_loop`s.
     ///
     /// Idempotent.
-    pub async fn stop_and_drain(&mut self) {
+    pub fn stop(&mut self) {
         self.subduction.shutdown();
         self.cancellation_token.cancel();
         self.tasks.close();
+    }
+
+    /// [`Self::stop`] plus `await` every tracked task.
+    pub async fn stop_and_drain(&mut self) {
+        self.stop();
         self.tasks.wait().await;
     }
 }
