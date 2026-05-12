@@ -137,14 +137,13 @@ fn verify_sorted_strict_ascending_property() {
         .for_each(|elements| {
             let result = decode::verify_sorted(elements);
 
-            // Compute the truth via windows().
             let is_strict_ascending = elements.windows(2).all(|w| match w {
                 [a, b] => a < b,
                 _ => true,
             });
 
             match (result, is_strict_ascending) {
-                (Ok(()), true) | (Err(_), false) => {} // agreement
+                (Ok(()), true) | (Err(_), false) => {}
                 (Ok(()), false) => panic!("verify_sorted accepted unsorted input: {elements:?}"),
                 (Err(e), true) => panic!("verify_sorted rejected sorted input: {e}"),
             }
@@ -157,7 +156,6 @@ fn verify_sorted_rejects_duplicates() {
     bolero::check!()
         .with_arbitrary::<(Vec<[u8; 32]>, [u8; 32])>()
         .for_each(|(prefix, dup)| {
-            // Build a sorted prefix, then append `dup` twice.
             let mut sorted: Vec<[u8; 32]> = prefix.clone();
             sorted.sort_unstable();
             sorted.dedup();
@@ -165,7 +163,6 @@ fn verify_sorted_rejects_duplicates() {
             sorted.push(*dup);
             sorted.sort_unstable();
 
-            // The presence of a duplicate guarantees rejection.
             let result = decode::verify_sorted(&sorted);
             assert!(
                 matches!(result, Err(UnsortedArray { .. })),

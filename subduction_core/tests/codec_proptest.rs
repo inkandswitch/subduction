@@ -604,7 +604,6 @@ fn sync_message_corrupted_total_size_rejected() {
         .with_arbitrary::<(SyncMessage, u32)>()
         .for_each(|(msg, fake_total_size)| {
             let mut encoded = msg.encode();
-            // Skip the case where the fake size happens to be valid.
             #[allow(clippy::cast_possible_truncation)]
             if (*fake_total_size as usize) == encoded.len() {
                 return;

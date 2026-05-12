@@ -63,7 +63,6 @@ impl Schema for PlainPayload {
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
     const TYPE_BYTE: u8 = b'1';
     const VERSION: u8 = 0;
-    // No DISCRIMINANT
 }
 
 impl EncodeFields for PlainPayload {
@@ -346,7 +345,6 @@ fn plain_decode_truncates_trailing_bytes() {
                 "truncation must produce canonical-length bytes"
             );
             assert_eq!(signed.as_bytes(), &canonical[..]);
-            // Verification must still succeed.
             signed.try_verify().expect("verify after truncation");
         });
 }
@@ -464,7 +462,6 @@ fn plain_schema_tamper_yields_invalid_schema() {
     bolero::check!()
         .with_arbitrary::<(PlainPayload, [u8; 32], [u8; 4])>()
         .for_each(|(payload, key_bytes, bad_schema)| {
-            // Skip the case where the bad schema happens to be valid.
             if bad_schema == &PlainPayload::SCHEMA {
                 return;
             }
