@@ -239,7 +239,6 @@ impl Drop for ClientGuard {
         client.shutdown();
 
         self.rt.block_on(async move {
-
             // WS tasks are parked on the tungstenite stream; abort to
             // unpark, then await below so their captured `Arc<WebSocket>`
             // is released before we return.
