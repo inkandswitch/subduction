@@ -68,8 +68,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
-        TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient,
-        server::TokioWebSocketServer,
+        TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
     },
 };
 use tokio_util::task::TaskTracker;
@@ -797,11 +796,7 @@ fn bench_concurrent_clients(c: &mut Criterion) {
     // 4- and 8-client cases each spawn that many parallel `connected_client`
     // setups per iteration, multiplying every per-iter resource cost.
     // Drop them in CI slim mode.
-    let counts: &[u64] = if ci_slim() {
-        &[1, 2]
-    } else {
-        &[1, 2, 4, 8]
-    };
+    let counts: &[u64] = if ci_slim() { &[1, 2] } else { &[1, 2, 4, 8] };
     for &num_clients in counts {
         group.throughput(Throughput::Elements(num_clients));
         group.bench_with_input(

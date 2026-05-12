@@ -157,6 +157,11 @@ where
     /// spawned per peer by the connection manager. This is required
     /// for deterministic teardown in benches / tests where many
     /// short-lived peers are created and disposed of.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tungstenite::Error`] if there is a problem binding
+    /// the listening socket.
     #[allow(clippy::too_many_lines)]
     pub async fn new_with_tracker(
         address: SocketAddr,

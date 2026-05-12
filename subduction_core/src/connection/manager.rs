@@ -195,6 +195,7 @@ impl<K: FutureForm + RunManager<C, M>, C, M: Encode + Decode, S: Spawn<K> + Send
     Local where C: Connection<Local, M> + Clone + 'static, M: 'static
 )]
 impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
+    #[allow(clippy::too_many_lines)]
     fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, C, M, S>,
     ) -> Self::Future<'static, ()> {

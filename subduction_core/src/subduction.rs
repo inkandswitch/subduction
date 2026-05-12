@@ -756,6 +756,13 @@ where
     /// and manager futures (held by the caller as `JoinHandle`s) will
     /// resolve to `Ok(())` shortly afterward — `await` them if you need
     /// a hard guarantee that all in-flight work has drained.
+    // `async` is kept on the signature for API stability and to
+    // express the asynchronous intent of "graceful shutdown" — even
+    // though the body is currently two synchronous `close()` calls,
+    // future iterations may add awaits (e.g., draining the manager's
+    // outstanding connection-loop tasks via `JoinHandle` here rather
+    // than relying on the caller).
+    #[allow(clippy::unused_async)]
     pub async fn shutdown(&self) {
         // Closing the manager's command channel causes its
         // `while let Ok(cmd) = commands.recv().await` loop to exit on

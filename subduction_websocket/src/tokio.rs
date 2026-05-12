@@ -71,7 +71,7 @@ pub struct TrackedTokioSpawn {
 impl TrackedTokioSpawn {
     /// Create a spawner backed by the given tracker.
     #[must_use]
-    pub fn new(tracker: TaskTracker) -> Self {
+    pub const fn new(tracker: TaskTracker) -> Self {
         Self { tracker }
     }
 
