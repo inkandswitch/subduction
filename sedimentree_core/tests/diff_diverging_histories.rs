@@ -201,17 +201,12 @@ fn ancestry_pruning_drops_ancestors_of_shared_tip() {
     assert_eq!(*diff.local_only_commits[0].0, head(4));
 }
 
-/// **Updated after fragment-aware pruning fix.** The previous version
-/// of this test pinned the unsound invariant "if remote claims B, it
-/// must also have B's ancestors" — and asserted that local would not
-/// re-send A. Production showed that this invariant can be violated
-/// (partial sync, restored-from-snapshot peers, earlier bugs like the
-/// cross-platform fingerprint mismatch fixed in #164), and once it
-/// was, the missing ancestors were pruned forever.
-///
-/// Post-fix behavior: without a fragment-based justification, local
-/// MUST send A. This is the only way a peer in the "descendant
-/// without ancestor" state can ever recover.
+/// A remote claiming loose commit B carries no guarantee that the
+/// remote also has B's ancestors — partial sync, restored-from-snapshot
+/// peers, and other failure modes can leave a peer holding descendants
+/// without ancestors. Without a fragment-based justification, local
+/// must send A so that any peer in the "descendant without ancestor"
+/// state can recover.
 #[test]
 fn loose_only_remote_does_not_imply_ancestors_are_remote_held() {
     let a = commit(1, &[]);
@@ -229,9 +224,9 @@ fn loose_only_remote_does_not_imply_ancestors_are_remote_held() {
 
 /// Two parallel chains rooted at the same point; remote has only chain
 /// 1 (root, b1, c1). Local has both chains. With pure loose-commit
-/// state (no fragments), the fix sends only commits the remote
-/// doesn't list — chain 1 commits are excluded by the first filter,
-/// chain 2 commits are sent.
+/// state (no fragments), only commits the remote doesn't list are
+/// sent — chain 1 commits are excluded by the first filter, chain 2
+/// commits are sent.
 ///
 /// Note: even though `root` is shared, no fragment justifies pruning
 /// b2/c2 transitively; they get sent.
@@ -260,13 +255,9 @@ fn disjoint_branches_only_send_unique_commits() {
     assert!(sent_ids.contains(&head(20)) && sent_ids.contains(&head(21)));
 }
 
-/// Diamond: `root → {b1, b2} → merge`. Remote has only `merge`.
-///
-/// **Updated after fragment-aware pruning fix.** Previously, the
-/// unsound invariant pruned root/b1/b2 (all ancestors of merge),
-/// asserting `local_only_commits.is_empty()`. Post-fix: no fragment
-/// justifies pruning, so local sends all three ancestors. Necessary
-/// for the bad peer to ever catch up.
+/// Diamond: `root → {b1, b2} → merge`. Remote has only `merge`. No
+/// fragment justifies transitively pruning root, b1, or b2, so local
+/// sends all three ancestors — necessary for the remote to catch up.
 #[test]
 fn diamond_dag_with_remote_holding_only_merge_sends_all_ancestors() {
     let root = commit(1, &[]);
@@ -287,12 +278,10 @@ fn diamond_dag_with_remote_holding_only_merge_sends_all_ancestors() {
     assert!(sent_ids.contains(&head(3)));
 }
 
-/// **Updated after fragment-aware pruning fix.** The previous version
-/// asserted that 3 ancestors of the shared loose tip get pruned
-/// (leaving 12 to send). With loose-only state and no fragments, no
-/// ancestor pruning is sound — all 14 non-shared commits get sent.
-/// The remote-side filter still excludes commit 12 (the one the
-/// remote claims).
+/// With loose-only state and no fragments, no ancestor pruning is
+/// sound — every non-shared commit gets sent. The remote-side filter
+/// still excludes commit 12 (the one the remote claims), leaving 14
+/// to send.
 #[test]
 fn many_parallel_chains_no_loose_pruning() {
     let mut all_commits = Vec::new();

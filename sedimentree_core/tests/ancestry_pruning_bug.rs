@@ -148,7 +148,7 @@ fn sends_entire_chain_when_remote_holds_only_tip() {
 }
 
 /// Branchy DAG: A → {B, C} → M. Bad peer has only M (the merge).
-/// After the fix, A, B, and C all get sent.
+/// A, B, and C all get sent.
 #[test]
 fn sends_ancestors_in_branching_dag() {
     // Shape:
@@ -228,9 +228,9 @@ fn shared_fragment_with_loose_commits_diff_is_empty() {
 
 /// Server has loose A → B → C → D AND fragment F(head=D, boundary={A},
 /// checkpoints={B,C}). Remote has only the fragment (no loose
-/// commits). After the fix, B and C — which fall inside F's range —
-/// should still get pruned because the walk from D (matched fragment
-/// head) stops at boundary A (which is in remote.commit_fingerprints).
+/// commits). B and C fall inside F's range and get pruned because
+/// the walk from D (matched fragment head) stops at boundary A
+/// (which is in `remote.commit_fingerprints`).
 #[test]
 fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
     let a = loose(b'A', &[]);
@@ -265,11 +265,11 @@ fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
 /// **Critical correctness case**: server has loose P → B → H (P is
 /// older, H is newer) AND fragment F(head=H, boundary={B}). Remote
 /// has fragment F + loose B. P is older than the fragment boundary
-/// so the remote doesn't have it. After the fix, P MUST be sent.
+/// so the remote doesn't have it. P must be sent.
 ///
-/// Pre-fix, the unsound walk traversed past B and pruned P; post-fix,
-/// the walk stops at B (which is in remote.commit_fingerprints as
-/// the fragment boundary).
+/// The walk from H stops at B (which is in
+/// `remote.commit_fingerprints` as the fragment boundary), so P is
+/// never marked covered.
 #[test]
 fn does_not_prune_commit_past_fragment_boundary() {
     let p = loose(b'P', &[]);
@@ -327,7 +327,8 @@ fn asymmetric_fragment_optimization_via_matching_local_head() {
 /// Local has no walk root (no head matches D), so it falls back to
 /// sending all local-only commits.
 ///
-/// **This** is where the documented bandwidth cost shows up.
+/// **This** is where the documented bandwidth cost shows up — the
+/// receiver already has B and C inside the fragment blob.
 #[test]
 fn asymmetric_fragment_no_matching_head_does_send_duplicates() {
     let a = loose(b'A', &[]);
