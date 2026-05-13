@@ -1515,63 +1515,66 @@ where
             return Ok(());
         }
 
-        self.persist_built_batch(id, commits, fragments, /* keep_verified = */ false)
+        let (verified_commits, verified_fragments) =
+            self.sign_built_batch(commits, fragments).await?;
+        self.persist_verified_batch(id, verified_commits, verified_fragments)
             .await
-            .map(|_| ())
     }
 
-    /// Sign, persist, and index an already-built batch. When `keep_verified`
-    /// is set, returns the verified items for broadcast reuse; otherwise
-    /// returns empty vectors and skips the clone.
-    async fn persist_built_batch(
+    /// Sign every commit and fragment in an already-built batch.
+    async fn sign_built_batch(
         &self,
-        id: SedimentreeId,
         commits: Vec<(LooseCommit, Blob)>,
         fragments: Vec<(Fragment, Blob)>,
-        keep_verified: bool,
     ) -> Result<
         (Vec<VerifiedMeta<LooseCommit>>, Vec<VerifiedMeta<Fragment>>),
         WriteError<F, S, C, H::Message, P::PutDisallowed>,
     > {
-        let putter = self.storage.local_putter::<F>(id);
-        let commit_count = commits.len();
-        let fragment_count = fragments.len();
-        tracing::info!(
-            "bulk-inserting {commit_count} commits and {fragment_count} fragments \
-             into sedimentree {id:?}{}",
-            if keep_verified { "" } else { " (no broadcast)" }
-        );
-
-        // Sign every commit and fragment first; defer all storage I/O so we
-        // can hit the adapter exactly once via `save_batch`.
-        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> = Vec::with_capacity(commit_count);
-        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(commit_count);
+        let mut verified_commits = Vec::with_capacity(commits.len());
         for (commit, blob) in commits {
             let verified_sig = Signed::seal::<F, _>(&self.signer, commit).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            commit_payloads.push(verified_meta.payload().clone());
             verified_commits.push(verified_meta);
         }
 
-        let mut verified_fragments: Vec<VerifiedMeta<Fragment>> =
-            Vec::with_capacity(fragment_count);
-        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(fragment_count);
+        let mut verified_fragments = Vec::with_capacity(fragments.len());
         for (fragment, blob) in fragments {
             let verified_sig = Signed::seal::<F, _>(&self.signer, fragment).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            fragment_payloads.push(verified_meta.payload().clone());
             verified_fragments.push(verified_meta);
         }
 
-        // Clone for broadcast before `save_batch` consumes the originals.
-        let (kept_commits, kept_fragments) = if keep_verified {
-            (verified_commits.clone(), verified_fragments.clone())
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        Ok((verified_commits, verified_fragments))
+    }
 
+    /// Flush a signed batch to storage and update the in-memory tree.
+    /// Consumes the verified items; if the caller needs them after this
+    /// (e.g. for wire broadcast), it should clone before calling.
+    async fn persist_verified_batch(
+        &self,
+        id: SedimentreeId,
+        verified_commits: Vec<VerifiedMeta<LooseCommit>>,
+        verified_fragments: Vec<VerifiedMeta<Fragment>>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        let commit_count = verified_commits.len();
+        let fragment_count = verified_fragments.len();
+        tracing::info!(
+            ?id,
+            "bulk-inserting {commit_count} commits and {fragment_count} fragments"
+        );
+
+        let commit_payloads: Vec<LooseCommit> = verified_commits
+            .iter()
+            .map(|v| v.payload().clone())
+            .collect();
+        let fragment_payloads: Vec<Fragment> = verified_fragments
+            .iter()
+            .map(|v| v.payload().clone())
+            .collect();
+
+        let putter = self.storage.local_putter::<F>(id);
         putter
             .save_batch(verified_commits, verified_fragments)
             .await
@@ -1590,11 +1593,12 @@ where
             .await;
 
         tracing::info!(
+            ?id,
             "bulk-insert of {commit_count} commits and {fragment_count} fragments \
              complete, tree minimized"
         );
 
-        Ok((kept_commits, kept_fragments))
+        Ok(())
     }
 
     /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads,
@@ -1609,7 +1613,9 @@ where
     /// [`add_built_batch_locally`](Self::add_built_batch_locally) +
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) for that.
     ///
-    /// Commits are inserted before fragments. Empty input is a no-op.
+    /// Commits are inserted (and sent on the wire) before fragments, so a
+    /// receiver processing messages in order sees parents before any
+    /// fragment that summarizes them. Empty input is a no-op.
     ///
     /// # Errors
     ///
@@ -1629,10 +1635,15 @@ where
             return Ok(());
         }
 
-        // Storage write first (cancel-safety: storage is the source of truth;
-        // a cancel between this and the broadcast self-heals on rehydrate).
-        let (verified_commits, verified_fragments) = self
-            .persist_built_batch(id, commits, fragments, /* keep_verified = */ true)
+        // Sign first, retain a copy of the verified items for the wire
+        // broadcast, then persist (which consumes them). Cancel-safety:
+        // storage is the source of truth; a cancel between persist and
+        // broadcast self-heals on rehydrate.
+        let (verified_commits, verified_fragments) =
+            self.sign_built_batch(commits, fragments).await?;
+        let broadcast_commits = verified_commits.clone();
+        let broadcast_fragments = verified_fragments.clone();
+        self.persist_verified_batch(id, verified_commits, verified_fragments)
             .await?;
 
         let self_id = self.peer_id();
@@ -1662,13 +1673,13 @@ where
             let peer_id = conn.peer_id();
             tracing::debug!(
                 "Propagating batch ({} commits, {} fragments) for sedimentree {:?} to {}",
-                verified_commits.len(),
-                verified_fragments.len(),
+                broadcast_commits.len(),
+                broadcast_fragments.len(),
                 id,
                 peer_id
             );
 
-            for verified in &verified_commits {
+            for verified in &broadcast_commits {
                 let msg: H::Message = SyncMessage::LooseCommit {
                     id,
                     commit: verified.signed().clone(),
@@ -1680,20 +1691,12 @@ where
                 }
                 .into();
 
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::warn!(
-                        "peer {} disconnected during batch broadcast: {}",
-                        peer_id,
-                        IoError::<F, S, C, H::Message>::ConnSend(e)
-                    );
-                    if self.remove_connection(&conn).await == Some(true) {
-                        self.send_counter.clear_peer(&peer_id).await;
-                    }
+                if !self.send_or_drop_conn(&conn, msg).await {
                     continue 'peer;
                 }
             }
 
-            for verified in &verified_fragments {
+            for verified in &broadcast_fragments {
                 let msg: H::Message = SyncMessage::Fragment {
                     id,
                     fragment: verified.signed().clone(),
@@ -1705,21 +1708,33 @@ where
                 }
                 .into();
 
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::warn!(
-                        "peer {} disconnected during batch broadcast: {}",
-                        peer_id,
-                        IoError::<F, S, C, H::Message>::ConnSend(e)
-                    );
-                    if self.remove_connection(&conn).await == Some(true) {
-                        self.send_counter.clear_peer(&peer_id).await;
-                    }
+                if !self.send_or_drop_conn(&conn, msg).await {
                     continue 'peer;
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Send a message to a connection; on failure log, evict the connection
+    /// and clear the peer's send counter, then report `false`. Returns
+    /// `true` on success.
+    async fn send_or_drop_conn(&self, conn: &Authenticated<C, F>, msg: H::Message) -> bool {
+        if let Err(e) = conn.send(&msg).await {
+            let peer_id = conn.peer_id();
+            tracing::warn!(
+                "peer {} disconnected during batch broadcast: {}",
+                peer_id,
+                IoError::<F, S, C, H::Message>::ConnSend(e)
+            );
+            if self.remove_connection(conn).await == Some(true) {
+                self.send_counter.clear_peer(&peer_id).await;
+            }
+            false
+        } else {
+            true
+        }
     }
 
     /// Handle receiving a batch sync response from a peer.
