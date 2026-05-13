@@ -39,10 +39,11 @@ fn tree_from(commits: &[LooseCommit]) -> Sedimentree {
 
 fn codec_roundtrip(req: BatchSyncRequest) -> BatchSyncRequest {
     let bytes = SyncMessage::BatchSyncRequest(req).encode();
-    match SyncMessage::try_decode(&bytes).expect("decode should succeed") {
-        SyncMessage::BatchSyncRequest(r) => r,
-        other => panic!("expected BatchSyncRequest, got {other:?}"),
-    }
+    let decoded = SyncMessage::try_decode(&bytes).expect("decode should succeed");
+    let SyncMessage::BatchSyncRequest(r) = decoded else {
+        panic!("expected BatchSyncRequest, got {decoded:?}");
+    };
+    r
 }
 
 /// `diff_remote_fingerprints` against a decoded summary returns the same

@@ -28,7 +28,7 @@ fn commit(seed: u8, parents: &[CommitId]) -> LooseCommit {
     )
 }
 
-fn head(seed: u8) -> CommitId {
+const fn head(seed: u8) -> CommitId {
     CommitId::new([seed; 32])
 }
 
