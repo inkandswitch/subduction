@@ -189,8 +189,8 @@ async fn mid_flight_close_leaves_peers_consistent() -> TestResult {
 
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
-    let a_count = a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    let b_count = b.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
+    let a_count = a.get_commits(sed_id).await.map_or(0, |c| c.len());
+    let b_count = b.get_commits(sed_id).await.map_or(0, |c| c.len());
 
     // A always sees its own commit. B's view may or may not include it
     // depending on whether the broadcast won the race with the close.

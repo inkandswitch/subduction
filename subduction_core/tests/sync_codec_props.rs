@@ -1,8 +1,8 @@
 //! Property tests for the `SyncMessage` codec's effect on
 //! `diff_remote_fingerprints`. Byte-identity round-trip is already
 //! covered by `subduction_core::connection::message::proptests` and
-//! `tests/codec_proptest.rs`; what's tested here is the stronger claim
-//! that the codec preserves the *semantic* answer of
+//! `tests/codec_proptest.rs`; what's tested here is the stronger
+//! claim that the codec preserves the *semantic* answer of
 //! `diff_remote_fingerprints`.
 
 #![cfg(feature = "bolero")]

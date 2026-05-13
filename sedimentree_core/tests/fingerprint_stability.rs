@@ -32,27 +32,30 @@ pub const EXPECTED_FP_ONES: u64 = 13_743_385_435_344_457_055;
 pub const EXPECTED_FP_SEQUENTIAL: u64 = 10_722_668_375_651_339_477;
 pub const EXPECTED_FP_REPEATING: u64 = 16_398_704_403_767_843_780;
 
-fn test_seed() -> FingerprintSeed {
+const fn test_seed() -> FingerprintSeed {
     FingerprintSeed::new(TEST_SEED_KEY0, TEST_SEED_KEY1)
 }
 
-fn id_zeroes() -> CommitId {
+const fn id_zeroes() -> CommitId {
     CommitId::new([0u8; 32])
 }
 
-fn id_ones() -> CommitId {
+const fn id_ones() -> CommitId {
     CommitId::new([0xFF; 32])
 }
 
 fn id_sequential() -> CommitId {
     let mut bytes = [0u8; 32];
     for (i, b) in bytes.iter_mut().enumerate() {
-        *b = (i + 1) as u8;
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            *b = (i + 1) as u8;
+        }
     }
     CommitId::new(bytes)
 }
 
-fn id_repeating() -> CommitId {
+const fn id_repeating() -> CommitId {
     CommitId::new([42u8; 32])
 }
 
@@ -90,8 +93,7 @@ fn print_fingerprint_baselines() {
     let fp_r: Fingerprint<CommitId> = Fingerprint::new(&seed, &id_repeating());
 
     eprintln!(
-        "Fingerprint baselines (seed key0=0x{:016X}, key1=0x{:016X}):",
-        TEST_SEED_KEY0, TEST_SEED_KEY1,
+        "Fingerprint baselines (seed key0=0x{TEST_SEED_KEY0:016X}, key1=0x{TEST_SEED_KEY1:016X}):",
     );
     eprintln!("  zeroes     = {}", fp_z.as_u64());
     eprintln!("  ones       = {}", fp_o.as_u64());

@@ -1,6 +1,6 @@
 //! Causal identity for loose commits.
 
-use crate::crypto::fingerprint::FingerprintInput;
+use crate::crypto::fingerprint::{Fingerprint, FingerprintSeed};
 
 /// A user-supplied opaque identifier for a loose commit.
 ///
@@ -36,9 +36,33 @@ impl From<[u8; 32]> for CommitId {
     }
 }
 
-impl FingerprintInput for CommitId {
-    fn fingerprint_bytes(&self) -> &[u8] {
-        &self.0
+impl Fingerprint<CommitId> {
+    /// Compute a `CommitId` fingerprint under `seed`.
+    ///
+    /// Hashes the `CommitId`'s 32 raw bytes directly via SipHash-2-4,
+    /// bypassing [`core::hash::Hash`] (whose `<[u8; N] as Hash>::hash`
+    /// impl prefixes the data with `write_usize(N)` — `usize` differs
+    /// in width between 32-bit and 64-bit targets, so a browser and a
+    /// native peer would otherwise compute different fingerprints for
+    /// the same `CommitId`).
+    ///
+    /// ```
+    /// use sedimentree_core::{
+    ///     crypto::fingerprint::{Fingerprint, FingerprintSeed},
+    ///     loose_commit::id::CommitId,
+    /// };
+    ///
+    /// let seed = FingerprintSeed::new(42, 99);
+    /// let id = CommitId::new([7u8; 32]);
+    /// let fp = Fingerprint::<CommitId>::new(&seed, &id);
+    /// assert_eq!(fp, Fingerprint::<CommitId>::new(&seed, &id));
+    /// ```
+    #[must_use]
+    pub fn new(seed: &FingerprintSeed, id: &CommitId) -> Self {
+        use core::hash::Hasher;
+        let mut hasher = seed.hasher();
+        hasher.write(&id.0);
+        Self::from_u64(hasher.finish())
     }
 }
 

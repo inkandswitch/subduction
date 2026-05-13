@@ -70,7 +70,7 @@ fn make_blob(seed: u8) -> Blob {
     Blob::new(data)
 }
 
-fn make_head(seed: u8) -> CommitId {
+const fn make_head(seed: u8) -> CommitId {
     let mut bytes = [0u8; 32];
     bytes[0] = seed;
     bytes[1] = seed.wrapping_mul(31);
@@ -331,7 +331,7 @@ async fn relay_topology_add_built_batch_each_call_is_incremental() -> TestResult
             .await?;
         tokio::time::sleep(PROPAGATION_PAUSE).await;
 
-        let a_count = a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
+        let a_count = a.get_commits(sed_id).await.map_or(0, |c| c.len());
         assert_eq!(a_count, n);
         assert!(a_count > prior_count);
         prior_count = a_count;
@@ -379,25 +379,23 @@ async fn relay_topology_two_clients_add_built_batch_converge_via_relay() -> Test
         .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
-    let total_pairs = 12;
+    let total_pairs: u8 = 12;
     for i in 0..total_pairs {
         if i % 2 == 0 {
-            let pair = make_commit_pair(sed_id, (i as u8) + 1);
+            let pair = make_commit_pair(sed_id, i + 1);
             a.add_built_batch(sed_id, vec![pair], Vec::new()).await?;
         } else {
-            let pair = make_commit_pair(sed_id, 100 + (i as u8));
+            let pair = make_commit_pair(sed_id, 100 + i);
             b.add_built_batch(sed_id, vec![pair], Vec::new()).await?;
         }
         tokio::time::sleep(PROPAGATION_PAUSE).await;
     }
 
-    let a_count = a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    let r_count = r.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    let b_count = b.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    assert_eq!(
-        (a_count, r_count, b_count),
-        (total_pairs, total_pairs, total_pairs)
-    );
+    let total = total_pairs as usize;
+    let a_count = a.get_commits(sed_id).await.map_or(0, |c| c.len());
+    let r_count = r.get_commits(sed_id).await.map_or(0, |c| c.len());
+    let b_count = b.get_commits(sed_id).await.map_or(0, |c| c.len());
+    assert_eq!((a_count, r_count, b_count), (total, total, total));
 
     let (_, a_stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     let (_, b_stats, _, _) = b.full_sync_with_all_peers(SYNC_TIMEOUT).await;

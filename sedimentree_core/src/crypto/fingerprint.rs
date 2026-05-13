@@ -130,9 +130,12 @@ impl<'a> arbitrary::Arbitrary<'a> for FingerprintSeed {
 
 /// A short keyed hash for set reconciliation.
 ///
-/// Computed via SipHash-2-4 with a per-request [`FingerprintSeed`].
-/// The phantom type `T` tracks what was fingerprinted:
-/// - [`Fingerprint<CommitId>`][crate::loose_commit::id::CommitId] — fingerprint of a commit or fragment identity
+/// Computed via SipHash-2-4 with a per-request [`FingerprintSeed`]. The
+/// phantom `T` tags what was fingerprinted so different fingerprint
+/// universes (e.g. `Fingerprint<CommitId>` vs a hypothetical
+/// `Fingerprint<Foo>`) don't get accidentally mixed. Per-type
+/// constructors live alongside the type they fingerprint — see
+/// [`Fingerprint<CommitId>::new`][crate::loose_commit::id::CommitId].
 ///
 /// # Collision Probability
 ///
@@ -146,46 +149,6 @@ impl<'a> arbitrary::Arbitrary<'a> for FingerprintSeed {
 pub struct Fingerprint<T> {
     hash: u64,
     _marker: PhantomData<T>,
-}
-
-/// A type whose bytes can be fed into a fingerprint hasher portably.
-///
-/// We bypass [`core::hash::Hash`] because `<[u8; N] as Hash>::hash` writes
-/// a `state.write_usize(N)` length prefix whose byte width differs on
-/// 32-bit (e.g. wasm32) vs 64-bit (e.g. x86_64) targets, so a browser
-/// and a native peer would compute different fingerprints for the same
-/// `CommitId`.
-///
-/// Implementations must return bytes of a fixed length for all values
-/// of `Self` (or otherwise self-delimit). `fingerprint_bytes` is fed to
-/// SipHash without a length prefix, so variable-length encodings could
-/// collide.
-pub trait FingerprintInput {
-    /// Raw bytes to feed into the fingerprint hasher.
-    fn fingerprint_bytes(&self) -> &[u8];
-}
-
-impl<T: FingerprintInput> Fingerprint<T> {
-    /// Compute a fingerprint of `value` under `seed`.
-    ///
-    /// ```
-    /// use sedimentree_core::{
-    ///     crypto::fingerprint::{Fingerprint, FingerprintSeed},
-    ///     loose_commit::id::CommitId,
-    /// };
-    ///
-    /// let seed = FingerprintSeed::new(42, 99);
-    /// let id = CommitId::new([7u8; 32]);
-    /// let fp: Fingerprint<CommitId> = Fingerprint::new(&seed, &id);
-    /// assert_eq!(fp, Fingerprint::new(&seed, &id));
-    /// ```
-    #[must_use]
-    pub fn new(seed: &FingerprintSeed, value: &T) -> Self {
-        use core::hash::Hasher;
-        let mut hasher = seed.hasher();
-        hasher.write(value.fingerprint_bytes());
-        Self::from_u64(hasher.finish())
-    }
 }
 
 impl<T> Fingerprint<T> {

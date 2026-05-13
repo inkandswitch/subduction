@@ -3,7 +3,11 @@
 //! This module provides mock connections and helpers for testing connection-related code.
 
 use alloc::sync::Arc;
-use core::{convert::Infallible, time::Duration};
+use core::{
+    convert::Infallible,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use future_form::{FutureForm, Local, Sendable};
 use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
@@ -476,7 +480,7 @@ impl crate::transport::Transport<Sendable> for ChannelTransport {
 #[derive(Debug, Clone)]
 pub struct CloseableChannelTransport {
     inner: ChannelTransport,
-    closed: Arc<core::sync::atomic::AtomicBool>,
+    closed: Arc<AtomicBool>,
 }
 
 impl CloseableChannelTransport {
@@ -487,11 +491,11 @@ impl CloseableChannelTransport {
         (
             Self {
                 inner: a,
-                closed: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+                closed: Arc::new(AtomicBool::new(false)),
             },
             Self {
                 inner: b,
-                closed: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+                closed: Arc::new(AtomicBool::new(false)),
             },
         )
     }
@@ -499,8 +503,7 @@ impl CloseableChannelTransport {
     /// Mark this side as closed. Subsequent `send_bytes` and `recv_bytes`
     /// calls return [`ChannelClosed`].
     pub fn close(&self) {
-        self.closed
-            .store(true, core::sync::atomic::Ordering::SeqCst);
+        self.closed.store(true, Ordering::SeqCst);
     }
 }
 
@@ -516,14 +519,14 @@ impl crate::transport::Transport<Sendable> for CloseableChannelTransport {
     type DisconnectionError = Infallible;
 
     fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        if self.closed.load(core::sync::atomic::Ordering::SeqCst) {
+        if self.closed.load(Ordering::SeqCst) {
             return Box::pin(async { Err(ChannelClosed) });
         }
         self.inner.send_bytes(bytes)
     }
 
     fn recv_bytes(&self) -> BoxFuture<'_, Result<alloc::vec::Vec<u8>, Self::RecvError>> {
-        if self.closed.load(core::sync::atomic::Ordering::SeqCst) {
+        if self.closed.load(Ordering::SeqCst) {
             return Box::pin(async { Err(ChannelClosed) });
         }
         self.inner.recv_bytes()
