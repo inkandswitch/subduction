@@ -1,7 +1,7 @@
 //! Three-node A↔R↔B sync over `MemoryStorage` + `ChannelTransport`.
 //! The middle relay only has direct connections to A and B; the end
-//! peers never connect directly. Reproduces the user-reported topology
-//! where two browsers sync through a relay server.
+//! peers never connect directly — i.e. clients talking through a
+//! relay server.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -169,7 +169,6 @@ async fn relay_topology_converges_on_initial_sync() -> TestResult {
 
 /// After A and B have fully converged through R, repeated
 /// `full_sync_with_all_peers` from either side must report empty stats.
-/// The bug shape "N missing, requesting N" violates this.
 #[tokio::test]
 async fn relay_topology_repeated_sync_after_convergence_is_empty() -> TestResult {
     let (a, r, b, _a_s, _r_s, _b_s) = setup_relay_topology().await?;
@@ -252,13 +251,10 @@ async fn relay_topology_rapid_fire_then_idle_sync_is_empty() -> TestResult {
     Ok(())
 }
 
-/// After convergence, one new commit on A should transfer at most a
-/// small delta (not the full history) to B on the next sync, and the
-/// follow-up round must be empty.
-///
-/// Note: `max_acceptable = 2` is slack for the race between `add_commit`'s
-/// broadcast and the explicit sync — to be tightened once we have a
-/// "local-only insert" path on Subduction.
+/// After convergence, one new commit on A propagates to the relay and
+/// to B by the time both peers explicitly sync, and the sync itself
+/// transfers at most that one commit (never the whole history). The
+/// follow-up round must be exactly empty.
 #[tokio::test]
 async fn relay_topology_one_more_commit_transfers_only_the_delta() -> TestResult {
     let (a, r, b, _a_s, _r_s, _b_s) = setup_relay_topology().await?;
@@ -288,8 +284,13 @@ async fn relay_topology_one_more_commit_transfers_only_the_delta() -> TestResult
     assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), Some(16));
     assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(16));
 
+    // Author one new commit on A and let the broadcast propagate before
+    // measuring delta-sync behavior. `add_commit` broadcasts via the
+    // subscription path; without the pause its delivery races with the
+    // explicit sync we're about to invoke.
     a.add_commit(sed_id, make_head(99), BTreeSet::new(), make_blob(99))
         .await?;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
 
     let (_, a_stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     let (_, b_stats, _, _) = b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
@@ -299,15 +300,14 @@ async fn relay_topology_one_more_commit_transfers_only_the_delta() -> TestResult
     assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), Some(17));
     assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(17));
 
-    let max_acceptable = 2;
+    // Either the broadcast won (0 transferred during sync) or the sync
+    // delivered the new commit (1 transferred) — never the full history.
     assert!(
-        a_stats.total_received() <= max_acceptable
-            && a_stats.total_sent() <= max_acceptable,
+        a_stats.total_received() <= 1 && a_stats.total_sent() <= 1,
         "A delta: {a_stats:?}",
     );
     assert!(
-        b_stats.total_received() <= max_acceptable
-            && b_stats.total_sent() <= max_acceptable,
+        b_stats.total_received() <= 1 && b_stats.total_sent() <= 1,
         "B delta: {b_stats:?}",
     );
 

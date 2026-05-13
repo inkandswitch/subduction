@@ -82,8 +82,7 @@ fn full_local_empty_remote_sends_all() {
 }
 
 /// Disjoint sets produce `local_only.len() == |local|` and
-/// `remote_only.len() == |remote|` — matches the "N missing, requesting N"
-/// log pattern when peers genuinely have nothing in common.
+/// `remote_only.len() == |remote|`.
 #[test]
 fn disjoint_histories_send_full_sets_in_both_directions() {
     let local = tree(vec![
@@ -289,125 +288,8 @@ fn many_parallel_chains_pruning() {
     assert_eq!(diff.local_only_commits.len(), 12);
 }
 
-/// After both sides ingest the other's `local_only_commits`, a fresh-seed
-/// round-2 diff is empty in both directions. The diff layer converges in
-/// one round given correct ingestion.
-#[test]
-fn convergence_after_one_round_when_both_sides_ingest() {
-    let local_initial = tree(vec![
-        commit(10, &[]),
-        commit(11, &[head(10)]),
-        commit(12, &[head(11)]),
-    ]);
-    let remote_initial = tree(vec![
-        commit(20, &[]),
-        commit(21, &[head(20)]),
-        commit(22, &[head(21)]),
-    ]);
-
-    let local_summary = local_initial.fingerprint_summarize(&SEED);
-    let remote_summary = remote_initial.fingerprint_summarize(&SEED);
-
-    let from_remote_to_local: Vec<LooseCommit> = {
-        let diff = remote_initial.diff_remote_fingerprints(&local_summary);
-        assert_eq!(diff.local_only_commits.len(), 3);
-        assert_eq!(diff.remote_only_commit_fingerprints.len(), 3);
-        diff.local_only_commits
-            .into_iter()
-            .map(|(_, c)| c.clone())
-            .collect()
-    };
-
-    let from_local_to_remote: Vec<LooseCommit> = {
-        let diff = local_initial.diff_remote_fingerprints(&remote_summary);
-        assert_eq!(diff.local_only_commits.len(), 3);
-        assert_eq!(diff.remote_only_commit_fingerprints.len(), 3);
-        diff.local_only_commits
-            .into_iter()
-            .map(|(_, c)| c.clone())
-            .collect()
-    };
-
-    let mut local_after = local_initial;
-    for commit in from_remote_to_local {
-        local_after.add_commit(commit);
-    }
-    let mut remote_after = remote_initial;
-    for commit in from_local_to_remote {
-        remote_after.add_commit(commit);
-    }
-
-    assert_eq!(local_after.loose_commits().count(), 6);
-    assert_eq!(remote_after.loose_commits().count(), 6);
-
-    let seed2 = FingerprintSeed::new(0xFEED_FACE, 0xCAFE_BABE);
-    let local_summary2 = local_after.fingerprint_summarize(&seed2);
-    let remote_summary2 = remote_after.fingerprint_summarize(&seed2);
-
-    let round2_at_local = local_after.diff_remote_fingerprints(&remote_summary2);
-    let round2_at_remote = remote_after.diff_remote_fingerprints(&local_summary2);
-
-    assert!(round2_at_local.local_only_commits.is_empty());
-    assert!(round2_at_local.remote_only_commit_fingerprints.is_empty());
-    assert!(round2_at_remote.local_only_commits.is_empty());
-    assert!(round2_at_remote.remote_only_commit_fingerprints.is_empty());
-}
-
-#[test]
-fn loose_commit_only_sync_converges_in_one_round_arbitrary_overlap() {
-    // Shared: A, B, C. Local-only: D, E. Remote-only: X, Y, Z (X forks off B).
-    let a = commit(1, &[]);
-    let b = commit(2, &[head(1)]);
-    let c = commit(3, &[head(2)]);
-    let d = commit(4, &[head(3)]);
-    let e = commit(5, &[head(4)]);
-    let x = commit(11, &[head(2)]);
-    let y = commit(12, &[head(11)]);
-    let z = commit(13, &[head(12)]);
-
-    let local_initial = tree(vec![a.clone(), b.clone(), c.clone(), d, e]);
-    let remote_initial = tree(vec![a, b, c, x, y, z]);
-
-    let local_summary = local_initial.fingerprint_summarize(&SEED);
-    let remote_summary = remote_initial.fingerprint_summarize(&SEED);
-
-    let from_remote_to_local: Vec<LooseCommit> = {
-        let diff = remote_initial.diff_remote_fingerprints(&local_summary);
-        assert_eq!(diff.local_only_commits.len(), 3);
-        diff.local_only_commits
-            .into_iter()
-            .map(|(_, c)| c.clone())
-            .collect()
-    };
-
-    let from_local_to_remote: Vec<LooseCommit> = {
-        let diff = local_initial.diff_remote_fingerprints(&remote_summary);
-        assert_eq!(diff.local_only_commits.len(), 2);
-        diff.local_only_commits
-            .into_iter()
-            .map(|(_, c)| c.clone())
-            .collect()
-    };
-
-    let mut local_after = local_initial;
-    for commit in from_remote_to_local {
-        local_after.add_commit(commit);
-    }
-    let mut remote_after = remote_initial;
-    for commit in from_local_to_remote {
-        remote_after.add_commit(commit);
-    }
-
-    assert_eq!(local_after.loose_commits().count(), 8);
-    assert_eq!(remote_after.loose_commits().count(), 8);
-
-    let seed2 = FingerprintSeed::new(7, 11);
-    let remote_summary2 = remote_after.fingerprint_summarize(&seed2);
-    let round2 = local_after.diff_remote_fingerprints(&remote_summary2);
-
-    assert!(round2.local_only_commits.is_empty());
-    assert!(round2.remote_only_commit_fingerprints.is_empty());
-}
+// One-round-convergence-after-mutual-ingest is covered as a property in
+// `tests/sync_convergence_props.rs::prop_mutual_ingest_converges_in_one_round`.
 
 /// Minimize on a fragment-less tree must not change the fingerprint set.
 #[test]

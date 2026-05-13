@@ -456,12 +456,81 @@ impl crate::transport::Transport<Sendable> for ChannelTransport {
         Box::pin(async move { tx.send(data).await.map_err(|_| ChannelClosed) })
     }
 
-    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<alloc::vec::Vec<u8>, Self::RecvError>> {
         let rx = self.rx.clone();
         Box::pin(async move { rx.recv().await.map_err(|_| ChannelClosed) })
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// A [`ChannelTransport`] wrapper that can be closed mid-test to simulate
+/// transport failure (peer disconnect, dead socket, etc.).
+///
+/// Once [`close`](Self::close) is called, subsequent `send_bytes` and
+/// `recv_bytes` calls on this side return [`ChannelClosed`]. The paired
+/// transport continues to function on the underlying channel — call
+/// `close()` on both halves to fully tear the link down.
+#[derive(Debug, Clone)]
+pub struct CloseableChannelTransport {
+    inner: ChannelTransport,
+    closed: Arc<core::sync::atomic::AtomicBool>,
+}
+
+impl CloseableChannelTransport {
+    /// Create a bidirectional pair of transports, each independently closable.
+    #[must_use]
+    pub fn pair() -> (Self, Self) {
+        let (a, b) = ChannelTransport::pair();
+        (
+            Self {
+                inner: a,
+                closed: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+            },
+            Self {
+                inner: b,
+                closed: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+            },
+        )
+    }
+
+    /// Mark this side as closed. Subsequent `send_bytes` and `recv_bytes`
+    /// calls return [`ChannelClosed`].
+    pub fn close(&self) {
+        self.closed
+            .store(true, core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl PartialEq for CloseableChannelTransport {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner && Arc::ptr_eq(&self.closed, &other.closed)
+    }
+}
+
+impl crate::transport::Transport<Sendable> for CloseableChannelTransport {
+    type SendError = ChannelClosed;
+    type RecvError = ChannelClosed;
+    type DisconnectionError = Infallible;
+
+    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        if self.closed.load(core::sync::atomic::Ordering::SeqCst) {
+            return Box::pin(async { Err(ChannelClosed) });
+        }
+        self.inner.send_bytes(bytes)
+    }
+
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<alloc::vec::Vec<u8>, Self::RecvError>> {
+        if self.closed.load(core::sync::atomic::Ordering::SeqCst) {
+            return Box::pin(async { Err(ChannelClosed) });
+        }
+        self.inner.recv_bytes()
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        self.close();
         Box::pin(async { Ok(()) })
     }
 }

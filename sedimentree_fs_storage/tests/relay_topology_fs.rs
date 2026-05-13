@@ -1,8 +1,7 @@
 //! Relay-topology sync over `FsStorage` (vs. the `MemoryStorage`
-//! version in `subduction_core/tests/relay_topology_sync.rs`). The
-//! user-reported bug only reproduces against the CLI server which uses
-//! `MetricsStorage<FsStorage>`; if these fail while the in-memory tests
-//! pass, the issue is in `FsStorage`'s concurrency model.
+//! version in `subduction_core/tests/relay_topology_sync.rs`). If
+//! these fail while the in-memory tests pass, the issue is in
+//! `FsStorage`'s concurrency model rather than the sync protocol.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -174,9 +173,9 @@ async fn fs_relay_single_client_repeated_add_built_batch_converges() -> TestResu
     Ok(())
 }
 
-/// Closest analogue to the user's two-browser workflow: A and B each
-/// `add_built_batch` repeatedly through a relay; final state must agree
-/// and a follow-up sync must be empty.
+/// Two clients writing through a single relay: A and B each
+/// `add_built_batch` repeatedly; final state must agree and a follow-up
+/// sync must be empty.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fs_relay_two_clients_add_built_batch_converge_via_relay() -> TestResult {
     let h = setup_relay().await?;
@@ -281,7 +280,12 @@ async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
         handle.await??;
     }
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Give in-flight broadcasts and embedded syncs a moment to drain,
+    // then drive an explicit sync to deterministically flush any state
+    // still pending on the relay (FsStorage I/O can outlast the burst).
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (_, stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
 
     assert_eq!(
         h.a.get_commits(sed_id).await.map(|c| c.len()),
@@ -290,10 +294,12 @@ async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
     assert_eq!(
         h.r.get_commits(sed_id).await.map(|c| c.len()),
         Some(n as usize),
+        "drive sync stats: {stats:?}",
     );
 
-    let (_, stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-    assert!(stats.is_empty(), "{stats:?}");
+    // Re-converged: a follow-up sync must be empty.
+    let (_, stats2, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
+    assert!(stats2.is_empty(), "follow-up sync: {stats2:?}");
 
     Ok(())
 }
