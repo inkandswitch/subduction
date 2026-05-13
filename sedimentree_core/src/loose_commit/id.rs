@@ -1,6 +1,7 @@
 //! Causal identity for loose commits.
 
 use crate::crypto::fingerprint::{Fingerprint, FingerprintSeed};
+use core::hash::Hasher;
 
 /// A user-supplied opaque identifier for a loose commit.
 ///
@@ -59,7 +60,6 @@ impl Fingerprint<CommitId> {
     /// ```
     #[must_use]
     pub fn new(seed: &FingerprintSeed, id: &CommitId) -> Self {
-        use core::hash::Hasher;
         let mut hasher = seed.hasher();
         hasher.write(&id.0);
         Self::from_u64(hasher.finish())
