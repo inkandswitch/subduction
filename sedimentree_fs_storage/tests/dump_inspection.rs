@@ -75,8 +75,7 @@ const MISSING_FROM_BAD_CLIENT: [&str; 4] = [
 
 /// Commit the **bad** client has that the **good** client doesn't.
 /// Included for symmetry / completeness in the report.
-const BAD_CLIENT_EXTRA: &str =
-    "4e818e86f71cbdfccb39034d02f55af6ca2974bc23737e26ff6aa03886ddf0b2";
+const BAD_CLIENT_EXTRA: &str = "4e818e86f71cbdfccb39034d02f55af6ca2974bc23737e26ff6aa03886ddf0b2";
 
 fn hex_to_commit_id(h: &str) -> CommitId {
     let bytes = hex::decode(h).expect("valid hex");
@@ -303,7 +302,11 @@ async fn simulate_followup_sync_with_fragments_only() -> TestResult {
         .collect();
     let bad_client_tree = Sedimentree::new(fragments.clone(), bad_client_loose);
 
-    eprintln!("Server tree:     {} commits, {} fragments", commits.len(), fragments.len());
+    eprintln!(
+        "Server tree:     {} commits, {} fragments",
+        commits.len(),
+        fragments.len()
+    );
     eprintln!(
         "Bad client tree: {} commits (4 omitted), {} fragments",
         commits.len() - 4,
@@ -357,9 +360,7 @@ async fn simulate_followup_sync_with_fragments_only() -> TestResult {
              does not explain the '0 missing commits' follow-up."
         );
     } else {
-        eprintln!(
-            "\nPARTIAL: some are masked, some aren't. Look at which ones differ."
-        );
+        eprintln!("\nPARTIAL: some are masked, some aren't. Look at which ones differ.");
     }
 
     // Also verify: for any commit that IS masked, the fingerprint of its
@@ -499,17 +500,25 @@ async fn fragment_versions_within_a_head_dir_are_consistent() -> TestResult {
             let signed: Signed<Fragment> = Signed::try_decode(signed_bytes.clone())?;
             let blob = Blob::new(blob_bytes.clone());
             let vm: VerifiedMeta<Fragment> = VerifiedMeta::try_from_trusted(signed, blob)?;
-            entries_vec.push((stem.to_string(), signed_bytes, blob_bytes, vm.payload().clone()));
+            entries_vec.push((
+                stem.to_string(),
+                signed_bytes,
+                blob_bytes,
+                vm.payload().clone(),
+            ));
         }
         total_files += entries_vec.len();
 
         // (1) All fragments under this head should be equal as content.
-        let metadata_unique: BTreeSet<&Fragment> = entries_vec.iter().map(|(_, _, _, f)| f).collect();
+        let metadata_unique: BTreeSet<&Fragment> =
+            entries_vec.iter().map(|(_, _, _, f)| f).collect();
         let metadata_unique_n = metadata_unique.len();
 
         // (2) All .blob bytes should be byte-equal.
-        let blob_unique: BTreeSet<&[u8]> =
-            entries_vec.iter().map(|(_, _, bb, _)| bb.as_slice()).collect();
+        let blob_unique: BTreeSet<&[u8]> = entries_vec
+            .iter()
+            .map(|(_, _, bb, _)| bb.as_slice())
+            .collect();
         let blob_unique_n = blob_unique.len();
 
         // (3) For each file, the filename's hex digest should be
@@ -535,14 +544,15 @@ async fn fragment_versions_within_a_head_dir_are_consistent() -> TestResult {
             filename_mismatches.len()
         );
 
-        let dir_has_problems = metadata_unique_n > 1
-            || blob_unique_n > 1
-            || !filename_mismatches.is_empty();
+        let dir_has_problems =
+            metadata_unique_n > 1 || blob_unique_n > 1 || !filename_mismatches.is_empty();
         if dir_has_problems {
             eprintln!("INCONSISTENT {header}");
             if metadata_unique_n > 1 {
                 dirs_with_divergent_metadata += 1;
-                eprintln!("  ! {metadata_unique_n} distinct fragment payloads share head {head_name}");
+                eprintln!(
+                    "  ! {metadata_unique_n} distinct fragment payloads share head {head_name}"
+                );
                 for f in &metadata_unique {
                     eprintln!(
                         "    - head={:?} boundary_n={} checkpoint_n={} blob_meta={:?}",
@@ -650,8 +660,7 @@ async fn coverage_check_against_all_fragments_on_disk() -> TestResult {
 #[ignore = "requires local dump at $DUMP_PATH"]
 async fn inspect_parents_of_missing_commits() -> TestResult {
     let commits = load_all_loose_commits_directly().await?;
-    let by_head: BTreeMap<CommitId, &LooseCommit> =
-        commits.iter().map(|c| (c.head(), c)).collect();
+    let by_head: BTreeMap<CommitId, &LooseCommit> = commits.iter().map(|c| (c.head(), c)).collect();
 
     let missing: BTreeSet<CommitId> = MISSING_FROM_BAD_CLIENT
         .iter()
@@ -678,8 +687,10 @@ async fn inspect_parents_of_missing_commits() -> TestResult {
         let parents_on_server: Vec<_> =
             parents.iter().filter(|p| by_head.contains_key(p)).collect();
         let children: Vec<_> = children_of.get(&id).cloned().unwrap_or_default();
-        let children_on_server: Vec<_> =
-            children.iter().filter(|c| by_head.contains_key(c)).collect();
+        let children_on_server: Vec<_> = children
+            .iter()
+            .filter(|c| by_head.contains_key(c))
+            .collect();
         eprintln!(
             "  {h}:\n    parents on server: {}/{}\n    children on server: {}/{}",
             parents_on_server.len(),
@@ -875,13 +886,18 @@ async fn characterize_171_fragment_divergence() -> TestResult {
         .iter()
         .map(|f| f.summary().blob_meta().size_bytes())
         .collect();
-    let sed_ids: BTreeSet<SedimentreeId> =
-        fragments.iter().map(|f| f.sedimentree_id()).collect();
+    let sed_ids: BTreeSet<SedimentreeId> = fragments.iter().map(|f| f.sedimentree_id()).collect();
 
     eprintln!("=== Diversity across the 171 fragment payloads ===");
     eprintln!("  distinct heads               : {}", heads.len());
-    eprintln!("  distinct boundary signatures : {}", boundary_signatures.len());
-    eprintln!("  distinct checkpoint-set sizes: {:?}", checkpoint_set_sizes);
+    eprintln!(
+        "  distinct boundary signatures : {}",
+        boundary_signatures.len()
+    );
+    eprintln!(
+        "  distinct checkpoint-set sizes: {:?}",
+        checkpoint_set_sizes
+    );
     eprintln!("  distinct blob digests        : {}", blob_digests.len());
     eprintln!("  distinct blob sizes          : {}", blob_sizes.len());
     eprintln!("  distinct sedimentree_ids     : {}", sed_ids.len());
@@ -890,9 +906,7 @@ async fn characterize_171_fragment_divergence() -> TestResult {
     let mut by_blob: BTreeMap<sedimentree_core::crypto::digest::Digest<Blob>, &Fragment> =
         BTreeMap::new();
     for f in &fragments {
-        by_blob
-            .entry(f.summary().blob_meta().digest())
-            .or_insert(f);
+        by_blob.entry(f.summary().blob_meta().digest()).or_insert(f);
     }
     eprintln!("\n  Sample of first 5 distinct fragments by blob digest:");
     for f in by_blob.values().take(5) {

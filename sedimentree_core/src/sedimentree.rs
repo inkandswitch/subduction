@@ -746,35 +746,36 @@ impl Sedimentree {
         //   3. Remote fragment boundaries    — covered by the fragment, but
         //                                       boundary's *parents* are NOT
         //
-        // The previous implementation walked ancestors from any CommitId in
-        // (1)∪(2)∪(3) and treated all visited commits as remote-covered.
-        // That is unsound for (1) and unsound for the parents of (3): the
-        // remote may hold E without holding any of E's parents (e.g. the
-        // client was restored from partial state, a previous sync was
-        // interrupted, or an earlier bug let descendants through while
-        // losing ancestors — e.g. the cross-platform fingerprint mismatch
-        // fixed in #164). Once a peer is in that state every subsequent
-        // diff prunes the missing ancestor and reports "0 missing" forever.
+        // A peer that claims to have loose commit E gives us no guarantee
+        // about E's parents — partial sync, restored-from-snapshot peers,
+        // and various failure modes can leave a peer holding a descendant
+        // without holding its ancestors. Pruning ancestors transitively
+        // from (1) is therefore unsound; the same is true for the parents
+        // of (3) (a fragment boundary's parents are explicitly outside the
+        // fragment's coverage).
         //
-        // Sound rule (this block): treat each LOCAL commit (or fragment)
-        // whose head appears in `remote.fragment_fingerprints` as a walk
-        // root. From those roots traverse the loose-commit DAG in BOTH
-        // directions (parent and child) and STOP at any commit whose
-        // fingerprint is in `remote.commit_fingerprints` (those are
-        // horizons: either fragment boundaries the remote has, or
-        // loose-commit heads that don't give us a transitive guarantee).
-        // The roots themselves always recurse so we can extend into the
-        // fragment's range — sedimentree fragments have head/boundary on
-        // opposite ends of a causal range, but the convention varies, so
-        // walking both directions handles either orientation.
+        // The fragment range (2)→(3) is the one population that DOES carry
+        // a transitive guarantee: a peer holding a fragment with head H
+        // also holds every commit between H and the fragment's boundaries.
         //
-        // Bandwidth-vs-correctness trade-off: in the rare case where one
-        // peer has the fragment metadata and the other has neither the
-        // fragment nor any matching head/fragment-head loose commit, the
-        // peer without the fragment will resend loose commits inside the
-        // fragment's range. That's a one-time cost — after the next sync
-        // both peers have the fragment. The alternative (keep the unsound
-        // pruning) is the production bug.
+        // Pruning rule: treat each LOCAL commit (or fragment) whose head
+        // appears in `remote.fragment_fingerprints` as a walk root. From
+        // those roots traverse the loose-commit DAG in BOTH directions
+        // (parent and child) and STOP at any commit whose fingerprint is
+        // in `remote.commit_fingerprints` (those are horizons: either
+        // fragment boundaries the remote has, or loose-commit heads that
+        // don't give us a transitive guarantee). The roots themselves
+        // always recurse so we can extend into the fragment's range —
+        // sedimentree fragments have head/boundary on opposite ends of
+        // a causal range, but the convention varies, so walking both
+        // directions handles either orientation.
+        //
+        // Bandwidth trade-off: in the rare case where one peer has the
+        // fragment metadata and the other has neither the fragment nor
+        // any matching head/fragment-head loose commit, the peer without
+        // the fragment will resend loose commits inside the fragment's
+        // range. That's a one-time cost — after the next sync both peers
+        // have the fragment.
 
         let fragment_roots: Set<CommitId> = self
             .commits

@@ -280,8 +280,7 @@ fn diamond_dag_with_remote_holding_only_merge_sends_all_ancestors() {
     let summary = remote.fingerprint_summarize(&SEED);
     let diff = local.diff_remote_fingerprints(&summary);
 
-    let sent_ids: BTreeSet<CommitId> =
-        diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+    let sent_ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
     assert_eq!(diff.local_only_commits.len(), 3);
     assert!(sent_ids.contains(&head(1)));
     assert!(sent_ids.contains(&head(2)));

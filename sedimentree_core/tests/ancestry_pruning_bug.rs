@@ -1,27 +1,19 @@
-//! Regression tests for a sync convergence bug in
-//! `Sedimentree::diff_remote_fingerprints` and the fragment-aware fix.
+//! Convergence tests for `Sedimentree::diff_remote_fingerprints`'s
+//! fragment-aware ancestry pruning.
 //!
-//! # Original symptom
+//! # Failure mode the pruning must avoid
 //!
-//! Observed in production with a `subduction_fs_storage` server +
-//! `automerge-repo` clients: a client persistently lags behind by a
-//! small number of commits, even though the server holds them. The
-//! server's log shows "0 missing commits" on every sync attempt after
-//! the initial divergence. A diff of the bad client's commit-id set
-//! against a good client's shows a small set of "ancestor" commits the
-//! bad client is missing.
+//! A peer can hold a descendant without holding its ancestors —
+//! partial sync, restored-from-snapshot peers, and various failure
+//! modes all produce this state. If the responder's diff prunes
+//! "ancestors of anything the requester claims" transitively, those
+//! ancestors are silently dropped from `local_only_commits` and the
+//! requester never receives them. Every subsequent diff reports "0
+//! missing" and the gap is permanent.
 //!
-//! # Original (broken) mechanism
+//! # Soundness rule
 //!
-//! The "DAG-ancestry pruning" block in `diff_remote_fingerprints` used
-//! to walk ancestors via the local loose-commit parent DAG starting
-//! from **any** CommitId that matched `remote.commit_fingerprints` —
-//! treating loose-commit heads, fragment heads, and fragment
-//! boundaries identically. The justification was: "if the remote has
-//! commit E, it must also have E's entire parent chain — no need to
-//! re-send those."
-//!
-//! That invariant only holds within a fragment's coverage range:
+//! `remote.commit_fingerprints` is a union of three populations:
 //!
 //!   - **Fragment head** on remote → remote holds head, checkpoints,
 //!     and boundaries (sound up to the boundary horizon).
@@ -30,29 +22,22 @@
 //!   - **Loose-commit head** on remote → no transitive guarantee
 //!     about parents at all.
 //!
-//! Once a peer had descendants but missing ancestors (e.g. partial
-//! sync interrupted, an earlier bug let descendants through while
-//! losing ancestors, or a client merged from an inconsistent source),
-//! the pruning hid the missing ancestors forever — every subsequent
-//! diff would report "0 missing".
+//! Only fragment heads carry a transitive guarantee, and only down to
+//! their boundaries. The pruning treats a local commit/fragment as a
+//! walk root iff its head appears in `remote.fragment_fingerprints`,
+//! walks the local loose-commit DAG in both directions from each
+//! root, and stops at any non-root commit whose fingerprint is in
+//! `remote.commit_fingerprints` (a boundary horizon, or a loose-commit
+//! head we can't extend through).
 //!
-//! # The fix (this file's positive tests)
+//! # Bandwidth trade-off
 //!
-//! `diff_remote_fingerprints` now does **fragment-aware** pruning:
-//! it only treats a CommitId as a walk root if the local has it as
-//! either a loose-commit head or fragment head AND that head appears
-//! in the **remote's `fragment_fingerprints`** (not just
-//! `commit_fingerprints`). The walk then traverses the local loose-
-//! commit DAG via parents, marking visited commits as covered, and
-//! STOPS at any commit that's in `remote.commit_fingerprints` (those
-//! are horizons: fragment boundaries the remote has, or loose-commit
-//! heads we shouldn't extend through).
-//!
-//! Bandwidth-vs-correctness trade-off: when only one peer has the
-//! fragment, this may re-send loose commits the other peer already
+//! When one peer has the fragment metadata and the other has neither
+//! the fragment nor a matching head, the pruning falls back to "send
+//! everything in `local_only_commits`" — duplicates that the receiver
 //! has via the fragment blob. The cost is bounded by the fragment's
-//! member count; the alternative (the previous broken pruning) is the
-//! production bug.
+//! member count and is one-time: after the next sync both peers have
+//! the fragment.
 
 #![allow(
     clippy::byte_char_slices,
@@ -94,7 +79,13 @@ fn fragment(head: u8, boundary: &[u8], checkpoints: &[u8], blob_bytes: u8) -> Fr
     let blob_meta = BlobMeta::new(&Blob::new(vec![blob_bytes; 16]));
     let boundary_set: BTreeSet<CommitId> = boundary.iter().copied().map(commit_id).collect();
     let checkpoint_vec: Vec<CommitId> = checkpoints.iter().copied().map(commit_id).collect();
-    Fragment::new(sed_id(), commit_id(head), boundary_set, &checkpoint_vec, blob_meta)
+    Fragment::new(
+        sed_id(),
+        commit_id(head),
+        boundary_set,
+        &checkpoint_vec,
+        blob_meta,
+    )
 }
 
 fn seed() -> FingerprintSeed {
@@ -102,12 +93,12 @@ fn seed() -> FingerprintSeed {
 }
 
 // ============================================================================
-// Bug fix: loose-only ancestor must now be sent. The original production case.
+// Loose-only ancestor: the responder must enumerate it as missing.
 // ============================================================================
 
 /// Linear chain A → B → C → D. Bad peer has B, C, D but is missing A.
-/// Server has all four (loose, no fragments). The diff should now
-/// report A as missing — that's the only way the bad peer recovers.
+/// Server has all four (loose, no fragments). The diff must report A
+/// as missing — that's the only way the bad peer recovers.
 #[test]
 fn sends_missing_ancestor_when_descendant_only_remote_has() {
     let a = loose(b'A', &[]);
@@ -124,14 +115,14 @@ fn sends_missing_ancestor_when_descendant_only_remote_has() {
     let ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
     assert!(
         ids.contains(&commit_id(b'A')),
-        "post-fix: missing ancestor A must be sent because no fragment-based \
+        "missing ancestor A must be sent because no fragment-based \
          coverage justifies pruning it; bad peer can finally recover"
     );
     assert_eq!(diff.local_only_commits.len(), 1, "only A is missing");
 }
 
 /// Server holds the entire chain A → B → C → D. Bad peer has only the
-/// tip D. After the fix, all of A, B, C should be sent.
+/// tip D. All three ancestors should be sent.
 #[test]
 fn sends_entire_chain_when_remote_holds_only_tip() {
     let a = loose(b'A', &[]);

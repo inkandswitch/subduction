@@ -2641,22 +2641,19 @@ where
             })
             .collect();
 
-        // Note: previously this code path applied "DAG-ancestry pruning"
-        // to drop commits from `requested_commit_ids` if they were
-        // ancestors of OTHER commits the local has that the remote did
-        // NOT request — under the assumption that "if the remote has X,
-        // it must also have X's ancestors". That assumption is the same
-        // unsound one that broke `Sedimentree::diff_remote_fingerprints`
-        // (see the comment there). The manifestation here is strictly
-        // worse: B explicitly listed these FPs in its `requesting` set,
-        // which means B knows it doesn't have them — dropping any of
-        // them silently strands B in the same "missing-ancestor" state
-        // forever.
+        // Honor the request as-is: the remote explicitly listed these
+        // FPs in `requesting`, meaning it knows it doesn't have them.
+        // The diff layer (`Sedimentree::diff_remote_fingerprints`) has
+        // already trimmed the candidate set via its fragment-aware
+        // pruning, so the bandwidth cost is bounded by what the remote
+        // asked for.
         //
-        // We now honor the request as-is: B asked for these FPs, A has
-        // them, A sends them. The bandwidth cost is bounded by what B
-        // explicitly asked for (which the diff layer already trimmed via
-        // its own fragment-aware logic).
+        // Do NOT second-guess `requesting` with a transitive-ancestor
+        // check: a peer holding a loose commit gives no guarantee about
+        // its ancestors (partial sync, restored snapshots, etc.), so
+        // dropping a requested FP because the local thinks the remote
+        // already has its ancestors can silently strand the remote in
+        // a "missing-ancestor" state from which it cannot recover.
 
         let requested_fragment_ids: Vec<CommitId> = requesting
             .fragment_fingerprints
