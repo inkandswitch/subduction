@@ -240,11 +240,8 @@ fn prop_ancestry_pruning_drops_exactly_ancestors_of_shared() {
             let ancestors = local.ancestors_of(&shared_ids);
 
             let diff = local.diff_remote_fingerprints(remote_summary);
-            let post_pruning_local_only: Set<CommitId> = diff
-                .local_only_commits
-                .iter()
-                .map(|(id, _)| **id)
-                .collect();
+            let post_pruning_local_only: Set<CommitId> =
+                diff.local_only_commits.iter().map(|(id, _)| **id).collect();
 
             let actual_dropped: Set<CommitId> = pre_pruning_local_only
                 .difference(&post_pruning_local_only)

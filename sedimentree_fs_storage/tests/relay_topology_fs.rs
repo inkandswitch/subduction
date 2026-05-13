@@ -203,7 +203,10 @@ async fn fs_relay_two_clients_add_built_batch_converge_via_relay() -> TestResult
     let a_count = h.a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let r_count = h.r.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let b_count = h.b.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    assert_eq!((a_count, r_count, b_count), (total_pairs, total_pairs, total_pairs));
+    assert_eq!(
+        (a_count, r_count, b_count),
+        (total_pairs, total_pairs, total_pairs)
+    );
 
     let (_, a_stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     let (_, b_stats, _, _) = h.b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
@@ -273,7 +276,9 @@ async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
     for pair in pairs {
         let a_clone = h.a.clone();
         handles.push(tokio::spawn(async move {
-            a_clone.add_built_batch(sed_id, vec![pair], Vec::new()).await
+            a_clone
+                .add_built_batch(sed_id, vec![pair], Vec::new())
+                .await
         }));
     }
     for handle in handles {

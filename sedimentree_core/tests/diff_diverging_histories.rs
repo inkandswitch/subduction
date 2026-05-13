@@ -160,11 +160,7 @@ fn remote_is_prefix_of_local() {
     let diff = local.diff_remote_fingerprints(&summary);
 
     assert_eq!(diff.local_only_commits.len(), 2);
-    let sent_ids: BTreeSet<CommitId> = diff
-        .local_only_commits
-        .iter()
-        .map(|(id, _)| **id)
-        .collect();
+    let sent_ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
     assert!(sent_ids.contains(&head(3)) && sent_ids.contains(&head(4)));
     assert!(!sent_ids.contains(&head(1)) && !sent_ids.contains(&head(2)));
     assert!(diff.remote_only_commit_fingerprints.is_empty());
@@ -232,18 +228,20 @@ fn ancestry_pruning_preserves_disjoint_branches() {
     let b2 = commit(20, &[head(1)]);
     let c2 = commit(21, &[head(20)]);
 
-    let local = tree(vec![root.clone(), b1.clone(), c1.clone(), b2.clone(), c2.clone()]);
+    let local = tree(vec![
+        root.clone(),
+        b1.clone(),
+        c1.clone(),
+        b2.clone(),
+        c2.clone(),
+    ]);
     let remote = tree(vec![root, b1, c1]);
 
     let summary = remote.fingerprint_summarize(&SEED);
     let diff = local.diff_remote_fingerprints(&summary);
 
     assert_eq!(diff.local_only_commits.len(), 2);
-    let sent_ids: BTreeSet<CommitId> = diff
-        .local_only_commits
-        .iter()
-        .map(|(id, _)| **id)
-        .collect();
+    let sent_ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
     assert!(sent_ids.contains(&head(20)) && sent_ids.contains(&head(21)));
 }
 

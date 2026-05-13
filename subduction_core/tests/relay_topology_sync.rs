@@ -200,15 +200,9 @@ async fn relay_topology_repeated_sync_after_convergence_is_empty() -> TestResult
 
     for round in 1..=4 {
         let (_, stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-        assert!(
-            stats.is_empty(),
-            "round {round} from A: {stats:?}",
-        );
+        assert!(stats.is_empty(), "round {round} from A: {stats:?}",);
         let (_, stats, _, _) = b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-        assert!(
-            stats.is_empty(),
-            "round {round} from B: {stats:?}",
-        );
+        assert!(stats.is_empty(), "round {round} from B: {stats:?}",);
     }
 
     Ok(())
@@ -379,8 +373,10 @@ async fn relay_topology_two_clients_add_built_batch_converge_via_relay() -> Test
     let sed_id = SedimentreeId::new([15u8; 32]);
 
     let r_peer = PeerId::from(make_signer(20).verifying_key());
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
-    b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
+    b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
     let total_pairs = 12;
@@ -398,7 +394,10 @@ async fn relay_topology_two_clients_add_built_batch_converge_via_relay() -> Test
     let a_count = a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let r_count = r.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let b_count = b.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    assert_eq!((a_count, r_count, b_count), (total_pairs, total_pairs, total_pairs));
+    assert_eq!(
+        (a_count, r_count, b_count),
+        (total_pairs, total_pairs, total_pairs)
+    );
 
     let (_, a_stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     let (_, b_stats, _, _) = b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
@@ -427,7 +426,9 @@ async fn relay_topology_concurrent_add_built_batch_calls_converge() -> TestResul
     for pair in pairs {
         let a_clone = a.clone();
         handles.push(tokio::spawn(async move {
-            a_clone.add_built_batch(sed_id, vec![pair], Vec::new()).await
+            a_clone
+                .add_built_batch(sed_id, vec![pair], Vec::new())
+                .await
         }));
     }
     for h in handles {
@@ -436,8 +437,14 @@ async fn relay_topology_concurrent_add_built_batch_calls_converge() -> TestResul
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    assert_eq!(a.get_commits(sed_id).await.map(|c| c.len()), Some(n as usize));
-    assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), Some(n as usize));
+    assert_eq!(
+        a.get_commits(sed_id).await.map(|c| c.len()),
+        Some(n as usize)
+    );
+    assert_eq!(
+        r.get_commits(sed_id).await.map(|c| c.len()),
+        Some(n as usize)
+    );
 
     let (_, stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     assert!(stats.is_empty(), "{stats:?}");
