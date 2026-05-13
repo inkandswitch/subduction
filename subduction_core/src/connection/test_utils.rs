@@ -5,6 +5,7 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::{
     convert::Infallible,
+    fmt::Error,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -25,6 +26,7 @@ use crate::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::Transport,
 };
 
 /// A minimal mock connection for testing.
@@ -72,9 +74,9 @@ impl Default for MockConnection {
 }
 
 impl Connection<Sendable, SyncMessage> for MockConnection {
-    type DisconnectionError = core::fmt::Error;
-    type SendError = core::fmt::Error;
-    type RecvError = core::fmt::Error;
+    type DisconnectionError = Error;
+    type SendError = Error;
+    type RecvError = Error;
 
     fn disconnect(
         &self,
@@ -133,9 +135,9 @@ impl Default for FailingSendMockConnection {
 }
 
 impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
-    type DisconnectionError = core::fmt::Error;
-    type SendError = core::fmt::Error;
-    type RecvError = core::fmt::Error;
+    type DisconnectionError = Error;
+    type SendError = Error;
+    type RecvError = Error;
 
     fn disconnect(
         &self,
@@ -513,7 +515,7 @@ impl PartialEq for CloseableChannelTransport {
     }
 }
 
-impl crate::transport::Transport<Sendable> for CloseableChannelTransport {
+impl Transport<Sendable> for CloseableChannelTransport {
     type SendError = ChannelClosed;
     type RecvError = ChannelClosed;
     type DisconnectionError = Infallible;
