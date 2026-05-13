@@ -4,7 +4,7 @@
 //! compact (`u64`) [`Fingerprint<T>`] values. This is especially
 //! useful for bandwidth-efficient sync.
 
-use core::{hash::Hasher, marker::PhantomData};
+use core::marker::PhantomData;
 
 use siphasher::sip::SipHasher24;
 
@@ -130,9 +130,10 @@ impl<'a> arbitrary::Arbitrary<'a> for FingerprintSeed {
 
 /// A short keyed hash for set reconciliation.
 ///
-/// Computed via SipHash-2-4 with a per-request [`FingerprintSeed`].
-/// The phantom type `T` tracks what was fingerprinted:
-/// - [`Fingerprint<CommitId>`][crate::loose_commit::id::CommitId] — fingerprint of a commit or fragment identity
+/// Computed via SipHash-2-4 with a per-request [`FingerprintSeed`]. The
+/// phantom `T` tags what was fingerprinted to prevent mixing fingerprints
+/// of different types. Per-type constructors live alongside the type they
+/// fingerprint — see [`Fingerprint<CommitId>::new`][crate::loose_commit::id::CommitId].
 ///
 /// # Collision Probability
 ///
@@ -146,26 +147,6 @@ impl<'a> arbitrary::Arbitrary<'a> for FingerprintSeed {
 pub struct Fingerprint<T> {
     hash: u64,
     _marker: PhantomData<T>,
-}
-
-impl<T: core::hash::Hash> Fingerprint<T> {
-    /// Compute a fingerprint of a hashable value using the given seed.
-    ///
-    /// Feeds the value into SipHash-2-4 via its [`Hash`] implementation.
-    ///
-    /// ```
-    /// use sedimentree_core::crypto::fingerprint::{Fingerprint, FingerprintSeed};
-    ///
-    /// let seed = FingerprintSeed::new(42, 99);
-    /// let fp: Fingerprint<u64> = Fingerprint::new(&seed, &12345u64);
-    /// assert_eq!(fp, Fingerprint::new(&seed, &12345u64));
-    /// ```
-    #[must_use]
-    pub fn new(seed: &FingerprintSeed, value: &T) -> Self {
-        let mut hasher = seed.hasher();
-        value.hash(&mut hasher);
-        Self::from_u64(hasher.finish())
-    }
 }
 
 impl<T> Fingerprint<T> {

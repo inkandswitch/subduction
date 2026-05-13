@@ -2,8 +2,13 @@
 //!
 //! This module provides mock connections and helpers for testing connection-related code.
 
-use alloc::sync::Arc;
-use core::{convert::Infallible, time::Duration};
+use alloc::{sync::Arc, vec::Vec};
+use core::{
+    convert::Infallible,
+    fmt::Error,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use future_form::{FutureForm, Local, Sendable};
 use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
@@ -21,6 +26,7 @@ use crate::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::Transport,
 };
 
 /// A minimal mock connection for testing.
@@ -68,9 +74,9 @@ impl Default for MockConnection {
 }
 
 impl Connection<Sendable, SyncMessage> for MockConnection {
-    type DisconnectionError = core::fmt::Error;
-    type SendError = core::fmt::Error;
-    type RecvError = core::fmt::Error;
+    type DisconnectionError = Error;
+    type SendError = Error;
+    type RecvError = Error;
 
     fn disconnect(
         &self,
@@ -129,9 +135,9 @@ impl Default for FailingSendMockConnection {
 }
 
 impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
-    type DisconnectionError = core::fmt::Error;
-    type SendError = core::fmt::Error;
-    type RecvError = core::fmt::Error;
+    type DisconnectionError = Error;
+    type SendError = Error;
+    type RecvError = Error;
 
     fn disconnect(
         &self,
@@ -462,6 +468,74 @@ impl crate::transport::Transport<Sendable> for ChannelTransport {
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// A [`ChannelTransport`] wrapper that can be closed mid-test to simulate
+/// transport failure (peer disconnect, dead socket, etc.).
+///
+/// Once [`close`](Self::close) is called, subsequent `send_bytes` and
+/// `recv_bytes` calls on this side return [`ChannelClosed`]. The paired
+/// transport continues to function on the underlying channel — call
+/// `close()` on both halves to fully tear the link down.
+#[derive(Debug, Clone)]
+pub struct CloseableChannelTransport {
+    inner: ChannelTransport,
+    closed: Arc<AtomicBool>,
+}
+
+impl CloseableChannelTransport {
+    /// Create a bidirectional pair of transports, each independently closable.
+    #[must_use]
+    pub fn pair() -> (Self, Self) {
+        let (a, b) = ChannelTransport::pair();
+        (
+            Self {
+                inner: a,
+                closed: Arc::new(AtomicBool::new(false)),
+            },
+            Self {
+                inner: b,
+                closed: Arc::new(AtomicBool::new(false)),
+            },
+        )
+    }
+
+    /// Mark this side as closed. Subsequent `send_bytes` and `recv_bytes`
+    /// calls return [`ChannelClosed`].
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+impl PartialEq for CloseableChannelTransport {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner && Arc::ptr_eq(&self.closed, &other.closed)
+    }
+}
+
+impl Transport<Sendable> for CloseableChannelTransport {
+    type SendError = ChannelClosed;
+    type RecvError = ChannelClosed;
+    type DisconnectionError = Infallible;
+
+    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(ChannelClosed) });
+        }
+        self.inner.send_bytes(bytes)
+    }
+
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(ChannelClosed) });
+        }
+        self.inner.recv_bytes()
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        self.close();
         Box::pin(async { Ok(()) })
     }
 }
