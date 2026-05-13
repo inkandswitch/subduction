@@ -34,6 +34,12 @@ impl From<[u8; 32]> for CommitId {
     }
 }
 
+impl crate::crypto::fingerprint::FingerprintInput for CommitId {
+    fn fingerprint_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl From<CommitId> for [u8; 32] {
     fn from(id: CommitId) -> Self {
         id.0
