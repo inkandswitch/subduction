@@ -2,7 +2,7 @@
 //!
 //! This module provides mock connections and helpers for testing connection-related code.
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     convert::Infallible,
     sync::atomic::{AtomicBool, Ordering},
@@ -460,7 +460,7 @@ impl crate::transport::Transport<Sendable> for ChannelTransport {
         Box::pin(async move { tx.send(data).await.map_err(|_| ChannelClosed) })
     }
 
-    fn recv_bytes(&self) -> BoxFuture<'_, Result<alloc::vec::Vec<u8>, Self::RecvError>> {
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
         let rx = self.rx.clone();
         Box::pin(async move { rx.recv().await.map_err(|_| ChannelClosed) })
     }
@@ -525,7 +525,7 @@ impl crate::transport::Transport<Sendable> for CloseableChannelTransport {
         self.inner.send_bytes(bytes)
     }
 
-    fn recv_bytes(&self) -> BoxFuture<'_, Result<alloc::vec::Vec<u8>, Self::RecvError>> {
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
         if self.closed.load(Ordering::SeqCst) {
             return Box::pin(async { Err(ChannelClosed) });
         }
