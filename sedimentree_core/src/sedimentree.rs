@@ -737,23 +737,95 @@ impl Sedimentree {
             })
             .collect();
 
-        // DAG-ancestry pruning: don't send commits that are ancestors of
-        // commits the remote already has. If the remote has commit E, it
-        // must also have E's entire parent chain — no need to re-send those.
-        let shared_commit_ids: Set<CommitId> = self
+        // Fragment-aware ancestry pruning.
+        //
+        // The remote's `commit_fingerprints` is a union of three populations:
+        //
+        //   1. Remote loose-commit heads     — no ancestor invariant
+        //   2. Remote fragment heads         — covers head→boundary interior
+        //   3. Remote fragment boundaries    — covered by the fragment, but
+        //                                       boundary's *parents* are NOT
+        //
+        // The previous implementation walked ancestors from any CommitId in
+        // (1)∪(2)∪(3) and treated all visited commits as remote-covered.
+        // That is unsound for (1) and unsound for the parents of (3): the
+        // remote may hold E without holding any of E's parents (e.g. the
+        // client was restored from partial state, a previous sync was
+        // interrupted, or an earlier bug let descendants through while
+        // losing ancestors — e.g. the cross-platform fingerprint mismatch
+        // fixed in #164). Once a peer is in that state every subsequent
+        // diff prunes the missing ancestor and reports "0 missing" forever.
+        //
+        // Sound rule (this block): treat each LOCAL commit (or fragment)
+        // whose head appears in `remote.fragment_fingerprints` as a walk
+        // root. From those roots traverse the loose-commit DAG in BOTH
+        // directions (parent and child) and STOP at any commit whose
+        // fingerprint is in `remote.commit_fingerprints` (those are
+        // horizons: either fragment boundaries the remote has, or
+        // loose-commit heads that don't give us a transitive guarantee).
+        // The roots themselves always recurse so we can extend into the
+        // fragment's range — sedimentree fragments have head/boundary on
+        // opposite ends of a causal range, but the convention varies, so
+        // walking both directions handles either orientation.
+        //
+        // Bandwidth-vs-correctness trade-off: in the rare case where one
+        // peer has the fragment metadata and the other has neither the
+        // fragment nor any matching head/fragment-head loose commit, the
+        // peer without the fragment will resend loose commits inside the
+        // fragment's range. That's a one-time cost — after the next sync
+        // both peers have the fragment. The alternative (keep the unsound
+        // pruning) is the production bug.
+
+        let fragment_roots: Set<CommitId> = self
             .commits
             .values()
-            .filter(|c| {
-                remote
-                    .commit_fingerprints
-                    .contains(&Fingerprint::new(seed, &c.head()))
-            })
             .map(LooseCommit::head)
+            .chain(self.fragments.values().map(Fragment::head))
+            .filter(|h| {
+                remote
+                    .fragment_fingerprints
+                    .contains(&Fingerprint::new(seed, h))
+            })
             .collect();
 
-        if !shared_commit_ids.is_empty() {
-            let ancestors = self.ancestors_of(&shared_commit_ids);
-            local_only_commits.retain(|(id, _)| !ancestors.contains(id));
+        if !fragment_roots.is_empty() {
+            // Build a children index over local loose commits so we can
+            // walk in both DAG directions from each root.
+            let mut children_of: Map<CommitId, Vec<CommitId>> = Map::new();
+            for c in self.commits.values() {
+                for parent in c.parents() {
+                    children_of.entry(*parent).or_default().push(c.head());
+                }
+            }
+
+            let mut covered: Set<CommitId> = Set::new();
+            let mut stack: Vec<CommitId> = fragment_roots.iter().copied().collect();
+            while let Some(id) = stack.pop() {
+                if !covered.insert(id) {
+                    continue;
+                }
+                let is_horizon = !fragment_roots.contains(&id)
+                    && remote
+                        .commit_fingerprints
+                        .contains(&Fingerprint::new(seed, &id));
+                if is_horizon {
+                    continue;
+                }
+                // Recurse via parents...
+                if let Some(commit) = self.commits.get(&id) {
+                    for parent in commit.parents() {
+                        stack.push(*parent);
+                    }
+                }
+                // ...and via children, so the walk reaches the fragment's
+                // range regardless of head/boundary orientation.
+                if let Some(children) = children_of.get(&id) {
+                    for child in children {
+                        stack.push(*child);
+                    }
+                }
+            }
+            local_only_commits.retain(|(id, _)| !covered.contains(id));
         }
 
         let local_only_fragments: Vec<(&CommitId, &Fragment)> = self
@@ -3228,14 +3300,17 @@ mod tests {
         }
 
         /// When remote has a fragment and local has the underlying loose
-        /// commits, fragment head/boundary coverage in `commit_fingerprints`
-        /// plus DAG-ancestry pruning prevents local from re-sending commits
-        /// that the remote already has inside its fragment.
+        /// commits, the fragment-aware pruning walks from any local
+        /// commit/fragment matching `remote.fragment_fingerprints`,
+        /// extending through the local DAG (both directions) and
+        /// stopping at horizons in `remote.commit_fingerprints`.
         ///
-        /// The remote's `commit_fingerprints` includes the fragment head and
-        /// boundary. Local sees these as "shared" and walks the DAG backward
-        /// — all of local's commits are ancestors of shared commits, so none
-        /// are sent. The fragment propagates via `fragment_fingerprints`.
+        /// In this scenario the local has loose commit A (matching the
+        /// remote's fragment head). The walk from A traverses to its
+        /// child B, then to D (which is in `remote.commit_fingerprints`
+        /// as the fragment boundary, so the walk stops there). B is
+        /// thereby marked as covered and pruned. The fragment itself
+        /// propagates via `fragment_fingerprints`.
         #[test]
         fn diff_minimized_remote_has_fragment_local_has_commits() {
             let mut rng = seeded_rng(203);
@@ -3268,13 +3343,14 @@ mod tests {
                 "remote has a fragment that local doesn't"
             );
 
-            // Local's commits are all ancestors of shared commits (fragment
-            // head A and boundary D are in remote's commit_fingerprints).
-            // DAG-ancestry pruning removes them all — nothing to send.
+            // Fragment-aware walk from local's loose commit A (matches
+            // remote's fragment head) reaches B via children, stops at D
+            // (in remote.commit_fingerprints). B is marked covered and
+            // pruned from local_only_commits. Local sends nothing.
             assert!(
                 diff_at_local.local_only_commits.is_empty(),
-                "local should not send commits that are ancestors of shared \
-                 fragment head/boundary"
+                "fragment-aware walk should cover all loose commits inside \
+                 the remote's fragment range"
             );
         }
 

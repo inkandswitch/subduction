@@ -2626,7 +2626,7 @@ where
             .unwrap_or_default()
             .heads(&self.depth_metric);
 
-        let mut requested_commit_ids: Vec<CommitId> = requesting
+        let requested_commit_ids: Vec<CommitId> = requesting
             .commit_fingerprints
             .iter()
             .filter_map(|fp| {
@@ -2641,22 +2641,22 @@ where
             })
             .collect();
 
-        // DAG-ancestry pruning: don't send commits that are ancestors of
-        // commits the remote already has. The "shared" commits are those
-        // in our resolver that the remote did NOT request (they have them).
-        if !requested_commit_ids.is_empty() {
-            let tree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
-            let requested_set: Set<CommitId> = requested_commit_ids.iter().copied().collect();
-            let shared: Set<CommitId> = tree
-                .loose_commits()
-                .map(LooseCommit::head)
-                .filter(|cid| !requested_set.contains(cid))
-                .collect();
-            if !shared.is_empty() {
-                let ancestors = tree.ancestors_of(&shared);
-                requested_commit_ids.retain(|cid| !ancestors.contains(cid));
-            }
-        }
+        // Note: previously this code path applied "DAG-ancestry pruning"
+        // to drop commits from `requested_commit_ids` if they were
+        // ancestors of OTHER commits the local has that the remote did
+        // NOT request — under the assumption that "if the remote has X,
+        // it must also have X's ancestors". That assumption is the same
+        // unsound one that broke `Sedimentree::diff_remote_fingerprints`
+        // (see the comment there). The manifestation here is strictly
+        // worse: B explicitly listed these FPs in its `requesting` set,
+        // which means B knows it doesn't have them — dropping any of
+        // them silently strands B in the same "missing-ancestor" state
+        // forever.
+        //
+        // We now honor the request as-is: B asked for these FPs, A has
+        // them, A sends them. The bandwidth cost is bounded by what B
+        // explicitly asked for (which the diff layer already trimmed via
+        // its own fragment-aware logic).
 
         let requested_fragment_ids: Vec<CommitId> = requesting
             .fragment_fingerprints
