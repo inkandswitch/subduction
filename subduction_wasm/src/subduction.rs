@@ -999,12 +999,14 @@ impl WasmSubduction {
     /// Bulk-insert commits and fragments into a sedimentree, then broadcast.
     ///
     /// Unlike [`add_commit`](Self::add_commit) and
-    /// [`add_fragment`](Self::add_fragment) — which each re-minimize the tree
-    /// and broadcast to peers per call — this method inserts everything first,
-    /// runs `minimize_tree` once at the end, and then performs a single
-    /// `sync_with_all_peers` to propagate the new state. For workloads that
-    /// add many commits or fragments at once this avoids `O(N²)` minimize work
-    /// and `N` redundant broadcasts.
+    /// [`add_fragment`](Self::add_fragment) — which re-minimize the tree
+    /// and broadcast per call — this method inserts everything first,
+    /// runs `minimize_tree` once at the end, and then propagates the new
+    /// items to peers using the same per-item push messages the singleton
+    /// APIs use. For workloads that add many commits or fragments at once
+    /// this avoids `O(N²)` minimize work and `N` redundant flushes to
+    /// storage, while still fanning out to subscribers symmetrically with
+    /// [`addCommit`](Self::add_commit) and [`addFragment`](Self::add_fragment).
     ///
     /// Each [`WasmCommitInput`] bundles an unsigned
     /// [`LooseCommit`](sedimentree_core::loose_commit::LooseCommit) with its
@@ -1018,16 +1020,15 @@ impl WasmSubduction {
     /// Returns a [`WasmWriteError`] if any blob does not match its claimed
     /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if a local
     /// [`Storage`](sedimentree_wasm::storage::JsStorage) error is hit while
-    /// persisting the batch or while ingesting inbound data during the
-    /// trailing broadcast.
+    /// persisting the batch.
     ///
-    /// Per-peer transport failures during the trailing broadcast are *not*
-    /// surfaced as `Err`: peers that can't be reached (closed connections,
-    /// timeouts) are reported by `sync_with_all_peers` as data inside its
-    /// per-peer result map, which this method discards. If you need to
-    /// observe peer-level sync outcomes, drive the local insert via
-    /// [`addCommitsBatch`](Self::add_commits_batch) /
-    /// [`addFragmentsBatch`](Self::add_fragments_batch) and call
+    /// Per-peer transport failures during the broadcast are *not* surfaced
+    /// as `Err`: disconnected peers are logged and dropped from the
+    /// connection map, matching the behaviour of [`addCommit`](Self::add_commit)
+    /// and [`addFragment`](Self::add_fragment). If you need to drive a
+    /// reconciling round-trip instead (with `BatchSyncRequest` and implicit
+    /// subscription), use [`addCommitsBatch`](Self::add_commits_batch) /
+    /// [`addFragmentsBatch`](Self::add_fragments_batch) and follow up with
     /// [`syncWithAllPeers`](Self::sync_with_all_peers) directly.
     #[wasm_bindgen(js_name = addBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
@@ -1056,9 +1057,9 @@ impl WasmSubduction {
     /// Bulk-insert commits into a sedimentree without broadcasting.
     ///
     /// Like [`addBatch`](Self::add_batch) for the commits half only, but
-    /// skips the trailing `sync_with_all_peers` step. Useful for ingestion
-    /// paths (e.g. local replay, hydration from another store) where the
-    /// caller will trigger sync separately or not at all.
+    /// skips the per-item broadcast step. Useful for ingestion paths
+    /// (e.g. local replay, hydration from another store) where the
+    /// caller will trigger propagation separately or not at all.
     ///
     /// Each [`WasmCommitInput`] bundles an unsigned commit with its blob;
     /// an empty list is a no-op.
@@ -1089,7 +1090,7 @@ impl WasmSubduction {
     /// Bulk-insert fragments into a sedimentree without broadcasting.
     ///
     /// Like [`addBatch`](Self::add_batch) for the fragments half only, but
-    /// skips the trailing `sync_with_all_peers` step.
+    /// skips the per-item broadcast step.
     ///
     /// Each [`WasmFragmentInput`] bundles an unsigned fragment with its
     /// blob; an empty list is a no-op.
