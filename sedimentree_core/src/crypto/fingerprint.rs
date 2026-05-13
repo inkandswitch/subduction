@@ -131,11 +131,9 @@ impl<'a> arbitrary::Arbitrary<'a> for FingerprintSeed {
 /// A short keyed hash for set reconciliation.
 ///
 /// Computed via SipHash-2-4 with a per-request [`FingerprintSeed`]. The
-/// phantom `T` tags what was fingerprinted so different fingerprint
-/// universes (e.g. `Fingerprint<CommitId>` vs a hypothetical
-/// `Fingerprint<Foo>`) don't get accidentally mixed. Per-type
-/// constructors live alongside the type they fingerprint — see
-/// [`Fingerprint<CommitId>::new`][crate::loose_commit::id::CommitId].
+/// phantom `T` tags what was fingerprinted to prevent mixing fingerprints
+/// of different types. Per-type constructors live alongside the type they
+/// fingerprint — see [`Fingerprint<CommitId>::new`][crate::loose_commit::id::CommitId].
 ///
 /// # Collision Probability
 ///
