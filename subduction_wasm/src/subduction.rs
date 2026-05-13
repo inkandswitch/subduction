@@ -996,40 +996,20 @@ impl WasmSubduction {
         Ok(())
     }
 
-    /// Bulk-insert commits and fragments into a sedimentree, then broadcast.
-    ///
-    /// Unlike [`add_commit`](Self::add_commit) and
-    /// [`add_fragment`](Self::add_fragment) — which re-minimize the tree
-    /// and broadcast per call — this method inserts everything first,
-    /// runs `minimize_tree` once at the end, and then propagates the new
-    /// items to peers using the same per-item push messages the singleton
-    /// APIs use. For workloads that add many commits or fragments at once
-    /// this avoids `O(N²)` minimize work and `N` redundant flushes to
-    /// storage, while still fanning out to subscribers symmetrically with
-    /// [`addCommit`](Self::add_commit) and [`addFragment`](Self::add_fragment).
-    ///
-    /// Each [`WasmCommitInput`] bundles an unsigned
-    /// [`LooseCommit`](sedimentree_core::loose_commit::LooseCommit) with its
-    /// blob; each [`WasmFragmentInput`] bundles an unsigned
-    /// [`Fragment`](sedimentree_core::fragment::Fragment) with its blob.
-    /// Either list may be empty; passing two empty lists is a no-op (no
-    /// minimize, no broadcast).
+    /// Bulk-insert commits and fragments into a sedimentree, then propagate
+    /// to peers via per-item push messages (symmetric with
+    /// [`addCommit`](Self::add_commit) / [`addFragment`](Self::add_fragment)).
+    /// Minimizes the tree once and flushes to storage in a single
+    /// `save_batch` call. Empty input is a no-op.
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
-    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if a local
-    /// [`Storage`](sedimentree_wasm::storage::JsStorage) error is hit while
-    /// persisting the batch.
-    ///
-    /// Per-peer transport failures during the broadcast are *not* surfaced
-    /// as `Err`: disconnected peers are logged and dropped from the
-    /// connection map, matching the behaviour of [`addCommit`](Self::add_commit)
-    /// and [`addFragment`](Self::add_fragment). If you need to drive a
-    /// reconciling round-trip instead (with `BatchSyncRequest` and implicit
-    /// subscription), use [`addCommitsBatch`](Self::add_commits_batch) /
-    /// [`addFragmentsBatch`](Self::add_fragments_batch) and follow up with
-    /// [`syncWithAllPeers`](Self::sync_with_all_peers) directly.
+    /// Returns [`WasmWriteError`] on blob mismatch or storage failure.
+    /// Per-peer transport failures are not surfaced; disconnected peers are
+    /// logged and dropped. For a reconciling round-trip, use
+    /// [`addCommitsBatch`](Self::add_commits_batch) /
+    /// [`addFragmentsBatch`](Self::add_fragments_batch) plus
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers).
     #[wasm_bindgen(js_name = addBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn add_batch(
@@ -1055,19 +1035,12 @@ impl WasmSubduction {
     }
 
     /// Bulk-insert commits into a sedimentree without broadcasting.
-    ///
-    /// Like [`addBatch`](Self::add_batch) for the commits half only, but
-    /// skips the per-item broadcast step. Useful for ingestion paths
-    /// (e.g. local replay, hydration from another store) where the
-    /// caller will trigger propagation separately or not at all.
-    ///
-    /// Each [`WasmCommitInput`] bundles an unsigned commit with its blob;
-    /// an empty list is a no-op.
+    /// Commit-only counterpart of [`addBatch`](Self::add_batch). Empty
+    /// input is a no-op.
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
-    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    /// Returns [`WasmWriteError`] on blob mismatch or storage failure.
     #[wasm_bindgen(js_name = addCommitsBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn add_commits_batch(
@@ -1088,17 +1061,12 @@ impl WasmSubduction {
     }
 
     /// Bulk-insert fragments into a sedimentree without broadcasting.
-    ///
-    /// Like [`addBatch`](Self::add_batch) for the fragments half only, but
-    /// skips the per-item broadcast step.
-    ///
-    /// Each [`WasmFragmentInput`] bundles an unsigned fragment with its
-    /// blob; an empty list is a no-op.
+    /// Fragment-only counterpart of [`addBatch`](Self::add_batch). Empty
+    /// input is a no-op.
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
-    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    /// Returns [`WasmWriteError`] on blob mismatch or storage failure.
     #[wasm_bindgen(js_name = addFragmentsBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn add_fragments_batch(
