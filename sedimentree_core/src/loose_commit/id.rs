@@ -1,5 +1,7 @@
 //! Causal identity for loose commits.
 
+use crate::crypto::fingerprint::FingerprintInput;
+
 /// A user-supplied opaque identifier for a loose commit.
 ///
 /// Unlike [`Digest`](crate::crypto::digest::Digest), which is a content hash
@@ -34,7 +36,7 @@ impl From<[u8; 32]> for CommitId {
     }
 }
 
-impl crate::crypto::fingerprint::FingerprintInput for CommitId {
+impl FingerprintInput for CommitId {
     fn fingerprint_bytes(&self) -> &[u8] {
         &self.0
     }
