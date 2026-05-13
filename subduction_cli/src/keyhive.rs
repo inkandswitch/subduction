@@ -30,6 +30,7 @@ use crate::{
 
 const ARCHIVES_SUBDIR: &str = "archives";
 const OPS_SUBDIR: &str = "ops";
+const TMP_SUBDIR: &str = "tmp";
 
 /// Filesystem-backed [`KeyhiveStorage<Local>`].
 ///
@@ -56,25 +57,33 @@ impl FsKeyhiveStorage {
     pub(crate) fn new(root: std::path::PathBuf) -> io::Result<Self> {
         std::fs::create_dir_all(root.join(ARCHIVES_SUBDIR))?;
         std::fs::create_dir_all(root.join(OPS_SUBDIR))?;
+        std::fs::create_dir_all(root.join(TMP_SUBDIR))?;
         Ok(Self { root })
     }
 
-    fn archive_path(&self, hash: StorageHash) -> std::path::PathBuf {
-        self.root
-            .join(ARCHIVES_SUBDIR)
-            .join(format!("{}.bin", hash.to_hex()))
+    fn archive_dir(&self) -> std::path::PathBuf {
+        self.root.join(ARCHIVES_SUBDIR)
     }
 
-    fn event_path(&self, hash: StorageHash) -> std::path::PathBuf {
-        self.root
-            .join(OPS_SUBDIR)
-            .join(format!("{}.bin", hash.to_hex()))
+    fn event_dir(&self) -> std::path::PathBuf {
+        self.root.join(OPS_SUBDIR)
     }
 
-    async fn save_file(path: std::path::PathBuf, data: Vec<u8>) -> io::Result<()> {
-        let tmp = path.with_extension("tmp");
+    fn tmp_dir(&self) -> std::path::PathBuf {
+        self.root.join(TMP_SUBDIR)
+    }
+
+    async fn save_file(
+        &self,
+        parent_dir: std::path::PathBuf,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> io::Result<()> {
+        let filename = format!("{}.bin", hash.to_hex());
+        let tmp = self.tmp_dir().join(&filename);
+        let dest = parent_dir.join(&filename);
         tokio::fs::write(&tmp, data).await?;
-        tokio::fs::rename(&tmp, &path).await
+        tokio::fs::rename(&tmp, &dest).await
     }
 
     async fn load_dir(dir: std::path::PathBuf) -> io::Result<Vec<(StorageHash, Vec<u8>)>> {
@@ -94,7 +103,8 @@ impl FsKeyhiveStorage {
         Ok(out)
     }
 
-    async fn delete_file(path: std::path::PathBuf) -> io::Result<()> {
+    async fn delete_file(parent_dir: std::path::PathBuf, hash: StorageHash) -> io::Result<()> {
+        let path = parent_dir.join(format!("{}.bin", hash.to_hex()));
         match tokio::fs::remove_file(path).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -111,20 +121,25 @@ impl KeyhiveStorage<Local> for FsKeyhiveStorage {
         hash: StorageHash,
         data: Vec<u8>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let path = self.archive_path(hash);
-        async move { Self::save_file(path, data).await.map_err(Into::into) }.boxed_local()
+        let parent_dir = self.archive_dir();
+        async move {
+            self.save_file(parent_dir, hash, data)
+                .await
+                .map_err(Into::into)
+        }
+        .boxed_local()
     }
 
     fn load_archives(
         &self,
     ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
-        let dir = self.root.join(ARCHIVES_SUBDIR);
+        let dir = self.archive_dir();
         async move { Self::load_dir(dir).await.map_err(Into::into) }.boxed_local()
     }
 
     fn delete_archive(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let path = self.archive_path(hash);
-        async move { Self::delete_file(path).await.map_err(Into::into) }.boxed_local()
+        let dir = self.archive_dir();
+        async move { Self::delete_file(dir, hash).await.map_err(Into::into) }.boxed_local()
     }
 
     fn save_event(
@@ -132,18 +147,23 @@ impl KeyhiveStorage<Local> for FsKeyhiveStorage {
         hash: StorageHash,
         data: Vec<u8>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let path = self.event_path(hash);
-        async move { Self::save_file(path, data).await.map_err(Into::into) }.boxed_local()
+        let parent_dir = self.event_dir();
+        async move {
+            self.save_file(parent_dir, hash, data)
+                .await
+                .map_err(Into::into)
+        }
+        .boxed_local()
     }
 
     fn load_events(&self) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
-        let dir = self.root.join(OPS_SUBDIR);
+        let dir = self.event_dir();
         async move { Self::load_dir(dir).await.map_err(Into::into) }.boxed_local()
     }
 
     fn delete_event(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let path = self.event_path(hash);
-        async move { Self::delete_file(path).await.map_err(Into::into) }.boxed_local()
+        let dir = self.event_dir();
+        async move { Self::delete_file(dir, hash).await.map_err(Into::into) }.boxed_local()
     }
 }
 
@@ -226,4 +246,113 @@ pub(crate) async fn spawn_keyhive_thread(
     )
     .await
     .map_err(|e| eyre::eyre!(e))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn test_hash(byte: u8) -> StorageHash {
+        StorageHash::new([byte; 32])
+    }
+
+    fn make_storage(dir: &std::path::Path) -> FsKeyhiveStorage {
+        FsKeyhiveStorage::new(dir.to_path_buf()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn save_and_load_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0xaa);
+        let data = b"archive-data".to_vec();
+
+        storage.save_archive(hash, data.clone()).await.unwrap();
+        let loaded = storage.load_archives().await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0], (hash, data));
+    }
+
+    #[tokio::test]
+    async fn save_and_load_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0xbb);
+        let data = b"event-data".to_vec();
+
+        storage.save_event(hash, data.clone()).await.unwrap();
+        let loaded = storage.load_events().await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0], (hash, data));
+    }
+
+    #[tokio::test]
+    async fn delete_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0xcc);
+
+        storage.save_archive(hash, b"data".to_vec()).await.unwrap();
+        storage.delete_archive(hash).await.unwrap();
+        let loaded = storage.load_archives().await.unwrap();
+
+        assert!(loaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0xdd);
+
+        storage.save_event(hash, b"data".to_vec()).await.unwrap();
+        storage.delete_event(hash).await.unwrap();
+        let loaded = storage.load_events().await.unwrap();
+
+        assert!(loaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+
+        storage.delete_archive(test_hash(0x01)).await.unwrap();
+        storage.delete_event(test_hash(0x02)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overwrite_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0xee);
+
+        storage.save_archive(hash, b"old".to_vec()).await.unwrap();
+        storage.save_archive(hash, b"new".to_vec()).await.unwrap();
+        let loaded = storage.load_archives().await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].1, b"new");
+    }
+
+    #[tokio::test]
+    async fn archives_and_events_are_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0xff);
+
+        storage.save_archive(hash, b"archive".to_vec()).await.unwrap();
+        storage.save_event(hash, b"event".to_vec()).await.unwrap();
+
+        let archives = storage.load_archives().await.unwrap();
+        let events = storage.load_events().await.unwrap();
+
+        assert_eq!(archives.len(), 1);
+        assert_eq!(archives[0].1, b"archive");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].1, b"event");
+    }
 }
