@@ -1,11 +1,8 @@
-//! Relay-topology sync test using **`FsStorage`** instead of `MemoryStorage`.
-//!
-//! The equivalent test in `subduction_core/tests/relay_topology_sync.rs`
-//! passes with `MemoryStorage`. The user-observed bug only reproduces with
-//! the `subduction_cli` server, which uses `MetricsStorage<FsStorage>`.
-//! If this test fails while the `MemoryStorage` version passes, the bug
-//! is in `FsStorage` (most likely a concurrency / load-vs-save race that
-//! the synchronous in-memory map doesn't have).
+//! Relay-topology sync over `FsStorage` (vs. the `MemoryStorage`
+//! version in `subduction_core/tests/relay_topology_sync.rs`). The
+//! user-reported bug only reproduces against the CLI server which uses
+//! `MetricsStorage<FsStorage>`; if these fail while the in-memory tests
+//! pass, the issue is in `FsStorage`'s concurrency model.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -75,7 +72,6 @@ fn make_commit_pair(sed_id: SedimentreeId, seed: u8) -> (LooseCommit, Blob) {
     (commit, blob)
 }
 
-/// Build a Subduction backed by `FsStorage` rooted at `tempdir`.
 fn make_node(signer: MemorySigner, tempdir: &TempDir) -> TestResult<TestSubduction> {
     let storage = FsStorage::new(tempdir.path().to_path_buf())?;
 
@@ -118,7 +114,7 @@ struct RelayHarness {
     a: TestSubduction,
     r: TestSubduction,
     b: TestSubduction,
-    // Held to keep storage dirs alive for the duration of the test.
+    /// Held to keep storage dirs alive for the duration of the test.
     _dirs: [TempDir; 3],
 }
 
@@ -148,10 +144,6 @@ async fn setup_relay() -> TestResult<RelayHarness> {
     })
 }
 
-/// Single-client: repeatedly `add_built_batch` (the wasm `addBatch` path)
-/// against a relay backed by `FsStorage`. Each call inserts one commit,
-/// then internally syncs with the relay. After all calls, both sides must
-/// have all commits and a follow-up sync must be empty.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fs_relay_single_client_repeated_add_built_batch_converges() -> TestResult {
     let h = setup_relay().await?;
@@ -170,36 +162,27 @@ async fn fs_relay_single_client_repeated_add_built_batch_converges() -> TestResu
     assert_eq!(
         h.a.get_commits(sed_id).await.map(|c| c.len()),
         Some(total as usize),
-        "A: all commits present"
     );
     assert_eq!(
         h.r.get_commits(sed_id).await.map(|c| c.len()),
         Some(total as usize),
-        "R: all commits propagated"
     );
 
     let (_, stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-    assert!(
-        stats.is_empty(),
-        "follow-up sync should be empty, got received={}, sent={}",
-        stats.total_received(),
-        stats.total_sent(),
-    );
+    assert!(stats.is_empty(), "{stats:?}");
 
     Ok(())
 }
 
-/// Two clients writing through a relay, each calling `add_built_batch`
-/// repeatedly. This is the closest analogue to the user's two-browser
-/// todo-app workflow.
+/// Closest analogue to the user's two-browser workflow: A and B each
+/// `add_built_batch` repeatedly through a relay; final state must agree
+/// and a follow-up sync must be empty.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fs_relay_two_clients_add_built_batch_converge_via_relay() -> TestResult {
     let h = setup_relay().await?;
     let sed_id = SedimentreeId::new([0xA2; 32]);
 
     let r_peer = PeerId::from(make_signer(20).verifying_key());
-
-    // Subscribe each client to the relay for this sed_id.
     h.a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
         .await?;
     h.b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
@@ -221,43 +204,25 @@ async fn fs_relay_two_clients_add_built_batch_converge_via_relay() -> TestResult
     let a_count = h.a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let r_count = h.r.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let b_count = h.b.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    assert_eq!(
-        (a_count, r_count, b_count),
-        (total_pairs, total_pairs, total_pairs),
-        "after interleaved add_built_batch from both ends, all three should hold \
-         {total_pairs} commits each (got A={a_count}, R={r_count}, B={b_count})"
-    );
+    assert_eq!((a_count, r_count, b_count), (total_pairs, total_pairs, total_pairs));
 
     let (_, a_stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     let (_, b_stats, _, _) = h.b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-    assert!(
-        a_stats.is_empty(),
-        "A's follow-up sync should be empty, got received={}, sent={}",
-        a_stats.total_received(),
-        a_stats.total_sent(),
-    );
-    assert!(
-        b_stats.is_empty(),
-        "B's follow-up sync should be empty, got received={}, sent={}",
-        b_stats.total_received(),
-        b_stats.total_sent(),
-    );
+    assert!(a_stats.is_empty(), "A: {a_stats:?}");
+    assert!(b_stats.is_empty(), "B: {b_stats:?}");
 
     Ok(())
 }
 
-/// **Rapid-fire stress.** Two clients fire commits as fast as possible,
-/// with no waits between calls. Each commit involves disk I/O via
-/// `FsStorage`. With concurrent `BatchSyncRequest`s arriving while writes
-/// are still in flight, this is the most plausible setup for a
-/// load-vs-save race on the responder.
+/// Rapid-fire from both clients, no inter-call pause. Concurrent
+/// `BatchSyncRequest`s arrive while writes are still in flight — the
+/// load-vs-save race window is widest here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fs_relay_two_clients_rapid_fire_converges() -> TestResult {
     let h = setup_relay().await?;
     let sed_id = SedimentreeId::new([0xA3; 32]);
 
     let r_peer = PeerId::from(make_signer(20).verifying_key());
-
     h.a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
         .await?;
     h.b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
@@ -265,9 +230,6 @@ async fn fs_relay_two_clients_rapid_fire_converges() -> TestResult {
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
     let total = 16usize;
-    // Each side authors `total / 2` commits in rapid succession. The
-    // `await` is required at each step (single-task issuance), but no
-    // PROPAGATION_PAUSE between them.
     for i in 0..total {
         if i % 2 == 0 {
             let pair = make_commit_pair(sed_id, (i as u8) + 1);
@@ -278,10 +240,8 @@ async fn fs_relay_two_clients_rapid_fire_converges() -> TestResult {
         }
     }
 
-    // Give I/O + propagation a generous chance to settle.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Drive convergence explicitly.
     h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     h.b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
@@ -289,37 +249,16 @@ async fn fs_relay_two_clients_rapid_fire_converges() -> TestResult {
     let a_count = h.a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let r_count = h.r.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     let b_count = h.b.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    assert_eq!(
-        (a_count, r_count, b_count),
-        (total, total, total),
-        "rapid-fire: all three should hold {total} commits each \
-         (got A={a_count}, R={r_count}, B={b_count})"
-    );
+    assert_eq!((a_count, r_count, b_count), (total, total, total));
 
     let (_, a_stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     let (_, b_stats, _, _) = h.b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-    assert!(
-        a_stats.is_empty(),
-        "A's follow-up sync after rapid-fire should be empty, got received={}, sent={}",
-        a_stats.total_received(),
-        a_stats.total_sent(),
-    );
-    assert!(
-        b_stats.is_empty(),
-        "B's follow-up sync after rapid-fire should be empty, got received={}, sent={}",
-        b_stats.total_received(),
-        b_stats.total_sent(),
-    );
+    assert!(a_stats.is_empty(), "A: {a_stats:?}");
+    assert!(b_stats.is_empty(), "B: {b_stats:?}");
 
     Ok(())
 }
 
-/// **Concurrent add_built_batch from a single client.** Spawns multiple
-/// tasks that each call `add_built_batch` simultaneously against the
-/// relay. Each `add_built_batch` internally issues a `BatchSyncRequest`,
-/// so the relay sees a burst of concurrent requests interleaved with
-/// `LooseCommit` fire-and-forget pushes. With `FsStorage`'s real I/O
-/// latency, the storage-load-vs-in-memory-shard race window is widest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
     let h = setup_relay().await?;
@@ -344,25 +283,17 @@ async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
 
     tokio::time::sleep(Duration::from_millis(400)).await;
 
-    let a_count = h.a.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
-    let r_count = h.r.get_commits(sed_id).await.map(|c| c.len()).unwrap_or(0);
     assert_eq!(
-        a_count, n as usize,
-        "A: all {n} commits present after concurrent burst"
+        h.a.get_commits(sed_id).await.map(|c| c.len()),
+        Some(n as usize),
     );
     assert_eq!(
-        r_count, n as usize,
-        "R: all {n} commits propagated despite concurrent BatchSyncRequest barrage \
-         (got R={r_count})"
+        h.r.get_commits(sed_id).await.map(|c| c.len()),
+        Some(n as usize),
     );
 
     let (_, stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-    assert!(
-        stats.is_empty(),
-        "post-burst sync should be empty, got received={}, sent={}",
-        stats.total_received(),
-        stats.total_sent(),
-    );
+    assert!(stats.is_empty(), "{stats:?}");
 
     Ok(())
 }

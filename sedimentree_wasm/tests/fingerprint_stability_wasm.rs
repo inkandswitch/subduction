@@ -1,14 +1,6 @@
-//! **wasm32 companion to `sedimentree_core/tests/fingerprint_stability.rs`.**
-//!
-//! Computes `Fingerprint::new(seed, CommitId)` for the same fixed inputs
-//! as the native test and asserts the resulting `u64` matches the
-//! hardcoded baselines from x86_64.
-//!
-//! If the wasm32 build produces *different* `u64` values for the same
-//! `(seed, CommitId)` inputs, this test fails — and we've found the
-//! cause of the user's "N missing, requesting N" symptom: a browser
-//! and a native peer cannot communicate via fingerprints because
-//! `Fingerprint::new` is non-portable across architectures.
+//! wasm32 companion to `sedimentree_core/tests/fingerprint_stability.rs`;
+//! asserts the same baselines hold on wasm32. Constants must stay in sync
+//! with the native side.
 //!
 //! Run with:
 //! ```sh
@@ -23,9 +15,6 @@ use sedimentree_core::{
     loose_commit::id::CommitId,
 };
 use wasm_bindgen_test::wasm_bindgen_test;
-
-// Constants duplicated from
-// `sedimentree_core/tests/fingerprint_stability.rs`. They must agree.
 
 const TEST_SEED_KEY0: u64 = 0x1234_5678_9ABC_DEF0;
 const TEST_SEED_KEY1: u64 = 0xFEDC_BA98_7654_3210;
@@ -53,15 +42,7 @@ fn id_sequential() -> CommitId {
 #[wasm_bindgen_test]
 fn wasm_fingerprint_of_all_zero_commit_id_matches_baseline() {
     let fp: Fingerprint<CommitId> = Fingerprint::new(&test_seed(), &CommitId::new([0u8; 32]));
-    assert_eq!(
-        fp.as_u64(),
-        EXPECTED_FP_ZEROES,
-        "Fingerprint for (seed, all-zero CommitId) on wasm32 differs from \
-         the x86_64 baseline ({EXPECTED_FP_ZEROES}); got {got}. This means \
-         SipHash output differs between wasm and native — the user's bug \
-         is reproduced at this layer.",
-        got = fp.as_u64(),
-    );
+    assert_eq!(fp.as_u64(), EXPECTED_FP_ZEROES);
 }
 
 #[wasm_bindgen_test]

@@ -148,34 +148,25 @@ pub struct Fingerprint<T> {
     _marker: PhantomData<T>,
 }
 
-/// A type whose bytes can be fed into a fingerprint hasher in a
-/// **cross-architecture-stable** way.
+/// A type whose bytes can be fed into a fingerprint hasher portably.
 ///
-/// The standard library's [`Hash`](core::hash::Hash) trait is *not*
-/// suitable for cross-platform sync: `<[u8; N] as Hash>::hash` (and
-/// `<[T] as Hash>::hash`) prefix the data with `state.write_usize(N)`,
-/// whose byte width differs between 32-bit (e.g. wasm32) and 64-bit
-/// (e.g. x86_64) targets. A browser and a native peer hashing the
-/// same `CommitId` therefore produce different fingerprints, breaking
-/// set reconciliation entirely.
+/// We bypass [`core::hash::Hash`] because `<[u8; N] as Hash>::hash` writes
+/// a `state.write_usize(N)` length prefix whose byte width differs on
+/// 32-bit (e.g. wasm32) vs 64-bit (e.g. x86_64) targets, so a browser
+/// and a native peer would compute different fingerprints for the same
+/// `CommitId`.
 ///
-/// Implementors of this trait return the raw bytes to hash directly,
-/// bypassing `Hash`'s architecture-dependent length-prefix machinery.
+/// Implementations must return bytes of a fixed length for all values
+/// of `Self` (or otherwise self-delimit). `fingerprint_bytes` is fed to
+/// SipHash without a length prefix, so variable-length encodings could
+/// collide.
 pub trait FingerprintInput {
     /// Raw bytes to feed into the fingerprint hasher.
-    ///
-    /// Implementations must return identical bytes on every target
-    /// for the same logical value.
     fn fingerprint_bytes(&self) -> &[u8];
 }
 
 impl<T: FingerprintInput> Fingerprint<T> {
-    /// Compute a fingerprint of a [`FingerprintInput`] value using the
-    /// given seed.
-    ///
-    /// Writes the value's [`fingerprint_bytes`](FingerprintInput::fingerprint_bytes)
-    /// directly into SipHash-2-4 — no length prefix, no architecture
-    /// dependence.
+    /// Compute a fingerprint of `value` under `seed`.
     ///
     /// ```
     /// use sedimentree_core::{
