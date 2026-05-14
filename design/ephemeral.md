@@ -2,7 +2,7 @@
 
 Authenticated, fire-and-forget pub/sub for transient signals — cursor positions, selections, presence, typing indicators. Distinct from sync: no persistence, no consistency guarantees, best-effort delivery.
 
-The protocol layer lives in [`subduction_ephemeral`]. The core sync crate knows nothing about ephemeral behaviour; the two are composed at the application layer via a wire-envelope enum (see [`ComposedHandler`]).
+The protocol layer lives in [`subduction_ephemeral`]. The core sync crate knows nothing about ephemeral behavior; the two are composed at the application layer via a wire-envelope enum (see [`ComposedHandler`]).
 
 [`subduction_ephemeral`]: ../subduction_ephemeral/src/lib.rs
 [`ComposedHandler`]: ../subduction_ephemeral/src/composed.rs
@@ -36,7 +36,7 @@ Three message types travel under the `SUE\x00` schema:
 | `0x02` | `Unsubscribe { topics }`              | Inverse of the above                                                       |
 | `0x03` | `SubscribeRejected { topics }`        | Some subscribes were rejected by policy                                    |
 
-Authentication is per-message: each `Ephemeral` carries an Ed25519 signature over the payload, the issuer key, and the wire schema. Authorisation is per-topic via [`EphemeralPolicy`].
+Authentication is per-message: each `Ephemeral` carries an Ed25519 signature over the payload, the issuer key, and the wire schema. Authorization is per-topic via [`EphemeralPolicy`].
 
 [`EphemeralPolicy`]: ../subduction_ephemeral/src/policy.rs
 
@@ -73,7 +73,7 @@ recv_subscribe(conn, topics)
     send peer SubscribeRejected { rejected_topics }
 ```
 
-Authorisation is rechecked at fan-out time as well (`filter_authorized_subscribers`) so revocation is honoured without flushing the subscription map.
+Authorization is rechecked at fan-out time as well (`filter_authorized_subscribers`) so revocation is honored without flushing the subscription map.
 
 ## Message Lifecycle
 
