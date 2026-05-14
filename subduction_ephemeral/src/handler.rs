@@ -130,6 +130,8 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// rationale behind the cache seed.
     ///
     /// [`design/ephemeral.md#bounce-back-amplification`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#bounce-back-amplification
+    /// [`Signed::seal`]: subduction_crypto::signed::Signed::seal
+    /// [`Handler::handle`]: subduction_core::handler::Handler::handle
     ///
     /// Errors on individual sends are logged but not propagated —
     /// fire-and-forget semantics.
@@ -460,9 +462,10 @@ impl<
                 return;
             }
         };
-        let id = header.id;
-        let nonce = header.nonce;
-        let timestamp = header.timestamp;
+
+        let untrusted_id = header.id;
+        let untrusted_nonce = header.nonce;
+        let untrusted_timestamp = header.timestamp;
         let payload_len = header.payload_len;
 
         // 2a. Payload size (signature-independent).
@@ -471,7 +474,7 @@ impl<
             warn!(
                 originator = %sender,
                 relay = %relay,
-                id = %id,
+                id = %untrusted_id,
                 size = payload_len,
                 max = max_payload,
                 "ephemeral payload too large, dropping"
@@ -483,13 +486,13 @@ impl<
         let now = self.clock.now();
         let max_age = self.max_message_age;
         {
-            let age = now.abs_diff(timestamp);
+            let age = now.abs_diff(untrusted_timestamp);
             if age > max_age {
                 debug!(
                     originator = %sender,
                     relay = %relay,
-                    id = %id,
-                    timestamp_secs = timestamp.as_secs(),
+                    id = %untrusted_id,
+                    timestamp_secs = untrusted_timestamp.as_secs(),
                     now_secs = now.as_secs(),
                     age_secs = age.as_secs(),
                     max_age_secs = max_age.as_secs(),
@@ -502,12 +505,12 @@ impl<
         // 2c. Read-only cache probe. Hit ⇒ drop before paying for Ed25519 verify.
         {
             let cache = self.nonce_cache.lock().await;
-            if cache.contains(sender, id, nonce) {
+            if cache.contains(sender, untrusted_id, untrusted_nonce) {
                 debug!(
                     originator = %sender,
                     relay = %relay,
-                    id = %id,
-                    nonce = nonce,
+                    id = %untrusted_id,
+                    nonce = untrusted_nonce,
                     "duplicate ephemeral nonce (pre-verify fast path), dropping"
                 );
                 return;
@@ -528,13 +531,9 @@ impl<
             }
         };
 
-        // The verified payload's fields equal the ones we read above
-        // by construction (try_decode_trusted_payload and try_verify
-        // walk the same bytes with the same DecodeFields impl).
         let ep = verified.payload();
-        debug_assert_eq!(ep.id, id);
-        debug_assert_eq!(ep.nonce, nonce);
-        debug_assert_eq!(ep.timestamp, timestamp);
+        let id = ep.id;
+        let nonce = ep.nonce;
 
         // 4. Post-verify insert. The only place cache state is written.
         //    `false` here means a concurrent duplicate raced past 2c

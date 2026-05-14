@@ -142,15 +142,7 @@ impl DecodeFields for EphemeralPayload {
     const MIN_SIGNED_SIZE: usize = EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE;
 
     fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
-        let header = EphemeralPayloadHeader::try_decode(buf)?;
-
-        // `try_decode_header` validated structural sizing including the
-        // declared payload length; recompute the offset by tracing the
-        // header's fixed-size fields plus the bijou64 length prefix.
-        let fixed = 32 + 8 + 8;
-        #[allow(clippy::cast_possible_truncation)]
-        let len_prefix_size = bijou64::encoded_len(header.payload_len as u64);
-        let payload_start = fixed + len_prefix_size;
+        let (header, payload_start) = EphemeralPayloadHeader::try_decode_with_offset(buf)?;
         let payload_end = payload_start + header.payload_len;
 
         let payload = buf

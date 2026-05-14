@@ -76,6 +76,22 @@ impl EphemeralPayloadHeader {
     /// [`Signed::fields_bytes`]: subduction_crypto::signed::Signed::fields_bytes
     /// [`Bijou64Error`]: sedimentree_core::codec::error::Bijou64Error
     pub fn try_decode(buf: &[u8]) -> Result<Self, DecodeError> {
+        Self::try_decode_with_offset(buf).map(|(header, _)| header)
+    }
+
+    /// Same as [`try_decode`](Self::try_decode), but also returns the
+    /// byte offset immediately after the bijou64 payload-length prefix
+    /// — i.e. the offset at which the payload bytes begin.
+    ///
+    /// Useful for full-payload decoders (e.g. [`DecodeFields`] for
+    /// [`EphemeralPayload`](crate::message::EphemeralPayload)) that
+    /// want to walk the header once and pick up where it left off
+    /// without recomputing offsets.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`try_decode`](Self::try_decode).
+    pub fn try_decode_with_offset(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "EphemeralPayloadHeader",
@@ -120,11 +136,14 @@ impl EphemeralPayloadHeader {
             });
         }
 
-        Ok(Self {
-            id,
-            nonce,
-            timestamp,
-            payload_len,
-        })
+        Ok((
+            Self {
+                id,
+                nonce,
+                timestamp,
+                payload_len,
+            },
+            offset,
+        ))
     }
 }

@@ -121,11 +121,11 @@ fn count_ephemerals(msgs: &[EphemeralMessage]) -> usize {
 
 // ── H1: Self-bounce amplification ───────────────────────────────────────
 //
-// **Reghression**: `EphemeralHandler::publish()` does NOT add the
-// published nonce to the nonce cache. If the same message is then
+// **Regression**: `EphemeralHandler::publish()` used to skip adding the
+// published nonce to the nonce cache. If the same message was then
 // delivered back to the publishing handler (e.g., a peer relayed it
-// through a cycle), the handler re-processes it as if it were a new
-// inbound message: delivers it to its own callback _and_ re-fans-out.
+// through a cycle), the handler re-processed it as if it were a new
+// inbound message: delivered it to its own callback _and_ re-fanned-out.
 //
 // This is a textbook "we only check for the latest hop" bug: the
 // fan-out filter excludes the previous hop (the bouncing peer) and the
@@ -462,24 +462,19 @@ async fn triangle_topology_does_not_exponentially_amplify() -> TestResult {
     Ok(())
 }
 
-// ── H4: Inbound message round-trip via outgoing subscription ────────────
+// ── H4: Replay of an already-fanned-out message ─────────────────────────
 
-/// **Bug hypothesis**: When a server has `outgoing_subscriptions = {T}`
-/// (it's a relay that actively wants T from upstream), and it receives
-/// an inbound ephemeral for T, the fan-out filter only excludes the
-/// immediate relay and the originator — but NOT the server's own
-/// outgoing-relay peers, which the message arguably already covered.
+/// The fan-out filter in `recv_ephemeral` only excludes the immediate
+/// relay and the originator — peers further back in the gossip path
+/// are not tracked. So if a message has already been fanned out and
+/// then comes in again via a peer that wasn't the immediate previous
+/// hop, the filter alone won't catch it; the nonce cache must.
 ///
-/// More importantly: if the inbound message arrives via a peer that is
-/// ALSO in the server's subscription map (a common case: bidirectional
-/// subscriptions between two relays), the relay filter excludes that
-/// peer. But what about a peer that arrived BEFORE — the chain of
-/// relays through which this message previously passed? We have no
-/// info about that. We must rely entirely on the nonce cache.
-///
-/// This test pins down: when a relay receives a message it has already
-/// fanned out (the canonical "amplification" failure mode), the second
-/// arrival from any peer must not re-fan-out.
+/// Topology: one originator, three subscribed peers, and a fourth
+/// "loop-back" peer that replays the originator's signed message back
+/// into the handler after the first fan-out. We assert that no
+/// subscriber receives a second copy — i.e. the replay is dropped by
+/// the cache regardless of which peer it arrives through.
 #[tokio::test]
 async fn relay_does_not_refanout_after_seeing_its_own_outbound_come_back() -> TestResult {
     let connections: Connections = Arc::new(Mutex::new(Map::new()));
