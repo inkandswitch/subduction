@@ -1,27 +1,11 @@
-//! Keyhive message handler for Subduction.
+//! Keyhive message handlers for Subduction.
 //!
-//! Provides [`KeyhiveProtocolHandle`], a `Send + Sync` handle that
-//! bridges the [`Handler`] trait to an existing [`KeyhiveProtocol`]
-//! running on a `!Send` task (e.g., a `tokio::task::LocalSet`).
+//! Two [`Handler`] implementations:
 //!
-//! # Architecture
-//!
-//! ```text
-//! KeyhiveProtocolHandle (Send + Sync, Clone)
-//!   |  impl Handler<Sendable, C>
-//!   |
-//!   v  async_channel
-//! run_actor (runs on LocalSet, calls !Send KeyhiveProtocol)
-//!   |  loops on KeyhiveCommand
-//!   v
-//! KeyhiveProtocol::handle_message(...)
-//! ```
-//!
-//! When `keyhive_core` becomes `Send`, the actor can be removed and
-//! the handle can call `KeyhiveProtocol` directly.
-//!
-//! [`Handler`]: subduction_core::handler::Handler
-//! [`KeyhiveProtocol`]: crate::KeyhiveProtocol
+//! - [`SendableKeyhiveHandler`]: for multi-threaded runtimes. Calls
+//!   [`KeyhiveProtocol`] directly.
+//! - [`KeyhiveProtocolHandle`]: for single-threaded runtimes. Bridges
+//!   to a [`KeyhiveProtocol`] on a `LocalSet` via async channels.
 
 extern crate alloc;
 
@@ -30,6 +14,9 @@ use alloc::string::String;
 use async_channel::{Receiver, Sender};
 use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{authenticated::Authenticated, handler::Handler, peer::id::PeerId};
+
+use core::marker::PhantomData;
+use rand::rngs::OsRng;
 
 use crate::{KeyhiveMessage, SignedMessage, signed_message::CborError};
 
@@ -53,7 +40,7 @@ pub enum KeyhiveCommand<C, Conn> {
         /// actor converts this to a `Conn` and passes it to
         /// `handle_message` for auto-registering the peer when a
         /// sync-check arrives before any explicit `AddPeer`.
-        c: C,
+        conn: C,
         /// The keyhive wire message.
         message: KeyhiveMessage,
         /// Reply channel for the result.
@@ -193,17 +180,16 @@ pub async fn run_actor<C, Conn, F, Fut, A, AFut, D, DFut>(
         match cmd {
             KeyhiveCommand::HandleInbound {
                 peer_id,
-                c,
+                conn,
                 message,
                 reply,
             } => {
                 let result = match message.into_signed() {
-                    Ok(signed_msg) => process(peer_id, c, signed_msg)
+                    Ok(signed_msg) => process(peer_id, conn, signed_msg)
                         .await
                         .map_err(HandleError::Protocol),
                     Err(e) => Err(HandleError::Decode(e)),
                 };
-                // Best-effort reply; handle may have been dropped.
                 drop(reply.send(result).await);
             }
             KeyhiveCommand::AddPeer { peer_id, conn } => {
@@ -234,7 +220,7 @@ where
         message: KeyhiveMessage,
     ) -> BoxFuture<'a, Result<(), Self::HandlerError>> {
         let peer_id = conn.peer_id();
-        let c = conn.inner().clone();
+        let conn = conn.inner().clone();
         let tx = self.tx.clone();
 
         async move {
@@ -242,7 +228,7 @@ where
 
             tx.send(KeyhiveCommand::HandleInbound {
                 peer_id,
-                c,
+                conn,
                 message,
                 reply: reply_tx,
             })
@@ -263,6 +249,114 @@ where
             );
         }
         .boxed()
+    }
+}
+
+use alloc::sync::Arc;
+
+use crate::{KeyhivePeerId, connection::KeyhiveConnection, storage::KeyhiveStorage};
+
+use keyhive_core::{
+    listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+};
+use keyhive_crypto::signer::memory::MemorySigner;
+
+/// [`KeyhiveProtocol`](crate::KeyhiveProtocol) parameterized on
+/// [`SendableRuntimeKeyhive`](crate::runtime::SendableRuntimeKeyhive)'s
+/// concrete types, generic only over
+/// the connection and storage backends.
+pub type SendableRuntimeProtocol<Conn, Store> = crate::KeyhiveProtocol<
+    MemorySigner,
+    Vec<u8>,
+    Vec<u8>,
+    MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
+    NoListener,
+    OsRng,
+    Conn,
+    Store,
+    future_form::Sendable,
+>;
+
+/// [`Handler`] for multi-threaded runtimes.
+///
+/// `SubConn` is the subduction connection type (from [`Handler`]). `Conn`
+/// is the keyhive connection type. `ConnAdapter` converts between them.
+pub struct SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+where
+    Conn: KeyhiveConnection<future_form::Sendable>,
+    Store: KeyhiveStorage<future_form::Sendable>,
+{
+    protocol: Arc<SendableRuntimeProtocol<Conn, Store>>,
+    conn_adapter: ConnAdapter,
+    _phantom: PhantomData<SubConn>,
+}
+
+impl<Conn, Store, SubConn, ConnAdapter> SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+where
+    Conn: KeyhiveConnection<future_form::Sendable>,
+    Store: KeyhiveStorage<future_form::Sendable>,
+{
+    /// Create a new handler wrapping the given protocol.
+    pub const fn new(
+        protocol: Arc<SendableRuntimeProtocol<Conn, Store>>,
+        conn_adapter: ConnAdapter,
+    ) -> Self {
+        Self {
+            protocol,
+            conn_adapter,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<Conn, Store, SubConn, ConnAdapter> core::fmt::Debug
+    for SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+where
+    Conn: KeyhiveConnection<future_form::Sendable>,
+    Store: KeyhiveStorage<future_form::Sendable>,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendableKeyhiveHandler")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Conn, Store, SubConn, ConnAdapter> Handler<future_form::Sendable, SubConn>
+    for SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+where
+    Conn: KeyhiveConnection<future_form::Sendable> + Send + Sync + 'static,
+    Conn::SendError: 'static,
+    Conn::DisconnectError: 'static,
+    Store: KeyhiveStorage<future_form::Sendable> + Send + Sync + 'static,
+    SubConn: Clone + Send + Sync + 'static,
+    ConnAdapter: Fn(Authenticated<SubConn, future_form::Sendable>) -> Conn + Send + Sync,
+{
+    type Message = crate::KeyhiveMessage;
+    type HandlerError = HandleError;
+
+    fn handle<'a>(
+        &'a self,
+        conn: &'a Authenticated<SubConn, future_form::Sendable>,
+        message: crate::KeyhiveMessage,
+    ) -> BoxFuture<'a, Result<(), Self::HandlerError>> {
+        let auth = conn.clone();
+
+        Box::pin(async move {
+            let signed_msg = message.into_signed().map_err(HandleError::Decode)?;
+            let adapter = (self.conn_adapter)(auth);
+            let kh_peer = adapter.peer_id();
+            self.protocol
+                .handle_message(&kh_peer, signed_msg, Some(adapter))
+                .await
+                .map_err(|e| HandleError::Protocol(e.to_string()))
+        })
+    }
+
+    fn on_peer_disconnect(&self, peer: PeerId) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let kh_peer = KeyhivePeerId::from_bytes(*peer.as_bytes());
+            self.protocol.remove_peer(&kh_peer).await;
+        })
     }
 }
 

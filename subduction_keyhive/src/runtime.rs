@@ -1,18 +1,26 @@
-//! Keyhive thread runtime.
+//! Keyhive runtime initialization.
 //!
-//! Spawns a dedicated OS thread with a single-threaded tokio runtime and
-//! `LocalSet` to host the `!Send` keyhive. Returns after initialization
-//! completes so the caller can proceed with the protocol handle.
+//! Provides two initialization paths:
+//!
+//! - [`init_sendable_keyhive`]: for multi-threaded runtimes (`Send + Sync`)
+//! - [`spawn_local_keyhive_thread`]: for single-threaded contexts (`!Send`).
+//!   Spawns a dedicated OS thread with a `LocalSet`
 
 use alloc::{format, string::ToString, sync::Arc, vec::Vec};
 use core::time::Duration;
 
 use async_lock::Mutex as AsyncMutex;
 use keyhive_core::{
-    keyhive::Keyhive, listener::no_listener::NoListener, principal::identifier::Identifier,
-    store::ciphertext::memory::MemoryCiphertextStore,
+    contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
+    principal::identifier::Identifier, store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
+use rand::rngs::OsRng;
+use tokio::{
+    sync::oneshot,
+    task::{LocalSet, spawn_local},
+    time,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -22,15 +30,26 @@ use crate::{
     storage::KeyhiveStorage,
 };
 
-/// Concrete keyhive type used by the runtime.
-pub type RuntimeKeyhive = Keyhive<
+/// Concrete keyhive type for single-threaded (`!Send`) runtimes.
+pub type LocalRuntimeKeyhive = Keyhive<
     future_form::Local,
     MemorySigner,
     Vec<u8>,
     Vec<u8>,
     MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
     NoListener,
-    rand::rngs::OsRng,
+    OsRng,
+>;
+
+/// Concrete keyhive type for multi-threaded (`Send + Sync`) runtimes.
+pub type SendableRuntimeKeyhive = Keyhive<
+    future_form::Sendable,
+    MemorySigner,
+    Vec<u8>,
+    Vec<u8>,
+    MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
+    NoListener,
+    OsRng,
 >;
 
 /// Configuration for the keyhive runtime.
@@ -99,7 +118,7 @@ impl Default for RuntimeConfig {
 ///
 /// Returns an error if keyhive generation fails or the thread panics
 /// during initialization.
-pub async fn spawn_keyhive_thread<C, Conn, Store, ConnAdapter, PolicySetup>(
+pub async fn spawn_local_keyhive_thread<C, Conn, Store, ConnAdapter, PolicySetup>(
     msg_rx: async_channel::Receiver<KeyhiveCommand<C, Conn>>,
     storage: Store,
     signer: MemorySigner,
@@ -115,9 +134,9 @@ where
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<future_form::Local> + Send + 'static,
     ConnAdapter: Fn(KeyhivePeerId, C) -> Conn + Send + 'static,
-    PolicySetup: FnOnce(Arc<AsyncMutex<RuntimeKeyhive>>) + Send + 'static,
+    PolicySetup: FnOnce(Arc<AsyncMutex<LocalRuntimeKeyhive>>) + Send + 'static,
 {
-    let (init_tx, init_rx) = tokio::sync::oneshot::channel::<Result<(), std::string::String>>();
+    let (init_tx, init_rx) = oneshot::channel::<Result<(), std::string::String>>();
 
     std::thread::Builder::new()
         .name("keyhive".into())
@@ -134,8 +153,8 @@ where
                     return;
                 }
             };
-            let local = tokio::task::LocalSet::new();
-            rt.block_on(local.run_until(run_keyhive(
+            let local = LocalSet::new();
+            rt.block_on(local.run_until(run_local_keyhive(
                 msg_rx,
                 storage,
                 signer,
@@ -156,7 +175,7 @@ where
 }
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
+async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     msg_rx: async_channel::Receiver<KeyhiveCommand<C, Conn>>,
     storage: Store,
     signer: MemorySigner,
@@ -164,7 +183,7 @@ async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     conn_adapter: ConnAdapter,
     policy_setup: PolicySetup,
     cancel: CancellationToken,
-    init_tx: tokio::sync::oneshot::Sender<Result<(), std::string::String>>,
+    init_tx: oneshot::Sender<Result<(), std::string::String>>,
 ) where
     C: 'static,
     Conn: KeyhiveConnection<future_form::Local> + 'static,
@@ -172,13 +191,13 @@ async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<future_form::Local> + 'static,
     ConnAdapter: Fn(KeyhivePeerId, C) -> Conn + 'static,
-    PolicySetup: FnOnce(Arc<AsyncMutex<RuntimeKeyhive>>),
+    PolicySetup: FnOnce(Arc<AsyncMutex<LocalRuntimeKeyhive>>),
 {
     let keyhive = match Keyhive::generate(
         signer,
         MemoryCiphertextStore::<Vec<u8>, Vec<u8>>::new(),
         NoListener,
-        rand::rngs::OsRng,
+        OsRng,
     )
     .await
     {
@@ -227,11 +246,11 @@ async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     let process_proto = Arc::clone(&protocol);
     let connect_proto = Arc::clone(&protocol);
     let disconnect_proto = Arc::clone(&protocol);
-    tokio::task::spawn_local(run_actor(
+    spawn_local(run_actor(
         msg_rx,
-        move |peer, c, msg| {
+        move |peer, conn, msg| {
             let proto = Arc::clone(&process_proto);
-            let conn = conn_adapter(KeyhivePeerId::from_bytes(*peer.as_bytes()), c);
+            let conn = conn_adapter(KeyhivePeerId::from_bytes(*peer.as_bytes()), conn);
             async move {
                 let keyhive_peer = conn.peer_id();
                 proto
@@ -261,8 +280,8 @@ async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     let refresh_proto = Arc::clone(&protocol);
     let refresh_cancel = cancel.clone();
     let refresh_interval = config.cache_refresh_interval;
-    tokio::task::spawn_local(async move {
-        let mut tick = tokio::time::interval(refresh_interval);
+    spawn_local(async move {
+        let mut tick = time::interval(refresh_interval);
         tick.tick().await;
         loop {
             tokio::select! {
@@ -281,4 +300,32 @@ async fn run_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
 
     cancel.cancelled().await;
     tracing::debug!("keyhive actors shutting down");
+}
+
+/// Initialize a `Sendable` keyhive instance.
+///
+/// # Errors
+///
+/// Returns an error if keyhive generation fails.
+pub async fn init_sendable_keyhive(
+    signer: MemorySigner,
+) -> Result<(SendableRuntimeKeyhive, KeyhivePeerId, ContactCard), alloc::string::String> {
+    let keyhive = Keyhive::generate(
+        signer,
+        MemoryCiphertextStore::<Vec<u8>, Vec<u8>>::new(),
+        NoListener,
+        OsRng,
+    )
+    .await
+    .map_err(|e| format!("failed to generate keyhive: {e}"))?;
+
+    let contact_card = keyhive
+        .contact_card()
+        .await
+        .map_err(|e| format!("failed to generate keyhive contact card: {e}"))?;
+
+    let kh_id: Identifier = keyhive.id().into();
+    let peer_id = KeyhivePeerId::from_bytes(kh_id.to_bytes());
+
+    Ok((keyhive, peer_id, contact_card))
 }

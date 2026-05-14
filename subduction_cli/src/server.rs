@@ -3,10 +3,12 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use eyre::Result;
+use future_form::Sendable;
 use iroh::{EndpointAddr, endpoint::presets};
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
+    authenticated::Authenticated,
     handshake::{
         self,
         audience::{Audience, DiscoveryId},
@@ -27,7 +29,7 @@ use subduction_websocket::{
     tokio::{TokioSpawn, unified::UnifiedWebSocket},
     websocket::WebSocket,
 };
-use tokio::{net::TcpListener, task::JoinSet};
+use tokio::{net::TcpListener, task::JoinSet, time};
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
@@ -36,12 +38,12 @@ use subduction_ephemeral::{
     policy::OpenEphemeralPolicy,
 };
 
-use subduction_keyhive::KeyhivePeerId;
+use subduction_keyhive::{connection::KeyhiveConnection, runtime::init_sendable_keyhive};
 
 use crate::{
-    handler::{CliConn, CliEphemeralHandler, CliHandler},
+    handler::{CliConn, CliEphemeralHandler, CliHandler, CliKeyhiveHandler, CliKeyhiveProtocol},
     key,
-    keyhive::{CliConnKeyhiveAdapter, CliKeyhiveHandle},
+    keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage},
     metrics,
     policy::CliKeyhivePolicyHandle,
     transport::UnifiedTransport,
@@ -210,7 +212,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let metrics_token = token.clone();
         let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(refresh_interval);
+            let mut interval = time::interval(refresh_interval);
             interval.tick().await;
 
             loop {
@@ -244,22 +246,49 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
-    let (keyhive_handle, keyhive_rx) =
-        subduction_keyhive::handler::KeyhiveProtocolHandle::channel();
+    // Initialize keyhive.
+    let keyhive_root = data_dir.join(".keyhive");
+    tracing::info!("Initializing keyhive storage at {:?}", keyhive_root);
+    let fs_keyhive_storage = FsKeyhiveStorage::new(keyhive_root)?;
 
-    let sites_keyhive_handle: CliKeyhiveHandle = keyhive_handle.clone();
+    let (keyhive_instance, kh_peer_id, contact_card) = init_sendable_keyhive(keyhive_signer)
+        .await
+        .map_err(|e| eyre::eyre!(e))?;
 
-    let (policy_handle, policy_rx) = CliKeyhivePolicyHandle::channel();
+    let shared_keyhive = Arc::new(async_lock::Mutex::new(keyhive_instance));
+
+    let keyhive_protocol: CliKeyhiveProtocol = Arc::new(subduction_keyhive::KeyhiveProtocol::new(
+        Arc::clone(&shared_keyhive),
+        fs_keyhive_storage,
+        kh_peer_id,
+        contact_card,
+    ));
+
+    if let Err(e) = keyhive_protocol.ingest_from_storage().await {
+        tracing::warn!("keyhive ingest_from_storage failed: {e}");
+    }
+
+    let policy_handle = CliKeyhivePolicyHandle::new(Arc::clone(&shared_keyhive));
     let storage_policy = Arc::new(policy_handle);
 
-    crate::keyhive::spawn_keyhive_thread(
-        keyhive_rx,
-        policy_rx,
-        &data_dir,
-        keyhive_signer,
-        token.clone(),
-    )
-    .await?;
+    // Periodic keyhive cache refresh.
+    let refresh_proto = Arc::clone(&keyhive_protocol);
+    let refresh_cancel = token.clone();
+    tokio::spawn(async move {
+        let mut tick = time::interval(Duration::from_secs(2));
+        tick.tick().await;
+        loop {
+            tokio::select! {
+                () = refresh_cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    if let Err(e) = refresh_proto.refresh_cache().await {
+                        tracing::warn!(error = %e, "refresh_cache failed");
+                    }
+                }
+            }
+        }
+        tracing::debug!("keyhive cache refresh task shutting down");
+    });
 
     let builder = subduction_core::subduction::builder::SubductionBuilder::new()
         .signer(signer.clone())
@@ -273,6 +302,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         builder
     };
 
+    let keyhive_handler =
+        CliKeyhiveHandler::new(Arc::clone(&keyhive_protocol), CliConnKeyhiveAdapter::new);
     let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction, _, _, _) = builder
         .build_composed(|sync_handler| {
             let connections = sync_handler.connections();
@@ -300,7 +331,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             let handler = Arc::new(CliHandler {
                 sync: sync_handler,
                 ephemeral: ephemeral_handler.clone(),
-                keyhive: keyhive_handle,
+                keyhive: keyhive_handler,
             });
 
             (handler, ephemeral_handler)
@@ -371,7 +402,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let max_message_size = args.max_message_size;
     let max_frame_size = args.max_frame_size();
 
-    let accept_keyhive = sites_keyhive_handle.clone();
+    let accept_keyhive = keyhive_protocol.clone();
     let accept_task = tokio::spawn(async move {
         accept_loop(
             tcp_listener,
@@ -426,7 +457,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let iroh_ep = iroh_endpoint.clone();
         let iroh_cancel = token.child_token();
         let iroh_ephemeral = ephemeral.clone();
-        let iroh_keyhive_handle = sites_keyhive_handle.clone();
+        let iroh_keyhive_proto = keyhive_protocol.clone();
 
         let task = tokio::spawn({
             let cancel = iroh_cancel.clone();
@@ -452,11 +483,11 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     tokio::spawn(accepted.sender_task);
 
                                     let auth = accepted.authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
-                                    let conn_for_keyhive = auth.inner().clone();
+                                    let auth_for_keyhive = auth.clone();
                                     match iroh_subduction.add_connection(auth).await {
                                         Ok(_) => {
                                             iroh_ephemeral.subscribe_peer(remote).await;
-                                            notify_peer_connect(&iroh_keyhive_handle, remote, conn_for_keyhive).await;
+                                            notify_peer_connect(&iroh_keyhive_proto, auth_for_keyhive).await;
                                             iroh_subduction.full_sync_with_peer(&remote, true, None).await;
                                             tracing::info!("iroh: added peer {remote}");
                                         }
@@ -495,7 +526,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             let peer_signer = signer.clone();
             let peer_cancel = token.clone();
             let peer_service_name = service_name.clone();
-            let peer_keyhive = sites_keyhive_handle.clone();
+            let peer_keyhive = keyhive_protocol.clone();
 
             tokio::spawn(async move {
                 match try_connect_iroh(
@@ -526,7 +557,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let sync_subduction = subduction.clone();
         let sync_cancel = token.child_token();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            let mut interval = time::interval(Duration::from_secs(5));
             interval.tick().await; // skip the first immediate tick
             loop {
                 tokio::select! {
@@ -588,7 +619,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let peer_cancel = token.clone();
         let peer_max_message_size = args.max_message_size;
         let peer_max_frame_size = args.max_frame_size();
-        let peer_keyhive = sites_keyhive_handle.clone();
+        let peer_keyhive = keyhive_protocol.clone();
 
         tokio::spawn(async move {
             match try_connect_ws(
@@ -653,7 +684,7 @@ async fn accept_loop(
     subduction: CliSubduction,
     ephemeral: CliEphemeralHandler,
     lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
-    keyhive_handle: CliKeyhiveHandle,
+    keyhive_proto: CliKeyhiveProtocol,
     cancel: CancellationToken,
     handshake_max_drift: Duration,
     max_message_size: usize,
@@ -679,7 +710,7 @@ async fn accept_loop(
                         let task_subduction = subduction.clone();
                         let task_ephemeral = ephemeral.clone();
                         let task_handler = lp_handler.clone();
-                        let task_keyhive = keyhive_handle.clone();
+                        let task_keyhive = keyhive_proto.clone();
                         let task_discovery = discovery_audience;
 
                         conns.spawn(async move {
@@ -751,7 +782,7 @@ async fn handle_websocket(
     addr: SocketAddr,
     subduction: CliSubduction,
     ephemeral: CliEphemeralHandler,
-    keyhive_handle: CliKeyhiveHandle,
+    keyhive_proto: CliKeyhiveProtocol,
     handshake_max_drift: Duration,
     max_message_size: usize,
     max_frame_size: usize,
@@ -827,12 +858,12 @@ async fn handle_websocket(
     };
 
     let peer_id = authenticated.peer_id();
-    let conn_for_keyhive = authenticated.inner().clone();
+    let auth_for_keyhive = authenticated.clone();
     if let Err(e) = subduction.add_connection(authenticated).await {
         tracing::error!("Failed to add WebSocket connection: {e}");
     } else {
         ephemeral.subscribe_peer(peer_id).await;
-        notify_peer_connect(&keyhive_handle, peer_id, conn_for_keyhive).await;
+        notify_peer_connect(&keyhive_proto, auth_for_keyhive).await;
     }
 }
 
@@ -843,7 +874,7 @@ async fn handle_http_longpoll(
     subduction: CliSubduction,
     ephemeral: CliEphemeralHandler,
     handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
-    keyhive_handle: CliKeyhiveHandle,
+    keyhive_proto: CliKeyhiveProtocol,
 ) {
     use http_body_util::Full;
     use hyper::{
@@ -861,7 +892,7 @@ async fn handle_http_longpoll(
         let handler = handler.clone();
         let subduction = subduction.clone();
         let ephemeral = ephemeral.clone();
-        let keyhive_handle = keyhive_handle.clone();
+        let keyhive_proto = keyhive_proto.clone();
         async move {
             // Handle CORS preflight
             if req.method() == hyper::Method::OPTIONS {
@@ -906,12 +937,12 @@ async fn handle_http_longpoll(
                 let peer_id = auth.peer_id();
                 let unified_auth =
                     auth.map(|lp| MessageTransport::new(UnifiedTransport::HttpLongPoll(lp)));
-                let conn_for_keyhive = unified_auth.inner().clone();
+                let auth_for_keyhive = unified_auth.clone();
                 if let Err(e) = subduction.add_connection(unified_auth).await {
                     tracing::error!("Failed to add HTTP long-poll connection: {e}");
                 } else {
                     ephemeral.subscribe_peer(peer_id).await;
-                    notify_peer_connect(&keyhive_handle, peer_id, conn_for_keyhive).await;
+                    notify_peer_connect(&keyhive_proto, auth_for_keyhive).await;
                 }
             }
 
@@ -947,10 +978,14 @@ async fn handle_http_longpoll(
     }
 }
 
-/// Wrap a connection in a keyhive adapter and notify the handle.
-async fn notify_peer_connect(handle: &CliKeyhiveHandle, peer_id: PeerId, conn: CliConn) {
-    let adapter = CliConnKeyhiveAdapter::new(KeyhivePeerId::from_bytes(*peer_id.as_bytes()), conn);
-    handle.on_peer_connect(peer_id, adapter).await;
+/// Wrap a connection in a keyhive adapter and register the peer.
+async fn notify_peer_connect(
+    protocol: &CliKeyhiveProtocol,
+    conn: Authenticated<CliConn, Sendable>,
+) {
+    let adapter = CliConnKeyhiveAdapter::new(conn);
+    let kh_peer_id = adapter.peer_id();
+    protocol.add_peer(kh_peer_id, adapter).await;
 }
 
 /// Connect to a peer via WebSocket (outbound).
@@ -959,7 +994,7 @@ async fn try_connect_ws(
     uri: Uri,
     subduction: &CliSubduction,
     ephemeral: &CliEphemeralHandler,
-    keyhive_handle: &CliKeyhiveHandle,
+    keyhive_proto: &CliKeyhiveProtocol,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -1033,10 +1068,10 @@ async fn try_connect_ws(
     let remote_id = authenticated.peer_id();
     tracing::info!("Handshake complete: connected to {remote_id}");
 
-    let conn_for_keyhive = authenticated.inner().clone();
+    let auth_for_keyhive = authenticated.clone();
     subduction.add_connection(authenticated).await?;
     ephemeral.subscribe_peer(remote_id).await;
-    notify_peer_connect(keyhive_handle, remote_id, conn_for_keyhive).await;
+    notify_peer_connect(keyhive_proto, auth_for_keyhive).await;
     tracing::info!("Connected to peer at {uri_str}");
 
     Ok(remote_id)
@@ -1049,7 +1084,7 @@ async fn try_connect_iroh(
     addr: EndpointAddr,
     subduction: &CliSubduction,
     ephemeral: &CliEphemeralHandler,
-    keyhive_handle: &CliKeyhiveHandle,
+    keyhive_proto: &CliKeyhiveProtocol,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -1096,10 +1131,10 @@ async fn try_connect_iroh(
 
     let remote_id = authenticated.peer_id();
     let auth = authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
-    let conn_for_keyhive = auth.inner().clone();
+    let auth_for_keyhive = auth.clone();
     subduction.add_connection(auth).await?;
     ephemeral.subscribe_peer(remote_id).await;
-    notify_peer_connect(keyhive_handle, remote_id, conn_for_keyhive).await;
+    notify_peer_connect(keyhive_proto, auth_for_keyhive).await;
     subduction.full_sync_with_peer(&remote_id, true, None).await;
 
     tracing::info!("iroh: added peer {node_id} (subduction ID: {remote_id})");

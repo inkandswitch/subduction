@@ -29,7 +29,7 @@
 //! requesting and sending contact cards before initiating sync.
 
 use alloc::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     string::ToString,
     sync::Arc,
     vec,
@@ -42,13 +42,17 @@ use keyhive_core::{
     event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    principal::{agent::Agent, identifier::Identifier, individual::op::KeyOp, public::Public},
+    principal::{
+        agent::Agent, group::membership_operation::MembershipOperation, identifier::Identifier,
+        individual::op::KeyOp, public::Public,
+    },
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
     content::reference::ContentRef, digest::Digest, signed::Signed,
     signer::async_signer::AsyncSigner,
 };
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     cache::PeriodicEventCache,
@@ -272,11 +276,11 @@ where
             for (digest, op) in source_ops {
                 let h = digest_to_bytes(digest);
                 hashes.push(h);
-                if let keyhive_core::principal::group::membership_operation::MembershipOperation::Delegation(dlg) = op {
+                if let MembershipOperation::Delegation(dlg) = op {
                     delegates.push(dlg.payload.delegate().id());
                 }
                 if !skip_serialization.contains(&h)
-                    && let alloc::collections::btree_map::Entry::Vacant(e) = event_data.entry(h)
+                    && let Entry::Vacant(e) = event_data.entry(h)
                 {
                     let event: Event<K, Signer, T, L> = op.clone().into();
                     let static_event = StaticEvent::from(event);
@@ -959,7 +963,7 @@ where
         for (digest, event) in our_events {
             if their_events.contains_key(&digest) {
                 let h = digest_to_bytes(&digest);
-                if let alloc::collections::btree_map::Entry::Vacant(entry) = result.entry(h) {
+                if let Entry::Vacant(entry) = result.entry(h) {
                     let pair = serialize_event_pair(&event)?;
                     entry.insert(pair);
                 }
@@ -1276,7 +1280,7 @@ where
         let h = digest_to_bytes(&digest);
         hashes.push(h);
         if !skip_serialization.contains(&h)
-            && let alloc::collections::btree_map::Entry::Vacant(e) = event_data.entry(h)
+            && let Entry::Vacant(e) = event_data.entry(h)
         {
             let static_event = StaticEvent::from(event);
             e.insert(serialize_event_pair(&static_event)?);
@@ -1311,7 +1315,7 @@ fn serialize_event_pair<T: ContentRef, E: core::error::Error + 'static>(
 /// Collect hashes reachable from `agent_id` through `index` into `hash_set`.
 fn extend_from_index(
     hash_set: &mut BTreeSet<EventHash>,
-    index: &std::collections::HashMap<Identifier, std::collections::HashSet<Identifier>>,
+    index: &HashMap<Identifier, HashSet<Identifier>>,
     source_hashes: &BTreeMap<Identifier, Vec<EventHash>>,
     agent_id: &Identifier,
 ) {

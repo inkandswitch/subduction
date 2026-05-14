@@ -1,7 +1,7 @@
 //! Key loading utilities.
 
 use eyre::{Result, WrapErr, eyre};
-use rand::RngCore;
+use rand::{RngCore, rngs::OsRng};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -44,7 +44,7 @@ pub(crate) fn load_signer_bytes(args: &KeyArgs) -> Result<[u8; 32]> {
     if args.ephemeral_key {
         tracing::warn!("Using ephemeral key (will be lost on restart)");
         let mut bytes = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        OsRng.fill_bytes(&mut bytes);
         return Ok(bytes);
     }
 

@@ -1,12 +1,9 @@
-//! Subduction policy for the CLI server.
+//! Keyhive-backed authorization policy for the CLI server.
 //!
-//! Same actor-bridge pattern as `keyhive.rs`: a `Send + Sync` handle forwards
-//! `authorize_*` calls to the keyhive thread. Legacy (zero-padded) doc IDs are
-//! always allowed.
+//! Legacy (zero-padded) doc IDs are always allowed.
 
 use std::sync::Arc;
 
-use async_channel::{Receiver, Sender};
 use async_lock::Mutex as AsyncMutex;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::id::SedimentreeId;
@@ -15,108 +12,48 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
-use subduction_keyhive::policy::{
-    ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError, authorize_connect_with,
-    authorize_fetch_with, authorize_put_with, filter_authorized_fetch_with,
+use subduction_keyhive::{
+    policy::{
+        ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError,
+        authorize_connect_with, authorize_fetch_with, authorize_put_with,
+        filter_authorized_fetch_with,
+    },
+    runtime::SendableRuntimeKeyhive,
 };
-
-use subduction_keyhive::runtime::RuntimeKeyhive;
-
-const POLICY_COMMAND_CAPACITY: usize = 1024;
 
 fn is_legacy(id: &SedimentreeId) -> bool {
     id.as_bytes()[16..].iter().all(|&b| b == 0)
 }
 
-#[allow(missing_debug_implementations)]
-pub(crate) enum PolicyCommand {
-    AuthorizeConnect {
-        peer: PeerId,
-        reply: Sender<Result<(), ConnectionDisallowedError>>,
-    },
-    AuthorizeFetch {
-        peer: PeerId,
-        sedimentree_id: SedimentreeId,
-        reply: Sender<Result<(), FetchDisallowedError>>,
-    },
-    AuthorizePut {
-        requestor: PeerId,
-        author: VerifiedAuthor,
-        sedimentree_id: SedimentreeId,
-        reply: Sender<Result<(), PutDisallowedError>>,
-    },
-    FilterAuthorizedFetch {
-        peer: PeerId,
-        ids: Vec<SedimentreeId>,
-        reply: Sender<Vec<SedimentreeId>>,
-    },
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct CliKeyhivePolicyHandle {
-    tx: Sender<PolicyCommand>,
+    keyhive: Arc<AsyncMutex<SendableRuntimeKeyhive>>,
 }
 
 impl CliKeyhivePolicyHandle {
-    pub(crate) fn channel() -> (Self, Receiver<PolicyCommand>) {
-        let (tx, rx) = async_channel::bounded(POLICY_COMMAND_CAPACITY);
-        (Self { tx }, rx)
+    pub(crate) const fn new(keyhive: Arc<AsyncMutex<SendableRuntimeKeyhive>>) -> Self {
+        Self { keyhive }
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum CliPolicyConnectDisallowed {
-    #[error(transparent)]
-    Keyhive(#[from] ConnectionDisallowedError),
-    #[error("keyhive policy actor has shut down")]
-    ActorGone,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum CliPolicyFetchDisallowed {
-    #[error(transparent)]
-    Keyhive(#[from] FetchDisallowedError),
-    #[error("keyhive policy actor has shut down")]
-    ActorGone,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum CliPolicyPutDisallowed {
-    #[error(transparent)]
-    Keyhive(#[from] PutDisallowedError),
-    #[error("keyhive policy actor has shut down")]
-    ActorGone,
-}
-
 impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
-    type ConnectionDisallowed = CliPolicyConnectDisallowed;
+    type ConnectionDisallowed = ConnectionDisallowedError;
 
     fn authorize_connect(
         &self,
         peer: PeerId,
     ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
         async move {
-            let (reply_tx, reply_rx) = async_channel::bounded(1);
-            self.tx
-                .send(PolicyCommand::AuthorizeConnect {
-                    peer,
-                    reply: reply_tx,
-                })
-                .await
-                .map_err(|_| CliPolicyConnectDisallowed::ActorGone)?;
-            let result = reply_rx
-                .recv()
-                .await
-                .map_err(|_| CliPolicyConnectDisallowed::ActorGone)?;
-            result.map_err(CliPolicyConnectDisallowed::Keyhive)
+            let kh = self.keyhive.lock().await;
+            authorize_connect_with(&*kh, peer).await
         }
         .boxed()
     }
 }
 
 impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
-    type FetchDisallowed = CliPolicyFetchDisallowed;
-    type PutDisallowed = CliPolicyPutDisallowed;
+    type FetchDisallowed = FetchDisallowedError;
+    type PutDisallowed = PutDisallowedError;
 
     fn authorize_fetch(
         &self,
@@ -127,20 +64,8 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
             return async { Ok(()) }.boxed();
         }
         async move {
-            let (reply_tx, reply_rx) = async_channel::bounded(1);
-            self.tx
-                .send(PolicyCommand::AuthorizeFetch {
-                    peer,
-                    sedimentree_id,
-                    reply: reply_tx,
-                })
-                .await
-                .map_err(|_| CliPolicyFetchDisallowed::ActorGone)?;
-            let result = reply_rx
-                .recv()
-                .await
-                .map_err(|_| CliPolicyFetchDisallowed::ActorGone)?;
-            result.map_err(CliPolicyFetchDisallowed::Keyhive)
+            let kh = self.keyhive.lock().await;
+            authorize_fetch_with(&*kh, peer, sedimentree_id).await
         }
         .boxed()
     }
@@ -155,21 +80,8 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
             return async { Ok(()) }.boxed();
         }
         async move {
-            let (reply_tx, reply_rx) = async_channel::bounded(1);
-            self.tx
-                .send(PolicyCommand::AuthorizePut {
-                    requestor,
-                    author,
-                    sedimentree_id,
-                    reply: reply_tx,
-                })
-                .await
-                .map_err(|_| CliPolicyPutDisallowed::ActorGone)?;
-            let result = reply_rx
-                .recv()
-                .await
-                .map_err(|_| CliPolicyPutDisallowed::ActorGone)?;
-            result.map_err(CliPolicyPutDisallowed::Keyhive)
+            let kh = self.keyhive.lock().await;
+            authorize_put_with(&*kh, requestor, author, sedimentree_id).await
         }
         .boxed()
     }
@@ -182,72 +94,11 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         let (legacy, keyhive_ids): (Vec<_>, Vec<_>) = ids.into_iter().partition(is_legacy);
 
         async move {
-            let (reply_tx, reply_rx) = async_channel::bounded(1);
-            if self
-                .tx
-                .send(PolicyCommand::FilterAuthorizedFetch {
-                    peer,
-                    ids: keyhive_ids,
-                    reply: reply_tx,
-                })
-                .await
-                .is_err()
-            {
-                return legacy;
-            }
-            let mut allowed = reply_rx.recv().await.unwrap_or_default();
+            let kh = self.keyhive.lock().await;
+            let mut allowed = filter_authorized_fetch_with(&*kh, peer, keyhive_ids).await;
             allowed.extend(legacy);
             allowed
         }
         .boxed()
     }
-}
-
-pub(crate) async fn run_policy_actor(
-    rx: Receiver<PolicyCommand>,
-    keyhive: Arc<AsyncMutex<RuntimeKeyhive>>,
-) {
-    while let Ok(cmd) = rx.recv().await {
-        match cmd {
-            PolicyCommand::AuthorizeConnect { peer, reply } => {
-                let result = {
-                    let locked_keyhive = keyhive.lock().await;
-                    authorize_connect_with(&*locked_keyhive, peer).await
-                };
-                reply.send(result).await.ok();
-            }
-            PolicyCommand::AuthorizeFetch {
-                peer,
-                sedimentree_id,
-                reply,
-            } => {
-                let result = {
-                    let locked_keyhive = keyhive.lock().await;
-                    authorize_fetch_with(&*locked_keyhive, peer, sedimentree_id).await
-                };
-                reply.send(result).await.ok();
-            }
-            PolicyCommand::AuthorizePut {
-                requestor,
-                author,
-                sedimentree_id,
-                reply,
-            } => {
-                let result = {
-                    let locked_keyhive = keyhive.lock().await;
-                    authorize_put_with(&*locked_keyhive, requestor, author, sedimentree_id).await
-                };
-                reply.send(result).await.ok();
-            }
-            PolicyCommand::FilterAuthorizedFetch { peer, ids, reply } => {
-                let result = {
-                    let locked_keyhive = keyhive.lock().await;
-                    filter_authorized_fetch_with(&*locked_keyhive, peer, ids).await
-                };
-                reply.send(result).await.ok();
-            }
-        }
-    }
-
-    tracing::debug!("keyhive policy actor shutting down (channel closed)");
 }
