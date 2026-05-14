@@ -201,11 +201,14 @@ fn ancestry_pruning_drops_ancestors_of_shared_tip() {
     assert_eq!(*diff.local_only_commits[0].0, head(4));
 }
 
-/// Pruning trusts the responder-claimed set's ancestors. If remote claims
-/// B without A, local does not re-send A — documenting the protocol
-/// invariant "if you have a commit, you have its ancestors."
+/// A remote claiming loose commit B carries no guarantee that the
+/// remote also has B's ancestors — partial sync, restored-from-snapshot
+/// peers, and other failure modes can leave a peer holding descendants
+/// without ancestors. Without a fragment-based justification, local
+/// must send A so that any peer in the "descendant without ancestor"
+/// state can recover.
 #[test]
-fn ancestry_pruning_trusts_remote_has_advertised_commits_ancestors() {
+fn loose_only_remote_does_not_imply_ancestors_are_remote_held() {
     let a = commit(1, &[]);
     let b = commit(2, &[head(1)]);
 
@@ -215,13 +218,20 @@ fn ancestry_pruning_trusts_remote_has_advertised_commits_ancestors() {
     let summary = remote.fingerprint_summarize(&SEED);
     let diff = local.diff_remote_fingerprints(&summary);
 
-    assert!(diff.local_only_commits.is_empty());
+    assert_eq!(diff.local_only_commits.len(), 1);
+    assert_eq!(*diff.local_only_commits[0].0, head(1));
 }
 
 /// Two parallel chains rooted at the same point; remote has only chain
-/// 1's tip. Pruning drops chain 1, keeps chain 2.
+/// 1 (root, b1, c1). Local has both chains. With pure loose-commit
+/// state (no fragments), only commits the remote doesn't list are
+/// sent — chain 1 commits are excluded by the first filter, chain 2
+/// commits are sent.
+///
+/// Note: even though `root` is shared, no fragment justifies pruning
+/// b2/c2 transitively; they get sent.
 #[test]
-fn ancestry_pruning_preserves_disjoint_branches() {
+fn disjoint_branches_only_send_unique_commits() {
     let root = commit(1, &[]);
     let b1 = commit(10, &[head(1)]);
     let c1 = commit(11, &[head(10)]);
@@ -245,10 +255,11 @@ fn ancestry_pruning_preserves_disjoint_branches() {
     assert!(sent_ids.contains(&head(20)) && sent_ids.contains(&head(21)));
 }
 
-/// Diamond: `root → {b1, b2} → merge`. Remote has only `merge`. Pruning
-/// drops root, b1, b2 (all ancestors of merge via both parents).
+/// Diamond: `root → {b1, b2} → merge`. Remote has only `merge`. No
+/// fragment justifies transitively pruning root, b1, or b2, so local
+/// sends all three ancestors — necessary for the remote to catch up.
 #[test]
-fn ancestry_pruning_handles_diamond_dag() {
+fn diamond_dag_with_remote_holding_only_merge_sends_all_ancestors() {
     let root = commit(1, &[]);
     let b1 = commit(2, &[head(1)]);
     let b2 = commit(3, &[head(1)]);
@@ -260,11 +271,19 @@ fn ancestry_pruning_handles_diamond_dag() {
     let summary = remote.fingerprint_summarize(&SEED);
     let diff = local.diff_remote_fingerprints(&summary);
 
-    assert!(diff.local_only_commits.is_empty());
+    let sent_ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+    assert_eq!(diff.local_only_commits.len(), 3);
+    assert!(sent_ids.contains(&head(1)));
+    assert!(sent_ids.contains(&head(2)));
+    assert!(sent_ids.contains(&head(3)));
 }
 
+/// With loose-only state and no fragments, no ancestor pruning is
+/// sound — every non-shared commit gets sent. The remote-side filter
+/// still excludes commit 12 (the one the remote claims), leaving 14
+/// to send.
 #[test]
-fn many_parallel_chains_pruning() {
+fn many_parallel_chains_no_loose_pruning() {
     let mut all_commits = Vec::new();
     for chain_idx in 0..5u8 {
         let base = 10 + chain_idx * 10;
@@ -281,9 +300,8 @@ fn many_parallel_chains_pruning() {
     let summary = remote.fingerprint_summarize(&SEED);
     let diff = local.diff_remote_fingerprints(&summary);
 
-    // Chain 0 is fully pruned (3 ancestors of the shared tip); 4 chains
-    // × 3 commits = 12 remain.
-    assert_eq!(diff.local_only_commits.len(), 12);
+    // 15 total - 1 shared (commit 12) = 14 to send.
+    assert_eq!(diff.local_only_commits.len(), 14);
 }
 
 // One-round-convergence-after-mutual-ingest is covered as a property in
