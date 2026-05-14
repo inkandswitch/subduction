@@ -1,4 +1,4 @@
-//! HTTP long-poll connection implementing [`Transport<K>`].
+//! HTTP long-poll connection implementing [`Transport<Async>`].
 //!
 //! Unlike the WebSocket transport, there are no background listener/sender
 //! tasks. Instead, the HTTP server's request handlers directly push to and
@@ -49,7 +49,7 @@ struct Inner {
     cancel_guard: Mutex<Option<async_channel::Sender<()>>>,
 }
 
-/// An HTTP long-poll connection that implements [`Transport<K>`].
+/// An HTTP long-poll connection that implements [`Transport<Async>`].
 ///
 /// Created during handshake and stored in the [`SessionStore`](crate::session::SessionStore).
 /// The server's HTTP handlers interact with this connection's channels to
@@ -135,21 +135,21 @@ impl HttpLongPollTransport {
 }
 
 #[future_form(Sendable, Local)]
-impl<K: FutureForm> Transport<K> for HttpLongPollTransport {
+impl<Async: FutureForm> Transport<Async> for HttpLongPollTransport {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
         let conn = self.clone();
-        K::from_future(async move {
+        Async::from_future(async move {
             conn.close();
             Ok(())
         })
     }
 
-    fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send_bytes(&self, bytes: &[u8]) -> Async::Future<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "http-lp: sending {} outbound bytes to peer {}",
             bytes.len(),
@@ -158,13 +158,13 @@ impl<K: FutureForm> Transport<K> for HttpLongPollTransport {
 
         let data = bytes.to_vec();
         let tx = self.inner.outbound_tx.clone();
-        K::from_future(async move {
+        Async::from_future(async move {
             tx.send(data).await.map_err(|_| SendError)?;
             Ok(())
         })
     }
 
-    fn recv_bytes(&self) -> K::Future<'_, Result<Vec<u8>, Self::RecvError>> {
+    fn recv_bytes(&self) -> Async::Future<'_, Result<Vec<u8>, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
         tracing::debug!(
             chan_id = self.inner.chan_id,
@@ -172,7 +172,7 @@ impl<K: FutureForm> Transport<K> for HttpLongPollTransport {
             self.inner.peer_id
         );
 
-        K::from_future(async move {
+        Async::from_future(async move {
             let bytes = chan.recv().await.map_err(|_| {
                 tracing::error!("inbound channel closed unexpectedly");
                 RecvError

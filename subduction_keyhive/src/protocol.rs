@@ -69,26 +69,26 @@ use crate::{
 };
 
 /// Shared keyhive instance behind a mutex.
-type SharedKeyhive<K, Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<K, Signer, T, P, C, L, R>>>;
+type SharedKeyhive<Async, Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<Async, Signer, T, P, C, L, R>>>;
 
 /// Keyhive sync protocol handler.
 ///
 /// Manages peer connections and implements the keyhive sync protocol for
 /// reconciling operations between peers. All keyhive access is serialized
 /// through an `Arc<Mutex<Keyhive>>`.
-pub struct KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
+pub struct KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, Async>
 where
-    Signer: AsyncSigner<K> + Clone,
+    Signer: AsyncSigner<Async> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
-    L: MembershipListener<K, Signer, T>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
-    Conn: KeyhiveConnection<K>,
-    Store: KeyhiveStorage<K>,
-    K: future_form::FutureForm,
+    Conn: KeyhiveConnection<Async>,
+    Store: KeyhiveStorage<Async>,
+    Async: future_form::FutureForm,
 {
-    keyhive: SharedKeyhive<K, Signer, T, P, C, L, R>,
+    keyhive: SharedKeyhive<Async, Signer, T, P, C, L, R>,
     storage: Store,
     peer_id: KeyhivePeerId,
     peers: Mutex<Map<KeyhivePeerId, Conn>>,
@@ -96,21 +96,21 @@ where
     archive_config: Option<(usize, StorageHash)>,
     syncpoints: Mutex<SyncpointMap>,
     cache: Mutex<PeriodicEventCache>,
-    _marker: core::marker::PhantomData<K>,
+    _marker: core::marker::PhantomData<Async>,
 }
 
-impl<Signer, T, P, C, L, R, Conn, Store, K> core::fmt::Debug
-    for KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
+impl<Signer, T, P, C, L, R, Conn, Store, Async> core::fmt::Debug
+    for KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, Async>
 where
-    Signer: AsyncSigner<K> + Clone,
+    Signer: AsyncSigner<Async> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
-    L: MembershipListener<K, Signer, T>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
-    Conn: KeyhiveConnection<K>,
-    Store: KeyhiveStorage<K>,
-    K: future_form::FutureForm,
+    Conn: KeyhiveConnection<Async>,
+    Store: KeyhiveStorage<Async>,
+    Async: future_form::FutureForm,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("KeyhiveProtocol")
@@ -119,23 +119,23 @@ where
     }
 }
 
-impl<Signer, T, P, C, L, R, Conn, Store, K> KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
+impl<Signer, T, P, C, L, R, Conn, Store, Async> KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, Async>
 where
-    Signer: AsyncSigner<K> + Clone,
+    Signer: AsyncSigner<Async> + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
-    L: MembershipListener<K, Signer, T>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
-    Conn: KeyhiveConnection<K>,
+    Conn: KeyhiveConnection<Async>,
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
-    Store: KeyhiveStorage<K>,
-    K: future_form::FutureForm,
+    Store: KeyhiveStorage<Async>,
+    Async: future_form::FutureForm,
 {
     /// Create a new protocol handler.
     pub fn new(
-        keyhive: SharedKeyhive<K, Signer, T, P, C, L, R>,
+        keyhive: SharedKeyhive<Async, Signer, T, P, C, L, R>,
         storage: Store,
         peer_id: KeyhivePeerId,
         contact_card: ContactCard,
@@ -282,7 +282,7 @@ where
                 if !skip_serialization.contains(&h)
                     && let Entry::Vacant(e) = event_data.entry(h)
                 {
-                    let event: Event<K, Signer, T, L> = op.clone().into();
+                    let event: Event<Async, Signer, T, L> = op.clone().into();
                     let static_event = StaticEvent::from(event);
                     e.insert(serialize_event_pair(&static_event)?);
                 }
@@ -297,7 +297,7 @@ where
         for (source_id, key_ops) in &all_prekey.ops {
             let events = key_ops
                 .iter()
-                .map(|op| -> Event<K, Signer, T, L> { Event::from(op.as_ref().clone()) });
+                .map(|op| -> Event<Async, Signer, T, L> { Event::from(op.as_ref().clone()) });
             prekey_source_hashes.insert(
                 *source_id,
                 hash_and_insert_events(&mut event_data, events, skip_serialization)?,
@@ -308,7 +308,7 @@ where
         for (source_id, cgka_ops) in &all_cgka.ops {
             let events = cgka_ops
                 .iter()
-                .map(|op| -> Event<K, Signer, T, L> { Event::from(op.clone()) });
+                .map(|op| -> Event<Async, Signer, T, L> { Event::from(op.clone()) });
             cgka_source_hashes.insert(
                 *source_id,
                 hash_and_insert_events(&mut event_data, events, skip_serialization)?,
@@ -1239,17 +1239,17 @@ where
 }
 
 /// Get sync-relevant events for an agent: membership, prekey, and CGKA operations.
-async fn sync_events_for_agent<K, Signer, T, P, C, L, R>(
-    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
-    agent: &Agent<K, Signer, T, L>,
+async fn sync_events_for_agent<Async, Signer, T, P, C, L, R>(
+    keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
+    agent: &Agent<Async, Signer, T, L>,
 ) -> Map<Digest<StaticEvent<T>>, StaticEvent<T>>
 where
-    K: future_form::FutureForm,
-    Signer: AsyncSigner<K> + Clone,
+    Async: future_form::FutureForm,
+    Signer: AsyncSigner<Async> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
-    L: MembershipListener<K, Signer, T>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
 {
     keyhive
@@ -1262,16 +1262,16 @@ where
 /// Hash, serialize, and deduplicate events into `event_data`, returning hashes.
 ///
 /// Hashes present in `skip_serialization` are recorded but not serialized.
-fn hash_and_insert_events<K, Signer, T, L, E>(
+fn hash_and_insert_events<Async, Signer, T, L, E>(
     event_data: &mut BTreeMap<EventHash, (EventBytes, CborBytes)>,
-    events: impl Iterator<Item = Event<K, Signer, T, L>>,
+    events: impl Iterator<Item = Event<Async, Signer, T, L>>,
     skip_serialization: &BTreeSet<EventHash>,
 ) -> Result<Vec<EventHash>, ProtocolError<E>>
 where
-    K: future_form::FutureForm,
-    Signer: AsyncSigner<K> + Clone,
+    Async: future_form::FutureForm,
+    Signer: AsyncSigner<Async> + Clone,
     T: ContentRef,
-    L: MembershipListener<K, Signer, T>,
+    L: MembershipListener<Async, Signer, T>,
     E: core::error::Error + 'static,
 {
     let mut hashes = Vec::new();

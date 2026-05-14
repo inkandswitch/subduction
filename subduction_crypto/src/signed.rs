@@ -307,8 +307,8 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     ///
     /// * `signer` - The signer to use
     /// * `payload` - The payload to sign
-    pub async fn seal<K: future_form::FutureForm, S: Signer<K>>(
-        signer: &S,
+    pub async fn seal<Async: future_form::FutureForm, Sign: Signer<Async>>(
+        signer: &Sign,
         payload: T,
     ) -> VerifiedSignature<T> {
         let issuer = signer.verifying_key();

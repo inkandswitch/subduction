@@ -43,7 +43,7 @@ use crate::topic::Topic;
 ///
 /// `authorize_subscribe` is checked at subscribe time (courtesy) and
 /// re-checked at forward time (security invariant — handles revocation).
-pub trait EphemeralPolicy<K: FutureForm + ?Sized> {
+pub trait EphemeralPolicy<Async: FutureForm + ?Sized> {
     /// Error returned when a subscribe is disallowed.
     type SubscribeDisallowed: core::error::Error;
 
@@ -55,14 +55,14 @@ pub trait EphemeralPolicy<K: FutureForm + ?Sized> {
         &self,
         peer: PeerId,
         id: Topic,
-    ) -> K::Future<'_, Result<(), Self::SubscribeDisallowed>>;
+    ) -> Async::Future<'_, Result<(), Self::SubscribeDisallowed>>;
 
     /// Check whether `peer` may publish ephemeral messages to `id`.
     fn authorize_publish(
         &self,
         peer: PeerId,
         id: Topic,
-    ) -> K::Future<'_, Result<(), Self::PublishDisallowed>>;
+    ) -> Async::Future<'_, Result<(), Self::PublishDisallowed>>;
 
     /// Batch-filter subscribers to only those currently authorized.
     ///
@@ -71,7 +71,7 @@ pub trait EphemeralPolicy<K: FutureForm + ?Sized> {
         &self,
         id: Topic,
         peers: Vec<PeerId>,
-    ) -> K::Future<'_, Vec<PeerId>>;
+    ) -> Async::Future<'_, Vec<PeerId>>;
 }
 
 /// An open policy that allows all ephemeral operations.
@@ -82,7 +82,7 @@ pub trait EphemeralPolicy<K: FutureForm + ?Sized> {
 pub struct OpenEphemeralPolicy;
 
 #[future_form(Sendable, Local)]
-impl<K: FutureForm> EphemeralPolicy<K> for OpenEphemeralPolicy {
+impl<Async: FutureForm> EphemeralPolicy<Async> for OpenEphemeralPolicy {
     type SubscribeDisallowed = Infallible;
     type PublishDisallowed = Infallible;
 
@@ -90,23 +90,23 @@ impl<K: FutureForm> EphemeralPolicy<K> for OpenEphemeralPolicy {
         &self,
         _peer: PeerId,
         _id: Topic,
-    ) -> K::Future<'_, Result<(), Self::SubscribeDisallowed>> {
-        K::from_future(async { Ok(()) })
+    ) -> Async::Future<'_, Result<(), Self::SubscribeDisallowed>> {
+        Async::from_future(async { Ok(()) })
     }
 
     fn authorize_publish(
         &self,
         _peer: PeerId,
         _id: Topic,
-    ) -> K::Future<'_, Result<(), Self::PublishDisallowed>> {
-        K::from_future(async { Ok(()) })
+    ) -> Async::Future<'_, Result<(), Self::PublishDisallowed>> {
+        Async::from_future(async { Ok(()) })
     }
 
     fn filter_authorized_subscribers(
         &self,
         _id: Topic,
         peers: Vec<PeerId>,
-    ) -> K::Future<'_, Vec<PeerId>> {
-        K::from_future(async { peers })
+    ) -> Async::Future<'_, Vec<PeerId>> {
+        Async::from_future(async { peers })
     }
 }

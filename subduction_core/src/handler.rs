@@ -19,27 +19,27 @@
 //!     storage: Arc<MyStorage>,
 //! }
 //!
-//! impl<K, C> Handler<K, C> for MyHandler
+//! impl<Async, Conn> Handler<Async, Conn> for MyHandler
 //! where
-//!     K: FutureForm,
-//!     C: Clone,
+//!     Async: FutureForm,
+//!     Conn: Clone,
 //! {
 //!     type Message = SyncMessage;
 //!     type HandlerError = MyError;
 //!
 //!     fn handle<'a>(
 //!         &'a self,
-//!         conn: &'a Authenticated<C, K>,
+//!         conn: &'a Authenticated<Conn, Async>,
 //!         message: SyncMessage,
-//!     ) -> K::Future<'a, Result<(), MyError>> {
-//!         K::from_future(async move {
+//!     ) -> Async::Future<'a, Result<(), MyError>> {
+//!         Async::from_future(async move {
 //!             // process message ...
 //!             Ok(())
 //!         })
 //!     }
 //!
-//!     fn on_peer_disconnect(&self, _peer: PeerId) -> K::Future<'_, ()> {
-//!         K::from_future(async {})
+//!     fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
+//!         Async::from_future(async {})
 //!     }
 //! }
 //! ```
@@ -72,12 +72,12 @@ use crate::{
 ///
 /// # Type Parameters
 ///
-/// `C` is minimally bounded (`Clone`) because [`Authenticated<C, K>`]
+/// `Conn` is minimally bounded (`Clone`) because [`Authenticated<Conn, Async>`]
 /// requires it. Individual impls specify their own additional bounds
-/// (e.g., `C: Connection<K, SyncMessage>`).
+/// (e.g., `Conn: Connection<Async, SyncMessage>`).
 ///
-/// [`Authenticated<C, K>`]: crate::authenticated::Authenticated
-pub trait Handler<K: FutureForm, C: Clone> {
+/// [`Authenticated<Conn, Async>`]: crate::authenticated::Authenticated
+pub trait Handler<Async: FutureForm, Conn: Clone> {
     /// The message type this handler processes.
     ///
     /// For the standard Subduction protocol, this is
@@ -98,9 +98,9 @@ pub trait Handler<K: FutureForm, C: Clone> {
     /// The returned future borrows both `self` and `conn` for lifetime `'a`.
     fn handle<'a>(
         &'a self,
-        conn: &'a Authenticated<C, K>,
+        conn: &'a Authenticated<Conn, Async>,
         message: Self::Message,
-    ) -> K::Future<'a, Result<(), Self::HandlerError>>;
+    ) -> Async::Future<'a, Result<(), Self::HandlerError>>;
 
     /// Extract a [`BatchSyncResponse`] from a message, if present.
     ///
@@ -132,5 +132,5 @@ pub trait Handler<K: FutureForm, C: Clone> {
     /// that the peer has no remaining connections.
     ///
     /// [`remove_connection`]: crate::subduction::Subduction::remove_connection
-    fn on_peer_disconnect(&self, peer: PeerId) -> K::Future<'_, ()>;
+    fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()>;
 }

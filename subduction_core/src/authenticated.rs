@@ -1,6 +1,6 @@
 //! Authenticated connection wrapper.
 //!
-//! Provides [`Authenticated<C, K>`], a witness type proving that a connection
+//! Provides [`Authenticated<Conn, Async>`], a witness type proving that a connection
 //! has completed cryptographic handshake verification.
 
 use core::marker::PhantomData;
@@ -21,8 +21,8 @@ use crate::{
 ///
 /// # Type Parameters
 ///
-/// * `C` — The connection type (struct bound relaxed to `Clone`)
-/// * `K` — The [`FutureForm`] (e.g., [`Sendable`] or [`Local`])
+/// * `Conn` — The connection type (struct bound relaxed to `Clone`)
+/// * `Async` — The [`FutureForm`] (e.g., [`Sendable`] or [`Local`])
 ///
 /// [`Sendable`]: future_form::Sendable
 /// [`Local`]: future_form::Local
@@ -34,13 +34,13 @@ use crate::{
 ///
 /// [`handshake::initiate`]: super::handshake::initiate
 /// [`handshake::respond`]: super::handshake::respond
-pub struct Authenticated<C: Clone, K: FutureForm> {
-    inner: C,
+pub struct Authenticated<Conn: Clone, Async: FutureForm> {
+    inner: Conn,
     peer_id: PeerId,
-    _marker: PhantomData<fn() -> K>,
+    _marker: PhantomData<fn() -> Async>,
 }
 
-impl<C: Clone, K: FutureForm> Clone for Authenticated<C, K> {
+impl<Conn: Clone, Async: FutureForm> Clone for Authenticated<Conn, Async> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -50,13 +50,15 @@ impl<C: Clone, K: FutureForm> Clone for Authenticated<C, K> {
     }
 }
 
-impl<C: Clone + PartialEq, K: FutureForm> PartialEq for Authenticated<C, K> {
+impl<Conn: Clone + PartialEq, Async: FutureForm> PartialEq for Authenticated<Conn, Async> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
 }
 
-impl<C: Clone + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Authenticated<C, K> {
+impl<Conn: Clone + core::fmt::Debug, Async: FutureForm> core::fmt::Debug
+    for Authenticated<Conn, Async>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Authenticated")
             .field("peer_id", &self.peer_id)
@@ -65,7 +67,7 @@ impl<C: Clone + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Authentica
     }
 }
 
-impl<C: Clone, K: FutureForm> Authenticated<C, K> {
+impl<Conn: Clone, Async: FutureForm> Authenticated<Conn, Async> {
     /// Construct from a successful handshake.
     ///
     /// This is only accessible within the `connection` module.
@@ -74,7 +76,7 @@ impl<C: Clone, K: FutureForm> Authenticated<C, K> {
     ///
     /// [`handshake::initiate`]: super::handshake::initiate
     /// [`handshake::respond`]: super::handshake::respond
-    pub(crate) fn from_handshake(inner: C, peer_id: PeerId) -> Self {
+    pub(crate) fn from_handshake(inner: Conn, peer_id: PeerId) -> Self {
         Self {
             inner,
             peer_id,
@@ -93,7 +95,7 @@ impl<C: Clone, K: FutureForm> Authenticated<C, K> {
     /// type (e.g., `WebSocket` → `UnifiedWebSocket`) while preserving the
     /// proof that the underlying connection completed handshake verification.
     #[must_use]
-    pub fn map<D: Clone>(self, f: impl FnOnce(C) -> D) -> Authenticated<D, K> {
+    pub fn map<D: Clone>(self, f: impl FnOnce(Conn) -> D) -> Authenticated<D, Async> {
         Authenticated {
             inner: f(self.inner),
             peer_id: self.peer_id,
@@ -105,7 +107,7 @@ impl<C: Clone, K: FutureForm> Authenticated<C, K> {
     ///
     /// This bypasses handshake verification and should only be used in tests.
     #[cfg(any(test, feature = "test_utils"))]
-    pub fn new_for_test(inner: C, peer_id: PeerId) -> Self {
+    pub fn new_for_test(inner: Conn, peer_id: PeerId) -> Self {
         Self {
             inner,
             peer_id,
@@ -114,44 +116,44 @@ impl<C: Clone, K: FutureForm> Authenticated<C, K> {
     }
 
     /// Access the inner connection.
-    pub const fn inner(&self) -> &C {
+    pub const fn inner(&self) -> &Conn {
         &self.inner
     }
 
     /// Consume and return the inner connection.
-    pub fn into_inner(self) -> C {
+    pub fn into_inner(self) -> Conn {
         self.inner
     }
 }
 
 // ── Delegation impls ────────────────────────────────────────────────────
 
-impl<C: Connection<K, M>, K: FutureForm, M: Encode + Decode> Connection<K, M>
-    for Authenticated<C, K>
+impl<Conn: Connection<Async, WireMsg>, Async: FutureForm, WireMsg: Encode + Decode>
+    Connection<Async, WireMsg> for Authenticated<Conn, Async>
 {
-    type DisconnectionError = C::DisconnectionError;
-    type SendError = C::SendError;
-    type RecvError = C::RecvError;
+    type DisconnectionError = Conn::DisconnectionError;
+    type SendError = Conn::SendError;
+    type RecvError = Conn::RecvError;
 
-    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }
 
-    fn send(&self, message: &M) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &WireMsg) -> Async::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
 
-    fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>> {
+    fn recv(&self) -> Async::Future<'_, Result<WireMsg, Self::RecvError>> {
         self.inner.recv()
     }
 }
 
-impl<C: Reconnect<K, M>, K: FutureForm, M: Encode + Decode> Reconnect<K, M>
-    for Authenticated<C, K>
+impl<Conn: Reconnect<Async, WireMsg>, Async: FutureForm, WireMsg: Encode + Decode>
+    Reconnect<Async, WireMsg> for Authenticated<Conn, Async>
 {
-    type ReconnectionError = C::ReconnectionError;
+    type ReconnectionError = Conn::ReconnectionError;
 
-    fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ReconnectionError>> {
+    fn reconnect(&mut self) -> Async::Future<'_, Result<(), Self::ReconnectionError>> {
         self.inner.reconnect()
     }
 

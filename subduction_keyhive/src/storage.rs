@@ -76,7 +76,7 @@ impl StorageHash {
 /// Archives contain the full keyhive state, while events are individual
 /// operations.
 #[allow(clippy::type_complexity)]
-pub trait KeyhiveStorage<K: FutureForm> {
+pub trait KeyhiveStorage<Async: FutureForm> {
     /// The error type for storage operations.
     type Error: core::error::Error;
 
@@ -88,16 +88,16 @@ pub trait KeyhiveStorage<K: FutureForm> {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Load all archives from storage.
     ///
     /// Returns a vector of (hash, data) pairs for all stored archives.
     #[allow(clippy::type_complexity)]
-    fn load_archives(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
+    fn load_archives(&self) -> Async::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
 
     /// Delete an archive from storage.
-    fn delete_archive(&self, hash: StorageHash) -> K::Future<'_, Result<(), Self::Error>>;
+    fn delete_archive(&self, hash: StorageHash) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Save an event to storage.
     ///
@@ -107,16 +107,16 @@ pub trait KeyhiveStorage<K: FutureForm> {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Load all events from storage.
     ///
     /// Returns a vector of (hash, data) pairs for all stored events.
     #[allow(clippy::type_complexity)]
-    fn load_events(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
+    fn load_events(&self) -> Async::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
 
     /// Delete an event from storage.
-    fn delete_event(&self, hash: StorageHash) -> K::Future<'_, Result<(), Self::Error>>;
+    fn delete_event(&self, hash: StorageHash) -> Async::Future<'_, Result<(), Self::Error>>;
 }
 
 /// An in-memory storage backend for testing.

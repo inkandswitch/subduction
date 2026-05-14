@@ -138,14 +138,14 @@ impl<T: HasBlobMeta + Schema + EncodeFields + DecodeFields> VerifiedMeta<T> {
     ///     verified_blob,
     /// ).await;
     /// ```
-    pub async fn seal<K: FutureForm, S: Signer<K>>(
-        signer: &S,
+    pub async fn seal<Async: FutureForm, Sign: Signer<Async>>(
+        signer: &Sign,
         args: T::Args,
         verified_blob: VerifiedBlobMeta,
     ) -> Self {
         let (blob_meta, blob) = verified_blob.into_parts();
         let meta = T::from_args(args, blob_meta);
-        let verified = Signed::seal::<K, _>(signer, meta).await;
+        let verified = Signed::seal::<Async, _>(signer, meta).await;
         Self { verified, blob }
     }
 

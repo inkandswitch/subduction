@@ -30,14 +30,14 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 /// The powerbox holds both the storage backend and the authorization policy,
 /// making it the single trust boundary for capability minting.
 #[derive(Debug)]
-pub struct StoragePowerbox<S, P> {
-    storage: Arc<S>,
-    policy: Arc<P>,
+pub struct StoragePowerbox<Store, Auth> {
+    storage: Arc<Store>,
+    policy: Arc<Auth>,
 }
 
-impl<S, P> StoragePowerbox<S, P> {
+impl<Store, Auth> StoragePowerbox<Store, Auth> {
     /// Create a new powerbox wrapping the given storage and policy.
-    pub fn new(storage: S, policy: Arc<P>) -> Self {
+    pub fn new(storage: Store, policy: Arc<Auth>) -> Self {
         Self {
             storage: Arc::new(storage),
             policy,
@@ -48,7 +48,7 @@ impl<S, P> StoragePowerbox<S, P> {
     ///
     /// This is useful for connection policy decisions outside of storage access.
     #[must_use]
-    pub fn policy(&self) -> &P {
+    pub fn policy(&self) -> &Auth {
         &self.policy
     }
 
@@ -56,7 +56,7 @@ impl<S, P> StoragePowerbox<S, P> {
     ///
     /// This is useful when you need shared ownership of the policy.
     #[must_use]
-    pub fn policy_arc(&self) -> Arc<P> {
+    pub fn policy_arc(&self) -> Arc<Auth> {
         self.policy.clone()
     }
 
@@ -65,9 +65,12 @@ impl<S, P> StoragePowerbox<S, P> {
     /// Use this for compaction, garbage collection, and other local-only
     /// delete operations. Never hand this capability to peers.
     #[must_use]
-    pub fn local_destroyer<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Destroyer<K, S>
+    pub fn local_destroyer<Async: FutureForm>(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Destroyer<Async, Store>
     where
-        S: Storage<K>,
+        Store: Storage<Async>,
     {
         Destroyer::new(self.storage.clone(), sedimentree_id)
     }
@@ -79,14 +82,14 @@ impl<S, P> StoragePowerbox<S, P> {
     /// # Errors
     ///
     /// Returns the policy's `FetchDisallowed` error if authorization fails.
-    pub async fn get_fetcher<K: FutureForm>(
+    pub async fn get_fetcher<Async: FutureForm>(
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> Result<Fetcher<K, S>, P::FetchDisallowed>
+    ) -> Result<Fetcher<Async, Store>, Auth::FetchDisallowed>
     where
-        S: Storage<K>,
-        P: StoragePolicy<K>,
+        Store: Storage<Async>,
+        Auth: StoragePolicy<Async>,
     {
         self.policy.authorize_fetch(peer, sedimentree_id).await?;
         Ok(Fetcher::new(self.storage.clone(), sedimentree_id))
@@ -104,15 +107,15 @@ impl<S, P> StoragePowerbox<S, P> {
     /// # Errors
     ///
     /// Returns the policy's `PutDisallowed` error if authorization fails.
-    pub async fn get_putter<K: FutureForm>(
+    pub async fn get_putter<Async: FutureForm>(
         &self,
         requestor: PeerId,
         author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
-    ) -> Result<Putter<K, S>, P::PutDisallowed>
+    ) -> Result<Putter<Async, Store>, Auth::PutDisallowed>
     where
-        S: Storage<K>,
-        P: StoragePolicy<K>,
+        Store: Storage<Async>,
+        Auth: StoragePolicy<Async>,
     {
         self.policy
             .authorize_put(requestor, author, sedimentree_id)
@@ -131,9 +134,12 @@ impl<S, P> StoragePowerbox<S, P> {
     /// [`add_commit`]: crate::subduction::Subduction::add_commit
     /// [`add_fragment`]: crate::subduction::Subduction::add_fragment
     #[must_use]
-    pub(crate) fn local_putter<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Putter<K, S>
+    pub(crate) fn local_putter<Async: FutureForm>(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Putter<Async, Store>
     where
-        S: Storage<K>,
+        Store: Storage<Async>,
     {
         Putter::new(self.storage.clone(), sedimentree_id)
     }
@@ -147,12 +153,12 @@ impl<S, P> StoragePowerbox<S, P> {
     /// All other access should go through [`get_fetcher`](Self::get_fetcher)
     /// or [`get_putter`](Self::get_putter).
     #[must_use]
-    pub(crate) fn hydration_access(&self) -> LocalStorageAccess<S> {
+    pub(crate) fn hydration_access(&self) -> LocalStorageAccess<Store> {
         LocalStorageAccess::new(self.storage.clone())
     }
 }
 
-impl<S, P> Clone for StoragePowerbox<S, P> {
+impl<Store, Auth> Clone for StoragePowerbox<Store, Auth> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),

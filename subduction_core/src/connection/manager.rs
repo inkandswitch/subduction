@@ -28,18 +28,18 @@ type TaskId = usize;
 
 /// Commands that can be sent to the [`ConnectionManager`].
 #[derive(Debug)]
-pub enum Command<C> {
+pub enum Command<Conn> {
     /// Add a new connection to be managed.
     ///
     /// The manager assigns a new [`ConnectionId`] and returns it via the closed channel
     /// when the connection drops.
-    Add(C, PeerId),
+    Add(Conn, PeerId),
 
     /// Re-add a reconnected connection, preserving its [`ConnectionId`].
     ///
     /// Used after a successful reconnection to restore the connection to the manager
     /// with the same logical identity.
-    ReAdd(ConnectionId, C, PeerId),
+    ReAdd(ConnectionId, Conn, PeerId),
 
     /// Remove a connection by its [`ConnectionId`] (aborts its task immediately).
     RemoveById(ConnectionId),
@@ -47,26 +47,26 @@ pub enum Command<C> {
     /// Remove a connection by reference (aborts its task immediately).
     ///
     /// Useful when you have a connection object but not its ID.
-    Remove(C),
+    Remove(Conn),
 }
 
 /// Trait for spawning connection handler tasks.
 ///
 /// Implement this for your runtime (e.g., tokio, async-std, wasm-bindgen-futures).
-pub trait Spawn<K: FutureForm> {
+pub trait Spawn<Async: FutureForm> {
     /// Spawn a future as a background task.
     ///
     /// The future should be driven to completion. The returned [`AbortHandle`]
     /// can be used to cancel the task.
-    fn spawn(&self, fut: K::Future<'static, ()>) -> AbortHandle;
+    fn spawn(&self, fut: Async::Future<'static, ()>) -> AbortHandle;
 }
 
 /// Manages connections by spawning an independent task for each one.
 ///
 /// Unlike [`SelectAll`]-based approaches, each connection runs in its own task,
 /// providing isolation and (on multi-threaded runtimes) true parallelism.
-pub struct ConnectionManager<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> {
-    spawner: S,
+pub struct ConnectionManager<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>> {
+    spawner: Spawner,
 
     /// Counter for generating internal task IDs.
     next_task_id: AtomicUsize,
@@ -76,15 +76,15 @@ pub struct ConnectionManager<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> 
 
     /// Active tasks: maps (`ConnectionId`, `TaskId`) to (`AbortHandle`, `Connection`).
     ///
-    /// The connection is stored to enable `Remove(C)` lookup via `PartialEq`.
+    /// The connection is stored to enable `Remove(Conn)` lookup via `PartialEq`.
     #[allow(clippy::type_complexity)]
-    tasks: Arc<Mutex<Vec<(ConnectionId, TaskId, AbortHandle, C)>>>,
+    tasks: Arc<Mutex<Vec<(ConnectionId, TaskId, AbortHandle, Conn)>>>,
 
     /// Inbound commands (add/remove connections).
-    commands: async_channel::Receiver<Command<C>>,
+    commands: async_channel::Receiver<Command<Conn>>,
 
     /// Outbound messages from all connections (bounded — provides backpressure).
-    messages: async_channel::Sender<(C, M)>,
+    messages: async_channel::Sender<(Conn, WireMsg)>,
 
     /// Fast path for response messages (bounded at high capacity).
     ///
@@ -93,30 +93,30 @@ pub struct ConnectionManager<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> 
     /// by a full request queue. Bounded at 8192 to cap memory usage if a
     /// peer floods fake responses; legitimate use never exceeds a few
     /// hundred concurrent in-flight requests.
-    responses: async_channel::Sender<(C, M)>,
+    responses: async_channel::Sender<(Conn, WireMsg)>,
 
     /// Predicate to identify response messages that should use the fast path.
-    is_response: fn(&M) -> bool,
+    is_response: fn(&WireMsg) -> bool,
 
     /// Notification when a connection closes (either normally or due to error).
     ///
     /// Sends the [`ConnectionId`] and connection object so the caller can
     /// decide whether to attempt reconnection.
-    closed: async_channel::Sender<(ConnectionId, C)>,
+    closed: async_channel::Sender<(ConnectionId, Conn)>,
 
-    _marker: core::marker::PhantomData<K>,
+    _marker: core::marker::PhantomData<Async>,
 }
 
-impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> ConnectionManager<K, C, M, S> {
+impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>> ConnectionManager<Async, Conn, WireMsg, Spawner> {
     /// Create a new [`ConnectionManager`].
     #[must_use]
     pub fn new(
-        spawner: S,
-        commands: async_channel::Receiver<Command<C>>,
-        messages: async_channel::Sender<(C, M)>,
-        responses: async_channel::Sender<(C, M)>,
-        is_response: fn(&M) -> bool,
-        closed: async_channel::Sender<(ConnectionId, C)>,
+        spawner: Spawner,
+        commands: async_channel::Receiver<Command<Conn>>,
+        messages: async_channel::Sender<(Conn, WireMsg)>,
+        responses: async_channel::Sender<(Conn, WireMsg)>,
+        is_response: fn(&WireMsg) -> bool,
+        closed: async_channel::Sender<(ConnectionId, Conn)>,
     ) -> Self {
         Self {
             spawner,
@@ -138,10 +138,10 @@ impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> ConnectionManager<K, C, 
     }
 }
 
-impl<K: FutureForm, C: Connection<K, M>, M: Encode + Decode, S: Spawn<K>>
-    ConnectionManager<K, C, M, S>
+impl<Async: FutureForm, Conn: Connection<Async, WireMsg>, WireMsg: Encode + Decode, Spawner: Spawn<Async>>
+    ConnectionManager<Async, Conn, WireMsg, Spawner>
 {
-    async fn remove_connection_by_ref(&self, conn: &C) {
+    async fn remove_connection_by_ref(&self, conn: &Conn) {
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(_, _, _, c)| c == conn) {
             let (conn_id, task_id, handle, _) = tasks.swap_remove(pos);
@@ -166,40 +166,40 @@ impl<K: FutureForm, C: Connection<K, M>, M: Encode + Decode, S: Spawn<K>>
 
 /// Trait for running the connection manager.
 ///
-/// This trait enables generic code to call `run()` on `ConnectionManager<K, C, M, S>`
-/// without knowing whether K is `Sendable` or `Local`.
-pub trait RunManager<C, M: Encode + Decode>: FutureForm + Sized {
+/// This trait enables generic code to call `run()` on `ConnectionManager<Async, Conn, WireMsg, Spawner>`
+/// without knowing whether Async is `Sendable` or `Local`.
+pub trait RunManager<Conn, WireMsg: Encode + Decode>: FutureForm + Sized {
     /// Run the manager, processing commands to add/remove connections.
-    fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
-        manager: ConnectionManager<Self, C, M, S>,
+    fn run_manager<Spawner: Spawn<Self> + Send + Sync + 'static>(
+        manager: ConnectionManager<Self, Conn, WireMsg, Spawner>,
     ) -> Self::Future<'static, ()>
     where
-        C: Connection<Self, M> + Clone + 'static;
+        Conn: Connection<Self, WireMsg> + Clone + 'static;
 }
 
-impl<K: FutureForm + RunManager<C, M>, C, M: Encode + Decode, S: Spawn<K> + Send + Sync + 'static>
-    ConnectionManager<K, C, M, S>
+impl<Async: FutureForm + RunManager<Conn, WireMsg>, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async> + Send + Sync + 'static>
+    ConnectionManager<Async, Conn, WireMsg, Spawner>
 {
     /// Run the manager, processing commands to add/remove connections.
-    pub fn run(self) -> K::Future<'static, ()>
+    pub fn run(self) -> Async::Future<'static, ()>
     where
-        C: Connection<K, M> + Clone + 'static,
+        Conn: Connection<Async, WireMsg> + Clone + 'static,
     {
-        K::run_manager(self)
+        Async::run_manager(self)
     }
 }
 
 // Implementations of RunManager for Sendable and Local
 #[future_form(
-    Sendable where C: Connection<Sendable, M> + Clone + Send + Sync + 'static, C::RecvError: Send, M: Send + Sync + 'static,
-    Local where C: Connection<Local, M> + Clone + 'static, M: 'static
+    Sendable where Conn: Connection<Sendable, WireMsg> + Clone + Send + Sync + 'static, Conn::RecvError: Send, WireMsg: Send + Sync + 'static,
+    Local where Conn: Connection<Local, WireMsg> + Clone + 'static, WireMsg: 'static
 )]
-impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
+impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg> for Async {
     #[allow(clippy::too_many_lines)]
-    fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
-        manager: ConnectionManager<Self, C, M, S>,
+    fn run_manager<Spawner: Spawn<Self> + Send + Sync + 'static>(
+        manager: ConnectionManager<Self, Conn, WireMsg, Spawner>,
     ) -> Self::Future<'static, ()> {
-        K::from_future(async move {
+        Async::from_future(async move {
             while let Ok(cmd) = manager.commands.recv().await {
                 match cmd {
                     Command::Add(conn, peer_id) => {
@@ -218,7 +218,7 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
                         let closed = manager.closed.clone();
                         let conn_clone = conn.clone();
 
-                        let fut = K::from_future(async move {
+                        let fut = Async::from_future(async move {
                             connection_loop(
                                 conn_clone.clone(),
                                 peer_id,
@@ -232,7 +232,7 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
                             let mut tasks_guard = tasks.lock().await;
                             let target_id: TaskId = task_id;
                             if let Some(pos) = tasks_guard.iter().position(
-                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, C)| {
+                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, Conn)| {
                                     *id == target_id
                                 },
                             ) {
@@ -264,7 +264,7 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
                         let closed = manager.closed.clone();
                         let conn_clone = conn.clone();
 
-                        let fut = K::from_future(async move {
+                        let fut = Async::from_future(async move {
                             connection_loop(
                                 conn_clone.clone(),
                                 peer_id,
@@ -278,7 +278,7 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
                             let mut tasks_guard = tasks.lock().await;
                             let target_id: TaskId = task_id;
                             if let Some(pos) = tasks_guard.iter().position(
-                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, C)| {
+                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, Conn)| {
                                     *id == target_id
                                 },
                             ) {
@@ -307,7 +307,7 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
             }
             tracing::debug!("ConnectionManager: command channel closed, shutting down");
 
-            // Abort outstanding `connection_loop`s and drop our `C` clones
+            // Abort outstanding `connection_loop`s and drop our `Conn` clones
             // so transports with `Clone`d channel senders (e.g. WebSocket)
             // can close their inbound channels.
             let mut tasks_guard = manager.tasks.lock().await;
@@ -323,12 +323,12 @@ impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
     }
 }
 
-async fn connection_loop<K: FutureForm, C: Connection<K, M>, M: Encode + Decode>(
-    conn: C,
+async fn connection_loop<Async: FutureForm, Conn: Connection<Async, WireMsg>, WireMsg: Encode + Decode>(
+    conn: Conn,
     peer_id: PeerId,
-    messages: async_channel::Sender<(C, M)>,
-    responses: async_channel::Sender<(C, M)>,
-    is_response: fn(&M) -> bool,
+    messages: async_channel::Sender<(Conn, WireMsg)>,
+    responses: async_channel::Sender<(Conn, WireMsg)>,
+    is_response: fn(&WireMsg) -> bool,
 ) {
     loop {
         match conn.recv().await {
@@ -352,8 +352,8 @@ async fn connection_loop<K: FutureForm, C: Connection<K, M>, M: Encode + Decode>
     }
 }
 
-impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> core::fmt::Debug
-    for ConnectionManager<K, C, M, S>
+impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>> core::fmt::Debug
+    for ConnectionManager<Async, Conn, WireMsg, Spawner>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectionManager").finish_non_exhaustive()
@@ -363,13 +363,13 @@ impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> core::fmt::Debug
 /// A future representing the running [`ConnectionManager`].
 ///
 /// This allows the caller to monitor and control the lifecycle of the manager.
-pub struct ManagerFuture<K: FutureForm> {
-    fut: core::pin::Pin<alloc::boxed::Box<futures::stream::Abortable<K::Future<'static, ()>>>>,
+pub struct ManagerFuture<Async: FutureForm> {
+    fut: core::pin::Pin<alloc::boxed::Box<futures::stream::Abortable<Async::Future<'static, ()>>>>,
 }
 
-impl<K: FutureForm> ManagerFuture<K> {
+impl<Async: FutureForm> ManagerFuture<Async> {
     /// Create a new manager future from an abortable future.
-    pub fn new(fut: futures::stream::Abortable<K::Future<'static, ()>>) -> Self {
+    pub fn new(fut: futures::stream::Abortable<Async::Future<'static, ()>>) -> Self {
         Self {
             fut: alloc::boxed::Box::pin(fut),
         }
@@ -382,7 +382,7 @@ impl<K: FutureForm> ManagerFuture<K> {
     }
 }
 
-impl<K: FutureForm> core::future::Future for ManagerFuture<K> {
+impl<Async: FutureForm> core::future::Future for ManagerFuture<Async> {
     type Output = Result<(), futures::stream::Aborted>;
 
     fn poll(
@@ -393,9 +393,9 @@ impl<K: FutureForm> core::future::Future for ManagerFuture<K> {
     }
 }
 
-impl<K: FutureForm> Unpin for ManagerFuture<K> {}
+impl<Async: FutureForm> Unpin for ManagerFuture<Async> {}
 
-impl<K: FutureForm> core::fmt::Debug for ManagerFuture<K> {
+impl<Async: FutureForm> core::fmt::Debug for ManagerFuture<Async> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ManagerFuture")
             .field("is_aborted", &self.is_aborted())

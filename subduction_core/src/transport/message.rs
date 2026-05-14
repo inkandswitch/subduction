@@ -72,33 +72,33 @@ pub enum RecvDecodeError<R: core::error::Error> {
         T::SendError: Send + 'static,
         T::RecvError: Send + 'static,
         T::DisconnectionError: Send + 'static,
-        M: Encode + Decode + Send + 'static,
+        WireMsg: Encode + Decode + Send + 'static,
     Local where
         T: Transport<Local>,
-        M: Encode + Decode + 'static
+        WireMsg: Encode + Decode + 'static
 )]
-impl<K: FutureForm, T, M> Connection<K, M> for MessageTransport<T> {
+impl<Async: FutureForm, T, WireMsg> Connection<Async, WireMsg> for MessageTransport<T> {
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = RecvDecodeError<T::RecvError>;
 
-    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }
 
-    fn send(&self, message: &M) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &WireMsg) -> Async::Future<'_, Result<(), Self::SendError>> {
         let bytes = message.encode();
-        K::from_future(async move { self.inner.send_bytes(&bytes).await })
+        Async::from_future(async move { self.inner.send_bytes(&bytes).await })
     }
 
-    fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>> {
-        K::from_future(async move {
+    fn recv(&self) -> Async::Future<'_, Result<WireMsg, Self::RecvError>> {
+        Async::from_future(async move {
             let bytes = self
                 .inner
                 .recv_bytes()
                 .await
                 .map_err(RecvDecodeError::Recv)?;
-            M::try_decode(&bytes).map_err(RecvDecodeError::from)
+            WireMsg::try_decode(&bytes).map_err(RecvDecodeError::from)
         })
     }
 }

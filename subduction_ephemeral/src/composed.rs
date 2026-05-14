@@ -122,23 +122,23 @@ pub enum ComposedHandlerError<S: core::error::Error, E: core::error::Error> {
 ///
 /// This works because [`MessageTransport`]-based connections have error
 /// types that are independent of the message generic `M`, so
-/// `ListenError<F,S,C,SyncMessage>` can be retyped to
-/// `ListenError<F,S,C,W>` without loss of information.
-impl<F, S, C, W, EphErr> From<ComposedHandlerError<ListenError<F, S, C, SyncMessage>, EphErr>>
-    for ListenError<F, S, C, W>
+/// `ListenError<Async,Store,Conn,SyncMessage>` can be retyped to
+/// `ListenError<Async,Store,Conn,WireMsg>` without loss of information.
+impl<Async, Store, Conn, WireMsg, EphErr> From<ComposedHandlerError<ListenError<Async, Store, Conn, SyncMessage>, EphErr>>
+    for ListenError<Async, Store, Conn, WireMsg>
 where
-    F: FutureForm + Debug,
-    S: Storage<F> + Debug,
-    C: Connection<F, SyncMessage> + Connection<F, W> + Debug,
-    W: Encode + Decode,
-    S::Error: Debug,
-    <C as Connection<F, SyncMessage>>::SendError: Debug + Into<<C as Connection<F, W>>::SendError>,
-    <C as Connection<F, SyncMessage>>::RecvError: Debug + Into<<C as Connection<F, W>>::RecvError>,
-    <C as Connection<F, W>>::SendError: Debug,
-    <C as Connection<F, W>>::RecvError: Debug,
+    Async: FutureForm + Debug,
+    Store: Storage<Async> + Debug,
+    Conn: Connection<Async, SyncMessage> + Connection<Async, WireMsg> + Debug,
+    WireMsg: Encode + Decode,
+    Store::Error: Debug,
+    <Conn as Connection<Async, SyncMessage>>::SendError: Debug + Into<<Conn as Connection<Async, WireMsg>>::SendError>,
+    <Conn as Connection<Async, SyncMessage>>::RecvError: Debug + Into<<Conn as Connection<Async, WireMsg>>::RecvError>,
+    <Conn as Connection<Async, WireMsg>>::SendError: Debug,
+    <Conn as Connection<Async, WireMsg>>::RecvError: Debug,
     EphErr: core::error::Error,
 {
-    fn from(err: ComposedHandlerError<ListenError<F, S, C, SyncMessage>, EphErr>) -> Self {
+    fn from(err: ComposedHandlerError<ListenError<Async, Store, Conn, SyncMessage>, EphErr>) -> Self {
         match err {
             ComposedHandlerError::Sync(listen_err) => match listen_err {
                 ListenError::IoError(io_err) => ListenError::IoError(match io_err {

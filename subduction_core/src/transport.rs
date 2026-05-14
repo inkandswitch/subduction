@@ -31,7 +31,7 @@ use future_form::FutureForm;
 ///
 /// - `send_bytes` must deliver the entire byte slice atomically (no partial sends).
 /// - `recv_bytes` must return a complete message frame (no fragmentation).
-pub trait Transport<K: FutureForm + ?Sized>: Clone + PartialEq {
+pub trait Transport<Async: FutureForm + ?Sized>: Clone + PartialEq {
     /// A problem when sending bytes.
     type SendError: core::error::Error;
 
@@ -42,35 +42,35 @@ pub trait Transport<K: FutureForm + ?Sized>: Clone + PartialEq {
     type DisconnectionError: core::error::Error;
 
     /// Send raw bytes over the transport.
-    fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>>;
+    fn send_bytes(&self, bytes: &[u8]) -> Async::Future<'_, Result<(), Self::SendError>>;
 
     /// Receive the next complete message frame as raw bytes.
-    fn recv_bytes(&self) -> K::Future<'_, Result<Vec<u8>, Self::RecvError>>;
+    fn recv_bytes(&self) -> Async::Future<'_, Result<Vec<u8>, Self::RecvError>>;
 
     /// Disconnect from the peer gracefully.
-    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
+    fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>>;
 }
 
 // ── Arc impl ────────────────────────────────────────────────────────────
 
-impl<T, K> Transport<K> for Arc<T>
+impl<T, Async> Transport<Async> for Arc<T>
 where
-    T: Transport<K>,
-    K: FutureForm,
+    T: Transport<Async>,
+    Async: FutureForm,
 {
     type SendError = T::SendError;
     type RecvError = T::RecvError;
     type DisconnectionError = T::DisconnectionError;
 
-    fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send_bytes(&self, bytes: &[u8]) -> Async::Future<'_, Result<(), Self::SendError>> {
         T::send_bytes(self, bytes)
     }
 
-    fn recv_bytes(&self) -> K::Future<'_, Result<Vec<u8>, Self::RecvError>> {
+    fn recv_bytes(&self) -> Async::Future<'_, Result<Vec<u8>, Self::RecvError>> {
         T::recv_bytes(self)
     }
 
-    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         T::disconnect(self)
     }
 }

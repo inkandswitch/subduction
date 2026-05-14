@@ -30,40 +30,45 @@ pub struct Unauthorized {
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
 #[derive(Debug, Clone, Copy, Error)]
-pub enum HydrationError<F: FutureForm, S: Storage<F>> {
+pub enum HydrationError<Async: FutureForm, Store: Storage<Async>> {
     /// An error occurred while loading all sedimentree IDs.
     #[error("hydration error when loading all sedimentree IDs: {0}")]
-    LoadAllIdsError(#[source] S::Error),
+    LoadAllIdsError(#[source] Store::Error),
 
     /// An error occurred while loading loose commits.
     #[error("hydration error when loading loose commits: {0}")]
-    LoadLooseCommitsError(#[source] S::Error),
+    LoadLooseCommitsError(#[source] Store::Error),
 
     /// An error occurred while loading fragments.
     #[error("hydration error when loading fragments: {0}")]
-    LoadFragmentsError(#[source] S::Error),
+    LoadFragmentsError(#[source] Store::Error),
 }
 
 /// An error that can occur during I/O operations.
 ///
 /// This covers storage and network connection errors.
 #[derive(Debug, Error)]
-pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode> {
+pub enum IoError<
+    Async: FutureForm + ?Sized,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+> {
     /// An error occurred while using storage.
     #[error(transparent)]
-    Storage(S::Error),
+    Storage(Store::Error),
 
     /// An error occurred while sending data on the connection.
     #[error(transparent)]
-    ConnSend(C::SendError),
+    ConnSend(Conn::SendError),
 
     /// An error occurred while receiving data from the connection.
     #[error(transparent)]
-    ConnRecv(C::RecvError),
+    ConnRecv(Conn::RecvError),
 
     /// An error occurred during a roundtrip call on the connection.
     #[error(transparent)]
-    ConnCall(CallError<C::SendError>),
+    ConnCall(CallError<Conn::SendError>),
 
     /// The blob content doesn't match the claimed metadata.
     #[error(transparent)]
@@ -72,10 +77,15 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: 
 
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
-pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode> {
+pub enum BlobRequestErr<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+> {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
-    IoError(#[from] IoError<F, S, C, M>),
+    IoError(#[from] IoError<Async, Store, Conn, WireMsg>),
 
     /// Some requested blobs were missing locally.
     #[error("Missing blobs: {0:?}")]
@@ -84,11 +94,15 @@ pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F, M>, M: En
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode>
-{
+pub enum ListenError<
+    Async: FutureForm + ?Sized,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+> {
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
-    IoError(#[from] IoError<F, S, C, M>),
+    IoError(#[from] IoError<Async, Store, Conn, WireMsg>),
 
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
@@ -112,15 +126,15 @@ pub enum AddConnectionError<D> {
 /// An error that can occur during local write operations.
 #[derive(Debug, Error)]
 pub enum WriteError<
-    F: FutureForm + ?Sized,
-    S: Storage<F>,
-    C: Connection<F, M>,
-    M: Encode + Decode,
+    Async: FutureForm + ?Sized,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
     PutErr = core::convert::Infallible,
 > {
     /// An I/O error occurred.
     #[error(transparent)]
-    Io(#[from] IoError<F, S, C, M>),
+    Io(#[from] IoError<Async, Store, Conn, WireMsg>),
 
     /// The storage policy rejected the write.
     #[error("put disallowed: {0}")]
@@ -134,14 +148,14 @@ pub enum WriteError<
 /// An error that can occur when sending requested data to a peer.
 #[derive(Debug, Error)]
 pub enum SendRequestedDataError<
-    F: FutureForm + ?Sized,
-    S: Storage<F>,
-    C: Connection<F, M>,
-    M: Encode + Decode,
+    Async: FutureForm + ?Sized,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
 > {
     /// An I/O error occurred.
     #[error(transparent)]
-    Io(#[from] IoError<F, S, C, M>),
+    Io(#[from] IoError<Async, Store, Conn, WireMsg>),
 
     /// The peer is not authorized to access the requested sedimentree.
     #[error(transparent)]

@@ -22,13 +22,13 @@ use thiserror::Error;
 ///     Err(TimedOut) => { /* deadline exceeded */ }
 /// }
 /// ```
-pub trait Timeout<K: FutureForm + ?Sized>: Clone {
+pub trait Timeout<Async: FutureForm + ?Sized>: Clone {
     /// Wrap a future with a timeout.
     fn timeout<'a, T: 'a>(
         &'a self,
         dur: Duration,
-        fut: K::Future<'a, T>,
-    ) -> K::Future<'a, Result<T, TimedOut>>;
+        fut: Async::Future<'a, T>,
+    ) -> Async::Future<'a, Result<T, TimedOut>>;
 }
 
 /// An error indicating that an operation has timed out.

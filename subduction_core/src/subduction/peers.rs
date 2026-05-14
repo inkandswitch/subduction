@@ -60,18 +60,18 @@ pub(crate) async fn remove_peer_from_subscriptions(
 /// For each subscriber, checks policy to confirm they are allowed to
 /// fetch this sedimentree before including their connections.
 pub(crate) async fn get_authorized_subscriber_conns<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, M> + PartialEq + Clone + 'static,
-    M: Encode + Decode,
-    P: StoragePolicy<F>,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,
+    WireMsg: Encode + Decode,
+    Auth: StoragePolicy<Async>,
 >(
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
-    storage: &StoragePowerbox<S, P>,
-    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>,
+    storage: &StoragePowerbox<Store, Auth>,
+    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
     sedimentree_id: SedimentreeId,
     exclude_peer: &PeerId,
-) -> Vec<Authenticated<C, F>> {
+) -> Vec<Authenticated<Conn, Async>> {
     let subscriber_ids: Vec<PeerId> = {
         let guard = subscriptions.lock().await;
         guard
@@ -118,13 +118,13 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `Some(true)` — connection removed, was the peer's last connection
 /// - `None` — connection was not found
 pub(crate) async fn remove_connection<
-    F: FutureForm,
-    C: Connection<F, M> + PartialEq + Clone + 'static,
-    M: Encode + Decode,
+    Async: FutureForm,
+    Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,
+    WireMsg: Encode + Decode,
 >(
-    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>,
+    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
-    conn: &Authenticated<C, F>,
+    conn: &Authenticated<Conn, Async>,
 ) -> Option<bool> {
     let peer_id = conn.peer_id();
     let mut guard = connections.lock().await;

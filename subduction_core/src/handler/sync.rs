@@ -76,33 +76,33 @@ use crate::{
 /// [`Subduction`]: crate::subduction::Subduction
 #[allow(clippy::type_complexity)]
 pub struct SyncHandler<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    const N: usize = 256,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize = 256,
     R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
-    sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
-    connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+    sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+    connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-    storage: StoragePowerbox<S, P>,
+    storage: StoragePowerbox<Store, Auth>,
     pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
-    depth_metric: M,
+    depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const N: usize,
-> core::fmt::Debug for SyncHandler<F, S, C, P, M, N, R>
+    const SHARDS: usize,
+> core::fmt::Debug for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -110,14 +110,14 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric + Clone,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric + Clone,
     R: RemoteHeadsObserver + Clone,
-    const N: usize,
-> Clone for SyncHandler<F, S, C, P, M, N, R>
+    const SHARDS: usize,
+> Clone for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -134,13 +134,13 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, NoRemoteHeadsObserver>
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -151,12 +151,12 @@ impl<
     /// [`Subduction::new`]: crate::subduction::Subduction::new
     #[allow(clippy::type_complexity)]
     pub fn new(
-        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
-        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<S, P>,
+        storage: StoragePowerbox<Store, Auth>,
         pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
-        depth_metric: M,
+        depth_metric: Metric,
     ) -> Self {
         Self {
             sedimentrees,
@@ -172,24 +172,24 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, R>
+    const SHARDS: usize,
+> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
-        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
-        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<S, P>,
+        storage: StoragePowerbox<Store, Auth>,
         pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
-        depth_metric: M,
+        depth_metric: Metric,
         remote_heads_observer: R,
     ) -> Self {
         Self {
@@ -211,7 +211,7 @@ impl<
     ///
     /// [`EphemeralHandler`]: subduction_ephemeral::handler::EphemeralHandler
     #[allow(clippy::type_complexity)]
-    pub fn connections(&self) -> Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>> {
+    pub fn connections(&self) -> Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> {
         self.connections.clone()
     }
 
@@ -233,29 +233,29 @@ impl<
 
 #[future_form(
     Sendable where
-        S: Storage<Sendable> + Send + Sync + core::fmt::Debug,
-        C: Connection<Sendable, SyncMessage> + PartialEq + Clone + Send + Sync + core::fmt::Debug + 'static,
-        P: StoragePolicy<Sendable> + Send + Sync,
-        P::FetchDisallowed: Send + 'static,
-        P::PutDisallowed: Send + 'static,
-        M: DepthMetric + Send + Sync,
-        S::Error: Send + 'static,
-        C::SendError: Send + 'static,
-        C::RecvError: Send + 'static,
-        C::DisconnectionError: Send + 'static,
+        Store: Storage<Sendable> + Send + Sync + core::fmt::Debug,
+        Conn: Connection<Sendable, SyncMessage> + PartialEq + Clone + Send + Sync + core::fmt::Debug + 'static,
+        Auth: StoragePolicy<Sendable> + Send + Sync,
+        Auth::FetchDisallowed: Send + 'static,
+        Auth::PutDisallowed: Send + 'static,
+        Metric: DepthMetric + Send + Sync,
+        Store::Error: Send + 'static,
+        Conn::SendError: Send + 'static,
+        Conn::RecvError: Send + 'static,
+        Conn::DisconnectionError: Send + 'static,
         R: RemoteHeadsObserver + Send + Sync,
     Local where
-        S: Storage<Local> + core::fmt::Debug,
-        C: Connection<Local, SyncMessage> + PartialEq + Clone + core::fmt::Debug + 'static,
-        P: StoragePolicy<Local>,
-        M: DepthMetric,
+        Store: Storage<Local> + core::fmt::Debug,
+        Conn: Connection<Local, SyncMessage> + PartialEq + Clone + core::fmt::Debug + 'static,
+        Auth: StoragePolicy<Local>,
+        Metric: DepthMetric,
         R: RemoteHeadsObserver
 )]
-impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
-    for SyncHandler<K, S, C, P, M, N, R>
+impl<Async: FutureForm, Store, Conn, Auth, Metric, R, const SHARDS: usize> Handler<Async, Conn>
+    for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     type Message = SyncMessage;
-    type HandlerError = ListenError<K, S, C, SyncMessage>;
+    type HandlerError = ListenError<Async, Store, Conn, SyncMessage>;
 
     fn as_batch_sync_response(msg: &Self::Message) -> Option<&BatchSyncResponse> {
         match msg {
@@ -273,16 +273,16 @@ impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
 
     fn handle<'a>(
         &'a self,
-        conn: &'a Authenticated<C, K>,
+        conn: &'a Authenticated<Conn, Async>,
         message: Self::Message,
-    ) -> K::Future<'a, Result<(), Self::HandlerError>> {
-        K::from_future(async move { self.dispatch(conn, message).await })
+    ) -> Async::Future<'a, Result<(), Self::HandlerError>> {
+        Async::from_future(async move { self.dispatch(conn, message).await })
     }
 
-    fn on_peer_disconnect(&self, _peer: PeerId) -> K::Future<'_, ()> {
+    fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
         // Sync subscriptions are already cleaned by `peers::remove_connection`,
         // so there is nothing extra to do here.
-        K::from_future(async {})
+        Async::from_future(async {})
     }
 }
 
@@ -291,14 +291,14 @@ impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
 // ---------------------------------------------------------------------------
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const N: usize,
-> RemoteHeadsNotifier for SyncHandler<F, S, C, P, M, N, R>
+    const SHARDS: usize,
+> RemoteHeadsNotifier for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
@@ -310,21 +310,21 @@ impl<
 // ---------------------------------------------------------------------------
 
 impl<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
-    P: StoragePolicy<F>,
-    M: DepthMetric,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const N: usize,
-> SyncHandler<F, S, C, P, M, N, R>
+    const SHARDS: usize,
+> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
         &self,
-        conn: &Authenticated<C, F>,
+        conn: &Authenticated<Conn, Async>,
         message: SyncMessage,
-    ) -> Result<(), ListenError<F, S, C, SyncMessage>> {
+    ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
         let from = conn.peer_id();
         tracing::debug!(
             from = %from,
@@ -470,8 +470,8 @@ impl<
         id: SedimentreeId,
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
-        conn: &Authenticated<C, F>,
-    ) -> Result<bool, IoError<F, S, C, SyncMessage>> {
+        conn: &Authenticated<Conn, Async>,
+    ) -> Result<bool, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -492,7 +492,7 @@ impl<
             author
         );
 
-        let putter = match self.storage.get_putter::<F>(*from, author, id).await {
+        let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -566,8 +566,8 @@ impl<
         id: SedimentreeId,
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
-        conn: &Authenticated<C, F>,
-    ) -> Result<bool, IoError<F, S, C, SyncMessage>> {
+        conn: &Authenticated<Conn, Async>,
+    ) -> Result<bool, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -588,7 +588,7 @@ impl<
             author
         );
 
-        let putter = match self.storage.get_putter::<F>(*from, author, id).await {
+        let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -662,12 +662,12 @@ impl<
         id: SedimentreeId,
         their_fingerprints: &FingerprintSummary,
         req_id: RequestId,
-        conn: &Authenticated<C, F>,
-    ) -> Result<(), ListenError<F, S, C, SyncMessage>> {
+        conn: &Authenticated<Conn, Async>,
+    ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
 
         let peer_id = conn.peer_id();
-        let fetcher = match self.storage.get_fetcher::<F>(peer_id, id).await {
+        let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
                 tracing::debug!(
@@ -815,7 +815,7 @@ impl<
         from: &PeerId,
         id: SedimentreeId,
         diff: SyncDiff,
-    ) -> Result<(), IoError<F, S, C, SyncMessage>> {
+    ) -> Result<(), IoError<Async, Store, Conn, SyncMessage>> {
         ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
         self.minimize_tree(id).await;
         Ok(())
@@ -823,10 +823,10 @@ impl<
 
     async fn recv_blob_request(
         &self,
-        conn: &Authenticated<C, F>,
+        conn: &Authenticated<Conn, Async>,
         id: SedimentreeId,
         digests: &[Digest<Blob>],
-    ) -> Result<(), BlobRequestErr<F, S, C, SyncMessage>> {
+    ) -> Result<(), BlobRequestErr<Async, Store, Conn, SyncMessage>> {
         let mut blobs = Vec::new();
         let mut missing = Vec::new();
         for digest in digests {
@@ -856,23 +856,23 @@ impl<
         &self,
         id: SedimentreeId,
         digest: Digest<Blob>,
-    ) -> Result<Option<Blob>, S::Error> {
+    ) -> Result<Option<Blob>, Store::Error> {
         ingest::get_blob(&self.storage, id, digest).await
     }
 
     async fn insert_commit_locally(
         &self,
-        putter: &Putter<F, S>,
+        putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, S::Error> {
+    ) -> Result<bool, Store::Error> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
     async fn insert_fragment_locally(
         &self,
-        putter: &Putter<F, S>,
+        putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, S::Error> {
+    ) -> Result<bool, Store::Error> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -909,7 +909,7 @@ impl<
         &self,
         sedimentree_id: SedimentreeId,
         exclude_peer: &PeerId,
-    ) -> Vec<Authenticated<C, F>> {
+    ) -> Vec<Authenticated<Conn, Async>> {
         peers::get_authorized_subscriber_conns(
             &self.subscriptions,
             &self.storage,
@@ -920,7 +920,7 @@ impl<
         .await
     }
 
-    async fn remove_connection(&self, conn: &Authenticated<C, F>) -> Option<bool> {
+    async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
         peers::remove_connection(&self.connections, &self.subscriptions, conn).await
     }
 }

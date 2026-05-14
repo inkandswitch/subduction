@@ -63,15 +63,15 @@ pub fn hash_event_bytes(bytes: &[u8]) -> StorageHash {
 /// # Errors
 ///
 /// Returns [`StorageError`] if CBOR serialization or the storage write fails.
-pub async fn save_keyhive_archive<T, S, K>(
+pub async fn save_keyhive_archive<T, S, Async>(
     storage: &S,
     storage_id: StorageHash,
     archive: &Archive<T>,
 ) -> Result<(), StorageError>
 where
     T: ContentRef,
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     let bytes = cbor_serialize(archive)?;
 
@@ -96,14 +96,14 @@ where
 ///
 /// Returns [`StorageError`] if bincode serialization or the storage write
 /// fails.
-pub async fn save_event<T, S, K>(
+pub async fn save_event<T, S, Async>(
     storage: &S,
     event: &StaticEvent<T>,
 ) -> Result<StorageHash, StorageError>
 where
     T: ContentRef,
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     let bytes = bincode_serialize(event)?;
     save_event_bytes(storage, bytes).await
@@ -116,13 +116,13 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if the storage write fails.
-pub async fn save_event_bytes<S, K>(
+pub async fn save_event_bytes<S, Async>(
     storage: &S,
     bytes: Vec<u8>,
 ) -> Result<StorageHash, StorageError>
 where
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     let hash = hash_event_bytes(&bytes);
 
@@ -145,13 +145,13 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if the storage read or CBOR deserialization fails.
-pub async fn load_archives<T, S, K>(
+pub async fn load_archives<T, S, Async>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, Archive<T>)>, StorageError>
 where
     T: ContentRef + serde::de::DeserializeOwned,
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     let raw_archives = storage
         .load_archives()
@@ -173,13 +173,13 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if the storage read or CBOR deserialization fails.
-pub async fn load_events<T, S, K>(
+pub async fn load_events<T, S, Async>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, StaticEvent<T>)>, StorageError>
 where
     T: ContentRef + serde::de::DeserializeOwned,
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     let raw_events = storage
         .load_events()
@@ -203,12 +203,12 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if the storage read fails.
-pub async fn load_event_bytes<S, K>(
+pub async fn load_event_bytes<S, Async>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, Vec<u8>)>, StorageError>
 where
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     storage
         .load_events()
@@ -225,19 +225,19 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if loading, deserialization, or archive ingestion fails.
-pub async fn ingest_from_storage<K, Signer, T, P, C, L, R, S>(
-    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
+pub async fn ingest_from_storage<Async, Signer, T, P, C, L, R, S>(
+    keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
     storage: &S,
 ) -> Result<Vec<Arc<StaticEvent<T>>>, StorageError>
 where
-    Signer: AsyncSigner<K> + Clone,
+    Signer: AsyncSigner<Async> + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
-    L: MembershipListener<K, Signer, T>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     // Load archives
     let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage).await?;
@@ -282,20 +282,20 @@ where
 ///
 /// Returns [`StorageError`] if any storage operation, serialization, or
 /// deserialization fails.
-pub async fn compact<K, Signer, T, P, C, L, R, S>(
-    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
+pub async fn compact<Async, Signer, T, P, C, L, R, S>(
+    keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
     storage: &S,
     storage_id: StorageHash,
 ) -> Result<(), StorageError>
 where
-    Signer: AsyncSigner<K> + Clone,
+    Signer: AsyncSigner<Async> + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
-    L: MembershipListener<K, Signer, T>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
-    S: KeyhiveStorage<K>,
-    K: FutureForm,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage

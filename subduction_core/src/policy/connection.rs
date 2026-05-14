@@ -7,7 +7,7 @@ use future_form::FutureForm;
 use crate::peer::id::PeerId;
 
 /// A policy for allowing or disallowing connections from peers.
-pub trait ConnectionPolicy<K: FutureForm> {
+pub trait ConnectionPolicy<Async: FutureForm> {
     /// Error type returned when a connection is disallowed.
     type ConnectionDisallowed: Error;
 
@@ -17,5 +17,5 @@ pub trait ConnectionPolicy<K: FutureForm> {
     fn authorize_connect(
         &self,
         peer: PeerId,
-    ) -> K::Future<'_, Result<(), Self::ConnectionDisallowed>>;
+    ) -> Async::Future<'_, Result<(), Self::ConnectionDisallowed>>;
 }
