@@ -31,8 +31,9 @@ use tracing::{debug, warn};
 use crate::{
     clock::Clock,
     config::{EphemeralConfig, EphemeralEvent},
-    message::{EphemeralMessage, EphemeralPayload},
+    message::EphemeralMessage,
     nonce_cache::EphemeralNonceCache,
+    payload_header::EphemeralPayloadHeader,
     policy::EphemeralPolicy,
     topic::Topic,
 };
@@ -143,7 +144,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
         // Decode just the header (id / nonce / timestamp / payload_len)
         // — no copy of the payload bytes, since we only need the
         // sizing info and the nonce-cache key.
-        let Ok(header) = EphemeralPayload::try_decode_header(signed.fields_bytes()) else {
+        let Ok(header) = EphemeralPayloadHeader::try_decode(signed.fields_bytes()) else {
             warn!("publish called with undecodable Signed<EphemeralPayload>, ignoring");
             return;
         };
@@ -448,7 +449,7 @@ impl<
         //    succeeds — used only for read-only checks below. The full
         //    payload is materialised once, post-verify, via
         //    `try_verify`.
-        let header = match EphemeralPayload::try_decode_header(signed.fields_bytes()) {
+        let header = match EphemeralPayloadHeader::try_decode(signed.fields_bytes()) {
             Ok(h) => h,
             Err(e) => {
                 warn!(

@@ -37,8 +37,6 @@ use subduction_ephemeral::{
 };
 use testresult::TestResult;
 
-// ── Helpers (mirrors ephemeral_handler.rs) ──────────────────────────────
-
 type EphConn = ChannelMockConnection<EphemeralMessage>;
 type EphAuth = Authenticated<EphConn, Sendable>;
 type EphHandle =
@@ -123,7 +121,7 @@ fn count_ephemerals(msgs: &[EphemeralMessage]) -> usize {
 
 // ── H1: Self-bounce amplification ───────────────────────────────────────
 //
-// **Bug hypothesis**: `EphemeralHandler::publish()` does NOT add the
+// **Reghression**: `EphemeralHandler::publish()` does NOT add the
 // published nonce to the nonce cache. If the same message is then
 // delivered back to the publishing handler (e.g., a peer relayed it
 // through a cycle), the handler re-processes it as if it were a new

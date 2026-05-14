@@ -50,5 +50,6 @@ pub mod config;
 pub mod handler;
 pub mod message;
 pub mod nonce_cache;
+pub mod payload_header;
 pub mod policy;
 pub mod topic;
