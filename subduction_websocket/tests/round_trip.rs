@@ -27,6 +27,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
+    websocket::KeepAlive,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -415,6 +416,116 @@ async fn second_sync_round_is_empty() -> TestResult {
         round2_stats.fragments_received,
         round2_stats.commits_sent,
         round2_stats.fragments_sent,
+    );
+
+    Ok(())
+}
+
+/// End-to-end: with keepalive enabled and a short ping interval, an
+/// otherwise-idle connection should survive multiple ping cycles. The
+/// peers are healthy (they automatically respond to pings via the
+/// listener loop), so neither side should declare a timeout.
+///
+/// This is a regression test that the new keepalive plumbing doesn't
+/// false-positive on a quiet but healthy link, and that the inbound
+/// data channel isn't perturbed by the Pong traffic.
+#[tokio::test]
+async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
+    init_tracing();
+
+    let server_signer = test_signer(30);
+    let client_signer = test_signer(31);
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
+
+    let addr: SocketAddr = "127.0.0.1:0".parse()?;
+
+    // Server: aggressive keepalive — 100 ms pings, 50 ms pong timeout, 2 misses.
+    // A silent peer would close in ~250 ms; a healthy one stays up.
+    let aggressive_keepalive = KeepAlive {
+        ping_interval: Duration::from_millis(100),
+        pong_timeout: Duration::from_millis(50),
+        missed_pong_threshold: 2,
+    };
+
+    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(server_signer)
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(TimeoutTokio)
+        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async move {
+        manager_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    let server = TokioWebSocketServer::new_with_keepalive(
+        addr,
+        HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        Some(aggressive_keepalive),
+        server_subduction.clone(),
+        tokio_util::task::TaskTracker::new(),
+    )
+    .await?;
+    let bound = server.address();
+
+    // Client side: also aggressive, just to exercise both directions.
+    let (client, _client_handler, listener_fut, client_manager_fut) =
+        setup_client_subduction(client_signer.clone());
+    tokio::spawn(client_manager_fut);
+    tokio::spawn(listener_fut);
+
+    let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
+    let (client_ws, listener_fut, sender_fut, keepalive_task) =
+        TokioWebSocketClient::with_options(
+            uri,
+            client_signer,
+            Audience::known(server_peer_id),
+            DEFAULT_MAX_MESSAGE_SIZE,
+            Some(aggressive_keepalive),
+        )
+        .await?;
+
+    tokio::spawn(async {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async {
+        sender_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    let keepalive_task = keepalive_task
+        .ok_or("with_options should return a keepalive task when Some(KeepAlive) is passed")?;
+    let keepalive_handle = tokio::spawn(async move { keepalive_task.await });
+
+    client.add_connection(client_ws).await?;
+    assert_eq!(client.connected_peer_ids().await.len(), 1);
+    assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
+
+    // Idle for ~600 ms — well past the silent-peer timeout window
+    // (3 ping cycles + pong timeout = 350 ms). Both sides should stay
+    // connected because they're answering each other's pings.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    assert_eq!(
+        client.connected_peer_ids().await.len(),
+        1,
+        "client should still be connected after idle keepalive cycles"
+    );
+    assert_eq!(
+        server_subduction.connected_peer_ids().await.len(),
+        1,
+        "server should still be connected after idle keepalive cycles"
+    );
+
+    // The keepalive task should not have exited.
+    assert!(
+        !keepalive_handle.is_finished(),
+        "keepalive task should still be running for healthy idle peer"
     );
 
     Ok(())

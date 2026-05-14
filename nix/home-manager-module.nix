@@ -107,6 +107,54 @@ in {
         '';
       };
 
+      wsKeepAlive = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether to enable WebSocket Ping/Pong keepalive. With
+            keepalive enabled, the server pings every connection on
+            {option}`services.subduction.server.wsKeepAlive.pingInterval`
+            and tears down connections that miss
+            {option}`services.subduction.server.wsKeepAlive.missedPongThreshold`
+            consecutive pongs.
+
+            Disabling is rarely useful; idle connections behind 60 s
+            load-balancer or NAT idle drops will be silently lost.
+          '';
+        };
+
+        pingInterval = lib.mkOption {
+          type = lib.types.int;
+          default = 30;
+          description = ''
+            Interval in seconds between WebSocket keepalive Pings.
+          '';
+        };
+
+        pongTimeout = lib.mkOption {
+          type = lib.types.int;
+          default = 10;
+          description = ''
+            Maximum wait in seconds for a Pong response after each
+            Ping. If the deadline passes without a Pong, the cycle
+            counts as one miss. Must be less than
+            {option}`services.subduction.server.wsKeepAlive.pingInterval`.
+          '';
+        };
+
+        missedPongThreshold = lib.mkOption {
+          type = lib.types.int;
+          default = 2;
+          description = ''
+            Number of consecutive missed pongs before the connection
+            is torn down. Single transient misses (e.g., GC pauses,
+            brief network jitter) are forgiven by keeping this above
+            1. Default 2.
+          '';
+        };
+      };
+
       metricsPort = lib.mkOption {
         type = lib.types.port;
         default = 9090;
@@ -194,6 +242,15 @@ in {
       ++ lib.optionals (cfg.server.maxFrameSize != null) [
         "--max-frame-size"
         (toString cfg.server.maxFrameSize)
+      ]
+      ++ lib.optionals (!cfg.server.wsKeepAlive.enable) ["--ws-no-keepalive"]
+      ++ [
+        "--ws-ping-interval"
+        (toString cfg.server.wsKeepAlive.pingInterval)
+        "--ws-pong-timeout"
+        (toString cfg.server.wsKeepAlive.pongTimeout)
+        "--ws-missed-pong-threshold"
+        (toString cfg.server.wsKeepAlive.missedPongThreshold)
       ]
       ++ lib.optionals cfg.server.enableMetrics [
         "--metrics"

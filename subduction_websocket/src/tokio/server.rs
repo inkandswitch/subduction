@@ -5,7 +5,7 @@ use subduction_core::timeout::Timeout;
 use crate::{
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     tokio::unified::UnifiedWebSocket,
-    websocket::WebSocket,
+    websocket::{KeepAlive, WebSocket},
 };
 
 use alloc::sync::Arc;
@@ -65,6 +65,12 @@ pub struct TokioWebSocketServer<
     /// lets the outbound methods use the configured value instead of
     /// falling back to the transport default.
     max_message_size: usize,
+    /// Optional Ping/Pong keepalive applied to all WebSocket connections
+    /// (inbound and outbound) managed by this server. `None` disables
+    /// keepalive entirely. Servers default to [`KeepAlive::balanced`] so
+    /// that idle connections survive standard 60s LB/NAT drops and dead
+    /// peers are detected within ~70 s.
+    keepalive: Option<KeepAlive>,
 }
 
 impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
@@ -85,6 +91,7 @@ where
             cancellation_token: self.cancellation_token.clone(),
             tasks: self.tasks.clone(),
             max_message_size: self.max_message_size,
+            keepalive: self.keepalive,
         }
     }
 }
@@ -104,7 +111,9 @@ where
     /// Create a new [`TokioWebSocketServer`] to manage connections to a [`Subduction`].
     ///
     /// The signer from the Subduction instance is used to authenticate incoming
-    /// connections during the handshake phase.
+    /// connections during the handshake phase. Defaults to
+    /// [`KeepAlive::balanced`] keepalive on every accepted and dialed
+    /// connection; use [`Self::new_with_keepalive`] to override or disable.
     ///
     /// # Arguments
     ///
@@ -122,12 +131,41 @@ where
         max_message_size: usize,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     ) -> Result<Self, tungstenite::Error> {
-        Self::new_with_tracker(
+        Self::new_with_keepalive(
             address,
             handshake_max_drift,
             max_message_size,
+            Some(KeepAlive::balanced()),
             subduction,
             TaskTracker::new(),
+        )
+        .await
+    }
+
+    /// Like [`new`](Self::new) but with explicit keepalive control.
+    ///
+    /// Pass `None` to disable Ping/Pong keepalive entirely. Otherwise the
+    /// supplied [`KeepAlive`] config is applied to every WebSocket
+    /// (inbound and outbound) the server manages.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tungstenite::Error`] if binding the socket fails.
+    pub async fn new_with_keepalive(
+        address: SocketAddr,
+        handshake_max_drift: Duration,
+        max_message_size: usize,
+        keepalive: Option<KeepAlive>,
+        subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+        tasks: TaskTracker,
+    ) -> Result<Self, tungstenite::Error> {
+        Self::new_with_tracker_and_keepalive(
+            address,
+            handshake_max_drift,
+            max_message_size,
+            keepalive,
+            subduction,
+            tasks,
         )
         .await
     }
@@ -138,14 +176,42 @@ where
     /// [`Self::stop_and_drain`] will await every server- and Subduction-side
     /// task — including per-peer `connection_loop`s.
     ///
+    /// Equivalent to [`Self::new_with_tracker_and_keepalive`] with
+    /// `keepalive = Some(KeepAlive::balanced())`.
+    ///
     /// # Errors
     ///
     /// Returns [`tungstenite::Error`] if binding the socket fails.
-    #[allow(clippy::too_many_lines)]
     pub async fn new_with_tracker(
         address: SocketAddr,
         handshake_max_drift: Duration,
         max_message_size: usize,
+        subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+        tasks: TaskTracker,
+    ) -> Result<Self, tungstenite::Error> {
+        Self::new_with_tracker_and_keepalive(
+            address,
+            handshake_max_drift,
+            max_message_size,
+            Some(KeepAlive::balanced()),
+            subduction,
+            tasks,
+        )
+        .await
+    }
+
+    /// Like [`new_with_tracker`](Self::new_with_tracker) but with explicit
+    /// keepalive control.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tungstenite::Error`] if binding the socket fails.
+    #[allow(clippy::too_many_lines)]
+    pub async fn new_with_tracker_and_keepalive(
+        address: SocketAddr,
+        handshake_max_drift: Duration,
+        max_message_size: usize,
+        keepalive: Option<KeepAlive>,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
         tasks: TaskTracker,
     ) -> Result<Self, tungstenite::Error> {
@@ -218,13 +284,17 @@ where
                                         let sender_cancel = task_cancel.clone();
                                         let listen_tracker = task_tracker.clone();
                                         let sender_tracker = task_tracker.clone();
+                                        let keepalive_for_closure = keepalive;
+                                        let keepalive_tracker = task_tracker.clone();
+                                        let keepalive_cancel = task_cancel.clone();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
                                             move |ws_handshake, peer_id| {
                                                 // Create WebSocket wrapper with verified PeerId
-                                                let (ws, sender_fut) = WebSocket::new(
+                                                let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
                                                     ws_handshake.into_inner(),
                                                     peer_id,
+                                                    keepalive_for_closure,
                                                 );
 
                                                 let listen_ws = ws.clone();
@@ -253,6 +323,20 @@ where
                                                         }
                                                     }
                                                 });
+
+                                                if let Some(keepalive_fut) = keepalive_fut {
+                                                    let keepalive_fut = keepalive_fut.into_future();
+                                                    keepalive_tracker.spawn(async move {
+                                                        tokio::select! {
+                                                            () = keepalive_cancel.cancelled() => {
+                                                                tracing::debug!("WebSocket keepalive cancelled");
+                                                            }
+                                                            outcome = keepalive_fut => {
+                                                                tracing::debug!(?outcome, "WebSocket keepalive exited");
+                                                            }
+                                                        }
+                                                    });
+                                                }
 
                                                 (UnifiedWebSocket::Accepted(ws), ())
                                             },
@@ -308,13 +392,16 @@ where
             cancellation_token,
             tasks,
             max_message_size,
+            keepalive,
         })
     }
 
     /// Create a new [`TokioWebSocketServer`] with storage and policy.
     ///
     /// This is a convenience method that creates the Subduction instance
-    /// and spawns the background tasks.
+    /// and spawns the background tasks. Defaults to [`KeepAlive::balanced`]
+    /// keepalive; use [`Self::setup_with_keepalive`] to customise or
+    /// disable.
     ///
     /// # Errors
     ///
@@ -325,6 +412,48 @@ where
         timeout: O,
         handshake_max_drift: Duration,
         max_message_size: usize,
+        signer: Sig,
+        service_name: Option<&str>,
+        storage: S,
+        policy: P,
+        nonce_cache: NonceCache,
+        depth_metric: M,
+    ) -> Result<Self, tungstenite::Error>
+    where
+        M: Clone,
+        S: core::fmt::Debug,
+    {
+        Self::setup_with_keepalive(
+            address,
+            timeout,
+            handshake_max_drift,
+            max_message_size,
+            Some(KeepAlive::balanced()),
+            signer,
+            service_name,
+            storage,
+            policy,
+            nonce_cache,
+            depth_metric,
+        )
+        .await
+    }
+
+    /// Like [`setup`](Self::setup) but with explicit keepalive control.
+    ///
+    /// Pass `None` for `keepalive` to disable Ping/Pong liveness
+    /// detection on every connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the socket could not be bound.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn setup_with_keepalive(
+        address: SocketAddr,
+        timeout: O,
+        handshake_max_drift: Duration,
+        max_message_size: usize,
+        keepalive: Option<KeepAlive>,
         signer: Sig,
         service_name: Option<&str>,
         storage: S,
@@ -359,10 +488,11 @@ where
         let (subduction, _handler, listener_fut, manager_fut) =
             builder.build::<Sendable, MessageTransport<UnifiedWebSocket>>();
 
-        let server = Self::new_with_tracker(
+        let server = Self::new_with_tracker_and_keepalive(
             address,
             handshake_max_drift,
             max_message_size,
+            keepalive,
             subduction,
             tasks,
         )
@@ -459,13 +589,20 @@ where
         let cancel_token = self.cancellation_token.clone();
         let listen_tracker = self.tasks.clone();
         let sender_tracker = self.tasks.clone();
+        let keepalive_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
+        let keepalive_uri_str = uri_str.clone();
+        let keepalive_config = self.keepalive;
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
+                let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
+                    ws_handshake.into_inner(),
+                    peer_id,
+                    keepalive_config,
+                );
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -483,7 +620,7 @@ where
                     }
                 });
 
-                let sender_cancel = cancel_token;
+                let sender_cancel = cancel_token.clone();
                 sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
@@ -496,6 +633,21 @@ where
                         }
                     }
                 });
+
+                if let Some(keepalive_fut) = keepalive_fut {
+                    let keepalive_cancel = cancel_token;
+                    let keepalive_fut = keepalive_fut.into_future();
+                    keepalive_tracker.spawn(async move {
+                        tokio::select! {
+                            () = keepalive_cancel.cancelled() => {
+                                tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
+                            }
+                            outcome = keepalive_fut => {
+                                tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
+                            }
+                        }
+                    });
+                }
 
                 (ws_conn, ())
             },
@@ -571,13 +723,20 @@ where
         let cancel_token = self.cancellation_token.clone();
         let listen_tracker = self.tasks.clone();
         let sender_tracker = self.tasks.clone();
+        let keepalive_tracker = self.tasks.clone();
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
+        let keepalive_uri_str = uri_str.clone();
+        let keepalive_config = self.keepalive;
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
+                let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
+                    ws_handshake.into_inner(),
+                    peer_id,
+                    keepalive_config,
+                );
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -595,7 +754,7 @@ where
                     }
                 });
 
-                let sender_cancel = cancel_token;
+                let sender_cancel = cancel_token.clone();
                 sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
@@ -608,6 +767,21 @@ where
                         }
                     }
                 });
+
+                if let Some(keepalive_fut) = keepalive_fut {
+                    let keepalive_cancel = cancel_token;
+                    let keepalive_fut = keepalive_fut.into_future();
+                    keepalive_tracker.spawn(async move {
+                        tokio::select! {
+                            () = keepalive_cancel.cancelled() => {
+                                tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
+                            }
+                            outcome = keepalive_fut => {
+                                tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
+                            }
+                        }
+                    });
+                }
 
                 (ws_conn, ())
             },
