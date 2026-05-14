@@ -216,7 +216,7 @@ In dense topologies the same `(issuer, topic, nonce)` legitimately arrives at a 
 
 ## Threat Model
 
-The ephemeral protocol uses Ed25519 signatures for authentication and a trusted-but-revocable policy layer for authorisation. The dedup cache is the one piece of mutable state shared between unverified and verified code paths, so its integrity is worth pinning down.
+The ephemeral protocol uses Ed25519 signatures for authentication and a trusted-but-revocable policy layer for authorization. The dedup cache is the one piece of mutable state shared between unverified and verified code paths, so its integrity is worth pinning down.
 
 ### Cache integrity invariant
 

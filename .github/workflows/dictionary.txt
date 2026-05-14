@@ -55,6 +55,7 @@ DDR
 DNS
 DataRequestRejected
 Debuggable
+Dedup
 Deployers
 Dev
 DevTools
@@ -134,6 +135,7 @@ RLE
 RPC
 RTT
 Reconnection
+Recv
 RemoteHeads
 RemoveSubscriptions
 ReplayedNonce
@@ -159,6 +161,7 @@ SipHash
 Stateful
 Subduction
 Subduction's
+SubscribeRejected
 SyncDiff
 TCP
 TLS
@@ -252,6 +255,7 @@ encodings
 encrypter
 encryptment
 enum
+ephemerals
 et
 expede
 faq
@@ -310,6 +314,7 @@ namespace
 namespaced
 natively
 nd
+newtype
 no-alloc
 nodejs
 non-extractable
@@ -319,6 +324,7 @@ ns
 ocap
 oneshot
 optimised
+oversized
 parameterization
 parsers
 perf
@@ -330,13 +336,16 @@ pprof
 pre-allocation
 pre-alpha
 pre-configured
+pre-populate
 pre-shared
+pre-verify
 precomputed
 preimage
 prekey
 prepends
 priori
 probabilistically
+proptests
 protobuf
 pseudorandom
 reconnection
