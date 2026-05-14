@@ -432,11 +432,7 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
     Ok(bytes)
 }
 
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::panic
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 #[cfg(test)]
 mod tests {
     use super::*;

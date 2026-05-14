@@ -102,7 +102,7 @@ impl EphemeralNonceCache {
             .entry(key)
             .or_insert_with(|| [NonceBucket::new(now), NonceBucket::new(now)]);
 
-        rotate_buckets(current, previous, now, self.window_duration);
+        gc_buckets(current, previous, now, self.window_duration);
 
         // Check for duplicate in both buckets.
         if current.nonces.contains(&nonce) || previous.nonces.contains(&nonce) {
@@ -119,12 +119,19 @@ impl EphemeralNonceCache {
     }
 }
 
-/// Rotate `current` and `previous` based on the current bucket's age.
-/// Extracted so [`EphemeralNonceCache::contains`] and
-/// [`EphemeralNonceCache::check_and_insert`] share identical rotation
-/// semantics — divergence would cause one path to see stale nonces the
-/// other doesn't.
-fn rotate_buckets(
+/// Drop stale nonces from `current` and `previous` based on the
+/// current bucket's age. Called only from
+/// [`EphemeralNonceCache::check_and_insert`] (the post-verify write
+/// path); the read-only [`EphemeralNonceCache::contains`] never
+/// triggers eviction.
+///
+/// - If `current` has aged past `2 × window_duration`, both buckets are
+///   fully stale: reset both to fresh empty buckets at `now`.
+/// - If `current` has aged past `window_duration`, demote it to
+///   `previous` (discarding whatever was in `previous`) and replace
+///   `current` with a fresh empty bucket at `now`.
+/// - Otherwise no-op.
+fn gc_buckets(
     current: &mut NonceBucket,
     previous: &mut NonceBucket,
     now: TimestampSeconds,
@@ -132,11 +139,12 @@ fn rotate_buckets(
 ) {
     let age = current.rotated_at.abs_diff(now);
     if age > window_duration.saturating_mul(2) {
-        // Long idle: both buckets are stale — reset entirely.
+        // Long idle: both buckets are fully expired — wipe.
         *current = NonceBucket::new(now);
         *previous = NonceBucket::new(now);
     } else if age > window_duration {
-        // Normal rotation: current → previous, fresh current.
+        // Slide the window forward: drop old `previous`, demote
+        // `current` to `previous`, install a fresh `current`.
         *previous = core::mem::replace(current, NonceBucket::new(now));
     }
 }
