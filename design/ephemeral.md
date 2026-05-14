@@ -149,7 +149,7 @@ Two access methods:
 
 The split exists so that pre-verify code paths cannot mutate cache state at all. See [Threat model](#threat-model).
 
-Because `contains` does not rotate, a nonce inserted in a bucket that has not yet been physically rotated out by a subsequent `check_and_insert` will keep being detected as a duplicate. With random 64-bit nonces this is strictly stronger replay protection: nonces are de facto retained from one legitimate write to the next, rather than for a fixed wall-clock window. Stale `(sender, topic)` entries are cleaned up by `on_peer_disconnect` and by the next legitimate write on that pair.
+Because `contains` does not rotate, a nonce inserted in a bucket that has not yet been physically rotated out by a subsequent `check_and_insert` will keep being detected as a duplicate. With random 64-bit nonces this is strictly stronger replay protection: in practice nonces are retained from one legitimate write to the next, rather than for a fixed wall-clock window. Stale `(sender, topic)` entries are cleaned up by `on_peer_disconnect` and by the next legitimate write on that pair.
 
 ### Volume attack resistance
 
