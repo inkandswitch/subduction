@@ -31,7 +31,7 @@ use tracing::{debug, warn};
 use crate::{
     clock::Clock,
     config::{EphemeralConfig, EphemeralEvent},
-    message::EphemeralMessage,
+    message::{EphemeralMessage, EphemeralPayload},
     nonce_cache::EphemeralNonceCache,
     policy::EphemeralPolicy,
     topic::Topic,
@@ -140,14 +140,17 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
             warn!("publish called with non-Ephemeral message, ignoring");
             return;
         };
-        let Ok(payload) = signed.try_decode_trusted_payload() else {
+        // Decode just the header (id / nonce / timestamp / payload_len)
+        // — no copy of the payload bytes, since we only need the
+        // sizing info and the nonce-cache key.
+        let Ok(header) = EphemeralPayload::try_decode_header(signed.fields_bytes()) else {
             warn!("publish called with undecodable Signed<EphemeralPayload>, ignoring");
             return;
         };
-        let id = payload.id;
-        let nonce = payload.nonce;
+        let id = header.id;
+        let nonce = header.nonce;
         let issuer = PeerId::from(signed.issuer());
-        let payload_len = payload.payload.len();
+        let payload_len = header.payload_len;
 
         let max_payload = self.max_payload_size;
         if payload_len > max_payload {
@@ -439,10 +442,14 @@ impl<
         let relay = conn.peer_id();
         let sender = PeerId::from(signed.issuer());
 
-        // 1. Decode payload fields without verifying. UNTRUSTED until
-        //    step 3 succeeds — only used for read-only checks below.
-        let untrusted = match signed.try_decode_trusted_payload() {
-            Ok(payload) => payload,
+        // 1. Decode the header fields (id / nonce / timestamp /
+        //    payload_len) without verifying and without copying the
+        //    payload bytes. These values are UNTRUSTED until step 3
+        //    succeeds — used only for read-only checks below. The full
+        //    payload is materialised once, post-verify, via
+        //    `try_verify`.
+        let header = match EphemeralPayload::try_decode_header(signed.fields_bytes()) {
+            Ok(h) => h,
             Err(e) => {
                 warn!(
                     relay = %relay,
@@ -452,10 +459,10 @@ impl<
                 return;
             }
         };
-        let id = untrusted.id;
-        let nonce = untrusted.nonce;
-        let timestamp = untrusted.timestamp;
-        let payload_len = untrusted.payload.len();
+        let id = header.id;
+        let nonce = header.nonce;
+        let timestamp = header.timestamp;
+        let payload_len = header.payload_len;
 
         // 2a. Payload size (signature-independent).
         let max_payload = self.max_payload_size;

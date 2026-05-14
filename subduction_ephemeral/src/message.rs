@@ -140,10 +140,59 @@ impl EncodeFields for EphemeralPayload {
     }
 }
 
-impl DecodeFields for EphemeralPayload {
-    const MIN_SIGNED_SIZE: usize = EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE;
+/// Header fields of an [`EphemeralPayload`] decoded without copying
+/// the variable-length payload bytes: `id`, `nonce`, `timestamp`,
+/// declared `payload_len`.
+///
+/// Returned by [`EphemeralPayload::try_decode_header`] for pre-verify
+/// code paths that need the fixed-size fields (for size / age / nonce
+/// checks) but should not allocate or copy the payload `Vec` — the
+/// payload is materialised once, post-verify, via the normal
+/// [`DecodeFields`] flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EphemeralPayloadHeader {
+    /// The topic this message is published to.
+    pub id: Topic,
+    /// Random nonce for deduplication.
+    pub nonce: u64,
+    /// UTC time at message creation.
+    pub timestamp: TimestampSeconds,
+    /// Declared length of the payload bytes (validated to fit in `buf`).
+    pub payload_len: usize,
+}
 
-    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+impl EphemeralPayload {
+    /// Decode the header fields (`id` / `nonce` / `timestamp` /
+    /// `payload_len`) of an [`EphemeralPayload`] _without_ verifying
+    /// the surrounding signature and _without_ allocating or copying
+    /// the payload bytes.
+    ///
+    /// `buf` must be the fields region of a `Signed<EphemeralPayload>`
+    /// — i.e. [`Signed::fields_bytes`]. The declared payload length is
+    /// bounds-checked against `buf`, so truncated wire bytes are
+    /// rejected here rather than being passed downstream.
+    ///
+    /// Used on the pre-verify path in
+    /// [`EphemeralHandler::recv_ephemeral`] so cross-path duplicates
+    /// can be dropped via the nonce-cache probe before paying for an
+    /// Ed25519 verify, and on the publish path so seeding the cache
+    /// doesn't require a full payload decode.
+    ///
+    /// The fields here are **untrusted** until the surrounding
+    /// signature is verified — only use them for read-only checks
+    /// (size, age, dedup probe).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::MessageTooShort`] if `buf` is shorter
+    /// than the minimum header size or if the declared payload length
+    /// extends past `buf`'s end, and [`Bijou64Error`] if the payload
+    /// length prefix is not a well-formed bijou64.
+    ///
+    /// [`Signed::fields_bytes`]: subduction_crypto::signed::Signed::fields_bytes
+    /// [`EphemeralHandler::recv_ephemeral`]: crate::handler::EphemeralHandler
+    /// [`Bijou64Error`]: sedimentree_core::codec::error::Bijou64Error
+    pub fn try_decode_header(buf: &[u8]) -> Result<EphemeralPayloadHeader, DecodeError> {
         if buf.len() < EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "EphemeralPayload",
@@ -170,30 +219,65 @@ impl DecodeFields for EphemeralPayload {
             need: offset + 1,
             have: buf.len(),
         })?;
-        let (payload_len, consumed) = bijou64::decode(remaining)
+        let (payload_len_u64, consumed) = bijou64::decode(remaining)
             .map_err(|kind| sedimentree_core::codec::error::Bijou64Error { offset, kind })?;
         offset += consumed;
 
         #[allow(clippy::cast_possible_truncation)]
-        let payload_len = payload_len as usize;
-        let payload = buf
-            .get(offset..offset + payload_len)
-            .ok_or(DecodeError::MessageTooShort {
+        let payload_len = payload_len_u64 as usize;
+
+        // Bounds-check the declared payload length against the actual
+        // remaining buffer so a truncated wire message is caught here
+        // rather than later inside `try_decode_fields`.
+        if buf.len() < offset.saturating_add(payload_len) {
+            return Err(DecodeError::MessageTooShort {
                 type_name: "EphemeralPayload payload data",
                 need: offset + payload_len,
                 have: buf.len(),
+            });
+        }
+
+        Ok(EphemeralPayloadHeader {
+            id,
+            nonce,
+            timestamp,
+            payload_len,
+        })
+    }
+}
+
+impl DecodeFields for EphemeralPayload {
+    const MIN_SIGNED_SIZE: usize = EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE;
+
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+        let header = Self::try_decode_header(buf)?;
+
+        // `try_decode_header` validated structural sizing including the
+        // declared payload length; recompute the offset by tracing the
+        // header's fixed-size fields plus the bijou64 length prefix.
+        let fixed = 32 + 8 + 8;
+        #[allow(clippy::cast_possible_truncation)]
+        let len_prefix_size = bijou64::encoded_len(header.payload_len as u64);
+        let payload_start = fixed + len_prefix_size;
+        let payload_end = payload_start + header.payload_len;
+
+        let payload = buf
+            .get(payload_start..payload_end)
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: "EphemeralPayload payload data",
+                need: payload_end,
+                have: buf.len(),
             })?
             .to_vec();
-        offset += payload_len;
 
         Ok((
             Self {
-                id,
-                nonce,
-                timestamp,
+                id: header.id,
+                nonce: header.nonce,
+                timestamp: header.timestamp,
                 payload,
             },
-            offset,
+            payload_end,
         ))
     }
 }
