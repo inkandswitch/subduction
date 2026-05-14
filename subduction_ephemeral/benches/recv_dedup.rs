@@ -47,6 +47,7 @@ use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 use subduction_ephemeral::{
     message::{EphemeralMessage, EphemeralPayload},
     nonce_cache::EphemeralNonceCache,
+    payload_header::EphemeralPayloadHeader,
     topic::Topic,
 };
 
@@ -169,15 +170,16 @@ fn bench_signed(c: &mut Criterion) {
             });
         });
 
-        g.bench_function(
-            format!("try_decode_trusted_payload/payload_{payload_size}B"),
-            |b| {
-                b.iter(|| {
-                    let result = signed.try_decode_trusted_payload();
-                    assert!(result.is_ok());
-                });
-            },
-        );
+        // What the post-Option-A `recv_ephemeral` actually does up
+        // front: header-only decode (no payload `Vec` allocation, no
+        // signature work).
+        g.bench_function(format!("try_decode_header/payload_{payload_size}B"), |b| {
+            let fields = signed.fields_bytes();
+            b.iter(|| {
+                let result = EphemeralPayloadHeader::try_decode(fields);
+                assert!(result.is_ok());
+            });
+        });
     }
 
     g.finish();
@@ -237,8 +239,9 @@ fn bench_recv_duplicate(c: &mut Criterion) {
 
         // ── AFTER: decode-then-contains (the new ordering) ──────────────
         //
-        // Cheap field decode, then a read-only cache probe. On a hit we
-        // return before paying for verify.
+        // Header-only field decode (no payload Vec allocation), then a
+        // read-only cache probe. On a hit we return before paying for
+        // verify. Mirrors the production `recv_ephemeral` fast path.
         g.bench_function(format!("after_reorder/payload_{payload_size}B"), |b| {
             b.iter_batched(
                 || (primed_cache.clone(), &msg),
@@ -246,13 +249,14 @@ fn bench_recv_duplicate(c: &mut Criterion) {
                     let EphemeralMessage::Ephemeral(ref signed) = *msg else {
                         unreachable!();
                     };
-                    // 1. Unverified field decode.
-                    let untrusted = signed.try_decode_trusted_payload().expect("decode");
+                    // 1. Header-only decode — no payload copy.
+                    let header =
+                        EphemeralPayloadHeader::try_decode(signed.fields_bytes()).expect("decode");
                     // 2. (New) size + age checks (sub-µs, skipped here
                     //    for clarity — they're identical to the old
                     //    path so they cancel out of the comparison).
                     // 3. Read-only cache probe: hit, short-circuit.
-                    let hit = cache.contains(issuer, untrusted.id, untrusted.nonce);
+                    let hit = cache.contains(issuer, header.id, header.nonce);
                     assert!(hit);
                 },
                 BatchSize::SmallInput,

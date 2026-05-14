@@ -122,16 +122,26 @@ impl EphemeralPayloadHeader {
             .map_err(|kind| sedimentree_core::codec::error::Bijou64Error { offset, kind })?;
         offset += consumed;
 
-        #[allow(clippy::cast_possible_truncation)]
-        let payload_len = payload_len_u64 as usize;
+        // Reject declared payload lengths that don't fit in `usize` on
+        // this target (e.g. > `u32::MAX` on `wasm32`). Truncating via
+        // `as usize` would silently reinterpret a malformed length as a
+        // smaller one.
+        let payload_len =
+            usize::try_from(payload_len_u64).map_err(|_| DecodeError::MessageTooShort {
+                type_name: "EphemeralPayloadHeader payload_len overflow",
+                need: usize::MAX,
+                have: buf.len(),
+            })?;
 
         // Bounds-check the declared payload length against the actual
-        // remaining buffer so a truncated wire message is caught here
-        // rather than later during full-payload decode.
-        if buf.len() < offset.saturating_add(payload_len) {
+        // remaining buffer. Use saturating arithmetic so an
+        // attacker-controlled `payload_len` near `usize::MAX` can't
+        // overflow `offset + payload_len` and panic in debug builds.
+        let needed = offset.saturating_add(payload_len);
+        if buf.len() < needed {
             return Err(DecodeError::MessageTooShort {
                 type_name: "EphemeralPayloadHeader payload data",
-                need: offset + payload_len,
+                need: needed,
                 have: buf.len(),
             });
         }
@@ -145,5 +155,71 @@ impl EphemeralPayloadHeader {
             },
             offset,
         ))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use sedimentree_core::codec::error::DecodeError;
+
+    use super::*;
+
+    /// Build a `fields_bytes`-shaped buffer with the given payload-length
+    /// prefix (encoded with the caller-supplied bytes) and `body` bytes
+    /// following it. Used to exercise the bounds-checking arithmetic
+    /// without going through `Signed::seal`.
+    fn make_fields(len_prefix: &[u8], body: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(32 + 8 + 8 + len_prefix.len() + body.len());
+        buf.extend_from_slice(&[0x42; 32]); // id
+        buf.extend_from_slice(&0_u64.to_be_bytes()); // nonce
+        buf.extend_from_slice(&0_u64.to_be_bytes()); // timestamp
+        buf.extend_from_slice(len_prefix);
+        buf.extend_from_slice(body);
+        buf
+    }
+
+    #[test]
+    fn rejects_payload_len_that_overflows_usize() {
+        // bijou64-encode `u64::MAX` and stick it into the length prefix.
+        // On 64-bit `usize` targets this is just a huge buffer requirement
+        // (caught by the bounds check); on 32-bit `usize` the cast would
+        // silently truncate, so `try_from` must reject it.
+        let mut len_prefix = Vec::new();
+        bijou64::encode(u64::MAX, &mut len_prefix);
+        let fields = make_fields(&len_prefix, &[]);
+
+        let err = EphemeralPayloadHeader::try_decode(&fields).expect_err("must reject");
+        assert!(
+            matches!(err, DecodeError::MessageTooShort { .. }),
+            "expected MessageTooShort for over-sized payload_len, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_payload_len_larger_than_buffer() {
+        // Declared 1024-byte payload, only 4 bytes present. Must be
+        // rejected, no panic (the bounds check uses saturating arithmetic).
+        let mut len_prefix = Vec::new();
+        bijou64::encode(1024, &mut len_prefix);
+        let fields = make_fields(&len_prefix, &[0u8; 4]);
+
+        let err = EphemeralPayloadHeader::try_decode(&fields).expect_err("must reject");
+        assert!(
+            matches!(err, DecodeError::MessageTooShort { .. }),
+            "expected MessageTooShort for truncated payload, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_well_formed_header() {
+        let mut len_prefix = Vec::new();
+        bijou64::encode(5, &mut len_prefix);
+        let fields = make_fields(&len_prefix, b"hello");
+
+        let header = EphemeralPayloadHeader::try_decode(&fields).expect("must decode");
+        assert_eq!(header.payload_len, 5);
     }
 }
