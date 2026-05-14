@@ -95,6 +95,7 @@ KeyhivePolicy
 Keyoxide
 KiB
 LEB
+LRU
 Little-endian
 LooseCommit
 ML-DSA
@@ -242,6 +243,7 @@ datasources
 decrypt
 decrypted
 decrypting
+dedup
 deduplicate
 deduplicates
 deduplication
@@ -309,6 +311,7 @@ misconfiguration
 mispredictions
 mitigations
 mixnet
+msg
 multibyte
 namespace
 namespaced
@@ -350,6 +353,7 @@ protobuf
 pseudorandom
 reconnection
 recurse
+recv
 repo
 representable
 reproducibility
@@ -388,6 +392,7 @@ teardown
 th
 tokio
 tombstoned
+topologies
 tradeoff
 tradeoffs
 unforgeable
