@@ -7,6 +7,7 @@ This directory contains protocol design documents for Subduction.
 | Document                          | Purpose                                      |
 |-----------------------------------|----------------------------------------------|
 | [`assumptions`](./assumptions.md) | Protocol assumptions and invariants          |
+| [`ephemeral`](./ephemeral.md)     | Best-effort pub/sub for transient signals (cursors, presence, etc.) |
 | [`handshake`](./handshake.md)     | Mutual authentication via Ed25519 signatures |
 | [`protocol`](./protocol.md)       | Binary format, serialization, cryptographic choices |
 | [`security/`](./security/)        | Threat model and security rationale          |

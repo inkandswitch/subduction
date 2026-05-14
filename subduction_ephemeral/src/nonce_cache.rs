@@ -64,25 +64,16 @@ impl EphemeralNonceCache {
         }
     }
 
-    /// Check whether `nonce` has been seen for `(sender, topic)` without
-    /// inserting it.
+    /// Check whether `nonce` has been seen for `(sender, topic)`
+    /// without inserting. Read-only probe used pre-verify; never
+    /// allocates for unknown keys, so an unverified caller cannot
+    /// pollute the cache. Existing entries are rotated lazily so
+    /// expired nonces stop counting as duplicates.
     ///
-    /// Returns `true` if the nonce was already seen, `false` if it's
-    /// unknown (or no entry exists yet for this `(sender, topic)`).
+    /// See [`design/ephemeral.md`] for the dedup model and
+    /// cache-integrity invariant.
     ///
-    /// This is the read-only fast path used _before_ signature
-    /// verification: cross-edge duplicates short-circuit here, avoiding
-    /// an Ed25519 verify per wasted hop. Because no nonce is ever
-    /// inserted by this call, an attacker who can't produce a valid
-    /// signature cannot pollute the cache by sending messages with
-    /// chosen `(issuer, topic, nonce)` triples. The cache is only
-    /// mutated by [`check_and_insert`](Self::check_and_insert), which
-    /// is gated behind successful verification at the call site.
-    ///
-    /// Bucket rotation _is_ performed for existing keys so that nonces
-    /// older than the retention window stop counting as duplicates.
-    /// Rotation only ever mutates entries that already exist; missing
-    /// keys remain absent (no spurious allocation from probe traffic).
+    /// [`design/ephemeral.md`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#dedup-model
     pub fn contains(
         &mut self,
         sender: PeerId,
@@ -91,9 +82,6 @@ impl EphemeralNonceCache {
         now: TimestampSeconds,
     ) -> bool {
         let key = (sender, topic);
-        // Only rotate / read existing entries — never create one on the
-        // pre-verify path, since the caller has not yet authenticated
-        // the `sender`/issuer field.
         let Some([current, previous]) = self.windows.get_mut(&key) else {
             return false;
         };
@@ -103,17 +91,15 @@ impl EphemeralNonceCache {
         current.nonces.contains(&nonce) || previous.nonces.contains(&nonce)
     }
 
-    /// Check whether `nonce` has been seen for `(sender, topic)`.
+    /// Check whether `nonce` has been seen for `(sender, topic)`,
+    /// inserting it if not. Returns `true` for fresh nonces (and
+    /// inserts), `false` for duplicates. Rotates buckets if the
+    /// current one has expired.
     ///
-    /// Returns `true` if the nonce is _new_ (not a duplicate) and
-    /// inserts it into the current bucket. Returns `false` if the
-    /// nonce was already seen (duplicate — should be dropped).
-    ///
-    /// Performs bucket rotation if the current bucket has expired.
-    ///
-    /// Use this _after_ verifying the signature so that an unverified
-    /// `sender` cannot inject entries; the read-only
-    /// [`contains`](Self::contains) is the pre-verify fast path.
+    /// Use _post-verify_ — this is the only call that mutates cache
+    /// state, so it must be gated behind a successful signature
+    /// check at the call site. Pre-verify code paths use
+    /// [`contains`](Self::contains).
     pub fn check_and_insert(
         &mut self,
         sender: PeerId,

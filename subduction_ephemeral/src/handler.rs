@@ -121,32 +121,14 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
 
     /// Publish a pre-signed ephemeral message to all subscribers.
     ///
-    /// The caller is responsible for constructing a signed message,
-    /// typically by sealing an [`EphemeralPayload`] (e.g., with
-    /// [`Signed::seal`]) and wrapping it in
-    /// [`EphemeralMessage::Ephemeral`]. This method checks the payload
-    /// size limit, seeds the nonce cache so bounce-backs are detected
-    /// as duplicates, gathers subscribers, filters by policy, and fans
-    /// out.
+    /// Checks payload size, seeds the nonce cache (so bounce-backs via
+    /// gossip cycles are detected as duplicates on receive), gathers
+    /// subscribers, filters by policy, and fans out.
     ///
-    /// # Bounce-back dedup
+    /// See [`design/ephemeral.md#bounce-back-amplification`] for the
+    /// rationale behind the cache seed.
     ///
-    /// The fan-out filter in [`recv_ephemeral`](Self::recv_ephemeral)
-    /// excludes only the immediate relay and the message's originator.
-    /// In a meshed topology a peer can legitimately forward our own
-    /// message back to us via a longer path (e.g.,
-    /// `S → A → B → ... → C → S`). Without the cache seed below, that
-    /// bounce would be processed as a fresh message: delivered to our
-    /// own callback channel _and_ re-fanned-out to other subscribers
-    /// that already received our publish.
-    ///
-    /// Seeding the nonce cache here makes
-    /// `(issuer, topic, nonce)` already-present, so any later
-    /// `recv_ephemeral` for the same triple short-circuits at the
-    /// nonce-check step.
-    ///
-    /// [`EphemeralPayload`]: crate::message::EphemeralPayload
-    /// [`Signed::seal`]: subduction_crypto::signed::Signed::seal
+    /// [`design/ephemeral.md#bounce-back-amplification`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#bounce-back-amplification
     ///
     /// Errors on individual sends are logged but not propagated —
     /// fire-and-forget semantics.
@@ -178,11 +160,10 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
             return;
         }
 
-        // Seed the nonce cache so a bounce-back via any peer is detected
-        // as a duplicate at the `recv_ephemeral` nonce-check step. If
-        // `check_and_insert` returns `false`, this exact
-        // `(issuer, topic, nonce)` was already published or seen; treat
-        // the re-publish as a silent no-op so we don't fan out twice.
+        // Seed the nonce cache so any bounce-back via gossip is treated
+        // as a duplicate at recv. See design/ephemeral.md#bounce-back-amplification.
+        // A `false` return here means this exact triple is already
+        // present (replay of our own publish); silent no-op.
         let now = self.clock.now();
         {
             let mut cache = self.nonce_cache.lock().await;
@@ -438,30 +419,17 @@ impl<
 
     /// Handle an inbound signed ephemeral message from a peer.
     ///
-    /// # Step order (and why)
+    /// Step order: decode-unverified → size → age → cache `contains`
+    /// (read-only) → verify → cache `check_and_insert` → authorise →
+    /// deliver → fan out. The cache probe before verify is the
+    /// cross-edge fast path; the post-verify `check_and_insert` is the
+    /// only place cache state is written and is gated behind a
+    /// successful signature check.
     ///
-    /// 1. Decode the unverified payload to extract issuer / topic /
-    ///    nonce / timestamp. `Signed::try_decode_trusted_payload` reads
-    ///    the fields without invoking Ed25519, so this is cheap.
-    /// 2. Run all checks that don't need a verified signature:
-    ///    payload size, message age, and a read-only nonce-cache
-    ///    [`contains`](crate::nonce_cache::EphemeralNonceCache::contains)
-    ///    probe. The cache check is the cross-edge fast path:
-    ///    duplicates that arrived from another path during gossip
-    ///    short-circuit here without ever paying the verify cost.
-    /// 3. Verify the signature ([`Signed::try_verify`]). Only reached
-    ///    after the cheap checks all passed.
-    /// 4. `check_and_insert` into the nonce cache. This is the only
-    ///    write to cache state, and it happens _after_ a successful
-    ///    verification, so an unauthenticated `sender` can never inject
-    ///    entries. (A concurrent legitimate duplicate that raced past
-    ///    the read-only probe in step 2 lands here, and we drop.)
-    /// 5. Authorize publish (using the now-verified originator).
-    /// 6. Deliver to the local callback channel.
-    /// 7. Fan out to other subscribers, excluding the relay and the
-    ///    originator.
+    /// See [`design/ephemeral.md`] for the full rationale and threat
+    /// model.
     ///
-    /// [`Signed::try_verify`]: subduction_crypto::signed::Signed::try_verify
+    /// [`design/ephemeral.md`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#recv-ephemeralhandlerrecv_ephemeral
     #[allow(clippy::too_many_lines)]
     async fn recv_ephemeral(&self, conn: &Authenticated<C, F>, message: EphemeralMessage) {
         let EphemeralMessage::Ephemeral(ref signed) = message else {
@@ -471,10 +439,8 @@ impl<
         let relay = conn.peer_id();
         let sender = PeerId::from(signed.issuer());
 
-        // 1. Decode payload fields without verifying. The values here
-        //    are UNTRUSTED until step 3 succeeds — they MUST only be
-        //    used for read-only checks (size, age, cache probe) until
-        //    then.
+        // 1. Decode payload fields without verifying. UNTRUSTED until
+        //    step 3 succeeds — only used for read-only checks below.
         let untrusted = match signed.try_decode_trusted_payload() {
             Ok(payload) => payload,
             Err(e) => {
@@ -491,7 +457,7 @@ impl<
         let timestamp = untrusted.timestamp;
         let payload_len = untrusted.payload.len();
 
-        // 2a. Check payload size (cheap, signature-independent).
+        // 2a. Payload size (signature-independent).
         let max_payload = self.max_payload_size;
         if payload_len > max_payload {
             warn!(
@@ -505,9 +471,7 @@ impl<
             return;
         }
 
-        // 2b. Check message age — reject stale or future-dated messages
-        //     (cheap, signature-independent; rejecting here just avoids
-        //     a verify on demonstrably-stale wire bytes).
+        // 2b. Message age (signature-independent).
         let now = self.clock.now();
         let max_age = self.max_message_age;
         {
@@ -527,14 +491,9 @@ impl<
             }
         }
 
-        // 2c. Fast-path duplicate check — READ-ONLY against the nonce
-        //     cache. If this hits, an earlier verified copy of the same
-        //     `(issuer, topic, nonce)` has already been processed and we
-        //     can drop without ever invoking the Ed25519 verify. This is
-        //     the optimisation that makes cross-edge cost ~free in
-        //     meshed topologies. The cache is mutated _only_ in step 4
-        //     after a successful verify, so a hostile peer who can't
-        //     produce a valid signature cannot pollute it from here.
+        // 2c. Read-only cache probe. Hit ⇒ drop before paying for
+        //     Ed25519 verify. See design/ephemeral.md#dedup-model and
+        //     #cross-path-duplicates.
         {
             let mut cache = self.nonce_cache.lock().await;
             if cache.contains(sender, id, nonce, now) {
@@ -549,7 +508,7 @@ impl<
             }
         }
 
-        // 3. Verify signature. From here on `sender` is trusted.
+        // 3. Verify signature. `sender` is trusted from here on.
         let verified = match signed.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -563,19 +522,17 @@ impl<
             }
         };
 
-        // The verified payload's fields must equal the ones we used for
-        // the pre-verify checks above — `try_decode_trusted_payload`
-        // walks the same bytes as `try_verify` and decodes them with
-        // the same `DecodeFields` impl, so this is by construction.
+        // The verified payload's fields equal the ones we read above
+        // by construction (try_decode_trusted_payload and try_verify
+        // walk the same bytes with the same DecodeFields impl).
         let ep = verified.payload();
         debug_assert_eq!(ep.id, id);
         debug_assert_eq!(ep.nonce, nonce);
         debug_assert_eq!(ep.timestamp, timestamp);
 
-        // 4. Insert into the nonce cache now that the signature has
-        //    been verified. If a concurrent legitimate copy raced past
-        //    the pre-verify probe in step 2c and got here first,
-        //    check_and_insert returns false and we drop.
+        // 4. Post-verify insert. The only place cache state is written.
+        //    `false` here means a concurrent duplicate raced past 2c
+        //    and inserted first; drop.
         {
             let mut cache = self.nonce_cache.lock().await;
             if !cache.check_and_insert(sender, id, nonce, now) {
