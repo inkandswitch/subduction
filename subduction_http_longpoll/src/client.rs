@@ -186,7 +186,8 @@ impl<Async: FutureForm, Sign: Signer<Async>, H: HttpClient<Async> + 'static> Con
             let send_conn = conn;
 
             let send_task = Async::from_future(async move {
-                send_loop::<Async, H>(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
+                send_loop::<Async, H>(send_http, send_url, session_id, send_conn, send_cancel_rx)
+                    .await;
             });
 
             Ok(ConnectResult {
@@ -379,7 +380,9 @@ struct ClientHttpHandshake<Async: FutureForm, H: HttpClient<Async>> {
 }
 
 #[future_form(Sendable where H: Send, Local)]
-impl<Async: FutureForm, H: HttpClient<Async>> handshake::Handshake<Async> for &mut ClientHttpHandshake<Async, H> {
+impl<Async: FutureForm, H: HttpClient<Async>> handshake::Handshake<Async>
+    for &mut ClientHttpHandshake<Async, H>
+{
     type Error = ClientError;
 
     fn send(&mut self, bytes: Vec<u8>) -> Async::Future<'_, Result<(), Self::Error>> {

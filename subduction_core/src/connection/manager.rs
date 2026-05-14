@@ -65,7 +65,12 @@ pub trait Spawn<Async: FutureForm> {
 ///
 /// Unlike [`SelectAll`]-based approaches, each connection runs in its own task,
 /// providing isolation and (on multi-threaded runtimes) true parallelism.
-pub struct ConnectionManager<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>> {
+pub struct ConnectionManager<
+    Async: FutureForm,
+    Conn,
+    WireMsg: Encode + Decode,
+    Spawner: Spawn<Async>,
+> {
     spawner: Spawner,
 
     /// Counter for generating internal task IDs.
@@ -107,7 +112,9 @@ pub struct ConnectionManager<Async: FutureForm, Conn, WireMsg: Encode + Decode, 
     _marker: core::marker::PhantomData<Async>,
 }
 
-impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>> ConnectionManager<Async, Conn, WireMsg, Spawner> {
+impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>>
+    ConnectionManager<Async, Conn, WireMsg, Spawner>
+{
     /// Create a new [`ConnectionManager`].
     #[must_use]
     pub fn new(
@@ -138,8 +145,12 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>> C
     }
 }
 
-impl<Async: FutureForm, Conn: Connection<Async, WireMsg>, WireMsg: Encode + Decode, Spawner: Spawn<Async>>
-    ConnectionManager<Async, Conn, WireMsg, Spawner>
+impl<
+    Async: FutureForm,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+    Spawner: Spawn<Async>,
+> ConnectionManager<Async, Conn, WireMsg, Spawner>
 {
     async fn remove_connection_by_ref(&self, conn: &Conn) {
         let mut tasks = self.tasks.lock().await;
@@ -177,8 +188,12 @@ pub trait RunManager<Conn, WireMsg: Encode + Decode>: FutureForm + Sized {
         Conn: Connection<Self, WireMsg> + Clone + 'static;
 }
 
-impl<Async: FutureForm + RunManager<Conn, WireMsg>, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async> + Send + Sync + 'static>
-    ConnectionManager<Async, Conn, WireMsg, Spawner>
+impl<
+    Async: FutureForm + RunManager<Conn, WireMsg>,
+    Conn,
+    WireMsg: Encode + Decode,
+    Spawner: Spawn<Async> + Send + Sync + 'static,
+> ConnectionManager<Async, Conn, WireMsg, Spawner>
 {
     /// Run the manager, processing commands to add/remove connections.
     pub fn run(self) -> Async::Future<'static, ()>
@@ -323,7 +338,11 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
     }
 }
 
-async fn connection_loop<Async: FutureForm, Conn: Connection<Async, WireMsg>, WireMsg: Encode + Decode>(
+async fn connection_loop<
+    Async: FutureForm,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+>(
     conn: Conn,
     peer_id: PeerId,
     messages: async_channel::Sender<(Conn, WireMsg)>,

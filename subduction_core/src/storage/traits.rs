@@ -87,7 +87,9 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Get all sedimentree IDs that have data stored.
-    fn load_all_sedimentree_ids(&self) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
+    fn load_all_sedimentree_ids(
+        &self,
+    ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
 
     // ==================== Loose Commits (compound with blob) ====================
 

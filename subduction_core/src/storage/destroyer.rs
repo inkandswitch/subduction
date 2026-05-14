@@ -49,7 +49,10 @@ impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
 
     /// Delete a single loose commit and its blob by [`CommitId`].
     #[must_use]
-    pub fn delete_loose_commit(&self, commit_id: CommitId) -> Async::Future<'_, Result<(), Store::Error>> {
+    pub fn delete_loose_commit(
+        &self,
+        commit_id: CommitId,
+    ) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage
             .delete_loose_commit(self.sedimentree_id, commit_id)
     }
@@ -62,7 +65,10 @@ impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
 
     /// Delete a fragment and its blob by fragment head [`CommitId`].
     #[must_use]
-    pub fn delete_fragment(&self, fragment_head: CommitId) -> Async::Future<'_, Result<(), Store::Error>> {
+    pub fn delete_fragment(
+        &self,
+        fragment_head: CommitId,
+    ) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage
             .delete_fragment(self.sedimentree_id, fragment_head)
     }

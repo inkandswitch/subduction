@@ -264,7 +264,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
     pub fn new(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
-    ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, Async>) {
+    ) -> (
+        Self,
+        impl Future<Output = Result<(), RunError>> + use<T, Async>,
+    ) {
         tracing::info!("new WebSocket connection for peer {peer_id:?} (keepalive: false)");
         Self::new_inner(ws, peer_id)
     }
@@ -273,7 +276,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
     fn new_inner(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
-    ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, Async>) {
+    ) -> (
+        Self,
+        impl Future<Output = Result<(), RunError>> + use<T, Async>,
+    ) {
         let (ws_writer, ws_reader) = ws.split();
         let (inbound_writer, inbound_reader) = async_channel::bounded(128);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);

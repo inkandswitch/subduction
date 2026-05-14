@@ -47,7 +47,12 @@ use crate::{
 /// Construct via [`new()`](Self::new), which returns both the handler
 /// and a receiver for inbound [`EphemeralEvent`]s.
 #[allow(clippy::type_complexity)]
-pub struct EphemeralHandler<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock> {
+pub struct EphemeralHandler<
+    Async: FutureForm,
+    Conn: Clone + 'static,
+    E: EphemeralPolicy<Async>,
+    Clk: Clock,
+> {
     /// Inbound subscriptions: which peers are subscribed to receive ephemeral messages from us.
     ephemeral_subscriptions: Arc<Mutex<Map<Topic, Set<PeerId>>>>,
     /// Outbound subscriptions: sedimentree IDs we want to receive ephemeral messages for.
@@ -79,8 +84,8 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async> + Clone
     }
 }
 
-impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock> core::fmt::Debug
-    for EphemeralHandler<Async, Conn, E, Clk>
+impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock>
+    core::fmt::Debug for EphemeralHandler<Async, Conn, E, Clk>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("EphemeralHandler").finish_non_exhaustive()
@@ -366,7 +371,9 @@ pub enum EphemeralHandlerError<SendErr: core::error::Error> {
         E: EphemeralPolicy<Local>,
         Clk: Clock
 )]
-impl<Async: FutureForm, Conn, E, Clk> Handler<Async, Conn> for EphemeralHandler<Async, Conn, E, Clk> {
+impl<Async: FutureForm, Conn, E, Clk> Handler<Async, Conn>
+    for EphemeralHandler<Async, Conn, E, Clk>
+{
     type Message = EphemeralMessage;
     type HandlerError = EphemeralHandlerError<Conn::SendError>;
 

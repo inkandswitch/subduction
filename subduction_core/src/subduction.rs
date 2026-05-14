@@ -232,8 +232,11 @@ impl<
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
-    ManagedConnection<Conn, Async, Timer>:
-        ManagedCall<Async, Hdl::Message, SendError = <Conn as Connection<Async, Hdl::Message>>::SendError>,
+    ManagedConnection<Conn, Async, Timer>: ManagedCall<
+            Async,
+            Hdl::Message,
+            SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
+        >,
 {
     /// Initialize a new `Subduction` instance.
     ///
@@ -351,10 +354,9 @@ where
 
         (
             sd.clone(),
-            ListenerFuture::<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>::new(Async::start_listener(
-                sd,
-                abort_listener_reg,
-            )),
+            ListenerFuture::<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>::new(
+                Async::start_listener(sd, abort_listener_reg),
+            ),
             crate::connection::manager::ManagerFuture::new(abortable_manager),
         )
     }
@@ -534,7 +536,9 @@ where
     ///
     /// * Returns `ListenError` if a handler error signals a broken connection.
     #[allow(clippy::too_many_lines)]
-    pub async fn listen(self: Arc<Self>) -> Result<(), ListenError<Async, Store, Conn, Hdl::Message>> {
+    pub async fn listen(
+        self: Arc<Self>,
+    ) -> Result<(), ListenError<Async, Store, Conn, Hdl::Message>> {
         tracing::info!("starting Subduction listener with concurrent dispatch");
 
         let handler = &self.handler;
@@ -971,7 +975,10 @@ where
     /// # Errors
     ///
     /// * Returns `Store::Error` if the storage backend encounters an error.
-    pub async fn get_blobs(&self, id: SedimentreeId) -> Result<Option<NonEmpty<Blob>>, Store::Error> {
+    pub async fn get_blobs(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<Option<NonEmpty<Blob>>, Store::Error> {
         tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
         let tree = self.sedimentrees.get_cloned(&id).await;
         if tree.is_none() {
@@ -1175,7 +1182,10 @@ where
         head: CommitId,
         parents: BTreeSet<CommitId>,
         blob: Blob,
-    ) -> Result<Option<FragmentRequested>, WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+    ) -> Result<
+        Option<FragmentRequested>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
         let self_id = self.peer_id();
         let putter = self.storage.local_putter::<Async>(id);
 
@@ -1397,7 +1407,8 @@ where
         for (head, parents, blob) in commits {
             let verified_blob = VerifiedBlobMeta::new(blob);
             let verified_meta: VerifiedMeta<LooseCommit> =
-                VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob).await;
+                VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob)
+                    .await;
             commit_payloads.push(verified_meta.payload().clone());
             verified_commits.push(verified_meta);
         }
@@ -1645,8 +1656,11 @@ impl<
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
-    ManagedConnection<Conn, Async, Timer>:
-        ManagedCall<Async, Hdl::Message, SendError = <Conn as Connection<Async, Hdl::Message>>::SendError>,
+    ManagedConnection<Conn, Async, Timer>: ManagedCall<
+            Async,
+            Hdl::Message,
+            SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
+        >,
 {
     /// Add a new sedimentree locally and propagate it to all connected peers.
     ///
@@ -1791,7 +1805,9 @@ where
             SyncStats,
             Vec<(
                 Authenticated<Conn, Async>,
-                crate::connection::managed::CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
+                crate::connection::managed::CallError<
+                    <Conn as Connection<Async, Hdl::Message>>::SendError,
+                >,
             )>,
         ),
         IoError<Async, Store, Conn, Hdl::Message>,
@@ -2346,7 +2362,9 @@ where
         SyncStats,
         Vec<(
             Authenticated<Conn, Async>,
-            crate::connection::managed::CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
+            crate::connection::managed::CallError<
+                <Conn as Connection<Async, Hdl::Message>>::SendError,
+            >,
         )>,
         Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
     ) {
@@ -2405,7 +2423,9 @@ where
         SyncStats,
         Vec<(
             Authenticated<Conn, Async>,
-            crate::connection::managed::CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
+            crate::connection::managed::CallError<
+                <Conn as Connection<Async, Hdl::Message>>::SendError,
+            >,
         )>,
         Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
     ) {
@@ -2474,8 +2494,11 @@ impl<
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
-    ManagedConnection<Conn, Async, Timer>:
-        ManagedCall<Async, Hdl::Message, SendError = <Conn as Connection<Async, Hdl::Message>>::SendError>,
+    ManagedConnection<Conn, Async, Timer>: ManagedCall<
+            Async,
+            Hdl::Message,
+            SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
+        >,
 {
     /********************
      * PUBLIC UTILITIES *
@@ -2842,7 +2865,8 @@ impl<
     Timer: Timeout<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
-> ConnectionPolicy<Async> for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> ConnectionPolicy<Async>
+    for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
 {
     type ConnectionDisallowed = Auth::ConnectionDisallowed;
 
@@ -2865,7 +2889,8 @@ impl<
     Timer: Timeout<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
-> StoragePolicy<Async> for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> StoragePolicy<Async>
+    for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
 {
     type FetchDisallowed = Auth::FetchDisallowed;
     type PutDisallowed = Auth::PutDisallowed;

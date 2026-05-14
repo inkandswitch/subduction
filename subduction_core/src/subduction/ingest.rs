@@ -276,7 +276,11 @@ pub(crate) async fn minimize_tree<Metric: DepthMetric, const SHARDS: usize>(
 ///
 /// Searches through both loose commits and fragments for the given
 /// sedimentree, returning the first blob whose digest matches.
-pub(crate) async fn get_blob<Async: FutureForm, Store: Storage<Async>, Auth: StoragePolicy<Async>>(
+pub(crate) async fn get_blob<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Auth: StoragePolicy<Async>,
+>(
     storage: &StoragePowerbox<Store, Auth>,
     id: SedimentreeId,
     digest: Digest<Blob>,

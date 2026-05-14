@@ -124,7 +124,8 @@ pub enum ComposedHandlerError<S: core::error::Error, E: core::error::Error> {
 /// types that are independent of the message generic `M`, so
 /// `ListenError<Async,Store,Conn,SyncMessage>` can be retyped to
 /// `ListenError<Async,Store,Conn,WireMsg>` without loss of information.
-impl<Async, Store, Conn, WireMsg, EphErr> From<ComposedHandlerError<ListenError<Async, Store, Conn, SyncMessage>, EphErr>>
+impl<Async, Store, Conn, WireMsg, EphErr>
+    From<ComposedHandlerError<ListenError<Async, Store, Conn, SyncMessage>, EphErr>>
     for ListenError<Async, Store, Conn, WireMsg>
 where
     Async: FutureForm + Debug,
@@ -132,13 +133,17 @@ where
     Conn: Connection<Async, SyncMessage> + Connection<Async, WireMsg> + Debug,
     WireMsg: Encode + Decode,
     Store::Error: Debug,
-    <Conn as Connection<Async, SyncMessage>>::SendError: Debug + Into<<Conn as Connection<Async, WireMsg>>::SendError>,
-    <Conn as Connection<Async, SyncMessage>>::RecvError: Debug + Into<<Conn as Connection<Async, WireMsg>>::RecvError>,
+    <Conn as Connection<Async, SyncMessage>>::SendError:
+        Debug + Into<<Conn as Connection<Async, WireMsg>>::SendError>,
+    <Conn as Connection<Async, SyncMessage>>::RecvError:
+        Debug + Into<<Conn as Connection<Async, WireMsg>>::RecvError>,
     <Conn as Connection<Async, WireMsg>>::SendError: Debug,
     <Conn as Connection<Async, WireMsg>>::RecvError: Debug,
     EphErr: core::error::Error,
 {
-    fn from(err: ComposedHandlerError<ListenError<Async, Store, Conn, SyncMessage>, EphErr>) -> Self {
+    fn from(
+        err: ComposedHandlerError<ListenError<Async, Store, Conn, SyncMessage>, EphErr>,
+    ) -> Self {
         match err {
             ComposedHandlerError::Sync(listen_err) => match listen_err {
                 ListenError::IoError(io_err) => ListenError::IoError(match io_err {

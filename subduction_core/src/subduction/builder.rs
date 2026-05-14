@@ -131,7 +131,9 @@ pub struct SubductionBuilder<
 /// Using a wrapper struct avoids placing the const generic `N` on
 /// fields that don't otherwise need it.
 #[derive(Debug)]
-struct SedimentreesOption<const SHARDS: usize>(Option<Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>>);
+struct SedimentreesOption<const SHARDS: usize>(
+    Option<Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>>,
+);
 
 impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
     fn default() -> Self {
@@ -143,7 +145,9 @@ impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
 // Constructor
 // -----------------------------------------------------------------------
 
-impl<const SHARDS: usize> SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS> {
+impl<const SHARDS: usize>
+    SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS>
+{
     /// Create a new builder with all defaults.
     ///
     /// The four required fields — `signer`, `spawner`, `storage`, and
@@ -177,11 +181,16 @@ impl<const SHARDS: usize> Default
     }
 }
 
-impl<Sp, Store, Timer, Metric, const SHARDS: usize> SubductionBuilder<Unset, Sp, Store, Timer, Metric, SHARDS> {
+impl<Sp, Store, Timer, Metric, const SHARDS: usize>
+    SubductionBuilder<Unset, Sp, Store, Timer, Metric, SHARDS>
+{
     /// Set the signer for peer identity and handshake authentication.
     ///
     /// This is a required field.
-    pub fn signer<Sign>(self, signer: Sign) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    pub fn signer<Sign>(
+        self,
+        signer: Sign,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
         SubductionBuilder {
             signer,
             spawner: self.spawner,
@@ -197,13 +206,18 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize> SubductionBuilder<Unset, Sp,
     }
 }
 
-impl<Sign, Store, Timer, Metric, const SHARDS: usize> SubductionBuilder<Sign, Unset, Store, Timer, Metric, SHARDS> {
+impl<Sign, Store, Timer, Metric, const SHARDS: usize>
+    SubductionBuilder<Sign, Unset, Store, Timer, Metric, SHARDS>
+{
     /// Set the task spawner for background work.
     ///
     /// This is a required field. Common implementations:
     /// - `TokioSpawn` for native async (requires `Sendable`)
     /// - `WasmSpawn` for browser environments (requires `Local`)
-    pub fn spawner<Sp>(self, spawner: Sp) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    pub fn spawner<Sp>(
+        self,
+        spawner: Sp,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner,
@@ -219,7 +233,9 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize> SubductionBuilder<Sign, Un
     }
 }
 
-impl<Sign, Sp, Timer, Metric, const SHARDS: usize> SubductionBuilder<Sign, Sp, Unset, Timer, Metric, SHARDS> {
+impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, SHARDS>
+{
     /// Set the storage backend and authorization policy.
     ///
     /// This is a required field. The `storage` backend provides
@@ -244,7 +260,9 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize> SubductionBuilder<Sign, Sp, U
     }
 }
 
-impl<Sign, Sp, Store, Metric, const SHARDS: usize> SubductionBuilder<Sign, Sp, Store, Unset, Metric, SHARDS> {
+impl<Sign, Sp, Store, Metric, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Unset, Metric, SHARDS>
+{
     /// Set the timeout strategy for roundtrip calls.
     ///
     /// This is a required field. Common implementations:
@@ -266,7 +284,9 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize> SubductionBuilder<Sign, Sp, S
     }
 }
 
-impl<Sign, Sp, Store, Timer, Metric, const SHARDS: usize> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+impl<Sign, Sp, Store, Timer, Metric, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS>
+{
     /// Set the discovery ID for discovery-mode connections.
     ///
     /// Defaults to `None` (peer-to-peer mode only).
@@ -485,7 +505,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
+        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
+            + 'static,
         Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'a,

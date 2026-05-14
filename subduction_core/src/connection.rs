@@ -80,7 +80,9 @@ where
 ///
 /// Connections implementing this trait can be automatically reconnected
 /// by the connection manager when they drop unexpectedly.
-pub trait Reconnect<Async: FutureForm, WireMsg: Encode + Decode>: Connection<Async, WireMsg> {
+pub trait Reconnect<Async: FutureForm, WireMsg: Encode + Decode>:
+    Connection<Async, WireMsg>
+{
     /// A problem when reconnecting.
     type ReconnectionError: core::error::Error + Send + 'static;
 

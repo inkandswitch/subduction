@@ -119,7 +119,8 @@ where
     }
 }
 
-impl<Signer, T, P, C, L, R, Conn, Store, Async> KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, Async>
+impl<Signer, T, P, C, L, R, Conn, Store, Async>
+    KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, Async>
 where
     Signer: AsyncSigner<Async> + Clone,
     T: ContentRef + serde::de::DeserializeOwned,

@@ -140,7 +140,9 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         })
     }
 
-    fn load_all_sedimentree_ids(&self) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
+    fn load_all_sedimentree_ids(
+        &self,
+    ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_all_sedimentree_ids().await;

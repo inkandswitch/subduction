@@ -94,7 +94,9 @@ impl<Async: FutureForm, Store: Storage<Async>> Fetcher<Async, Store> {
 
     /// Load all fragments with their blobs for this sedimentree.
     #[must_use]
-    pub fn load_fragments(&self) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Store::Error>> {
+    pub fn load_fragments(
+        &self,
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Store::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
 }

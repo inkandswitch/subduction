@@ -87,7 +87,9 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         })
     }
 
-    fn load_all_sedimentree_ids(&self) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
+    fn load_all_sedimentree_ids(
+        &self,
+    ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
         Async::from_future(async move {
             tracing::debug!("MemoryStorage::load_all_sedimentree_ids");
             Ok(self.ids.lock().await.iter().copied().collect())
