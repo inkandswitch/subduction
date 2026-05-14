@@ -64,6 +64,45 @@ impl EphemeralNonceCache {
         }
     }
 
+    /// Check whether `nonce` has been seen for `(sender, topic)` without
+    /// inserting it.
+    ///
+    /// Returns `true` if the nonce was already seen, `false` if it's
+    /// unknown (or no entry exists yet for this `(sender, topic)`).
+    ///
+    /// This is the read-only fast path used _before_ signature
+    /// verification: cross-edge duplicates short-circuit here, avoiding
+    /// an Ed25519 verify per wasted hop. Because no nonce is ever
+    /// inserted by this call, an attacker who can't produce a valid
+    /// signature cannot pollute the cache by sending messages with
+    /// chosen `(issuer, topic, nonce)` triples. The cache is only
+    /// mutated by [`check_and_insert`](Self::check_and_insert), which
+    /// is gated behind successful verification at the call site.
+    ///
+    /// Bucket rotation _is_ performed for existing keys so that nonces
+    /// older than the retention window stop counting as duplicates.
+    /// Rotation only ever mutates entries that already exist; missing
+    /// keys remain absent (no spurious allocation from probe traffic).
+    pub fn contains(
+        &mut self,
+        sender: PeerId,
+        topic: Topic,
+        nonce: u64,
+        now: TimestampSeconds,
+    ) -> bool {
+        let key = (sender, topic);
+        // Only rotate / read existing entries — never create one on the
+        // pre-verify path, since the caller has not yet authenticated
+        // the `sender`/issuer field.
+        let Some([current, previous]) = self.windows.get_mut(&key) else {
+            return false;
+        };
+
+        rotate_buckets(current, previous, now, self.window_duration);
+
+        current.nonces.contains(&nonce) || previous.nonces.contains(&nonce)
+    }
+
     /// Check whether `nonce` has been seen for `(sender, topic)`.
     ///
     /// Returns `true` if the nonce is _new_ (not a duplicate) and
@@ -71,6 +110,10 @@ impl EphemeralNonceCache {
     /// nonce was already seen (duplicate — should be dropped).
     ///
     /// Performs bucket rotation if the current bucket has expired.
+    ///
+    /// Use this _after_ verifying the signature so that an unverified
+    /// `sender` cannot inject entries; the read-only
+    /// [`contains`](Self::contains) is the pre-verify fast path.
     pub fn check_and_insert(
         &mut self,
         sender: PeerId,
@@ -84,16 +127,7 @@ impl EphemeralNonceCache {
             .entry(key)
             .or_insert_with(|| [NonceBucket::new(now), NonceBucket::new(now)]);
 
-        // Rotate if the current bucket has expired.
-        let age = current.rotated_at.abs_diff(now);
-        if age > self.window_duration.saturating_mul(2) {
-            // Long idle: both buckets are stale — reset entirely.
-            *current = NonceBucket::new(now);
-            *previous = NonceBucket::new(now);
-        } else if age > self.window_duration {
-            // Normal rotation: current → previous, fresh current.
-            *previous = core::mem::replace(current, NonceBucket::new(now));
-        }
+        rotate_buckets(current, previous, now, self.window_duration);
 
         // Check for duplicate in both buckets.
         if current.nonces.contains(&nonce) || previous.nonces.contains(&nonce) {
@@ -107,6 +141,28 @@ impl EphemeralNonceCache {
     /// Remove all entries for a given peer (called on disconnect).
     pub fn remove_peer(&mut self, peer: PeerId) {
         self.windows.retain(|(p, _), _| *p != peer);
+    }
+}
+
+/// Rotate `current` and `previous` based on the current bucket's age.
+/// Extracted so [`EphemeralNonceCache::contains`] and
+/// [`EphemeralNonceCache::check_and_insert`] share identical rotation
+/// semantics — divergence would cause one path to see stale nonces the
+/// other doesn't.
+fn rotate_buckets(
+    current: &mut NonceBucket,
+    previous: &mut NonceBucket,
+    now: TimestampSeconds,
+    window_duration: Duration,
+) {
+    let age = current.rotated_at.abs_diff(now);
+    if age > window_duration.saturating_mul(2) {
+        // Long idle: both buckets are stale — reset entirely.
+        *current = NonceBucket::new(now);
+        *previous = NonceBucket::new(now);
+    } else if age > window_duration {
+        // Normal rotation: current → previous, fresh current.
+        *previous = core::mem::replace(current, NonceBucket::new(now));
     }
 }
 
@@ -213,5 +269,71 @@ mod tests {
         assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
         // Jump past 2 * window (>4s) — both buckets stale, nonce accepted again
         assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(5)));
+    }
+
+    // ── contains() (read-only fast-path) ────────────────────────────────
+
+    #[test]
+    fn contains_returns_false_for_unknown_key() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        assert!(!cache.contains(peer(1), topic(1), 42, ts(1000)));
+    }
+
+    #[test]
+    fn contains_returns_true_after_insert() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+        assert!(cache.contains(peer(1), topic(1), 42, ts(1000)));
+    }
+
+    #[test]
+    fn contains_does_not_insert() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        // contains on unknown key returns false…
+        assert!(!cache.contains(peer(1), topic(1), 42, ts(1000)));
+        // …and must NOT have created an entry: a subsequent
+        // check_and_insert sees a fresh nonce and accepts it.
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+    }
+
+    #[test]
+    fn contains_finds_nonce_in_previous_bucket_after_rotation() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        // Insert at t=0
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // contains at t=3 should rotate (current→previous, fresh current)
+        // and still find 42 in the previous bucket.
+        assert!(cache.contains(peer(1), topic(1), 42, ts(3)));
+    }
+
+    #[test]
+    fn contains_drops_nonce_after_two_windows() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // Force one rotation by doing an unrelated insert at t=3.
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(3)));
+        // contains at t=6: rotates again, previous (with 42) is discarded.
+        assert!(!cache.contains(peer(1), topic(1), 42, ts(6)));
+    }
+
+    #[test]
+    fn contains_does_not_pollute_cache_with_probe_traffic() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        // Hostile pre-verify probe of many (sender, topic, nonce) triples.
+        // None of these should leave state behind: the cache only mutates
+        // on a successful check_and_insert (which is post-verify).
+        for n in 0..1000_u64 {
+            assert!(!cache.contains(peer((n % 250) as u8), topic((n % 50) as u8), n, ts(1000)));
+        }
+        // The legitimate write path now sees a clean slate for every key
+        // the prober touched.
+        for n in 0..1000_u64 {
+            assert!(cache.check_and_insert(
+                peer((n % 250) as u8),
+                topic((n % 50) as u8),
+                n,
+                ts(1000)
+            ));
+        }
     }
 }

@@ -29,13 +29,19 @@ tracing = { workspace = true }
 arbitrary = { workspace = true, features = ["derive"] }
 async-lock = { workspace = true }
 bolero = { workspace = true, features = ["arbitrary"] }
+criterion = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["std"] }
+futures = { workspace = true, features = ["executor"] }
 getrandom = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
 subduction_crypto = { workspace = true, features = ["std"] }
 subduction_ephemeral = { path = ".", features = ["std", "test_utils", "bolero"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[[bench]]
+name = "recv_dedup"
+harness = false
 
 [features]
 default = []

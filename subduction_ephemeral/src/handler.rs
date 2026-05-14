@@ -125,7 +125,25 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// typically by sealing an [`EphemeralPayload`] (e.g., with
     /// [`Signed::seal`]) and wrapping it in
     /// [`EphemeralMessage::Ephemeral`]. This method checks the payload
-    /// size limit, gathers subscribers, filters by policy, and fans out.
+    /// size limit, seeds the nonce cache so bounce-backs are detected
+    /// as duplicates, gathers subscribers, filters by policy, and fans
+    /// out.
+    ///
+    /// # Bounce-back dedup
+    ///
+    /// The fan-out filter in [`recv_ephemeral`](Self::recv_ephemeral)
+    /// excludes only the immediate relay and the message's originator.
+    /// In a meshed topology a peer can legitimately forward our own
+    /// message back to us via a longer path (e.g.,
+    /// `S → A → B → ... → C → S`). Without the cache seed below, that
+    /// bounce would be processed as a fresh message: delivered to our
+    /// own callback channel _and_ re-fanned-out to other subscribers
+    /// that already received our publish.
+    ///
+    /// Seeding the nonce cache here makes
+    /// `(issuer, topic, nonce)` already-present, so any later
+    /// `recv_ephemeral` for the same triple short-circuits at the
+    /// nonce-check step.
     ///
     /// [`EphemeralPayload`]: crate::message::EphemeralPayload
     /// [`Signed::seal`]: subduction_crypto::signed::Signed::seal
@@ -145,6 +163,8 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
             return;
         };
         let id = payload.id;
+        let nonce = payload.nonce;
+        let issuer = PeerId::from(signed.issuer());
         let payload_len = payload.payload.len();
 
         let max_payload = self.max_payload_size;
@@ -156,6 +176,25 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
                 "ephemeral publish payload too large, dropping"
             );
             return;
+        }
+
+        // Seed the nonce cache so a bounce-back via any peer is detected
+        // as a duplicate at the `recv_ephemeral` nonce-check step. If
+        // `check_and_insert` returns `false`, this exact
+        // `(issuer, topic, nonce)` was already published or seen; treat
+        // the re-publish as a silent no-op so we don't fan out twice.
+        let now = self.clock.now();
+        {
+            let mut cache = self.nonce_cache.lock().await;
+            if !cache.check_and_insert(issuer, id, nonce, now) {
+                debug!(
+                    issuer = %issuer,
+                    id = %id,
+                    nonce = nonce,
+                    "publish called with already-seen (issuer, topic, nonce); skipping fan-out"
+                );
+                return;
+            }
         }
 
         // Peers subscribed to us (inbound) — we relay to them directly.
@@ -399,10 +438,28 @@ impl<
 
     /// Handle an inbound signed ephemeral message from a peer.
     ///
-    /// Verifies the signature via [`Signed::try_verify`], checks the
-    /// timestamp age, checks the nonce cache for duplicates, authorizes
-    /// the originator via policy, delivers to the callback channel, and
-    /// fans out to other subscribers.
+    /// # Step order (and why)
+    ///
+    /// 1. Decode the unverified payload to extract issuer / topic /
+    ///    nonce / timestamp. `Signed::try_decode_trusted_payload` reads
+    ///    the fields without invoking Ed25519, so this is cheap.
+    /// 2. Run all checks that don't need a verified signature:
+    ///    payload size, message age, and a read-only nonce-cache
+    ///    [`contains`](crate::nonce_cache::EphemeralNonceCache::contains)
+    ///    probe. The cache check is the cross-edge fast path:
+    ///    duplicates that arrived from another path during gossip
+    ///    short-circuit here without ever paying the verify cost.
+    /// 3. Verify the signature ([`Signed::try_verify`]). Only reached
+    ///    after the cheap checks all passed.
+    /// 4. `check_and_insert` into the nonce cache. This is the only
+    ///    write to cache state, and it happens _after_ a successful
+    ///    verification, so an unauthenticated `sender` can never inject
+    ///    entries. (A concurrent legitimate duplicate that raced past
+    ///    the read-only probe in step 2 lands here, and we drop.)
+    /// 5. Authorize publish (using the now-verified originator).
+    /// 6. Deliver to the local callback channel.
+    /// 7. Fan out to other subscribers, excluding the relay and the
+    ///    originator.
     ///
     /// [`Signed::try_verify`]: subduction_crypto::signed::Signed::try_verify
     #[allow(clippy::too_many_lines)]
@@ -414,40 +471,43 @@ impl<
         let relay = conn.peer_id();
         let sender = PeerId::from(signed.issuer());
 
-        // 1. Verify signature and decode payload.
-        let verified = match signed.try_verify() {
-            Ok(v) => v,
+        // 1. Decode payload fields without verifying. The values here
+        //    are UNTRUSTED until step 3 succeeds — they MUST only be
+        //    used for read-only checks (size, age, cache probe) until
+        //    then.
+        let untrusted = match signed.try_decode_trusted_payload() {
+            Ok(payload) => payload,
             Err(e) => {
                 warn!(
-                    originator = %sender,
                     relay = %relay,
                     error = %e,
-                    "ephemeral signature verification failed, dropping"
+                    "ephemeral payload undecodable, dropping"
                 );
                 return;
             }
         };
+        let id = untrusted.id;
+        let nonce = untrusted.nonce;
+        let timestamp = untrusted.timestamp;
+        let payload_len = untrusted.payload.len();
 
-        let ep = verified.payload();
-        let id = ep.id;
-        let nonce = ep.nonce;
-        let timestamp = ep.timestamp;
-
-        // 2. Check payload size.
+        // 2a. Check payload size (cheap, signature-independent).
         let max_payload = self.max_payload_size;
-        if ep.payload.len() > max_payload {
+        if payload_len > max_payload {
             warn!(
                 originator = %sender,
                 relay = %relay,
                 id = %id,
-                size = ep.payload.len(),
+                size = payload_len,
                 max = max_payload,
                 "ephemeral payload too large, dropping"
             );
             return;
         }
 
-        // 3. Check message age — reject stale or future-dated messages.
+        // 2b. Check message age — reject stale or future-dated messages
+        //     (cheap, signature-independent; rejecting here just avoids
+        //     a verify on demonstrably-stale wire bytes).
         let now = self.clock.now();
         let max_age = self.max_message_age;
         {
@@ -467,7 +527,55 @@ impl<
             }
         }
 
-        // 4. Check nonce (dedup).
+        // 2c. Fast-path duplicate check — READ-ONLY against the nonce
+        //     cache. If this hits, an earlier verified copy of the same
+        //     `(issuer, topic, nonce)` has already been processed and we
+        //     can drop without ever invoking the Ed25519 verify. This is
+        //     the optimisation that makes cross-edge cost ~free in
+        //     meshed topologies. The cache is mutated _only_ in step 4
+        //     after a successful verify, so a hostile peer who can't
+        //     produce a valid signature cannot pollute it from here.
+        {
+            let mut cache = self.nonce_cache.lock().await;
+            if cache.contains(sender, id, nonce, now) {
+                debug!(
+                    originator = %sender,
+                    relay = %relay,
+                    id = %id,
+                    nonce = nonce,
+                    "duplicate ephemeral nonce (pre-verify fast path), dropping"
+                );
+                return;
+            }
+        }
+
+        // 3. Verify signature. From here on `sender` is trusted.
+        let verified = match signed.try_verify() {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    originator = %sender,
+                    relay = %relay,
+                    error = %e,
+                    "ephemeral signature verification failed, dropping"
+                );
+                return;
+            }
+        };
+
+        // The verified payload's fields must equal the ones we used for
+        // the pre-verify checks above — `try_decode_trusted_payload`
+        // walks the same bytes as `try_verify` and decodes them with
+        // the same `DecodeFields` impl, so this is by construction.
+        let ep = verified.payload();
+        debug_assert_eq!(ep.id, id);
+        debug_assert_eq!(ep.nonce, nonce);
+        debug_assert_eq!(ep.timestamp, timestamp);
+
+        // 4. Insert into the nonce cache now that the signature has
+        //    been verified. If a concurrent legitimate copy raced past
+        //    the pre-verify probe in step 2c and got here first,
+        //    check_and_insert returns false and we drop.
         {
             let mut cache = self.nonce_cache.lock().await;
             if !cache.check_and_insert(sender, id, nonce, now) {
@@ -476,13 +584,13 @@ impl<
                     relay = %relay,
                     id = %id,
                     nonce = nonce,
-                    "duplicate ephemeral nonce, dropping"
+                    "duplicate ephemeral nonce (post-verify race), dropping"
                 );
                 return;
             }
         }
 
-        // 5. Check publish authorization (using originator, not relay).
+        // 5. Check publish authorization (using verified originator).
         if let Err(e) = self.policy.authorize_publish(sender, id).await {
             debug!(
                 originator = %sender,
