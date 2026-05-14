@@ -66,11 +66,29 @@ impl EphemeralNonceCache {
 
     /// Check whether `nonce` has been seen for `(sender, topic)`.
     ///
-    /// Returns `true` if the nonce is _new_ (not a duplicate) and
-    /// inserts it into the current bucket. Returns `false` if the
-    /// nonce was already seen (duplicate — should be dropped).
+    /// See [`design/ephemeral.md`] for the dedup model and
+    /// cache-integrity invariant.
     ///
-    /// Performs bucket rotation if the current bucket has expired.
+    /// [`EphemeralHandler::recv_ephemeral`]: crate::handler::EphemeralHandler
+    /// [`check_and_insert`]: Self::check_and_insert
+    /// [`design/ephemeral.md`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#dedup-model
+    #[must_use]
+    pub fn contains(&self, sender: PeerId, topic: Topic, nonce: u64) -> bool {
+        let Some([current, previous]) = self.windows.get(&(sender, topic)) else {
+            return false;
+        };
+        current.nonces.contains(&nonce) || previous.nonces.contains(&nonce)
+    }
+
+    /// Check whether `nonce` has been seen for `(sender, topic)`,
+    /// inserting it if not. Returns `true` for fresh nonces (and
+    /// inserts), `false` for duplicates. Rotates buckets if the
+    /// current one has expired.
+    ///
+    /// Use _post-verify_ — this is the only call that mutates cache
+    /// state, so it must be gated behind a successful signature
+    /// check at the call site. Pre-verify code paths use
+    /// [`contains`](Self::contains).
     pub fn check_and_insert(
         &mut self,
         sender: PeerId,
@@ -84,16 +102,7 @@ impl EphemeralNonceCache {
             .entry(key)
             .or_insert_with(|| [NonceBucket::new(now), NonceBucket::new(now)]);
 
-        // Rotate if the current bucket has expired.
-        let age = current.rotated_at.abs_diff(now);
-        if age > self.window_duration.saturating_mul(2) {
-            // Long idle: both buckets are stale — reset entirely.
-            *current = NonceBucket::new(now);
-            *previous = NonceBucket::new(now);
-        } else if age > self.window_duration {
-            // Normal rotation: current → previous, fresh current.
-            *previous = core::mem::replace(current, NonceBucket::new(now));
-        }
+        gc_buckets(current, previous, now, self.window_duration);
 
         // Check for duplicate in both buckets.
         if current.nonces.contains(&nonce) || previous.nonces.contains(&nonce) {
@@ -107,6 +116,36 @@ impl EphemeralNonceCache {
     /// Remove all entries for a given peer (called on disconnect).
     pub fn remove_peer(&mut self, peer: PeerId) {
         self.windows.retain(|(p, _), _| *p != peer);
+    }
+}
+
+/// Drop stale nonces from `current` and `previous` based on the
+/// current bucket's age. Called only from
+/// [`EphemeralNonceCache::check_and_insert`] (the post-verify write
+/// path); the read-only [`EphemeralNonceCache::contains`] never
+/// triggers eviction.
+///
+/// - If `current` has aged past `2 × window_duration`, both buckets are
+///   fully stale: reset both to fresh empty buckets at `now`.
+/// - If `current` has aged past `window_duration`, demote it to
+///   `previous` (discarding whatever was in `previous`) and replace
+///   `current` with a fresh empty bucket at `now`.
+/// - Otherwise no-op.
+fn gc_buckets(
+    current: &mut NonceBucket,
+    previous: &mut NonceBucket,
+    now: TimestampSeconds,
+    window_duration: Duration,
+) {
+    let age = current.rotated_at.abs_diff(now);
+    if age > window_duration.saturating_mul(2) {
+        // Long idle: both buckets are fully expired — wipe.
+        *current = NonceBucket::new(now);
+        *previous = NonceBucket::new(now);
+    } else if age > window_duration {
+        // Slide the window forward: drop old `previous`, demote
+        // `current` to `previous`, install a fresh `current`.
+        *previous = core::mem::replace(current, NonceBucket::new(now));
     }
 }
 
@@ -213,5 +252,94 @@ mod tests {
         assert!(!cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
         // Jump past 2 * window (>4s) — both buckets stale, nonce accepted again
         assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(5)));
+    }
+
+    // ── contains() (read-only fast-path) ────────────────────────────────
+
+    #[test]
+    fn contains_returns_false_for_unknown_key() {
+        let cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        assert!(!cache.contains(peer(1), topic(1), 42));
+    }
+
+    #[test]
+    fn contains_returns_true_after_insert() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+        assert!(cache.contains(peer(1), topic(1), 42));
+    }
+
+    #[test]
+    fn contains_does_not_insert() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        // contains on unknown key returns false…
+        assert!(!cache.contains(peer(1), topic(1), 42));
+        // …and must NOT have created an entry: a subsequent
+        // check_and_insert sees a fresh nonce and accepts it.
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
+    }
+
+    #[test]
+    fn contains_finds_nonce_in_previous_bucket_after_legit_rotation() {
+        // contains is read-only: physical rotation happens only on the
+        // post-verify write path. Once `check_and_insert` rotates a
+        // nonce into the `previous` bucket, `contains` continues to
+        // detect it without any further rotation.
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // Legit subsequent write triggers normal rotation:
+        // previous = {42}, current = {99}.
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(3)));
+        assert!(cache.contains(peer(1), topic(1), 42));
+        assert!(cache.contains(peer(1), topic(1), 99));
+    }
+
+    #[test]
+    fn contains_drops_nonce_after_two_legit_rotations() {
+        // Two post-verify rotations push the original nonce out of
+        // both buckets; contains then no longer reports it.
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        // Rotation #1: previous = {42}, current = {99}.
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(3)));
+        // Rotation #2: previous = {99}, current = {100}. 42 is now dropped.
+        assert!(cache.check_and_insert(peer(1), topic(1), 100, ts(6)));
+        assert!(!cache.contains(peer(1), topic(1), 42));
+        assert!(cache.contains(peer(1), topic(1), 99));
+        assert!(cache.contains(peer(1), topic(1), 100));
+    }
+
+    #[test]
+    fn long_idle_legit_write_clears_old_nonces_from_contains() {
+        // A check_and_insert past `2 * window` triggers the long-idle
+        // reset, wiping both buckets. contains then sees a clean slate.
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        assert!(cache.contains(peer(1), topic(1), 42));
+        // Long idle: 10 > 2 * window (4). Both buckets reset.
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(10)));
+        assert!(!cache.contains(peer(1), topic(1), 42));
+        assert!(cache.contains(peer(1), topic(1), 99));
+    }
+
+    #[test]
+    fn contains_does_not_pollute_cache_with_probe_traffic() {
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        // Hostile pre-verify probe of many (sender, topic, nonce) triples.
+        // None of these should leave state behind: the cache only mutates
+        // on a successful check_and_insert (which is post-verify).
+        for n in 0..1000_u64 {
+            assert!(!cache.contains(peer((n % 250) as u8), topic((n % 50) as u8), n));
+        }
+        // The legitimate write path now sees a clean slate for every key
+        // the prober touched.
+        for n in 0..1000_u64 {
+            assert!(cache.check_and_insert(
+                peer((n % 250) as u8),
+                topic((n % 50) as u8),
+                n,
+                ts(1000)
+            ));
+        }
     }
 }

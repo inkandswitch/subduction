@@ -33,6 +33,7 @@ use crate::{
     config::{EphemeralConfig, EphemeralEvent},
     message::EphemeralMessage,
     nonce_cache::EphemeralNonceCache,
+    payload_header::EphemeralPayloadHeader,
     policy::EphemeralPolicy,
     topic::Topic,
 };
@@ -121,14 +122,16 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
 
     /// Publish a pre-signed ephemeral message to all subscribers.
     ///
-    /// The caller is responsible for constructing a signed message,
-    /// typically by sealing an [`EphemeralPayload`] (e.g., with
-    /// [`Signed::seal`]) and wrapping it in
-    /// [`EphemeralMessage::Ephemeral`]. This method checks the payload
-    /// size limit, gathers subscribers, filters by policy, and fans out.
+    /// Checks payload size, seeds the nonce cache (so bounce-backs via
+    /// gossip cycles are detected as duplicates on receive), gathers
+    /// subscribers, filters by policy, and fans out.
     ///
-    /// [`EphemeralPayload`]: crate::message::EphemeralPayload
+    /// See [`design/ephemeral.md#bounce-back-amplification`] for the
+    /// rationale behind the cache seed.
+    ///
+    /// [`design/ephemeral.md#bounce-back-amplification`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#bounce-back-amplification
     /// [`Signed::seal`]: subduction_crypto::signed::Signed::seal
+    /// [`Handler::handle`]: subduction_core::handler::Handler::handle
     ///
     /// Errors on individual sends are logged but not propagated —
     /// fire-and-forget semantics.
@@ -140,12 +143,17 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
             warn!("publish called with non-Ephemeral message, ignoring");
             return;
         };
-        let Ok(payload) = signed.try_decode_trusted_payload() else {
+        // Decode just the header (id / nonce / timestamp / payload_len)
+        // — no copy of the payload bytes, since we only need the
+        // sizing info and the nonce-cache key.
+        let Ok(header) = EphemeralPayloadHeader::try_decode(signed.fields_bytes()) else {
             warn!("publish called with undecodable Signed<EphemeralPayload>, ignoring");
             return;
         };
-        let id = payload.id;
-        let payload_len = payload.payload.len();
+        let id = header.id;
+        let nonce = header.nonce;
+        let issuer = PeerId::from(signed.issuer());
+        let payload_len = header.payload_len;
 
         let max_payload = self.max_payload_size;
         if payload_len > max_payload {
@@ -156,6 +164,24 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
                 "ephemeral publish payload too large, dropping"
             );
             return;
+        }
+
+        // Seed the nonce cache so any bounce-back via gossip is treated
+        // as a duplicate at recv. See design/ephemeral.md#bounce-back-amplification.
+        // A `false` return here means this exact triple is already
+        // present (replay of our own publish); silent no-op.
+        let now = self.clock.now();
+        {
+            let mut cache = self.nonce_cache.lock().await;
+            if !cache.check_and_insert(issuer, id, nonce, now) {
+                debug!(
+                    issuer = %issuer,
+                    id = %id,
+                    nonce = nonce,
+                    "publish called with already-seen (issuer, topic, nonce); skipping fan-out"
+                );
+                return;
+            }
         }
 
         // Peers subscribed to us (inbound) — we relay to them directly.
@@ -399,12 +425,17 @@ impl<
 
     /// Handle an inbound signed ephemeral message from a peer.
     ///
-    /// Verifies the signature via [`Signed::try_verify`], checks the
-    /// timestamp age, checks the nonce cache for duplicates, authorizes
-    /// the originator via policy, delivers to the callback channel, and
-    /// fans out to other subscribers.
+    /// Step order: decode-unverified → size → age → cache `contains`
+    /// (read-only) → verify → cache `check_and_insert` → authorise →
+    /// deliver → fan out. The cache probe before verify is the
+    /// cross-edge fast path; the post-verify `check_and_insert` is the
+    /// only place cache state is written and is gated behind a
+    /// successful signature check.
     ///
-    /// [`Signed::try_verify`]: subduction_crypto::signed::Signed::try_verify
+    /// See [`design/ephemeral.md`] for the full rationale and threat
+    /// model.
+    ///
+    /// [`design/ephemeral.md`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#recv-ephemeralhandlerrecv_ephemeral
     #[allow(clippy::too_many_lines)]
     async fn recv_ephemeral(&self, conn: &Authenticated<C, F>, message: EphemeralMessage) {
         let EphemeralMessage::Ephemeral(ref signed) = message else {
@@ -414,7 +445,79 @@ impl<
         let relay = conn.peer_id();
         let sender = PeerId::from(signed.issuer());
 
-        // 1. Verify signature and decode payload.
+        // 1. Decode the header fields (id / nonce / timestamp /
+        //    payload_len) without verifying and without copying the
+        //    payload bytes. These values are UNTRUSTED until step 3
+        //    succeeds — used only for read-only checks below. The full
+        //    payload is materialised once, post-verify, via
+        //    `try_verify`.
+        let header = match EphemeralPayloadHeader::try_decode(signed.fields_bytes()) {
+            Ok(h) => h,
+            Err(e) => {
+                warn!(
+                    relay = %relay,
+                    error = %e,
+                    "ephemeral payload undecodable, dropping"
+                );
+                return;
+            }
+        };
+
+        let untrusted_id = header.id;
+        let untrusted_nonce = header.nonce;
+        let untrusted_timestamp = header.timestamp;
+        let payload_len = header.payload_len;
+
+        // 2a. Payload size (signature-independent).
+        let max_payload = self.max_payload_size;
+        if payload_len > max_payload {
+            warn!(
+                originator = %sender,
+                relay = %relay,
+                id = %untrusted_id,
+                size = payload_len,
+                max = max_payload,
+                "ephemeral payload too large, dropping"
+            );
+            return;
+        }
+
+        // 2b. Message age (signature-independent).
+        let now = self.clock.now();
+        let max_age = self.max_message_age;
+        {
+            let age = now.abs_diff(untrusted_timestamp);
+            if age > max_age {
+                debug!(
+                    originator = %sender,
+                    relay = %relay,
+                    id = %untrusted_id,
+                    timestamp_secs = untrusted_timestamp.as_secs(),
+                    now_secs = now.as_secs(),
+                    age_secs = age.as_secs(),
+                    max_age_secs = max_age.as_secs(),
+                    "ephemeral message too old or too far in the future, dropping"
+                );
+                return;
+            }
+        }
+
+        // 2c. Read-only cache probe. Hit ⇒ drop before paying for Ed25519 verify.
+        {
+            let cache = self.nonce_cache.lock().await;
+            if cache.contains(sender, untrusted_id, untrusted_nonce) {
+                debug!(
+                    originator = %sender,
+                    relay = %relay,
+                    id = %untrusted_id,
+                    nonce = untrusted_nonce,
+                    "duplicate ephemeral nonce (pre-verify fast path), dropping"
+                );
+                return;
+            }
+        }
+
+        // 3. Verify signature. `sender` is trusted from here on.
         let verified = match signed.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -431,43 +534,10 @@ impl<
         let ep = verified.payload();
         let id = ep.id;
         let nonce = ep.nonce;
-        let timestamp = ep.timestamp;
 
-        // 2. Check payload size.
-        let max_payload = self.max_payload_size;
-        if ep.payload.len() > max_payload {
-            warn!(
-                originator = %sender,
-                relay = %relay,
-                id = %id,
-                size = ep.payload.len(),
-                max = max_payload,
-                "ephemeral payload too large, dropping"
-            );
-            return;
-        }
-
-        // 3. Check message age — reject stale or future-dated messages.
-        let now = self.clock.now();
-        let max_age = self.max_message_age;
-        {
-            let age = now.abs_diff(timestamp);
-            if age > max_age {
-                debug!(
-                    originator = %sender,
-                    relay = %relay,
-                    id = %id,
-                    timestamp_secs = timestamp.as_secs(),
-                    now_secs = now.as_secs(),
-                    age_secs = age.as_secs(),
-                    max_age_secs = max_age.as_secs(),
-                    "ephemeral message too old or too far in the future, dropping"
-                );
-                return;
-            }
-        }
-
-        // 4. Check nonce (dedup).
+        // 4. Post-verify insert. The only place cache state is written.
+        //    `false` here means a concurrent duplicate raced past 2c
+        //    and inserted first; drop.
         {
             let mut cache = self.nonce_cache.lock().await;
             if !cache.check_and_insert(sender, id, nonce, now) {
@@ -476,13 +546,13 @@ impl<
                     relay = %relay,
                     id = %id,
                     nonce = nonce,
-                    "duplicate ephemeral nonce, dropping"
+                    "duplicate ephemeral nonce (post-verify race), dropping"
                 );
                 return;
             }
         }
 
-        // 5. Check publish authorization (using originator, not relay).
+        // 5. Check publish authorization (using verified originator).
         if let Err(e) = self.policy.authorize_publish(sender, id).await {
             debug!(
                 originator = %sender,

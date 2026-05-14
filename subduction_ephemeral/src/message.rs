@@ -44,7 +44,7 @@ use alloc::{boxed::Box, vec::Vec};
 
 use nonempty::NonEmpty;
 use sedimentree_core::codec::{
-    decode::{self, Decode, DecodeFields},
+    decode::{Decode, DecodeFields},
     encode::{self, Encode, EncodeFields},
     error::{DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
     schema::{self, Schema},
@@ -52,7 +52,10 @@ use sedimentree_core::codec::{
 use subduction_core::timestamp::TimestampSeconds;
 use subduction_crypto::signed::Signed;
 
-use crate::topic::Topic;
+use crate::{
+    payload_header::{EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE, EphemeralPayloadHeader},
+    topic::Topic,
+};
 
 /// Schema header for [`EphemeralMessage`] envelope: **SU**bduction **E**phemeral v0.
 pub const EPHEMERAL_SCHEMA: [u8; 4] = *b"SUE\x00";
@@ -79,11 +82,6 @@ mod min_sizes {
     // count(2) + topic(32)
     pub(super) const SUBSCRIBE_REJECTED: usize = 2 + 32;
 }
-
-// ── EphemeralPayload ────────────────────────────────────────────────────
-
-/// Size of `EphemeralPayload` fields: `id(32) + nonce(8) + timestamp(8) + payload_len(bijou64 min=1)`.
-const EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE: usize = 32 + 8 + 8 + 1;
 
 /// Minimum size of a `Signed<EphemeralPayload>`:
 /// schema(4) + discriminant(1) + issuer(32) + fields + signature(64).
@@ -144,61 +142,29 @@ impl DecodeFields for EphemeralPayload {
     const MIN_SIGNED_SIZE: usize = EPHEMERAL_PAYLOAD_MIN_SIGNED_SIZE;
 
     fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
-        if buf.len() < EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE {
-            return Err(DecodeError::MessageTooShort {
-                type_name: "EphemeralPayload",
-                need: EPHEMERAL_PAYLOAD_MIN_FIELDS_SIZE,
-                have: buf.len(),
-            });
-        }
+        let (header, payload_start) = EphemeralPayloadHeader::try_decode_with_offset(buf)?;
+        let payload_end = payload_start + header.payload_len;
 
-        let mut offset = 0;
-
-        let id_bytes: [u8; 32] = decode::array(buf, offset)?;
-        offset += 32;
-        let id = Topic::new(id_bytes);
-
-        let nonce = decode::u64(buf, offset)?;
-        offset += 8;
-
-        let timestamp_secs = decode::u64(buf, offset)?;
-        offset += 8;
-        let timestamp = TimestampSeconds::new(timestamp_secs);
-
-        let remaining = buf.get(offset..).ok_or(DecodeError::MessageTooShort {
-            type_name: "EphemeralPayload payload_len",
-            need: offset + 1,
-            have: buf.len(),
-        })?;
-        let (payload_len, consumed) = bijou64::decode(remaining)
-            .map_err(|kind| sedimentree_core::codec::error::Bijou64Error { offset, kind })?;
-        offset += consumed;
-
-        #[allow(clippy::cast_possible_truncation)]
-        let payload_len = payload_len as usize;
         let payload = buf
-            .get(offset..offset + payload_len)
+            .get(payload_start..payload_end)
             .ok_or(DecodeError::MessageTooShort {
                 type_name: "EphemeralPayload payload data",
-                need: offset + payload_len,
+                need: payload_end,
                 have: buf.len(),
             })?
             .to_vec();
-        offset += payload_len;
 
         Ok((
             Self {
-                id,
-                nonce,
-                timestamp,
+                id: header.id,
+                nonce: header.nonce,
+                timestamp: header.timestamp,
                 payload,
             },
-            offset,
+            payload_end,
         ))
     }
 }
-
-// ── EphemeralMessage ────────────────────────────────────────────────────
 
 /// Wire message types for the ephemeral protocol.
 ///
@@ -237,8 +203,6 @@ pub enum EphemeralMessage {
         topics: NonEmpty<Topic>,
     },
 }
-
-// ── Encode ──────────────────────────────────────────────────────────────
 
 impl Encode for EphemeralMessage {
     fn encode(&self) -> Vec<u8> {
@@ -294,8 +258,6 @@ fn encode_topic_list(buf: &mut Vec<u8>, topics: &NonEmpty<Topic>) {
         buf.extend_from_slice(topic.as_bytes());
     }
 }
-
-// ── Decode ──────────────────────────────────────────────────────────────
 
 impl Decode for EphemeralMessage {
     const MIN_SIZE: usize = CONTROL_HEADER_SIZE;
@@ -436,8 +398,6 @@ fn decode_topic_list(payload: &[u8]) -> Result<NonEmpty<Topic>, DecodeError> {
     })
 }
 
-// ── Decode helpers ──────────────────────────────────────────────────────
-
 fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, DecodeError> {
     let bytes: [u8; 2] = buf
         .get(*offset..*offset + 2)
@@ -464,16 +424,12 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
     Ok(bytes)
 }
 
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::panic
-)]
 mod tests {
     use super::*;
     use subduction_core::peer::id::PeerId;
+    use testresult::TestResult;
 
     /// Helper: create a signed ephemeral for roundtrip tests.
     /// Uses `MemorySigner` for a real signature.
@@ -493,57 +449,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ephemeral_roundtrip() {
+    async fn ephemeral_roundtrip() -> TestResult {
         let msg = make_signed_ephemeral(vec![1, 2, 3, 4, 5]).await;
 
         let encoded = msg.encode();
-        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
+        let decoded = EphemeralMessage::try_decode(&encoded)?;
 
         assert_eq!(decoded, msg);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn empty_payload_roundtrip() {
+    async fn empty_payload_roundtrip() -> TestResult {
         let msg = make_signed_ephemeral(vec![]).await;
 
         let encoded = msg.encode();
-        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
+        let decoded = EphemeralMessage::try_decode(&encoded)?;
 
         assert_eq!(decoded, msg);
+        Ok(())
     }
 
     #[test]
-    fn subscribe_roundtrip() {
+    fn subscribe_roundtrip() -> TestResult {
         let mut topics = NonEmpty::new(Topic::new([0x01; 32]));
         topics.push(Topic::new([0x02; 32]));
         let msg = EphemeralMessage::Subscribe { topics };
 
         let encoded = msg.encode();
-        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
+        let decoded = EphemeralMessage::try_decode(&encoded)?;
 
         assert_eq!(decoded, msg);
+        Ok(())
     }
 
     #[test]
-    fn unsubscribe_roundtrip() {
+    fn unsubscribe_roundtrip() -> TestResult {
         let topics = NonEmpty::new(Topic::new([0xFF; 32]));
         let msg = EphemeralMessage::Unsubscribe { topics };
 
         let encoded = msg.encode();
-        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
+        let decoded = EphemeralMessage::try_decode(&encoded)?;
 
         assert_eq!(decoded, msg);
+        Ok(())
     }
 
     #[test]
-    fn subscribe_rejected_roundtrip() {
+    fn subscribe_rejected_roundtrip() -> TestResult {
         let topics = NonEmpty::new(Topic::new([0x42; 32]));
         let msg = EphemeralMessage::SubscribeRejected { topics };
 
         let encoded = msg.encode();
-        let decoded = EphemeralMessage::try_decode(&encoded).expect("decode");
+        let decoded = EphemeralMessage::try_decode(&encoded)?;
 
         assert_eq!(decoded, msg);
+        Ok(())
     }
 
     #[test]
@@ -595,20 +556,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signed_ephemeral_verifies() {
+    async fn signed_ephemeral_verifies() -> TestResult {
         let msg = make_signed_ephemeral(vec![0xDE, 0xAD]).await;
 
         let EphemeralMessage::Ephemeral(ref signed) = msg else {
             panic!("expected Ephemeral");
         };
 
-        let verified = signed.try_verify();
-        assert!(verified.is_ok(), "signature should verify");
-
-        let payload = verified.expect("verified").into_payload();
+        let payload = signed.try_verify()?.into_payload();
         assert_eq!(payload.id, Topic::new([0xBB; 32]));
         assert_eq!(payload.nonce, 0x1234_5678_9ABC_DEF0);
         assert_eq!(payload.payload, vec![0xDE, 0xAD]);
+        Ok(())
     }
 
     #[tokio::test]

@@ -55,6 +55,7 @@ DDR
 DNS
 DataRequestRejected
 Debuggable
+Dedup
 Deployers
 Dev
 DevTools
@@ -94,6 +95,7 @@ KeyhivePolicy
 Keyoxide
 KiB
 LEB
+LRU
 Little-endian
 LooseCommit
 ML-DSA
@@ -134,6 +136,7 @@ RLE
 RPC
 RTT
 Reconnection
+Recv
 RemoteHeads
 RemoveSubscriptions
 ReplayedNonce
@@ -159,6 +162,7 @@ SipHash
 Stateful
 Subduction
 Subduction's
+SubscribeRejected
 SyncDiff
 TCP
 TLS
@@ -239,6 +243,7 @@ datasources
 decrypt
 decrypted
 decrypting
+dedup
 deduplicate
 deduplicates
 deduplication
@@ -252,6 +257,7 @@ encodings
 encrypter
 encryptment
 enum
+ephemerals
 et
 expede
 faq
@@ -305,11 +311,13 @@ misconfiguration
 mispredictions
 mitigations
 mixnet
+msg
 multibyte
 namespace
 namespaced
 natively
 nd
+newtype
 no-alloc
 nodejs
 non-extractable
@@ -319,6 +327,7 @@ ns
 ocap
 oneshot
 optimised
+oversized
 parameterization
 parsers
 perf
@@ -330,17 +339,21 @@ pprof
 pre-allocation
 pre-alpha
 pre-configured
+pre-populate
 pre-shared
+pre-verify
 precomputed
 preimage
 prekey
 prepends
 priori
 probabilistically
+proptests
 protobuf
 pseudorandom
 reconnection
 recurse
+recv
 repo
 representable
 reproducibility
@@ -379,6 +392,7 @@ teardown
 th
 tokio
 tombstoned
+topologies
 tradeoff
 tradeoffs
 unforgeable
