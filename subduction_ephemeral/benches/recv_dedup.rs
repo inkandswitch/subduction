@@ -84,51 +84,38 @@ fn bench_nonce_cache(c: &mut Criterion) {
     let sender = PeerId::new([0x01; 32]);
     let topic = Topic::new([0x02; 32]);
 
-    // contains() on a key the cache has never seen — the rejected-by-default
-    // path. No allocation; just a `HashMap::get_mut` returning `None`.
+    // contains() on a key the cache has never seen — single `HashMap::get`
+    // returning `None`. No allocation, no mutation.
     g.bench_function("contains_miss_unknown_key", |b| {
         let cache = EphemeralNonceCache::new(WINDOW);
-        b.iter_batched(
-            || cache.clone(),
-            |mut cache| {
-                let hit = cache.contains(sender, topic, 0xFFFF_FFFF, NOW);
-                assert!(!hit);
-            },
-            BatchSize::SmallInput,
-        );
+        b.iter(|| {
+            let hit = cache.contains(sender, topic, 0xFFFF_FFFF);
+            assert!(!hit);
+        });
     });
 
-    // contains() returns false but the (sender, topic) entry exists with
-    // some other nonces in it — covers the rotation + dual-bucket lookup
-    // path on a populated entry.
+    // contains() returns false on a populated entry — exercises the
+    // dual-bucket lookup path against ~16 already-inserted nonces.
     g.bench_function("contains_miss_populated_entry", |b| {
-        let mut base = EphemeralNonceCache::new(WINDOW);
+        let mut cache = EphemeralNonceCache::new(WINDOW);
         for n in 0..16_u64 {
-            assert!(base.check_and_insert(sender, topic, n, NOW));
+            assert!(cache.check_and_insert(sender, topic, n, NOW));
         }
-        b.iter_batched(
-            || base.clone(),
-            |mut cache| {
-                let hit = cache.contains(sender, topic, 0xFFFF_FFFF, NOW);
-                assert!(!hit);
-            },
-            BatchSize::SmallInput,
-        );
+        b.iter(|| {
+            let hit = cache.contains(sender, topic, 0xFFFF_FFFF);
+            assert!(!hit);
+        });
     });
 
-    // contains() finds the nonce — this is the fast path we're optimising
-    // for: a cross-edge duplicate short-circuits here.
+    // contains() finds the nonce — this is the duplicate-drop fast path
+    // a cross-edge probe takes.
     g.bench_function("contains_hit_current_bucket", |b| {
-        let mut base = EphemeralNonceCache::new(WINDOW);
-        assert!(base.check_and_insert(sender, topic, 0xDEAD_BEEF, NOW));
-        b.iter_batched(
-            || base.clone(),
-            |mut cache| {
-                let hit = cache.contains(sender, topic, 0xDEAD_BEEF, NOW);
-                assert!(hit);
-            },
-            BatchSize::SmallInput,
-        );
+        let mut cache = EphemeralNonceCache::new(WINDOW);
+        assert!(cache.check_and_insert(sender, topic, 0xDEAD_BEEF, NOW));
+        b.iter(|| {
+            let hit = cache.contains(sender, topic, 0xDEAD_BEEF);
+            assert!(hit);
+        });
     });
 
     // check_and_insert() on a fresh nonce — the post-verify write path.
@@ -255,7 +242,7 @@ fn bench_recv_duplicate(c: &mut Criterion) {
         g.bench_function(format!("after_reorder/payload_{payload_size}B"), |b| {
             b.iter_batched(
                 || (primed_cache.clone(), &msg),
-                |(mut cache, msg)| {
+                |(cache, msg)| {
                     let EphemeralMessage::Ephemeral(ref signed) = *msg else {
                         unreachable!();
                     };
@@ -265,7 +252,7 @@ fn bench_recv_duplicate(c: &mut Criterion) {
                     //    for clarity — they're identical to the old
                     //    path so they cancel out of the comparison).
                     // 3. Read-only cache probe: hit, short-circuit.
-                    let hit = cache.contains(issuer, untrusted.id, untrusted.nonce, NOW);
+                    let hit = cache.contains(issuer, untrusted.id, untrusted.nonce);
                     assert!(hit);
                 },
                 BatchSize::SmallInput,

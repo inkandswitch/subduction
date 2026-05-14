@@ -132,26 +132,28 @@ EphemeralNonceCache:
                             (nonces)
 ```
 
-Each `(sender, topic)` pair has two time-bucketed nonce sets. A nonce is "duplicate" if it appears in **either** bucket. Buckets rotate when the current bucket's age exceeds `window_duration` (default 30 s); after `2 × window_duration` of idleness, both buckets reset.
+Each `(sender, topic)` pair has two time-bucketed nonce sets. A nonce is "duplicate" if it appears in **either** bucket. The post-verify write path rotates buckets when the current bucket's age exceeds `window_duration` (default 30 s).
 
-| Bucket lifecycle                              | After                |
-|-----------------------------------------------|----------------------|
-| Insert into `current`                         | new nonces           |
-| Rotate `current → previous`, new `current`    | window elapses       |
-| Drop `previous`                               | 2× window elapses    |
+| Bucket lifecycle                           | When                                            |
+|--------------------------------------------|-------------------------------------------------|
+| Insert into `current`                      | new nonces, on `check_and_insert`               |
+| Rotate `current → previous`, new `current` | next `check_and_insert` after window elapses    |
+| Drop `previous`                            | next `check_and_insert` after 2× window elapses |
 
 Two access methods:
 
-| Method                                        | Effect                                                                                                                | Used by                                          |
-|-----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|--------------------------------------------------|
-| `contains(sender, topic, nonce, now)`         | Returns whether the nonce is known; rotates _existing_ entries lazily; **never** allocates a new entry                | Pre-verify probe (recv step 2c)                  |
-| `check_and_insert(sender, topic, nonce, now)` | Returns `false` if duplicate, otherwise inserts and returns `true`; will create a fresh entry for an unseen `(sender, topic)` | Post-verify write (recv step 4) and publish-seed |
+| Method                                        | Effect                                                                                                                                                                             | Used by                                          |
+|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------|
+| `contains(sender, topic, nonce) -> bool`      | Genuinely read-only (`&self`). Looks at the current physical state of the two buckets; never rotates, never allocates, never modifies the windows map.                             | Pre-verify probe (recv step 2c)                  |
+| `check_and_insert(sender, topic, nonce, now)` | Returns `false` if duplicate, otherwise inserts and returns `true`; rotates buckets if the current bucket has aged out; will create a fresh entry for an unseen `(sender, topic)`. | Post-verify write (recv step 4) and publish-seed |
 
-The split exists so that pre-verify code paths cannot mutate cache state. See [Threat model](#threat-model).
+The split exists so that pre-verify code paths cannot mutate cache state at all. See [Threat model](#threat-model).
+
+Because `contains` does not rotate, a nonce inserted in a bucket that has not yet been physically rotated out by a subsequent `check_and_insert` will keep being detected as a duplicate. With random 64-bit nonces this is strictly stronger replay protection: nonces are de facto retained from one legitimate write to the next, rather than for a fixed wall-clock window. Stale `(sender, topic)` entries are cleaned up by `on_peer_disconnect` and by the next legitimate write on that pair.
 
 ### Volume attack resistance
 
-Eviction is **time-driven only**. A peer flooding the cache with distinct nonces fills the current bucket but cannot cause earlier nonces in `previous` to be evicted any faster. There is no LRU.
+Eviction is **time-driven only**. A peer flooding the cache with distinct nonces (via `check_and_insert`) fills the current bucket but cannot cause earlier nonces in `previous` to be evicted any faster. There is no LRU.
 
 ## Bounce-back Amplification
 
@@ -226,7 +228,7 @@ Preserved by:
 
 | Mechanism                                       | How                                                                                                  |
 |-------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| `contains` cannot insert                        | Returns early with `false` for unknown `(sender, topic)`; only rotates entries that already exist    |
+| `contains` is read-only                         | Takes `&self`; never inserts, never rotates, never allocates. An unverified caller cannot modify cache state.|
 | `check_and_insert` is gated behind verify       | Reached only after `try_verify` returns `Ok`                                                          |
 | `publish` only seeds for our own publications   | The issuer is by definition us; we just signed it                                                     |
 

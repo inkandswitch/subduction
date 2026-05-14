@@ -432,13 +432,12 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
     Ok(bytes)
 }
 
-#[cfg(test)]
 #[allow(
-    clippy::expect_used,
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::panic
 )]
+#[cfg(test)]
 mod tests {
     use super::*;
     use subduction_core::peer::id::PeerId;

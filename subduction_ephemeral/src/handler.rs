@@ -499,12 +499,10 @@ impl<
             }
         }
 
-        // 2c. Read-only cache probe. Hit ⇒ drop before paying for
-        //     Ed25519 verify. See design/ephemeral.md#dedup-model and
-        //     #cross-path-duplicates.
+        // 2c. Read-only cache probe. Hit ⇒ drop before paying for Ed25519 verify.
         {
-            let mut cache = self.nonce_cache.lock().await;
-            if cache.contains(sender, id, nonce, now) {
+            let cache = self.nonce_cache.lock().await;
+            if cache.contains(sender, id, nonce) {
                 debug!(
                     originator = %sender,
                     relay = %relay,

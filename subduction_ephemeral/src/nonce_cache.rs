@@ -64,30 +64,19 @@ impl EphemeralNonceCache {
         }
     }
 
-    /// Check whether `nonce` has been seen for `(sender, topic)`
-    /// without inserting. Read-only probe used pre-verify; never
-    /// allocates for unknown keys, so an unverified caller cannot
-    /// pollute the cache. Existing entries are rotated lazily so
-    /// expired nonces stop counting as duplicates.
+    /// Check whether `nonce` has been seen for `(sender, topic)`.
     ///
     /// See [`design/ephemeral.md`] for the dedup model and
     /// cache-integrity invariant.
     ///
+    /// [`EphemeralHandler::recv_ephemeral`]: crate::handler::EphemeralHandler
+    /// [`check_and_insert`]: Self::check_and_insert
     /// [`design/ephemeral.md`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#dedup-model
-    pub fn contains(
-        &mut self,
-        sender: PeerId,
-        topic: Topic,
-        nonce: u64,
-        now: TimestampSeconds,
-    ) -> bool {
-        let key = (sender, topic);
-        let Some([current, previous]) = self.windows.get_mut(&key) else {
+    #[must_use]
+    pub fn contains(&self, sender: PeerId, topic: Topic, nonce: u64) -> bool {
+        let Some([current, previous]) = self.windows.get(&(sender, topic)) else {
             return false;
         };
-
-        rotate_buckets(current, previous, now, self.window_duration);
-
         current.nonces.contains(&nonce) || previous.nonces.contains(&nonce)
     }
 
@@ -261,45 +250,68 @@ mod tests {
 
     #[test]
     fn contains_returns_false_for_unknown_key() {
-        let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
-        assert!(!cache.contains(peer(1), topic(1), 42, ts(1000)));
+        let cache = EphemeralNonceCache::new(Duration::from_secs(30));
+        assert!(!cache.contains(peer(1), topic(1), 42));
     }
 
     #[test]
     fn contains_returns_true_after_insert() {
         let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
         assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
-        assert!(cache.contains(peer(1), topic(1), 42, ts(1000)));
+        assert!(cache.contains(peer(1), topic(1), 42));
     }
 
     #[test]
     fn contains_does_not_insert() {
         let mut cache = EphemeralNonceCache::new(Duration::from_secs(30));
         // contains on unknown key returns false…
-        assert!(!cache.contains(peer(1), topic(1), 42, ts(1000)));
+        assert!(!cache.contains(peer(1), topic(1), 42));
         // …and must NOT have created an entry: a subsequent
         // check_and_insert sees a fresh nonce and accepts it.
         assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(1000)));
     }
 
     #[test]
-    fn contains_finds_nonce_in_previous_bucket_after_rotation() {
+    fn contains_finds_nonce_in_previous_bucket_after_legit_rotation() {
+        // contains is read-only: physical rotation happens only on the
+        // post-verify write path. Once `check_and_insert` rotates a
+        // nonce into the `previous` bucket, `contains` continues to
+        // detect it without any further rotation.
         let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
-        // Insert at t=0
         assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
-        // contains at t=3 should rotate (current→previous, fresh current)
-        // and still find 42 in the previous bucket.
-        assert!(cache.contains(peer(1), topic(1), 42, ts(3)));
+        // Legit subsequent write triggers normal rotation:
+        // previous = {42}, current = {99}.
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(3)));
+        assert!(cache.contains(peer(1), topic(1), 42));
+        assert!(cache.contains(peer(1), topic(1), 99));
     }
 
     #[test]
-    fn contains_drops_nonce_after_two_windows() {
+    fn contains_drops_nonce_after_two_legit_rotations() {
+        // Two post-verify rotations push the original nonce out of
+        // both buckets; contains then no longer reports it.
         let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
         assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
-        // Force one rotation by doing an unrelated insert at t=3.
+        // Rotation #1: previous = {42}, current = {99}.
         assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(3)));
-        // contains at t=6: rotates again, previous (with 42) is discarded.
-        assert!(!cache.contains(peer(1), topic(1), 42, ts(6)));
+        // Rotation #2: previous = {99}, current = {100}. 42 is now dropped.
+        assert!(cache.check_and_insert(peer(1), topic(1), 100, ts(6)));
+        assert!(!cache.contains(peer(1), topic(1), 42));
+        assert!(cache.contains(peer(1), topic(1), 99));
+        assert!(cache.contains(peer(1), topic(1), 100));
+    }
+
+    #[test]
+    fn long_idle_legit_write_clears_old_nonces_from_contains() {
+        // A check_and_insert past `2 * window` triggers the long-idle
+        // reset, wiping both buckets. contains then sees a clean slate.
+        let mut cache = EphemeralNonceCache::new(Duration::from_secs(2));
+        assert!(cache.check_and_insert(peer(1), topic(1), 42, ts(0)));
+        assert!(cache.contains(peer(1), topic(1), 42));
+        // Long idle: 10 > 2 * window (4). Both buckets reset.
+        assert!(cache.check_and_insert(peer(1), topic(1), 99, ts(10)));
+        assert!(!cache.contains(peer(1), topic(1), 42));
+        assert!(cache.contains(peer(1), topic(1), 99));
     }
 
     #[test]
@@ -309,7 +321,7 @@ mod tests {
         // None of these should leave state behind: the cache only mutates
         // on a successful check_and_insert (which is post-verify).
         for n in 0..1000_u64 {
-            assert!(!cache.contains(peer((n % 250) as u8), topic((n % 50) as u8), n, ts(1000)));
+            assert!(!cache.contains(peer((n % 250) as u8), topic((n % 50) as u8), n));
         }
         // The legitimate write path now sees a clean slate for every key
         // the prober touched.
