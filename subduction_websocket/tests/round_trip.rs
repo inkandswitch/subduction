@@ -480,15 +480,14 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut, keepalive_task) =
-        TokioWebSocketClient::with_options(
-            uri,
-            client_signer,
-            Audience::known(server_peer_id),
-            DEFAULT_MAX_MESSAGE_SIZE,
-            Some(aggressive_keepalive),
-        )
-        .await?;
+    let (client_ws, listener_fut, sender_fut, keepalive_task) = TokioWebSocketClient::with_options(
+        uri,
+        client_signer,
+        Audience::known(server_peer_id),
+        DEFAULT_MAX_MESSAGE_SIZE,
+        Some(aggressive_keepalive),
+    )
+    .await?;
 
     tokio::spawn(async {
         listener_fut.await?;

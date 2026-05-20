@@ -678,7 +678,10 @@ mod tests {
             "should have missed at least the threshold count: got {missed}"
         );
 
-        assert!(inbound_writer.is_closed(), "inbound_writer should be closed");
+        assert!(
+            inbound_writer.is_closed(),
+            "inbound_writer should be closed"
+        );
         // At least 2 pings (one per missed cycle) + 1 close frame; in practice 2 or 3.
         assert!(pings >= 2, "expected >=2 outbound messages, got {pings}");
         // Inbound is closed, so a recv attempt returns Err immediately.

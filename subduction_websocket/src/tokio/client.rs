@@ -93,14 +93,8 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
     where
         R: 'a,
     {
-        let (auth, listener, sender, no_keepalive) = Self::with_options(
-            address,
-            signer,
-            audience,
-            DEFAULT_MAX_MESSAGE_SIZE,
-            None,
-        )
-        .await?;
+        let (auth, listener, sender, no_keepalive) =
+            Self::with_options(address, signer, audience, DEFAULT_MAX_MESSAGE_SIZE, None).await?;
         debug_assert!(no_keepalive.is_none(), "keepalive is None => no task");
         Ok((auth, listener, sender))
     }
@@ -236,8 +230,11 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             handshake::initiate::<Sendable, _, _, _, _>(
                 WebSocketHandshake::new(ws_stream),
                 |ws_handshake, peer_id| {
-                    let (socket, sender_fut, keepalive_task) =
-                        WebSocket::new_with_keepalive(ws_handshake.into_inner(), peer_id, keepalive);
+                    let (socket, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                        ws_handshake.into_inner(),
+                        peer_id,
+                        keepalive,
+                    );
                     (socket, (Sendable::from_future(sender_fut), keepalive_task))
                 },
                 &signer,
@@ -375,7 +372,10 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
             if let Some(keepalive_task) = keepalive_task {
                 tokio::spawn(async move {
                     let outcome = keepalive_task.await;
-                    tracing::debug!(?outcome, "WebSocket client keepalive exited after reconnect");
+                    tracing::debug!(
+                        ?outcome,
+                        "WebSocket client keepalive exited after reconnect"
+                    );
                 });
             }
 
