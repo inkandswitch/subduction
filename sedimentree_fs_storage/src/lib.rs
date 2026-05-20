@@ -49,11 +49,18 @@ use sedimentree_core::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use thiserror::Error;
+
+/// Process-wide counter for distinguishing concurrent writers that target
+/// the same content-addressed path.
+static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 /// Errors that can occur during filesystem storage operations.
 #[derive(Debug, Error)]
@@ -353,8 +360,10 @@ impl Storage<Sendable> for FsStorage {
             }
 
             let blob_data = verified.blob().contents().clone();
-            let blob_temp = blob_path.with_extension("blob.tmp");
-            let meta_temp = meta_path.with_extension("meta.tmp");
+            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+
+            let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
+            let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
 
             tokio::fs::write(&blob_temp, &blob_data).await?;
             tokio::fs::write(&meta_temp, &signed_data).await?;
@@ -570,8 +579,10 @@ impl Storage<Sendable> for FsStorage {
             }
 
             let blob_data = verified.blob().contents().clone();
-            let blob_temp = blob_path.with_extension("blob.tmp");
-            let meta_temp = meta_path.with_extension("meta.tmp");
+            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+
+            let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
+            let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
 
             tokio::fs::write(&blob_temp, &blob_data).await?;
             tokio::fs::write(&meta_temp, &signed_data).await?;

@@ -2738,7 +2738,7 @@ where
         // Send all messages concurrently using FuturesUnordered
         let mut send_futures: FuturesUnordered<_> = commit_messages
             .into_iter()
-            .chain(fragment_messages.into_iter())
+            .chain(fragment_messages)
             .map(|(is_commit, msg)| async move {
                 let result = conn.send(&msg).await;
                 (is_commit, result)

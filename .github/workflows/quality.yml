@@ -24,6 +24,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Setup Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: true
+
     - name: Build workspace
       run: cargo build --workspace --verbose
 

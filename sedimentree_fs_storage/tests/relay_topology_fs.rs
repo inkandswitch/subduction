@@ -43,7 +43,7 @@ type TestSubduction = Arc<
     >,
 >;
 
-const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_millis(1000));
+const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_secs(1));
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(80);
 
 fn make_signer(seed: u8) -> MemorySigner {
@@ -143,6 +143,56 @@ async fn setup_relay() -> TestResult<RelayHarness> {
     })
 }
 
+/// Poll until all three nodes hold exactly `expected` commits, or
+/// `timeout` elapses. Returns the last observed counts.
+///
+/// Used by tests whose `assert_eq!` would otherwise race against
+/// broadcast propagation. The per-iteration `PROPAGATION_PAUSE` is
+/// occasionally insufficient under heavy CPU contention (e.g., when
+/// `cargo test` runs all four FS relay tests in parallel within one
+/// process). The real correctness invariant is "convergence is reached
+/// in bounded time", not "convergence is reached within exactly the
+/// last `PROPAGATION_PAUSE` window".
+async fn wait_for_relay_convergence(
+    h: &RelayHarness,
+    sed_id: SedimentreeId,
+    expected: usize,
+    timeout: Duration,
+) -> (usize, usize, usize) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let a = h.a.get_commits(sed_id).await.map_or(0, |c| c.len());
+        let r = h.r.get_commits(sed_id).await.map_or(0, |c| c.len());
+        let b = h.b.get_commits(sed_id).await.map_or(0, |c| c.len());
+        if (a, r, b) == (expected, expected, expected) || tokio::time::Instant::now() >= deadline {
+            return (a, r, b);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// Poll until A and R both hold exactly `expected` commits, or
+/// `timeout` elapses. Returns `(a, r)` counts at exit.
+///
+/// Variant of [`wait_for_relay_convergence`] for tests that don't
+/// exercise B (e.g., single-client and concurrent-writer scenarios).
+async fn wait_for_ar_convergence(
+    h: &RelayHarness,
+    sed_id: SedimentreeId,
+    expected: usize,
+    timeout: Duration,
+) -> (usize, usize) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let a = h.a.get_commits(sed_id).await.map_or(0, |c| c.len());
+        let r = h.r.get_commits(sed_id).await.map_or(0, |c| c.len());
+        if (a, r) == (expected, expected) || tokio::time::Instant::now() >= deadline {
+            return (a, r);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fs_relay_single_client_repeated_add_built_batch_converges() -> TestResult {
     let h = setup_relay().await?;
@@ -158,14 +208,11 @@ async fn fs_relay_single_client_repeated_add_built_batch_converges() -> TestResu
         tokio::time::sleep(PROPAGATION_PAUSE).await;
     }
 
-    assert_eq!(
-        h.a.get_commits(sed_id).await.map(|c| c.len()),
-        Some(total as usize),
-    );
-    assert_eq!(
-        h.r.get_commits(sed_id).await.map(|c| c.len()),
-        Some(total as usize),
-    );
+    let expected = total as usize;
+    let (a_count, r_count) =
+        wait_for_ar_convergence(&h, sed_id, expected, Duration::from_secs(2)).await;
+    assert_eq!(a_count, expected, "A count");
+    assert_eq!(r_count, expected, "R count");
 
     let (_, stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     assert!(stats.is_empty(), "{stats:?}");
@@ -201,9 +248,8 @@ async fn fs_relay_two_clients_add_built_batch_converge_via_relay() -> TestResult
     }
 
     let total = total_pairs as usize;
-    let a_count = h.a.get_commits(sed_id).await.map_or(0, |c| c.len());
-    let r_count = h.r.get_commits(sed_id).await.map_or(0, |c| c.len());
-    let b_count = h.b.get_commits(sed_id).await.map_or(0, |c| c.len());
+    let (a_count, r_count, b_count) =
+        wait_for_relay_convergence(&h, sed_id, total, Duration::from_secs(2)).await;
     assert_eq!((a_count, r_count, b_count), (total, total, total));
 
     let (_, a_stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
@@ -289,16 +335,14 @@ async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
     // still pending on the relay (FsStorage I/O can outlast the burst).
     tokio::time::sleep(Duration::from_millis(200)).await;
     let (_, stats, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
 
+    let total = n as usize;
+    let (a_count, r_count) =
+        wait_for_ar_convergence(&h, sed_id, total, Duration::from_secs(2)).await;
+    assert_eq!(a_count, total, "A count after burst");
     assert_eq!(
-        h.a.get_commits(sed_id).await.map(|c| c.len()),
-        Some(n as usize),
-    );
-    assert_eq!(
-        h.r.get_commits(sed_id).await.map(|c| c.len()),
-        Some(n as usize),
-        "drive sync stats: {stats:?}",
+        r_count, total,
+        "R count after burst; drive sync stats: {stats:?}"
     );
 
     // Re-converged: a follow-up sync must be empty.
