@@ -195,7 +195,7 @@ async fn mid_flight_close_leaves_peers_consistent() -> TestResult {
     // A always sees its own commit. B's view may or may not include it
     // depending on whether the broadcast won the race with the close.
     assert_eq!(a_count, 1, "A retains its own commit");
-    assert!(b_count <= 1, "B saw at most the one commit; got {b_count}",);
+    assert!(b_count <= 1, "B saw at most the one commit; got {b_count}");
 
     // Connection should be unregistered on A regardless.
     assert_eq!(a.connected_peer_ids().await.len(), 0);

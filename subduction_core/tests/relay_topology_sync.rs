@@ -200,9 +200,9 @@ async fn relay_topology_repeated_sync_after_convergence_is_empty() -> TestResult
 
     for round in 1..=4 {
         let (_, stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-        assert!(stats.is_empty(), "round {round} from A: {stats:?}",);
+        assert!(stats.is_empty(), "round {round} from A: {stats:?}");
         let (_, stats, _, _) = b.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-        assert!(stats.is_empty(), "round {round} from B: {stats:?}",);
+        assert!(stats.is_empty(), "round {round} from B: {stats:?}");
     }
 
     Ok(())
