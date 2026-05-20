@@ -203,9 +203,9 @@ impl fmt::Display for ParsePeerIdError {
 impl std::error::Error for ParsePeerIdError {}
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+    use testresult::TestResult;
 
     #[test]
     fn test_from_bytes() {
@@ -247,43 +247,46 @@ mod tests {
     }
 
     #[test]
-    fn test_string_roundtrip_no_suffix() {
+    fn test_string_roundtrip_no_suffix() -> TestResult {
         let bytes = [42u8; 32];
         let peer_id = KeyhivePeerId::from_bytes(bytes);
 
         let s = peer_id.to_string_repr();
-        let parsed = KeyhivePeerId::from_string_repr(&s).expect("should parse");
+        let parsed = KeyhivePeerId::from_string_repr(&s)?;
 
         assert_eq!(peer_id, parsed);
+        Ok(())
     }
 
     #[test]
-    fn test_string_roundtrip_with_suffix() {
+    fn test_string_roundtrip_with_suffix() -> TestResult {
         let bytes = [42u8; 32];
         let peer_id = KeyhivePeerId::from_bytes_with_suffix(bytes, "my-suffix".to_string());
 
         let s = peer_id.to_string_repr();
-        let parsed = KeyhivePeerId::from_string_repr(&s).expect("should parse");
+        let parsed = KeyhivePeerId::from_string_repr(&s)?;
 
         assert_eq!(peer_id, parsed);
+        Ok(())
     }
 
     #[cfg(feature = "serde")]
     #[test]
-    fn verifying_key_serialises_as_cbor_byte_string() {
+    fn verifying_key_serialises_as_cbor_byte_string() -> TestResult {
         let peer = KeyhivePeerId::from_bytes([0xAB; 32]);
         let mut buf = alloc::vec::Vec::new();
-        ciborium::into_writer(&peer, &mut buf).expect("encode");
-        let raw: ciborium::Value = ciborium::de::from_reader(buf.as_slice()).expect("decode");
-        let map = raw.as_map().expect("map");
+        ciborium::into_writer(&peer, &mut buf)?;
+        let raw: ciborium::Value = ciborium::de::from_reader(buf.as_slice())?;
+        let map = raw.as_map().ok_or("expected CBOR map")?;
         let (_, vk) = map
             .iter()
             .find(|(k, _)| k.as_text() == Some("verifying_key"))
-            .expect("verifying_key key");
+            .ok_or("missing verifying_key")?;
         assert!(
             vk.is_bytes(),
             "verifying_key must be CBOR bytes, got {vk:?}"
         );
+        Ok(())
     }
 
     #[test]
@@ -294,6 +297,6 @@ mod tests {
         let peer3 = KeyhivePeerId::from_bytes_with_suffix(bytes, "test".to_string());
 
         assert_eq!(peer1, peer2);
-        assert_ne!(peer1, peer3); // Different because of suffix
+        assert_ne!(peer1, peer3);
     }
 }

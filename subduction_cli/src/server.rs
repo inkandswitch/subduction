@@ -231,7 +231,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
     }
 
-    let seed = key::load_signer_bytes(&args.key)?;
+    let seed = key::resolve_key_seed(&args.key)?;
     let signer = key::signer_from_seed(&seed);
     let keyhive_signer = key::keyhive_signer_from_seed(&seed);
 

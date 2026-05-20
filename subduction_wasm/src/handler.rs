@@ -1,7 +1,7 @@
-//! Custom composed handler that dispatches wire messages to sub-handlers,
-//! forwarding unknown-protocol frames to a registered JS callback.
+//! Composed handler that dispatches wire messages to sub-handlers,
+//! forwarding keyhive-protocol frames to a registered JS handler.
 
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, format, string::String, sync::Arc};
 
 use async_lock::Mutex;
 use future_form::Local;
@@ -18,7 +18,8 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_ephemeral::handler::EphemeralHandler;
-use wasm_bindgen::JsValue;
+use subduction_keyhive::KeyhiveMessage;
+use wasm_bindgen::prelude::*;
 
 use crate::{
     clock::JsClock,
@@ -31,7 +32,115 @@ use crate::{
 };
 use sedimentree_wasm::storage::JsStorage;
 
+// ── JS FrameHandler interface ────────────────────────────────────────
+
+#[wasm_bindgen(typescript_custom_section)]
+const TS_FRAME_HANDLER: &str = r#"
+/**
+ * Handler for keyhive (SUK) protocol frames.
+ *
+ * Register via `Subduction.registerFrameHandler()`. The two methods
+ * mirror the Rust `Handler` trait's `handle` / `on_peer_disconnect`.
+ */
+export interface FrameHandler {
+    /** Called with the CBOR payload (no SUK envelope) for each inbound keyhive frame. */
+    onMessage(payload: Uint8Array, peerId: PeerId): void;
+    /** Called when a peer's last connection drops. */
+    onPeerDisconnect(peerId: PeerId): void;
+}
+"#;
+
+#[wasm_bindgen]
+extern "C" {
+    /// A JS object implementing the `FrameHandler` interface.
+    #[wasm_bindgen(js_name = FrameHandler, typescript_type = "FrameHandler")]
+    pub type JsFrameHandler;
+
+    #[wasm_bindgen(method, catch, js_name = onMessage)]
+    fn js_on_message(
+        this: &JsFrameHandler,
+        payload: Uint8Array,
+        peer_id: WasmPeerId,
+    ) -> Result<(), JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = onPeerDisconnect)]
+    fn js_on_peer_disconnect(this: &JsFrameHandler, peer_id: WasmPeerId) -> Result<(), JsValue>;
+}
+
+impl core::fmt::Debug for JsFrameHandler {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("JsFrameHandler").finish()
+    }
+}
+
+impl Clone for JsFrameHandler {
+    fn clone(&self) -> Self {
+        JsCast::unchecked_into(JsValue::from(self).clone())
+    }
+}
+
+// ── WasmKeyhiveHandler ───────────────────────────────────────────────
+
 type WasmConn = MessageTransport<JsTransport>;
+
+#[derive(Debug, thiserror::Error)]
+#[error("keyhive frame handler error: {0}")]
+pub(crate) struct WasmKeyhiveHandlerError(String);
+
+/// Keyhive frame handler that forwards decoded SUK payloads to a
+/// registered JS [`FrameHandler`](JsFrameHandler).
+pub(crate) struct WasmKeyhiveHandler {
+    handler: Arc<Mutex<Option<JsFrameHandler>>>,
+}
+
+impl core::fmt::Debug for WasmKeyhiveHandler {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WasmKeyhiveHandler").finish_non_exhaustive()
+    }
+}
+
+impl WasmKeyhiveHandler {
+    pub(crate) fn new(handler: Arc<Mutex<Option<JsFrameHandler>>>) -> Self {
+        Self { handler }
+    }
+}
+
+impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
+    type Message = KeyhiveMessage;
+    type HandlerError = WasmKeyhiveHandlerError;
+
+    fn handle<'a>(
+        &'a self,
+        conn: &'a Authenticated<WasmConn, Local>,
+        message: KeyhiveMessage,
+    ) -> LocalBoxFuture<'a, Result<(), Self::HandlerError>> {
+        Box::pin(async move {
+            let guard = self.handler.lock().await;
+            if let Some(ref handler) = *guard {
+                let payload = Uint8Array::from(message.payload());
+                let peer_id = WasmPeerId::from(conn.peer_id());
+                handler
+                    .js_on_message(payload, peer_id)
+                    .map_err(|e| WasmKeyhiveHandlerError(format!("{e:?}")))?;
+            }
+            Ok(())
+        })
+    }
+
+    fn on_peer_disconnect(&self, peer: PeerId) -> LocalBoxFuture<'_, ()> {
+        Box::pin(async move {
+            let guard = self.handler.lock().await;
+            if let Some(ref handler) = *guard {
+                let peer_id = WasmPeerId::from(peer);
+                if let Err(e) = handler.js_on_peer_disconnect(peer_id) {
+                    tracing::error!("keyhive frame handler onPeerDisconnect error: {:?}", e);
+                }
+            }
+        })
+    }
+}
+
+// ── WasmComposedHandler ──────────────────────────────────────────────
 
 type WasmSyncHandler = SyncHandler<
     Local,
@@ -50,7 +159,7 @@ pub(crate) type WasmListenError = ListenError<Local, JsStorage, WasmConn, WireMe
 pub(crate) struct WasmComposedHandler {
     sync: WasmSyncHandler,
     ephemeral: WasmEphemeralHandler,
-    unknown_frame_callback: Arc<Mutex<Option<js_sys::Function>>>,
+    keyhive: WasmKeyhiveHandler,
 }
 
 impl core::fmt::Debug for WasmComposedHandler {
@@ -64,12 +173,12 @@ impl WasmComposedHandler {
     pub(crate) fn new(
         sync: WasmSyncHandler,
         ephemeral: WasmEphemeralHandler,
-        unknown_frame_callback: Arc<Mutex<Option<js_sys::Function>>>,
+        keyhive: WasmKeyhiveHandler,
     ) -> Self {
         Self {
             sync,
             ephemeral,
-            unknown_frame_callback,
+            keyhive,
         }
     }
 }
@@ -93,7 +202,7 @@ impl Handler<Local, WasmConn> for WasmComposedHandler {
                     None
                 }
             }
-            WireMessage::Ephemeral(_) | WireMessage::Unknown(_) => None,
+            WireMessage::Ephemeral(_) | WireMessage::Keyhive(_) => None,
         }
     }
 
@@ -117,14 +226,11 @@ impl Handler<Local, WasmConn> for WasmComposedHandler {
                     }
                     Ok(())
                 }
-                WireMessage::Unknown(bytes) => {
-                    let cb = self.unknown_frame_callback.lock().await.clone();
-                    if let Some(callback) = cb.as_ref() {
-                        let js_bytes = Uint8Array::from(bytes.as_slice());
-                        let js_peer_id: JsValue = WasmPeerId::from(conn.peer_id()).into();
-                        if let Err(e) = callback.call2(&JsValue::NULL, &js_bytes, &js_peer_id) {
-                            tracing::error!("unknown frame callback error: {:?}", e);
-                        }
+                WireMessage::Keyhive(msg) => {
+                    if let Err(e) =
+                        Handler::<Local, WasmConn>::handle(&self.keyhive, conn, msg).await
+                    {
+                        tracing::error!(error = %e, "keyhive handler error (non-fatal)");
                     }
                     Ok(())
                 }
@@ -136,6 +242,7 @@ impl Handler<Local, WasmConn> for WasmComposedHandler {
         Box::pin(async move {
             Handler::<Local, WasmConn>::on_peer_disconnect(&self.sync, peer).await;
             Handler::<Local, WasmConn>::on_peer_disconnect(&self.ephemeral, peer).await;
+            Handler::<Local, WasmConn>::on_peer_disconnect(&self.keyhive, peer).await;
         })
     }
 }

@@ -26,11 +26,13 @@ pub(crate) struct KeyArgs {
     pub(crate) ephemeral_key: bool,
 }
 
-/// Resolve the 32-byte signing-key seed from the configured source.
+/// Obtain a 32-byte signing-key seed, loaded from a file or hex string,
+/// or generated fresh when `--ephemeral-key` is set.
 ///
-/// Shared bottom layer for `load_signer` and `load_keyhive_signer` so the
-/// subduction and keyhive signers always derive from the same key material.
-pub(crate) fn load_signer_bytes(args: &KeyArgs) -> Result<[u8; 32]> {
+/// Shared bottom layer for `signer_from_seed` and `keyhive_signer_from_seed`
+/// so the subduction and keyhive signers always derive from the same key
+/// material.
+pub(crate) fn resolve_key_seed(args: &KeyArgs) -> Result<[u8; 32]> {
     if let Some(hex_seed) = &args.key_seed {
         let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
         tracing::info!("Using signing key from --key-seed");

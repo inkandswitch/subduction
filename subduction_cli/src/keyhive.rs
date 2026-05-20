@@ -6,11 +6,8 @@
 use core::convert::Infallible;
 use std::{io, path::PathBuf};
 
-use future_form::{Local, Sendable};
-use futures::{
-    FutureExt,
-    future::{BoxFuture, LocalBoxFuture},
-};
+use future_form::Sendable;
+use futures::{FutureExt, future::BoxFuture};
 
 use subduction_core::{authenticated::Authenticated, connection::Connection};
 use subduction_keyhive::{
@@ -104,60 +101,6 @@ impl FsKeyhiveStorage {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
         }
-    }
-}
-
-impl KeyhiveStorage<Local> for FsKeyhiveStorage {
-    type Error = FsKeyhiveStorageError;
-
-    fn save_archive(
-        &self,
-        hash: StorageHash,
-        data: Vec<u8>,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let parent_dir = self.archive_dir();
-        async move {
-            self.save_file(parent_dir, hash, data)
-                .await
-                .map_err(Into::into)
-        }
-        .boxed_local()
-    }
-
-    fn load_archives(
-        &self,
-    ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
-        let dir = self.archive_dir();
-        async move { Self::load_dir(dir).await.map_err(Into::into) }.boxed_local()
-    }
-
-    fn delete_archive(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let dir = self.archive_dir();
-        async move { Self::delete_file(dir, hash).await.map_err(Into::into) }.boxed_local()
-    }
-
-    fn save_event(
-        &self,
-        hash: StorageHash,
-        data: Vec<u8>,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let parent_dir = self.event_dir();
-        async move {
-            self.save_file(parent_dir, hash, data)
-                .await
-                .map_err(Into::into)
-        }
-        .boxed_local()
-    }
-
-    fn load_events(&self) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
-        let dir = self.event_dir();
-        async move { Self::load_dir(dir).await.map_err(Into::into) }.boxed_local()
-    }
-
-    fn delete_event(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let dir = self.event_dir();
-        async move { Self::delete_file(dir, hash).await.map_err(Into::into) }.boxed_local()
     }
 }
 

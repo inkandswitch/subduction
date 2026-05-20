@@ -12,7 +12,6 @@ use crate::error::VerificationError;
 use crate::peer_id::KeyhivePeerId;
 #[cfg(all(feature = "serde", feature = "std"))]
 use alloc::string::ToString;
-#[cfg(all(feature = "serde", feature = "std"))]
 use keyhive_core::contact_card::ContactCard;
 #[cfg(all(feature = "serde", feature = "std"))]
 use keyhive_crypto::signed::Signed;

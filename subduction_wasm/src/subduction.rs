@@ -107,7 +107,7 @@ impl Spawn<Local> for WasmSpawn {
 
 use crate::{
     clock::JsClock,
-    handler::WasmComposedHandler,
+    handler::{JsFrameHandler, WasmComposedHandler, WasmKeyhiveHandler},
     policy::{
         JsPolicy,
         ephemeral::{JsEphemeralPolicy, make_open_ephemeral_policy},
@@ -116,9 +116,9 @@ use crate::{
     wire::WireMessage,
 };
 
-type WasmConn = MessageTransport<JsTransport>;
+use subduction_keyhive::KeyhiveMessage;
 
-type WasmHandler = WasmComposedHandler;
+type WasmConn = MessageTransport<JsTransport>;
 
 type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>;
 
@@ -127,7 +127,7 @@ type WasmSubductionCore = Subduction<
     Local,
     JsStorage,
     WasmConn,
-    WasmHandler,
+    WasmComposedHandler,
     JsPolicy,
     JsSigner,
     JsTimeout,
@@ -141,7 +141,7 @@ pub struct WasmSubduction {
     core: Arc<WasmSubductionCore>,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
     ephemeral_handler: WasmEphemeralHandler,
-    unknown_frame_callback: Arc<Mutex<Option<js_sys::Function>>>,
+    keyhive_handler: Arc<Mutex<Option<JsFrameHandler>>>,
 }
 
 impl core::fmt::Debug for WasmSubduction {
@@ -231,11 +231,11 @@ impl WasmSubduction {
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
         let send_counter = sync_handler.send_counter().clone();
-        let unknown_frame_callback = Arc::new(Mutex::new(None));
+        let keyhive_handler = Arc::new(Mutex::new(None));
         let handler = Arc::new(WasmComposedHandler::new(
             sync_handler,
             ephemeral_handler,
-            unknown_frame_callback.clone(),
+            WasmKeyhiveHandler::new(keyhive_handler.clone()),
         ));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -288,7 +288,7 @@ impl WasmSubduction {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
-            unknown_frame_callback,
+            keyhive_handler,
         }
     }
 
@@ -433,11 +433,11 @@ impl WasmSubduction {
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
         let send_counter = sync_handler.send_counter().clone();
-        let unknown_frame_callback = Arc::new(Mutex::new(None));
+        let keyhive_handler = Arc::new(Mutex::new(None));
         let handler = Arc::new(WasmComposedHandler::new(
             sync_handler,
             ephemeral_handler,
-            unknown_frame_callback.clone(),
+            WasmKeyhiveHandler::new(keyhive_handler.clone()),
         ));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
@@ -490,7 +490,7 @@ impl WasmSubduction {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
-            unknown_frame_callback,
+            keyhive_handler,
         })
     }
 
@@ -1359,31 +1359,36 @@ impl WasmSubduction {
         }
     }
 
-    // ── Unknown-protocol frame forwarding ─────────────────────────────
+    // ── Keyhive (SUK) frame handling ───────────────────────────────────
 
-    /// Register a callback for frames with unrecognized 4-byte schema headers.
+    /// Register a handler for keyhive protocol frames.
     ///
-    /// When a frame arrives whose header is not `SUM\0` (sync) or `SUE\0`
-    /// (ephemeral), the raw bytes and the sender's peer ID are forwarded
-    /// to this callback instead of being dropped.
+    /// When a frame arrives with the `SUK\0` schema header, the CBOR
+    /// payload (without the SUK envelope) and the sender's peer ID are
+    /// forwarded to the handler's `onMessage` method. When a peer
+    /// disconnects, `onPeerDisconnect` is called.
     ///
     /// Only one handler can be registered at a time. Calling this again
     /// replaces the previous handler. Pass `null`/`undefined` to unregister.
     #[wasm_bindgen(js_name = registerFrameHandler)]
-    pub async fn register_frame_handler(&self, callback: Option<js_sys::Function>) {
-        *self.unknown_frame_callback.lock().await = callback;
+    pub async fn register_frame_handler(&self, handler: Option<JsFrameHandler>) {
+        *self.keyhive_handler.lock().await = handler;
     }
 
-    /// Send raw bytes through the connection to a specific peer.
+    /// Send a keyhive frame to a specific peer.
     ///
-    /// The caller is responsible for framing (including any 4-byte schema
-    /// header). Subduction sends the bytes as-is with no additional encoding.
+    /// `payload` is the CBOR-encoded content (e.g., a `SignedMessage`).
+    /// Subduction wraps it in the `SUK\0` envelope before sending.
     ///
     /// # Errors
     ///
     /// Returns an error if the peer has no active connection or if sending fails.
-    #[wasm_bindgen(js_name = sendRawFrame)]
-    pub async fn send_raw_frame(&self, bytes: &[u8], peer_id: &WasmPeerId) -> Result<(), JsValue> {
+    #[wasm_bindgen(js_name = sendKeyhiveMessage)]
+    pub async fn send_keyhive_message(
+        &self,
+        payload: &[u8],
+        peer_id: &WasmPeerId,
+    ) -> Result<(), JsValue> {
         use subduction_core::connection::Connection;
 
         let pid: PeerId = peer_id.clone().into();
@@ -1392,7 +1397,7 @@ impl WasmSubduction {
             .get_connection(&pid)
             .await
             .ok_or_else(|| JsValue::from_str("no connection for peer"))?;
-        let msg = WireMessage::Unknown(bytes.to_vec());
+        let msg = WireMessage::Keyhive(KeyhiveMessage::new(payload.to_vec()));
         conn.send(&msg)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))
