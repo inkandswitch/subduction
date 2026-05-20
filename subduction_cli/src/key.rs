@@ -1,12 +1,11 @@
 //! Key loading utilities.
 
 use eyre::{Result, WrapErr, eyre};
+use rand::{RngCore, rngs::OsRng};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use subduction_crypto::signer::memory::MemorySigner;
-
 /// Common key-related arguments for CLI commands.
 #[derive(Debug, clap::Args)]
 pub(crate) struct KeyArgs {
@@ -27,26 +26,28 @@ pub(crate) struct KeyArgs {
     pub(crate) ephemeral_key: bool,
 }
 
-/// Load a signer from the configured source.
+/// Obtain a 32-byte signing-key seed, loaded from a file or hex string,
+/// or generated fresh when `--ephemeral-key` is set.
 ///
-/// Requires one of:
-/// - `--key-seed`: Use the provided hex seed
-/// - `--key-file`: Load from an existing file
-/// - `--ephemeral-key`: Generate a random ephemeral key (lost on restart)
-pub(crate) fn load_signer(args: &KeyArgs) -> Result<MemorySigner> {
+/// Shared bottom layer for `signer_from_seed` and `keyhive_signer_from_seed`
+/// so the subduction and keyhive signers always derive from the same key
+/// material.
+pub(crate) fn resolve_key_seed(args: &KeyArgs) -> Result<[u8; 32]> {
     if let Some(hex_seed) = &args.key_seed {
         let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
         tracing::info!("Using signing key from --key-seed");
-        return Ok(MemorySigner::from_bytes(&seed_bytes));
+        return Ok(seed_bytes);
     }
 
     if let Some(key_path) = &args.key_file {
-        return load_key_file(key_path);
+        return load_key_file_bytes(key_path);
     }
 
     if args.ephemeral_key {
         tracing::warn!("Using ephemeral key (will be lost on restart)");
-        return Ok(MemorySigner::generate());
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        return Ok(bytes);
     }
 
     Err(eyre!(
@@ -57,14 +58,26 @@ pub(crate) fn load_signer(args: &KeyArgs) -> Result<MemorySigner> {
     ))
 }
 
-/// Load a signing key from an existing file.
-fn load_key_file(path: &Path) -> Result<MemorySigner> {
+/// Build a subduction signer from a 32-byte seed.
+pub(crate) fn signer_from_seed(seed: &[u8; 32]) -> subduction_crypto::signer::memory::MemorySigner {
+    subduction_crypto::signer::memory::MemorySigner::from_bytes(seed)
+}
+
+/// Build a keyhive signer from a 32-byte seed.
+pub(crate) fn keyhive_signer_from_seed(
+    seed: &[u8; 32],
+) -> keyhive_crypto::signer::memory::MemorySigner {
+    ed25519_dalek::SigningKey::from_bytes(seed).into()
+}
+
+/// Read and parse a key-file path into raw 32-byte seed material.
+fn load_key_file_bytes(path: &Path) -> Result<[u8; 32]> {
     let contents =
         fs::read(path).wrap_err_with(|| format!("Failed to read key file: {}", path.display()))?;
 
     let seed_bytes = parse_key_file_contents(&contents, path)?;
     tracing::info!("Loaded signing key from {}", path.display());
-    Ok(MemorySigner::from_bytes(&seed_bytes))
+    Ok(seed_bytes)
 }
 
 /// Parse key file contents as either hex or raw bytes.
@@ -92,4 +105,26 @@ fn parse_key_file_contents(contents: &[u8], path: &Path) -> Result<[u8; 32]> {
         path.display(),
         contents.len()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signers_from_same_seed_have_matching_identities() {
+        use keyhive_crypto::verifiable::Verifiable;
+
+        let seed = [42u8; 32];
+        let signer = signer_from_seed(&seed);
+        let kh_signer = keyhive_signer_from_seed(&seed);
+
+        let subduction_vk = signer.verifying_key();
+        let keyhive_vk = kh_signer.verifying_key();
+        assert_eq!(
+            subduction_vk.as_bytes(),
+            keyhive_vk.as_bytes(),
+            "subduction and keyhive signers must derive the same public key"
+        );
+    }
 }

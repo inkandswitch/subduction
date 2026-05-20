@@ -10,20 +10,41 @@ mod collections;
 
 pub mod connection;
 pub mod error;
+#[cfg(feature = "handler")]
+pub mod handler;
 pub mod message;
 pub mod peer_id;
+#[cfg(feature = "handler")]
+pub mod policy;
+#[cfg(feature = "runtime")]
+pub mod runtime;
 pub mod signed_message;
 pub mod storage;
 pub mod wire;
 
 #[cfg(feature = "serde")]
+pub mod all_agent_events;
+#[cfg(feature = "serde")]
+mod cache;
+#[cfg(feature = "serde")]
 pub mod protocol;
 #[cfg(feature = "serde")]
+mod serde_compat;
+#[cfg(feature = "serde")]
 pub mod storage_ops;
+#[cfg(feature = "serde")]
+mod syncpoints;
 
-#[cfg(all(test, feature = "serde"))]
-#[allow(clippy::expect_used, clippy::indexing_slicing)]
-mod test_utils;
+#[cfg(any(test, feature = "test-utils"))]
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    missing_debug_implementations,
+    missing_docs
+)]
+pub mod test_utils;
 
 pub use connection::KeyhiveConnection;
 pub use error::StorageError;
@@ -36,7 +57,9 @@ pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
 pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 #[cfg(feature = "serde")]
-pub use protocol::{KeyhiveProtocol, SyncOutcome};
+pub use all_agent_events::AllAgentEvents;
+#[cfg(feature = "serde")]
+pub use protocol::KeyhiveProtocol;
 #[cfg(feature = "serde")]
 pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,

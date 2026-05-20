@@ -2,14 +2,20 @@
 //!
 //! Dispatches [`CliWireMessage`] variants to the appropriate sub-handler:
 //!
-//! | Variant      | Handler                     |
-//! |--------------|-----------------------------|
-//! | `Sync`       | [`SyncHandler`]             |
-//! | `Ephemeral`  | [`EphemeralHandler`]        |
-//! | `Keyhive`    | [`KeyhiveProtocolHandle`]   |
+//! | Variant      | Handler                    |
+//! |--------------|----------------------------|
+//! | `Sync`       | [`SyncHandler`]            |
+//! | `Ephemeral`  | [`EphemeralHandler`]       |
+//! | `Keyhive`    | [`SendableKeyhiveHandler`] |
 
 use std::sync::Arc;
 
+use crate::{
+    keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage},
+    policy::CliKeyhivePolicyHandle,
+    transport::UnifiedTransport,
+    wire::CliWireMessage,
+};
 use future_form::Sendable;
 use futures::future::BoxFuture;
 use sedimentree_core::commit::CountLeadingZeroBytes;
@@ -18,7 +24,6 @@ use subduction_core::{
     authenticated::Authenticated,
     handler::Handler,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     storage::metrics::MetricsStorage,
     subduction::error::{IoError, ListenError},
@@ -27,9 +32,7 @@ use subduction_core::{
 use subduction_ephemeral::{
     clock::std_clock::StdClock, handler::EphemeralHandler, policy::OpenEphemeralPolicy,
 };
-use subduction_keyhive_policy::handler::KeyhiveProtocolHandle;
-
-use crate::{transport::UnifiedTransport, wire::CliWireMessage};
+use subduction_keyhive::handler::{SendableKeyhiveHandler, SendableRuntimeProtocol};
 
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
@@ -37,6 +40,18 @@ pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
 /// The concrete ephemeral handler type for the CLI server.
 pub(crate) type CliEphemeralHandler =
     EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock>;
+
+/// The concrete keyhive protocol type for the CLI server.
+pub(crate) type CliKeyhiveProtocol =
+    Arc<SendableRuntimeProtocol<CliConnKeyhiveAdapter, FsKeyhiveStorage>>;
+
+/// The concrete keyhive handler type for the CLI server.
+pub(crate) type CliKeyhiveHandler = SendableKeyhiveHandler<
+    CliConnKeyhiveAdapter,
+    FsKeyhiveStorage,
+    CliConn,
+    fn(Authenticated<CliConn, Sendable>) -> CliConnKeyhiveAdapter,
+>;
 
 /// Concrete `ListenError` for the CLI handler.
 type CliListenError = ListenError<Sendable, MetricsStorage<FsStorage>, CliConn, CliWireMessage>;
@@ -48,12 +63,12 @@ pub(crate) struct CliHandler {
             Sendable,
             MetricsStorage<FsStorage>,
             CliConn,
-            OpenPolicy,
+            CliKeyhivePolicyHandle,
             CountLeadingZeroBytes,
         >,
     >,
     pub(crate) ephemeral: CliEphemeralHandler,
-    pub(crate) keyhive: KeyhiveProtocolHandle,
+    pub(crate) keyhive: CliKeyhiveHandler,
 }
 
 impl core::fmt::Debug for CliHandler {

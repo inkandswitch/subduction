@@ -15,13 +15,15 @@ rust-version.workspace = true
 
 [dependencies]
 ahash = { workspace = true }
+async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 axum = { workspace = true }
-blake3 = { workspace = true }
+ciborium = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 console-subscriber = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true }
 eyre = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
@@ -31,17 +33,19 @@ http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio", "http1", "server-auto"] }
 iroh = { workspace = true }
+keyhive_core = { workspace = true }
+keyhive_crypto = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 nonempty = { workspace = true, features = ["std"] }
+rand = { workspace = true }
 reqwest = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["system_time", "metrics"] }
 subduction_ephemeral = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true }
-subduction_keyhive = { workspace = true, features = ["serde"] }
-subduction_keyhive_policy = { workspace = true }
+subduction_keyhive = { workspace = true, features = ["runtime"] }
 subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
 subduction_iroh = { workspace = true }
 subduction_websocket = { workspace = true }

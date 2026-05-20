@@ -507,14 +507,15 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57357a1e2f8899fb78779b0364e9430beb2fd20b241136e02d4022f919ff2398"
+checksum = "e3a55cd7ac9bd9450bfca9de75c9e3d691cc396ae5da88e28057e9842aaf43d7"
 dependencies = [
  "blake3",
  "chacha20poly1305",
  "dupe",
  "ed25519-dalek 2.2.0",
+ "future_form",
  "keyhive_crypto",
  "nonempty 0.10.0",
  "rand 0.8.6",
@@ -2942,9 +2943,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "034630cc927df6c8a0166cb8d73fb10aa3c61173056a0b60891d9775925a5ac5"
+checksum = "fed8e8a6e6b297464358edd9facdf86a0573b132af338932a18cd48439739d3b"
 dependencies = [
  "beekem",
  "bincode",
@@ -2955,6 +2956,7 @@ dependencies = [
  "derive_more 1.0.0",
  "dupe",
  "ed25519-dalek 2.2.0",
+ "future_form",
  "futures 0.3.32",
  "keyhive_crypto",
  "nonempty 0.10.0",
@@ -2962,17 +2964,15 @@ dependencies = [
  "serde",
  "signature 2.2.0",
  "thiserror 1.0.69",
- "topological-sort",
  "tracing",
- "trait-variant",
  "x25519-dalek",
 ]
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "429decc39976cec079b5af15f9b42584848a6766b1fb181ee88d74a77a0e9f7a"
+checksum = "06cce70232e9f46005a509916753f51a9dc9cf8ac6ed77ae27c0df525ba93ae9"
 dependencies = [
  "bincode",
  "blake3",
@@ -2980,6 +2980,8 @@ dependencies = [
  "derive_more 1.0.0",
  "dupe",
  "ed25519-dalek 2.2.0",
+ "future_form",
+ "futures 0.3.32",
  "rand 0.8.6",
  "serde",
  "signature 2.2.0",
@@ -5166,13 +5168,15 @@ name = "subduction_cli"
 version = "0.14.2"
 dependencies = [
  "ahash",
+ "async-channel",
  "async-lock",
  "async-tungstenite",
  "axum",
- "blake3",
+ "ciborium",
  "clap",
  "color-eyre",
  "console-subscriber",
+ "ed25519-dalek 2.2.0",
  "eyre",
  "future_form",
  "futures 0.3.32",
@@ -5182,9 +5186,12 @@ dependencies = [
  "hyper",
  "hyper-util",
  "iroh",
+ "keyhive_core",
+ "keyhive_crypto",
  "metrics",
  "metrics-exporter-prometheus",
  "nonempty 0.12.0",
+ "rand 0.8.6",
  "reqwest 0.12.28",
  "sedimentree_core",
  "sedimentree_fs_storage",
@@ -5194,7 +5201,6 @@ dependencies = [
  "subduction_http_longpoll",
  "subduction_iroh",
  "subduction_keyhive",
- "subduction_keyhive_policy",
  "subduction_websocket",
  "tempfile",
  "testresult",
@@ -5341,6 +5347,7 @@ dependencies = [
  "async-channel",
  "async-lock",
  "base64 0.22.1",
+ "bincode",
  "blake3",
  "bolero",
  "ciborium",
@@ -5353,30 +5360,14 @@ dependencies = [
  "rand 0.8.6",
  "sedimentree_core",
  "serde",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "subduction_keyhive_policy"
-version = "0.9.1"
-dependencies = [
- "async-channel",
- "ed25519-dalek 2.2.0",
- "future_form",
- "futures 0.3.32",
- "keyhive_core",
- "keyhive_crypto",
- "rand 0.8.6",
- "sedimentree_core",
- "serde",
+ "serde_bytes",
+ "serde_json",
  "subduction_core",
  "subduction_crypto",
- "subduction_keyhive",
  "testresult",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -5404,6 +5395,7 @@ dependencies = [
  "subduction_crypto",
  "subduction_ephemeral",
  "subduction_http_longpoll",
+ "subduction_keyhive",
  "thiserror 2.0.18",
  "tracing",
  "wasm-bindgen",
@@ -5882,12 +5874,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "topological-sort"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea68304e134ecd095ac6c3574494fc62b909f416c4fca77e440530221e549d3d"
-
-[[package]]
 name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6036,17 +6022,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "trait-variant"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70977707304198400eb4835a78f6a9f928bf41bba420deb8fdb175cd965d77a7"
-dependencies = [
- "proc-macro2 1.0.106",
- "quote 1.0.45",
- "syn 2.0.117",
 ]
 
 [[package]]

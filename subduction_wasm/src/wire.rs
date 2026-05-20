@@ -1,5 +1,5 @@
-//! Wire message enum for multiplexing sync and ephemeral traffic over
-//! a single physical connection.
+//! Wire message enum for multiplexing sync, ephemeral, and keyhive
+//! traffic over a single physical connection.
 //!
 //! This is an application-level type defined in the Wasm crate. The
 //! transport layer is generic over message types via `ChannelMessage`;
@@ -14,12 +14,14 @@ use sedimentree_core::codec::{
 };
 use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
 use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
+use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
-/// Composed wire message carrying sync or ephemeral traffic.
+/// Composed wire message carrying sync, ephemeral, or keyhive traffic.
 ///
 /// Encode delegates to the inner variant (schema headers are already
-/// distinct: `SUM\x00` vs `SUE\x00`). Decode reads the 4-byte schema
-/// header and dispatches to the appropriate decoder.
+/// distinct: `SUM\x00` vs `SUE\x00` vs `SUK\x00`). Decode reads the
+/// 4-byte schema header and dispatches to the appropriate decoder.
+/// Unrecognized schemas produce a [`DecodeError::InvalidSchema`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireMessage {
     /// A sync-protocol message.
@@ -27,6 +29,9 @@ pub enum WireMessage {
 
     /// An ephemeral-protocol message.
     Ephemeral(EphemeralMessage),
+
+    /// A keyhive-protocol message.
+    Keyhive(KeyhiveMessage),
 }
 
 impl From<SyncMessage> for WireMessage {
@@ -41,11 +46,18 @@ impl From<EphemeralMessage> for WireMessage {
     }
 }
 
+impl From<KeyhiveMessage> for WireMessage {
+    fn from(msg: KeyhiveMessage) -> Self {
+        Self::Keyhive(msg)
+    }
+}
+
 impl Encode for WireMessage {
     fn encode(&self) -> Vec<u8> {
         match self {
             Self::Sync(msg) => Encode::encode(msg.as_ref()),
             Self::Ephemeral(msg) => msg.encode(),
+            Self::Keyhive(msg) => msg.encode(),
         }
     }
 
@@ -53,6 +65,7 @@ impl Encode for WireMessage {
         match self {
             Self::Sync(msg) => msg.encoded_size(),
             Self::Ephemeral(msg) => msg.encoded_size(),
+            Self::Keyhive(msg) => msg.encoded_size(),
         }
     }
 }
@@ -81,39 +94,12 @@ impl Decode for WireMessage {
         match schema {
             MESSAGE_SCHEMA => SyncMessage::try_decode(buf).map(|m| WireMessage::Sync(Box::new(m))),
             EPHEMERAL_SCHEMA => EphemeralMessage::try_decode(buf).map(WireMessage::Ephemeral),
+            KEYHIVE_SCHEMA => KeyhiveMessage::try_decode(buf).map(WireMessage::Keyhive),
             _ => Err(InvalidSchema {
                 expected: MESSAGE_SCHEMA,
                 got: schema,
             }
             .into()),
-        }
-    }
-}
-
-impl subduction_ephemeral::composed::WireEnvelope for WireMessage {
-    fn dispatch(self) -> subduction_ephemeral::composed::Dispatched {
-        match self {
-            Self::Sync(msg) => subduction_ephemeral::composed::Dispatched::Sync(msg),
-            Self::Ephemeral(msg) => subduction_ephemeral::composed::Dispatched::Ephemeral(msg),
-        }
-    }
-
-    fn as_batch_sync_response(
-        &self,
-    ) -> Option<&subduction_core::connection::message::BatchSyncResponse> {
-        match self {
-            Self::Sync(msg) => match msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                SyncMessage::BatchSyncRequest(_)
-                | SyncMessage::BlobsRequest { .. }
-                | SyncMessage::BlobsResponse { .. }
-                | SyncMessage::DataRequestRejected(_)
-                | SyncMessage::Fragment { .. }
-                | SyncMessage::LooseCommit { .. }
-                | SyncMessage::RemoveSubscriptions(_)
-                | SyncMessage::HeadsUpdate { .. } => None,
-            },
-            Self::Ephemeral(_) => None,
         }
     }
 }

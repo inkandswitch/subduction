@@ -46,7 +46,6 @@ use subduction_core::{
 };
 use subduction_crypto::signed::Signed;
 use subduction_ephemeral::{
-    composed::ComposedHandler,
     config::EphemeralConfig,
     handler::EphemeralHandler,
     message::{EphemeralMessage, EphemeralPayload},
@@ -90,7 +89,7 @@ use futures::{
 };
 
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
-const WASM_SHARD_COUNT: usize = 4;
+pub(crate) const WASM_SHARD_COUNT: usize = 4;
 
 /// A spawner that uses wasm-bindgen-futures to spawn local tasks.
 #[derive(Debug, Clone, Copy, Default)]
@@ -108,28 +107,18 @@ impl Spawn<Local> for WasmSpawn {
 
 use crate::{
     clock::JsClock,
+    handler::{JsFrameHandler, WasmComposedHandler, WasmKeyhiveHandler},
     policy::{
         JsPolicy,
         ephemeral::{JsEphemeralPolicy, make_open_ephemeral_policy},
         make_open_policy,
     },
+    wire::WireMessage,
 };
 
-type WasmConn = MessageTransport<JsTransport>;
+use subduction_keyhive::KeyhiveMessage;
 
-type WasmHandler = ComposedHandler<
-    SyncHandler<
-        Local,
-        JsStorage,
-        WasmConn,
-        JsPolicy,
-        WasmHashMetric,
-        WASM_SHARD_COUNT,
-        crate::remote_heads::JsRemoteHeadsObserver,
-    >,
-    EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>,
-    crate::wire::WireMessage,
->;
+type WasmConn = MessageTransport<JsTransport>;
 
 type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>;
 
@@ -138,7 +127,7 @@ type WasmSubductionCore = Subduction<
     Local,
     JsStorage,
     WasmConn,
-    WasmHandler,
+    WasmComposedHandler,
     JsPolicy,
     JsSigner,
     JsTimeout,
@@ -152,6 +141,7 @@ pub struct WasmSubduction {
     core: Arc<WasmSubductionCore>,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
     ephemeral_handler: WasmEphemeralHandler,
+    keyhive_handler: Arc<Mutex<Option<JsFrameHandler>>>,
 }
 
 impl core::fmt::Debug for WasmSubduction {
@@ -241,7 +231,12 @@ impl WasmSubduction {
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
         let send_counter = sync_handler.send_counter().clone();
-        let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+        let keyhive_handler = Arc::new(Mutex::new(None));
+        let handler = Arc::new(WasmComposedHandler::new(
+            sync_handler,
+            ephemeral_handler,
+            WasmKeyhiveHandler::new(keyhive_handler.clone()),
+        ));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
             handler,
@@ -293,6 +288,7 @@ impl WasmSubduction {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
+            keyhive_handler,
         }
     }
 
@@ -437,7 +433,12 @@ impl WasmSubduction {
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
         let send_counter = sync_handler.send_counter().clone();
-        let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+        let keyhive_handler = Arc::new(Mutex::new(None));
+        let handler = Arc::new(WasmComposedHandler::new(
+            sync_handler,
+            ephemeral_handler,
+            WasmKeyhiveHandler::new(keyhive_handler.clone()),
+        ));
 
         let (core, listener_fut, manager_fut) = Subduction::new(
             handler,
@@ -489,6 +490,7 @@ impl WasmSubduction {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
+            keyhive_handler,
         })
     }
 
@@ -1355,6 +1357,50 @@ impl WasmSubduction {
         if let Some(topics) = NonEmpty::from_vec(topics) {
             self.ephemeral_handler.unsubscribe(topics).await;
         }
+    }
+
+    // ── Keyhive (SUK) frame handling ───────────────────────────────────
+
+    /// Register a handler for keyhive protocol frames.
+    ///
+    /// When a frame arrives with the `SUK\0` schema header, the CBOR
+    /// payload (without the SUK envelope) and the sender's peer ID are
+    /// forwarded to the handler's `onMessage` method. When a peer
+    /// disconnects, `onPeerDisconnect` is called.
+    ///
+    /// Only one handler can be registered at a time. Calling this again
+    /// replaces the previous handler. Pass `null`/`undefined` to unregister.
+    #[wasm_bindgen(js_name = registerFrameHandler)]
+    pub async fn register_frame_handler(&self, handler: Option<JsFrameHandler>) {
+        *self.keyhive_handler.lock().await = handler;
+    }
+
+    /// Send a keyhive frame to a specific peer.
+    ///
+    /// `payload` is the CBOR-encoded content (e.g., a `SignedMessage`).
+    /// Subduction wraps it in the `SUK\0` envelope before sending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the peer has no active connection or if sending fails.
+    #[wasm_bindgen(js_name = sendKeyhiveMessage)]
+    pub async fn send_keyhive_message(
+        &self,
+        payload: &[u8],
+        peer_id: &WasmPeerId,
+    ) -> Result<(), JsValue> {
+        use subduction_core::connection::Connection;
+
+        let pid: PeerId = peer_id.clone().into();
+        let conn = self
+            .core
+            .get_connection(&pid)
+            .await
+            .ok_or_else(|| JsValue::from_str("no connection for peer"))?;
+        let msg = WireMessage::Keyhive(KeyhiveMessage::new(payload.to_vec()));
+        conn.send(&msg)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     // ── Queries ──────────────────────────────────────────────────────────

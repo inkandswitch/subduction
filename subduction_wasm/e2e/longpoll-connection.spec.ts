@@ -60,7 +60,7 @@ test.beforeAll(async ({ browserName }) => {
   // Start server with both transports enabled (default), ephemeral key for test isolation
   subductionServer = spawn(
     cliPath,
-    ["server", "--socket", `${LP_HOST}:${currentPort}`, "--ephemeral-key"],
+    ["server", "--socket", `${LP_HOST}:${currentPort}`, "--ephemeral-key", "--open-policy"],
     {
       cwd: path.join(__dirname, "../.."),
       stdio: "pipe",
