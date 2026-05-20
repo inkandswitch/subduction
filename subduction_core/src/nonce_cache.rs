@@ -30,7 +30,7 @@ use crate::{peer::id::PeerId, timestamp::TimestampSeconds};
 use subduction_crypto::nonce::Nonce;
 
 /// Default bucket duration (3 minutes).
-const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(180);
+const DEFAULT_BUCKET_DURATION: Duration = Duration::from_mins(3);
 
 /// Number of buckets.
 const BUCKET_COUNT: usize = 4;

@@ -85,10 +85,10 @@ use rejection::{Rejection, RejectionReason};
 use response::{Response, ResponseValidationError};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
-pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
+pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_mins(10);
 
 /// Maximum clock drift tolerated during simultaneous open handshakes.
-const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(600);
+const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_mins(10);
 
 /// Client-side drift correction.
 ///
