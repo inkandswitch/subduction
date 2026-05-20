@@ -2107,7 +2107,7 @@ mod tests {
                         assert!(
                             result.is_err(),
                             "cyclic graph must produce CycleError, got Ok with {} items",
-                            result.map(|t| t.len()).unwrap_or(0)
+                            result.map_or(0, |t| t.len())
                         );
                     });
             }
