@@ -43,7 +43,7 @@ type TestSubduction = Arc<
     >,
 >;
 
-const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_millis(1000));
+const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_secs(1));
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(80);
 
 fn make_signer(seed: u8) -> MemorySigner {

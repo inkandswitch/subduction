@@ -30,7 +30,11 @@ use crate::{peer::id::PeerId, timestamp::TimestampSeconds};
 use subduction_crypto::nonce::Nonce;
 
 /// Default bucket duration (3 minutes).
-const DEFAULT_BUCKET_DURATION: Duration = Duration::from_mins(3);
+// `Duration::from_mins` is not yet const-stable (rust-lang/rust#140881), so
+// stay on `from_secs` until the MSRV catches up. The `unknown_lints` allow
+// keeps older toolchains (pre-1.95) quiet about the unrecognized lint name.
+#[allow(unknown_lints, clippy::duration_suboptimal_units)]
+const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(3 * 60);
 
 /// Number of buckets.
 const BUCKET_COUNT: usize = 4;

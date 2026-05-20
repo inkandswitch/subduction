@@ -85,10 +85,15 @@ use rejection::{Rejection, RejectionReason};
 use response::{Response, ResponseValidationError};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
-pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_mins(10);
+// `Duration::from_mins` is not yet const-stable (rust-lang/rust#140881), so
+// stay on `from_secs` until the MSRV catches up. The `unknown_lints` allow
+// keeps older toolchains (pre-1.95) quiet about the unrecognized lint name.
+#[allow(unknown_lints, clippy::duration_suboptimal_units)]
+pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
 
 /// Maximum clock drift tolerated during simultaneous open handshakes.
-const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_mins(10);
+#[allow(unknown_lints, clippy::duration_suboptimal_units)]
+const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(10 * 60);
 
 /// Client-side drift correction.
 ///
