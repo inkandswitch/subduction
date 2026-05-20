@@ -164,6 +164,11 @@ pub(crate) struct ServerArgs {
     /// Useful for integration tests that need to discover the server's address.
     #[arg(long = "ready-file", value_name = "PATH")]
     pub(crate) ready_file: Option<PathBuf>,
+
+    /// Use an allow-all storage policy instead of keyhive-based access control.
+    /// Intended for testing sync without keyhive delegation.
+    #[arg(long)]
+    pub(crate) open_policy: bool,
 }
 
 impl ServerArgs {
@@ -268,7 +273,12 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         tracing::warn!("keyhive ingest_from_storage failed: {e}");
     }
 
-    let policy_handle = CliKeyhivePolicyHandle::new(Arc::clone(&shared_keyhive));
+    let policy_handle = if args.open_policy {
+        tracing::info!("Using open (allow-all) storage policy");
+        CliKeyhivePolicyHandle::open()
+    } else {
+        CliKeyhivePolicyHandle::new(Arc::clone(&shared_keyhive))
+    };
     let storage_policy = Arc::new(policy_handle);
 
     // Periodic keyhive cache refresh.

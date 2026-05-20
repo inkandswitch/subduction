@@ -27,12 +27,18 @@ fn is_legacy(id: &SedimentreeId) -> bool {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CliKeyhivePolicyHandle {
-    keyhive: Arc<AsyncMutex<SendableRuntimeKeyhive>>,
+    keyhive: Option<Arc<AsyncMutex<SendableRuntimeKeyhive>>>,
 }
 
 impl CliKeyhivePolicyHandle {
     pub(crate) const fn new(keyhive: Arc<AsyncMutex<SendableRuntimeKeyhive>>) -> Self {
-        Self { keyhive }
+        Self {
+            keyhive: Some(keyhive),
+        }
+    }
+
+    pub(crate) const fn open() -> Self {
+        Self { keyhive: None }
     }
 }
 
@@ -43,8 +49,12 @@ impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         &self,
         peer: PeerId,
     ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+        let Some(ref keyhive) = self.keyhive else {
+            return async { Ok(()) }.boxed();
+        };
+        let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = self.keyhive.lock().await;
+            let kh = keyhive.lock().await;
             authorize_connect_with(&*kh, peer).await
         }
         .boxed()
@@ -60,11 +70,15 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+        let Some(ref keyhive) = self.keyhive else {
+            return async { Ok(()) }.boxed();
+        };
         if is_legacy(&sedimentree_id) {
             return async { Ok(()) }.boxed();
         }
+        let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = self.keyhive.lock().await;
+            let kh = keyhive.lock().await;
             authorize_fetch_with(&*kh, peer, sedimentree_id).await
         }
         .boxed()
@@ -76,11 +90,15 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+        let Some(ref keyhive) = self.keyhive else {
+            return async { Ok(()) }.boxed();
+        };
         if is_legacy(&sedimentree_id) {
             return async { Ok(()) }.boxed();
         }
+        let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = self.keyhive.lock().await;
+            let kh = keyhive.lock().await;
             authorize_put_with(&*kh, requestor, author, sedimentree_id).await
         }
         .boxed()
@@ -91,10 +109,13 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        let Some(ref keyhive) = self.keyhive else {
+            return async { ids }.boxed();
+        };
         let (legacy, keyhive_ids): (Vec<_>, Vec<_>) = ids.into_iter().partition(is_legacy);
-
+        let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = self.keyhive.lock().await;
+            let kh = keyhive.lock().await;
             let mut allowed = filter_authorized_fetch_with(&*kh, peer, keyhive_ids).await;
             allowed.extend(legacy);
             allowed
