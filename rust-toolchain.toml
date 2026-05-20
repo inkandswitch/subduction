@@ -1,0 +1,8 @@
+[toolchain]
+# Pinned to match the workspace `rust-version` declared in `Cargo.toml`
+# and the Nix flake's `rustVersion` in `flake.nix`. CI's
+# `actions-rust-lang/setup-rust-toolchain@v1` reads this file
+# automatically; local Nix users get the same version via the dev
+# shell. Bump these three in lockstep.
+channel = "1.90.0"
+components = ["clippy", "rustfmt"]
