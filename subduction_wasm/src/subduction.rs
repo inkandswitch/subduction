@@ -187,6 +187,7 @@ impl WasmSubduction {
         on_remote_heads: Option<js_sys::Function>,
         on_ephemeral: Option<js_sys::Function>,
     ) -> Self {
+        crate::set_panic_hook();
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         #[allow(clippy::expect_used)]
@@ -333,6 +334,7 @@ impl WasmSubduction {
     ) -> Result<Self, WasmHydrationError> {
         use subduction_core::storage::traits::Storage as _;
 
+        crate::set_panic_hook();
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         #[allow(clippy::expect_used)]

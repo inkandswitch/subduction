@@ -1,6 +1,6 @@
 //! In-memory storage for testing and development.
 
-use alloc::string::ToString;
+use alloc::{string::ToString, vec::Vec};
 use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
@@ -10,7 +10,9 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
-use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
+use subduction_crypto::{
+    signed::Signed, verified_meta::VerifiedMeta, verified_signature::VerifiedSignature,
+};
 use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use wasm_bindgen_futures::future_to_promise;
 
@@ -349,11 +351,9 @@ impl MemoryStorage {
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        future_to_promise(async move {
-            Storage::<Local>::save_sedimentree_id(&inner, id)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
+        let result = (|| -> Result<(Vec<VerifiedMeta<LooseCommit>>, Vec<VerifiedMeta<Fragment>>), JsValue> {
+            let mut verified_commits = Vec::with_capacity(commits.length() as usize);
             for item in commits.iter() {
                 let signed_val = js_sys::Reflect::get(&item, &JsValue::from_str("signedCommit"))
                     .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
@@ -363,14 +363,14 @@ impl MemoryStorage {
                     .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
                 let blob = Blob::new(Uint8Array::new(&blob_val).to_vec());
 
-                let verified =
-                    VerifiedMeta::try_from_trusted(Signed::<LooseCommit>::from(signed), blob)
-                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                Storage::<Local>::save_loose_commit(&inner, id, verified)
-                    .await
+                let verified_sig = VerifiedSignature::try_from_trusted(Signed::<LooseCommit>::from(signed))
                     .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                let verified = VerifiedMeta::new(verified_sig, blob)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                verified_commits.push(verified);
             }
 
+            let mut verified_fragments = Vec::with_capacity(fragments.length() as usize);
             for item in fragments.iter() {
                 let signed_val = js_sys::Reflect::get(&item, &JsValue::from_str("signedFragment"))
                     .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
@@ -380,15 +380,29 @@ impl MemoryStorage {
                     .map_err(|e| JsValue::from_str(&alloc::format!("Reflect error: {e:?}")))?;
                 let blob = Blob::new(Uint8Array::new(&blob_val).to_vec());
 
-                let verified =
-                    VerifiedMeta::try_from_trusted(Signed::<Fragment>::from(signed), blob)
-                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                Storage::<Local>::save_fragment(&inner, id, verified)
-                    .await
+                let verified_sig = VerifiedSignature::try_from_trusted(Signed::<Fragment>::from(signed))
                     .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                let verified = VerifiedMeta::new(verified_sig, blob)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                verified_fragments.push(verified);
             }
 
-            Ok(JsValue::from(commits.length() + fragments.length()))
+            Ok((verified_commits, verified_fragments))
+        })();
+
+        let Ok((verified_commits, verified_fragments)) = result else {
+            let err = result
+                .err()
+                .unwrap_or_else(|| JsValue::from_str("unknown saveBatchAll error"));
+            return js_sys::Promise::reject(&err);
+        };
+
+        future_to_promise(async move {
+            let count =
+                Storage::<Local>::save_batch(&inner, id, verified_commits, verified_fragments)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            Ok(JsValue::from(count))
         })
     }
 }

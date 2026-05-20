@@ -104,7 +104,7 @@ use error::{
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
     FutureExt, StreamExt,
-    future::try_join_all,
+    future::{Either, select, try_join_all},
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
 };
 use nonempty::NonEmpty;
@@ -541,27 +541,40 @@ where
         let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
 
         loop {
-            futures::select_biased! {
-                // 1st priority: drain completed handler tasks
-                result = in_flight.select_next_some() => {
-                    #[allow(clippy::type_complexity)]
-                    let (conn, dispatch_result): (Authenticated<C, F>, Result<(), H::HandlerError>) = result;
-                    if let Err(e) = dispatch_result {
-                        let peer_id = conn.peer_id();
-                        tracing::error!(
-                            peer = %peer_id,
-                            "error dispatching message: {e}"
-                        );
-                        // Connection is broken — remove from conns map.
-                        if self.remove_connection(&conn).await == Some(true) {
-                            handler.on_peer_disconnect(peer_id).await;
-                            self.send_counter.clear_peer(&peer_id).await;
+            // First drain any already-completed handler tasks without blocking
+            // the listener. We intentionally avoid `select_next_some()` on an
+            // empty `FuturesUnordered`: it panics, which shows up as
+            // `RuntimeError: unreachable` in Wasm on a freshly-created
+            // Subduction instance.
+            while !in_flight.is_empty() {
+                let next = select(in_flight.select_next_some(), futures::future::ready(()));
+                match next.await {
+                    Either::Left((result, _)) => {
+                        #[allow(clippy::type_complexity)]
+                        let (conn, dispatch_result): (
+                            Authenticated<C, F>,
+                            Result<(), H::HandlerError>,
+                        ) = result;
+                        if let Err(e) = dispatch_result {
+                            let peer_id = conn.peer_id();
+                            tracing::error!(
+                                peer = %peer_id,
+                                "error dispatching message: {e}"
+                            );
+                            // Connection is broken — remove from conns map.
+                            if self.remove_connection(&conn).await == Some(true) {
+                                handler.on_peer_disconnect(peer_id).await;
+                                self.send_counter.clear_peer(&peer_id).await;
+                            }
+                            tracing::warn!("removed failed connection from peer {}", peer_id);
                         }
-                        tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
+                    Either::Right(((), _)) => break,
                 }
+            }
 
-                // 2nd priority: route responses to complete our pending sync
+            futures::select_biased! {
+                // 1st priority: route responses to complete our pending sync
                 // calls. Prioritized over incoming requests because completing
                 // round trips frees resources and unblocks callers. Response
                 // volume is self-limiting (bounded by our in-flight request count).
@@ -605,7 +618,7 @@ where
                     }
                 }
 
-                // 3rd priority: accept new requests from peers. Lower priority
+                // 2nd priority: accept new requests from peers. Lower priority
                 // than responses because incoming requests can wait (bounded by
                 // msg_queue backpressure) while our callers are actively blocked
                 // on response routing.
@@ -671,7 +684,7 @@ where
                     }
                 }
 
-                // 4th priority: handle closed connections
+                // 3rd priority: handle closed connections
                 closed_result = self.connection_closed.recv().fuse() => {
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
