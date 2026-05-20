@@ -164,9 +164,7 @@ async fn wait_for_relay_convergence(
         let a = h.a.get_commits(sed_id).await.map_or(0, |c| c.len());
         let r = h.r.get_commits(sed_id).await.map_or(0, |c| c.len());
         let b = h.b.get_commits(sed_id).await.map_or(0, |c| c.len());
-        if (a, r, b) == (expected, expected, expected)
-            || tokio::time::Instant::now() >= deadline
-        {
+        if (a, r, b) == (expected, expected, expected) || tokio::time::Instant::now() >= deadline {
             return (a, r, b);
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -342,7 +340,10 @@ async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
     let (a_count, r_count) =
         wait_for_ar_convergence(&h, sed_id, total, Duration::from_secs(2)).await;
     assert_eq!(a_count, total, "A count after burst");
-    assert_eq!(r_count, total, "R count after burst; drive sync stats: {stats:?}");
+    assert_eq!(
+        r_count, total,
+        "R count after burst; drive sync stats: {stats:?}"
+    );
 
     // Re-converged: a follow-up sync must be empty.
     let (_, stats2, _, _) = h.a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
