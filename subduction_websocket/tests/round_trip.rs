@@ -440,7 +440,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
     // Server: aggressive keepalive — 100 ms pings, 50 ms pong timeout, 2 misses.
-    // A silent peer would close in ~250 ms; a healthy one stays up.
+    // A silent peer would close at `2 × (100 + 50) = 300 ms`; a healthy one stays up.
     let aggressive_keepalive = KeepAlive {
         ping_interval: Duration::from_millis(100),
         pong_timeout: Duration::from_millis(50),
@@ -507,8 +507,9 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
     // Idle for ~600 ms — well past the silent-peer timeout window
-    // (3 ping cycles + pong timeout = 350 ms). Both sides should stay
-    // connected because they're answering each other's pings.
+    // (`threshold × (ping + pong) = 2 × (100 + 50) = 300 ms`). Both
+    // sides should stay connected because they're answering each
+    // other's pings.
     tokio::time::sleep(Duration::from_millis(600)).await;
 
     assert_eq!(
@@ -563,8 +564,8 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    // Aggressive: 80ms ping × 2 misses + 40ms pong-deadline = ~200ms
-    // expected close window. We give it a 1s budget to absorb CI jitter.
+    // Aggressive: `2 × (80 ms ping + 40 ms pong) = 240 ms` expected close
+    // window. We give it a 1s budget to absorb CI jitter.
     let aggressive = KeepAlive {
         ping_interval: Duration::from_millis(80),
         pong_timeout: Duration::from_millis(40),
@@ -636,7 +637,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
     // Wedge the client: abort the WebSocket listener. The TCP socket
     // stays open, but pings arriving from the server are now never
     // decoded or replied to. The server's keepalive should notice
-    // within ~`ping × threshold + pong_timeout` = 200ms.
+    // within `threshold × (ping + pong) = 2 × (80 + 40) = 240 ms`.
     ws_listener_handle.abort();
 
     // Poll until the server notices, bounded by the detection budget.

@@ -273,7 +273,7 @@ async fn client_reconnect() -> TestResult {
 ///
 /// A regression that broke listener installation on the new connection
 /// would show up as the server tearing the new connection down within
-/// ~`ping × threshold + pong` ms.
+/// `threshold × (ping + pong)` ms.
 ///
 /// > [!NOTE]
 /// > This test does NOT assert that the _original_ keepalive task has

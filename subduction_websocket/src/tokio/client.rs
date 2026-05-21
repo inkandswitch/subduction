@@ -355,6 +355,8 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ReconnectionError>> {
         async move {
+            // Establish the new connection first; if it fails, the old
+            // connection stays intact (we haven't touched it yet).
             let (authenticated, listener, sender, keepalive_task) =
                 TokioWebSocketClient::<R>::with_options(
                     self.address.clone(),
@@ -364,6 +366,22 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
                     self.keepalive,
                 )
                 .await?;
+
+            // Honor step 1 of `Reconnect`'s documented contract ("close
+            // any existing connection resources"). `close_channels()`
+            // shuts down the sender + keepalive tasks cleanly.
+            //
+            // FIXME(reconnect-listener-leak): the old listener task is
+            // _not_ shut down by this — it's blocked in
+            // `ws_reader.next().await`, a read on the underlying TCP
+            // socket. The task will only exit when the peer closes the
+            // connection or sends another frame that the listener
+            // tries to forward to the now-closed `inbound_writer`.
+            // Until then it sits idle holding the only remaining Arc
+            // ref to the old TCP stream. A proper fix needs a
+            // `CancellationToken` plumbed through the spawned tasks;
+            // tracked separately to keep this PR scoped.
+            self.socket.close_channels();
 
             // Extract the inner client from the Authenticated wrapper
             *self = authenticated.into_inner();

@@ -70,7 +70,7 @@ pub struct TokioWebSocketServer<
     /// (inbound and outbound) managed by this server. `None` disables
     /// keepalive entirely. Servers default to [`KeepAlive::balanced`] so
     /// that idle connections survive standard 60s LB/NAT drops and dead
-    /// peers are detected within ~70 s.
+    /// peers are detected within ~80 s (`2 × (30 s + 10 s)`).
     keepalive: Option<KeepAlive>,
 }
 

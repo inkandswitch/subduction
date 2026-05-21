@@ -39,8 +39,9 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 /// up to [`Subduction`].
 ///
 /// The total dead-link detection latency is approximately
-/// `ping_interval * missed_pong_threshold + pong_timeout` (the final cycle
-/// fires at the pong-deadline rather than at the next ping).
+/// `missed_pong_threshold × (ping_interval + pong_timeout)` — each missed
+/// cycle costs one full `(ping + pong)` window, and there are
+/// `missed_pong_threshold` of them before the connection is torn down.
 ///
 /// [`pong_timeout`]: KeepAlive::pong_timeout
 /// [`missed_pong_threshold`]: KeepAlive::missed_pong_threshold
@@ -69,7 +70,8 @@ pub struct KeepAlive {
 impl KeepAlive {
     /// Balanced defaults: 30 s ping interval, 10 s pong timeout, 2
     /// consecutive misses before close. Dead-link detection latency is
-    /// roughly `ping_interval × missed_pong_threshold + pong_timeout` = 70 s.
+    /// `missed_pong_threshold × (ping_interval + pong_timeout)`
+    /// = 2 × (30 + 10) = **80 s**.
     ///
     /// Picked to stay comfortably under typical 60 s load-balancer /
     /// NAT idle drops (the first ping at 30 s prevents the idle drop)
@@ -162,10 +164,14 @@ pub enum KeepAliveOutcome {
     #[error("keepalive task exited: connection shut down")]
     ConnectionClosed,
 
-    /// The peer failed to respond to [`KeepAlive::missed_pong_threshold`]
-    /// consecutive pings, so the keepalive task forcibly closed the
-    /// inbound and outbound channels.
-    #[error("keepalive task exited: peer failed to respond after {missed} consecutive pings")]
+    /// The peer failed to reply with a Pong to
+    /// [`KeepAlive::missed_pong_threshold`] consecutive pings (pings
+    /// were still sent every cycle; the pongs are what didn't come
+    /// back), so the keepalive task forcibly closed the inbound and
+    /// outbound channels.
+    #[error(
+        "keepalive task exited: peer missed {missed} consecutive pong replies"
+    )]
     Timeout {
         /// Number of consecutive missed pongs at the moment of close.
         missed: u32,
@@ -403,6 +409,31 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
         self.peer_id
     }
 
+    /// Close this connection's outbound and inbound channels.
+    ///
+    /// Used by callers (e.g. the `Reconnect` impl) that need to tear
+    /// down this connection without dropping the `WebSocket` value
+    /// itself. After this call:
+    ///
+    /// - The sender task will exit on its next `recv` from the now-
+    ///   closed outbound channel.
+    /// - Any keepalive task will exit with
+    ///   [`KeepAliveOutcome::ConnectionClosed`] on its next
+    ///   `outbound_tx.send` attempt.
+    /// - Consumers of `recv_bytes` will see an error on the closed
+    ///   inbound channel.
+    ///
+    /// The listener task is _not_ directly cancelled by this call: it
+    /// is blocked on a read from the underlying socket and will only
+    /// exit when that read returns EOF/error, or when it next attempts
+    /// to forward a binary frame to the (now-closed) inbound channel.
+    /// Callers that need deterministic listener shutdown should
+    /// additionally drop their reference to the underlying socket.
+    pub fn close_channels(&self) {
+        self.outbound_tx.close();
+        self.inbound_writer.close();
+    }
+
     /// Listen for incoming messages and forward them to the inbound channel.
     ///
     /// Raw bytes from the WebSocket are forwarded to the inbound channel
@@ -443,18 +474,35 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                 }
                 Ok(tungstenite::Message::Ping(p)) => {
                     tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received ping");
-                    // Use try_send so a backpressured outbound queue
-                    // cannot stall the listener (which would prevent
-                    // _our_ pong responses from being processed and
-                    // could lead the remote peer's keepalive to
-                    // false-positive disconnect us). If the channel
-                    // is full or closed we just drop the pong reply;
-                    // the remote will retry on its next ping cycle.
-                    if let Err(e) = self.outbound_tx.try_send(tungstenite::Message::Pong(p)) {
+                    // Trade-off: `try_send` vs `send().await`.
+                    //
+                    // `send().await` would stall the listener whenever
+                    // the outbound channel is full. With the listener
+                    // stalled, no further inbound frames (data, pings,
+                    // Close) are processed — a cascading hazard for
+                    // any longer-than-momentary backpressure.
+                    //
+                    // `try_send` keeps the listener responsive but
+                    // drops the pong if the channel is full. The
+                    // remote will see one missed pong; with the
+                    // default `missed_pong_threshold = 2` it takes
+                    // two consecutive drops to trigger a false-positive
+                    // disconnect, which requires sustained saturation
+                    // overlapping with ping cycles. For low-throughput
+                    // connections (typical) this is acceptable.
+                    //
+                    // The robust long-term fix is a dedicated
+                    // high-priority channel for control frames so
+                    // pongs never compete with user data — tracked as
+                    // a follow-up.
+                    if let Err(e) = self
+                        .outbound_tx
+                        .try_send(tungstenite::Message::Pong(p))
+                    {
                         tracing::warn!(
                             error = ?e,
                             peer_id = ?self.peer_id,
-                            "failed to enqueue pong reply"
+                            "failed to enqueue pong reply; remote may count this as a missed pong"
                         );
                     }
                 }

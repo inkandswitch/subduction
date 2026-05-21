@@ -135,7 +135,9 @@ pub(crate) struct ServerArgs {
 
     /// Maximum wait in seconds for a Pong response after each Ping.
     /// If the deadline passes without a Pong, the cycle counts as one
-    /// miss. Must be `< ws_ping_interval`.
+    /// miss. Typically less than `--ws-ping-interval`; the loop accepts
+    /// any non-negative value, but larger pong timeouts just lengthen
+    /// the effective cycle without adding safety.
     #[arg(long = "ws-pong-timeout", default_value_t = 10)]
     pub(crate) ws_pong_timeout_secs: u64,
 
