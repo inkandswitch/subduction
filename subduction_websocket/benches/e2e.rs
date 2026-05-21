@@ -205,6 +205,7 @@ struct ClientGuard {
     // scope (unlike `mem::replace(_, tokio::spawn(_))`).
     ws_listener_task: Option<tokio::task::JoinHandle<()>>,
     ws_sender_task: Option<tokio::task::JoinHandle<()>>,
+    ws_keepalive_task: Option<tokio::task::JoinHandle<()>>,
     // Tracks `connection_loop`s spawned by the client's `ConnectionManager`.
     tasks: TaskTracker,
 }
@@ -226,6 +227,9 @@ impl Drop for ClientGuard {
         let Some(ws_sender_task) = self.ws_sender_task.take() else {
             return;
         };
+        let Some(ws_keepalive_task) = self.ws_keepalive_task.take() else {
+            return;
+        };
 
         // Dropping a `tokio::task::JoinHandle` does NOT abort the task
         // (unlike `async-std`); capture the handles up front so we can
@@ -244,12 +248,14 @@ impl Drop for ClientGuard {
             // is released before we return.
             ws_listener_task.abort();
             ws_sender_task.abort();
+            ws_keepalive_task.abort();
 
-            let (l_res, m_res, _, _) = futures::future::join4(
+            let (l_res, m_res, _, _, _) = futures::future::join5(
                 tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, listener_task),
                 tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, manager_task),
                 tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, ws_listener_task),
                 tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, ws_sender_task),
+                tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, ws_keepalive_task),
             )
             .await;
 
@@ -364,7 +370,7 @@ async fn connected_client(
         .parse()
         .expect("valid uri");
 
-    let (client_ws, ws_listener, ws_sender) =
+    let (client_ws, ws_listener, ws_sender, ws_keepalive) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id))
             .await
             .expect("client connect");
@@ -379,6 +385,10 @@ async fn connected_client(
             tracing::error!("ws_sender task failed: {e:?}");
         }
     });
+    let ws_keepalive_task = tokio::spawn(async move {
+        let outcome = ws_keepalive.await;
+        tracing::debug!(?outcome, "ws_keepalive task exited");
+    });
 
     client
         .add_connection(client_ws)
@@ -392,6 +402,7 @@ async fn connected_client(
         manager_task: Some(manager_task),
         ws_listener_task: Some(ws_listener_task),
         ws_sender_task: Some(ws_sender_task),
+        ws_keepalive_task: Some(ws_keepalive_task),
         tasks,
     }
 }
@@ -419,11 +430,12 @@ fn bench_handshake(c: &mut Criterion) {
 
                     // `TokioWebSocketClient::new` awaits the handshake
                     // internally before returning. The returned `listener`
-                    // / `sender` futures only matter for post-handshake
-                    // message I/O, which this bench doesn't exercise — so
-                    // we drop them immediately along with the connection
-                    // rather than leaking spawn handles per iteration.
-                    let (_ws, _listener, _sender) = TokioWebSocketClient::new(
+                    // / `sender` / `keepalive` futures only matter for
+                    // post-handshake message I/O, which this bench doesn't
+                    // exercise — so we drop them immediately along with
+                    // the connection rather than leaking spawn handles
+                    // per iteration.
+                    let (_ws, _listener, _sender, _keepalive) = TokioWebSocketClient::new(
                         uri,
                         client_signer,
                         Audience::known(server_peer_id),

@@ -55,8 +55,13 @@ impl KeepAlive {
     /// Tuned for the common 60 s LB / NAT idle drop: the first ping at
     /// 30 s keeps the connection alive, and a single slow cycle is
     /// forgiven.
+    ///
+    /// # Panics
+    ///
+    /// If 2 somethow turns out to be nonzero
     #[must_use]
     pub const fn balanced() -> Self {
+        #[allow(clippy::expect_used)]
         let two = NonZeroU32::new(2).expect("2 should be a valid nonzero u32");
         Self {
             ping_interval: Duration::from_secs(30),
@@ -567,7 +572,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> PartialEq for WebSocket<T
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tokio_base"))]
 mod tests {
     use super::*;
     use futures::io::Cursor;
@@ -576,7 +581,7 @@ mod tests {
     use crate::sleep::TokioSleeper;
 
     #[allow(clippy::expect_used, reason = "test-only helper")]
-    fn nz(n: u32) -> NonZeroU32 {
+    const fn nz(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).expect("non-zero")
     }
 

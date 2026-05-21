@@ -7,7 +7,9 @@
 
 use core::time::Duration;
 
-use future_form::{FutureForm, Sendable};
+use future_form::FutureForm;
+#[cfg(any(feature = "futures-timer", feature = "tokio_base"))]
+use future_form::Sendable;
 
 #[cfg(any(feature = "futures-timer", feature = "tokio_base"))]
 use alloc::boxed::Box;

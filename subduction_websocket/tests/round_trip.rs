@@ -461,7 +461,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        Some(aggressive_keepalive),
+        aggressive_keepalive,
         server_subduction.clone(),
         tokio_util::task::TaskTracker::new(),
     )
@@ -480,7 +480,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         client_signer,
         Audience::known(server_peer_id),
         DEFAULT_MAX_MESSAGE_SIZE,
-        Some(aggressive_keepalive),
+        aggressive_keepalive,
     )
     .await?;
 
@@ -492,8 +492,6 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         sender_fut.await?;
         Ok::<(), eyre::Report>(())
     });
-    let keepalive_task = keepalive_task
-        .ok_or("with_options should return a keepalive task when Some(KeepAlive) is passed")?;
     let keepalive_handle = tokio::spawn(async move { keepalive_task.await });
 
     client.add_connection(client_ws).await?;
@@ -569,7 +567,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        Some(aggressive),
+        aggressive,
         server_subduction.clone(),
         tokio_util::task::TaskTracker::new(),
     )
