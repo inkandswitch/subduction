@@ -881,9 +881,7 @@ mod tests {
         });
 
         // Also drain so the loop can send its initial ping.
-        tokio::spawn(async move {
-            while outbound_rx.recv().await.is_ok() {}
-        });
+        tokio::spawn(async move { while outbound_rx.recv().await.is_ok() {} });
 
         let config = KeepAlive {
             ping_interval: Duration::from_secs(1),
@@ -926,8 +924,10 @@ mod tests {
     async fn pong_reply_via_try_send_does_not_block_when_outbound_full() -> TestResult {
         // Channel capacity = 2; saturate it.
         let (tx, rx) = async_channel::bounded::<tungstenite::Message>(2);
-        tx.send(tungstenite::Message::Binary(vec![1].into())).await?;
-        tx.send(tungstenite::Message::Binary(vec![2].into())).await?;
+        tx.send(tungstenite::Message::Binary(vec![1].into()))
+            .await?;
+        tx.send(tungstenite::Message::Binary(vec![2].into()))
+            .await?;
         assert_eq!(tx.len(), 2);
 
         // Mirror exactly what `WebSocket::listen()` does on Ping arrival.
@@ -970,10 +970,7 @@ mod tests {
                 let interval_ms = u64::from(input.0).max(1);
                 let timeout_ms = u64::from(input.1).max(1);
                 let threshold_u32 = u32::from(input.2.clamp(1, 10));
-                #[allow(
-                    clippy::expect_used,
-                    reason = "threshold_u32 was just clamped to >= 1"
-                )]
+                #[allow(clippy::expect_used, reason = "threshold_u32 was just clamped to >= 1")]
                 let threshold = NonZeroU32::new(threshold_u32).expect("clamped to >=1");
 
                 #[allow(
@@ -991,9 +988,7 @@ mod tests {
                     let (inbound_tx, _) = async_channel::bounded::<Vec<u8>>(16);
                     let pong_received = Arc::new(AtomicBool::new(false));
 
-                    let drain = tokio::spawn(async move {
-                        while rx.recv().await.is_ok() {}
-                    });
+                    let drain = tokio::spawn(async move { while rx.recv().await.is_ok() {} });
 
                     let cfg = KeepAlive {
                         ping_interval: Duration::from_millis(interval_ms),
