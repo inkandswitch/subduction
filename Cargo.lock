@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
@@ -5165,7 +5165,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "ahash",
  "async-channel",
@@ -5342,7 +5342,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5373,7 +5373,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "async-channel",
  "async-lock",
