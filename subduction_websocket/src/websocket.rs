@@ -57,9 +57,7 @@ impl KeepAlive {
     /// forgiven.
     #[must_use]
     pub const fn balanced() -> Self {
-        let Some(two) = NonZeroU32::new(2) else {
-            unreachable!()
-        };
+        let two = NonZeroU32::new(2).expect("2 should be a valid nonzero u32");
         Self {
             ping_interval: Duration::from_secs(30),
             pong_timeout: Duration::from_secs(10),

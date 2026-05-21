@@ -669,11 +669,6 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
         });
     }
 
-    // The first match above already returned `InvalidEnumTag` for any
-    // unknown tag, so this dispatch is structurally exhaustive. We
-    // still emit a structured error rather than `unreachable!()` so a
-    // future refactor that desyncs the two match arms cannot turn
-    // into a panic on adversarial input.
     match tag {
         tags::LOOSE_COMMIT => decode_loose_commit(payload),
         tags::FRAGMENT => decode_fragment(payload),
