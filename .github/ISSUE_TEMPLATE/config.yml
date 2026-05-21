@@ -1,0 +1,18 @@
+# GitHub Issues entry-point configuration.
+#
+# `blank_issues_enabled: false` forces contributors through one of the
+# structured forms below so we always get crate / version / repro info.
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/inkandswitch/subduction/discussions
+    about: |
+      For open-ended questions, design discussions, or "is this a bug?"
+      conversations, please start a Discussion instead of an Issue.
+  - name: Security vulnerability
+    url: https://github.com/inkandswitch/subduction/security/advisories/new
+    about: |
+      Please report security issues privately via GitHub Security
+      Advisories — do NOT open a public Issue for security problems.

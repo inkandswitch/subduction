@@ -1,0 +1,128 @@
+name: Feature request
+description: Propose new functionality or a behavior change in Subduction.
+title: "[feat]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an idea. For substantial protocol or API
+        changes, consider opening a [Discussion](https://github.com/inkandswitch/subduction/discussions)
+        first so the shape can be hashed out before filing.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I have searched existing issues and discussions for similar proposals.
+          required: true
+
+  - type: checkboxes
+    id: crates
+    attributes:
+      label: Affected crate(s)
+      description: Where would this live? Leave empty if unsure.
+      options:
+        - label: automerge_sedimentree
+        - label: automerge_sedimentree_wasm
+        - label: automerge_subduction_ingest
+        - label: automerge_subduction_wasm
+        - label: sedimentree_core
+        - label: sedimentree_fs_storage
+        - label: sedimentree_wasm
+        - label: subduction_cli
+        - label: subduction_core
+        - label: subduction_crypto
+        - label: subduction_ephemeral
+        - label: subduction_http_longpoll
+        - label: subduction_iroh
+        - label: subduction_keyhive
+        - label: subduction_keyhive_policy
+        - label: subduction_wasm
+        - label: subduction_websocket
+        - label: New crate
+        - label: Nix module / packaging
+        - label: CI / tooling
+        - label: Docs
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: |
+        The release tag (e.g. `v0.13.0`), git SHA, or crate version
+        you're proposing this against. Helps us know whether the
+        feature already landed in a newer release.
+      placeholder: "v0.13.0 / commit fa0ab0dd / @automerge/subduction 0.12.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: |
+        What use case isn't currently served, or what friction are you
+        hitting? Lead with the "why" — concrete scenarios are more
+        useful than abstract requests.
+      placeholder: |
+        Running multiple subduction_cli instances behind a load balancer
+        requires sticky sessions because there's no way to coordinate
+        ephemeral pub/sub state between instances.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior or workaround
+      description: |
+        Concretely: what happens today, or what workaround are you
+        using? Include code snippets, error messages, or steps that
+        let someone evaluating the proposal see the same friction.
+        This is the feature-request analog of "reproduction steps".
+        For features that don't exist yet, describe what users do
+        instead and where that breaks down.
+      placeholder: |
+        Today we run two `subduction_cli` instances behind nginx with
+        `ip_hash`. When a client reconnects after a network blip and
+        lands on the other instance, in-flight `EphemeralPayload`
+        messages on its `Topic` are dropped because the subscription
+        state lives in the original process's memory.
+
+        Repro:
+        1. Start two instances on ports 8080/8081 with the same signer.
+        2. Connect client A → 8080, subscribe to topic `T`.
+        3. Send from B → 8081 on topic `T`.
+        4. Observe A never receives the message.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: |
+        A sketch of how it might work. Code snippets, API shapes, or
+        ASCII diagrams welcome. It's fine to leave this open-ended if
+        you'd rather discuss alternatives.
+      placeholder: |
+        Add an `EphemeralRelay` trait that forwards `Topic` messages
+        between instances via Redis pub/sub or NATS.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Other approaches you've thought about and rejected, with reasons.
+        Helpful even (especially) when you're not sure which is best.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Links to prior art, related issues, design docs, or anything
+        else that informs the proposal.
