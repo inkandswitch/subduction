@@ -26,6 +26,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
+    websocket::KeepAlive,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -227,7 +228,7 @@ async fn client_reconnect() -> TestResult {
     let bound = server.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
 
-    let (mut client_ws, listener_fut, sender_fut) =
+    let (mut client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -258,6 +259,104 @@ async fn client_reconnect() -> TestResult {
     // Verify connection still works after reconnect
     client_ws.send(&test_msg).await?;
 
+    Ok(())
+}
+
+/// After reconnect, the new connection's listener answers server pings —
+/// otherwise the server would tear the connection down within
+/// `threshold × (ping + pong)` ms.
+#[tokio::test]
+async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
+    init_tracing();
+
+    let server_signer = test_signer(40);
+    let client_signer = test_signer(41);
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
+
+    let addr: SocketAddr = "127.0.0.1:0".parse()?;
+    let (server_subduction, listener_fut, manager_fut) = {
+        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        (sub, lfut, mfut)
+    };
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async move {
+        manager_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    // Aggressive: server pings every 80ms with a 40ms pong deadline and
+    // tears connections down after 2 consecutive misses (~240ms).
+    let aggressive = KeepAlive {
+        ping_interval: Duration::from_millis(80),
+        pong_timeout: Duration::from_millis(40),
+        #[allow(clippy::expect_used, reason = "test-only literal")]
+        missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    };
+    let server = TokioWebSocketServer::new_with_keepalive(
+        addr,
+        HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        aggressive,
+        server_subduction.clone(),
+        tokio_util::task::TaskTracker::new(),
+    )
+    .await?;
+    let bound = server.address();
+    let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
+
+    let (mut client_ws, listener_fut, sender_fut, keepalive_task) =
+        TokioWebSocketClient::with_options(
+            uri,
+            client_signer,
+            Audience::known(server_peer_id),
+            DEFAULT_MAX_MESSAGE_SIZE,
+            aggressive,
+        )
+        .await?;
+
+    tokio::spawn(async move {
+        let outcome = keepalive_task.await;
+        tracing::debug!(?outcome, "initial keepalive task exited");
+    });
+    tokio::spawn(async {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async {
+        sender_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    // Let the initial connection settle and survive at least one keepalive
+    // cycle — proves the initial wiring is sound.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let before = server_subduction.connected_peer_ids().await.len();
+    assert!(
+        before >= 1,
+        "server should see the initial client connection (saw {before})"
+    );
+
+    // Reconnect — spawns a new connection and a new keepalive task.
+    client_ws.reconnect().await?;
+
+    // Idle past several keepalive cycles. The server's keepalive will
+    // ping the new connection; if the new connection's listener weren't
+    // alive (broken reconnect-keepalive wiring), the server would close
+    // it within ~240ms.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // `>= 1` rather than `== 1`: the old connection may still be
+    // visible (its listener task lingers until the server's keepalive
+    // closes the dead socket — see the FIXME in
+    // `subduction_websocket::tokio::client::reconnect`).
+    let after = server_subduction.connected_peer_ids().await.len();
+    assert!(
+        after >= 1,
+        "server should still see the reconnected client after multiple keepalive cycles (saw {after})"
+    );
     Ok(())
 }
 
@@ -297,7 +396,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     // Connect a client
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (_client_ws, listener_fut, sender_fut) =
+    let (_client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer.clone(), Audience::known(server_peer_id))
             .await?;
 
@@ -390,7 +489,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         tokio::spawn(listener_fut);
 
         let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-        let (client_ws, listener_fut, sender_fut) =
+        let (client_ws, listener_fut, sender_fut, _keepalive_task) =
             TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
         tokio::spawn(async {
@@ -544,7 +643,7 @@ async fn large_message_handling() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) =
+    let (client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -638,7 +737,7 @@ async fn message_ordering() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) =
+    let (client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -884,7 +983,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
     tokio::spawn(client_listener_fut);
 
     let uri: Uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, ws_listener_fut, ws_sender_fut) =
+    let (client_ws, ws_listener_fut, ws_sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {

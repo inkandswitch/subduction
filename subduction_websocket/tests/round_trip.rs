@@ -27,6 +27,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
+    websocket::KeepAlive,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -189,7 +190,7 @@ async fn batch_sync() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) =
+    let (client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -346,7 +347,7 @@ async fn second_sync_round_is_empty() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, ws_listener, ws_sender) =
+    let (client_ws, ws_listener, ws_sender, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
     tokio::spawn(async { ws_listener.await.map_err(|e| eyre::eyre!("{e:?}")) });
     tokio::spawn(async { ws_sender.await.map_err(|e| eyre::eyre!("{e:?}")) });
@@ -417,5 +418,220 @@ async fn second_sync_round_is_empty() -> TestResult {
         round2_stats.fragments_sent,
     );
 
+    Ok(())
+}
+
+/// Idle healthy peer survives multiple keepalive cycles (no false-
+/// positive Timeout).
+#[tokio::test]
+async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
+    init_tracing();
+
+    let server_signer = test_signer(30);
+    let client_signer = test_signer(31);
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
+
+    let addr: SocketAddr = "127.0.0.1:0".parse()?;
+
+    // Server: aggressive keepalive — 100 ms pings, 50 ms pong timeout, 2 misses.
+    // A silent peer would close at `2 × (100 + 50) = 300 ms`; a healthy one stays up.
+    let aggressive_keepalive = KeepAlive {
+        ping_interval: Duration::from_millis(100),
+        pong_timeout: Duration::from_millis(50),
+        #[allow(clippy::expect_used, reason = "test-only literal")]
+        missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    };
+
+    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(server_signer)
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(TimeoutTokio)
+        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async move {
+        manager_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    let server = TokioWebSocketServer::new_with_keepalive(
+        addr,
+        HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        aggressive_keepalive,
+        server_subduction.clone(),
+        tokio_util::task::TaskTracker::new(),
+    )
+    .await?;
+    let bound = server.address();
+
+    // Client side: also aggressive, just to exercise both directions.
+    let (client, _client_handler, listener_fut, client_manager_fut) =
+        setup_client_subduction(client_signer.clone());
+    tokio::spawn(client_manager_fut);
+    tokio::spawn(listener_fut);
+
+    let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
+    let (client_ws, listener_fut, sender_fut, keepalive_task) = TokioWebSocketClient::with_options(
+        uri,
+        client_signer,
+        Audience::known(server_peer_id),
+        DEFAULT_MAX_MESSAGE_SIZE,
+        aggressive_keepalive,
+    )
+    .await?;
+
+    tokio::spawn(async {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async {
+        sender_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    let keepalive_handle = tokio::spawn(async move { keepalive_task.await });
+
+    client.add_connection(client_ws).await?;
+    assert_eq!(client.connected_peer_ids().await.len(), 1);
+    assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
+
+    // Idle for ~600 ms — well past the silent-peer timeout window
+    // (`threshold × (ping + pong) = 2 × (100 + 50) = 300 ms`). Both
+    // sides should stay connected because they're answering each
+    // other's pings.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    assert_eq!(
+        client.connected_peer_ids().await.len(),
+        1,
+        "client should still be connected after idle keepalive cycles"
+    );
+    assert_eq!(
+        server_subduction.connected_peer_ids().await.len(),
+        1,
+        "server should still be connected after idle keepalive cycles"
+    );
+
+    // The keepalive task should not have exited.
+    assert!(
+        !keepalive_handle.is_finished(),
+        "keepalive task should still be running for healthy idle peer"
+    );
+
+    Ok(())
+}
+
+/// Sad-path E2E: wedged client (listener aborted) → server's keepalive
+/// detects → peer disappears from `connected_peer_ids()`. Exercises the
+/// full keepalive→channel-close→`on_peer_disconnect` chain.
+#[tokio::test]
+async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult {
+    init_tracing();
+
+    let server_signer = test_signer(50);
+    let client_signer = test_signer(51);
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
+    let client_peer_id = PeerId::from(client_signer.verifying_key());
+
+    let addr: SocketAddr = "127.0.0.1:0".parse()?;
+
+    // Aggressive: `2 × (80 ms ping + 40 ms pong) = 240 ms` expected close
+    // window. We give it a 1s budget to absorb CI jitter.
+    let aggressive = KeepAlive {
+        ping_interval: Duration::from_millis(80),
+        pong_timeout: Duration::from_millis(40),
+        #[allow(clippy::expect_used, reason = "test-only literal")]
+        missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    };
+    let detection_budget = Duration::from_secs(1);
+
+    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(server_signer)
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(TimeoutTokio)
+        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async move {
+        manager_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    let server = TokioWebSocketServer::new_with_keepalive(
+        addr,
+        HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        aggressive,
+        server_subduction.clone(),
+        tokio_util::task::TaskTracker::new(),
+    )
+    .await?;
+    let bound = server.address();
+
+    let (client, _client_handler, client_listener_fut, client_manager_fut) =
+        setup_client_subduction(client_signer.clone());
+    tokio::spawn(client_manager_fut);
+    tokio::spawn(client_listener_fut);
+
+    // Client connects WITHOUT its own keepalive — we only care about the
+    // server's view here, and want to be sure the server's keepalive
+    // path is what does the detection (not the client's).
+    let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
+    let (client_ws, client_ws_listener_fut, sender_fut, _keepalive_task) =
+        TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
+
+    // Capture the WebSocket listener handle so we can wedge the client.
+    let ws_listener_handle = tokio::spawn(async {
+        client_ws_listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async {
+        sender_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    client.add_connection(client_ws).await?;
+
+    // Sanity: connection established on both sides, server's keepalive
+    // is firing pings that the client's listener is answering.
+    let initial_settle = Duration::from_millis(150);
+    tokio::time::sleep(initial_settle).await;
+    assert_eq!(
+        server_subduction.connected_peer_ids().await.len(),
+        1,
+        "server should see the client before we wedge it"
+    );
+
+    // Wedge the client: abort the WebSocket listener. The TCP socket
+    // stays open, but pings arriving from the server are now never
+    // decoded or replied to. The server's keepalive should notice
+    // within `threshold × (ping + pong) = 2 × (80 + 40) = 240 ms`.
+    ws_listener_handle.abort();
+
+    // Poll until the server notices, bounded by the detection budget.
+    let deadline = tokio::time::Instant::now() + detection_budget;
+    let poll_interval = Duration::from_millis(25);
+    let mut last_seen: usize = usize::MAX;
+    while tokio::time::Instant::now() < deadline {
+        let peers = server_subduction.connected_peer_ids().await;
+        last_seen = peers.len();
+        if !peers.contains(&client_peer_id) {
+            break;
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+
+    let peers = server_subduction.connected_peer_ids().await;
+    assert!(
+        !peers.contains(&client_peer_id),
+        "server should have dropped the wedged client within {detection_budget:?}; \
+         last poll saw {last_seen} peer(s): {peers:?}"
+    );
     Ok(())
 }

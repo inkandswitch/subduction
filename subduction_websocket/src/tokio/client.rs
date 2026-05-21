@@ -6,7 +6,8 @@ use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
     error::{DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    websocket::{ListenerTask, SenderTask, WebSocket},
+    sleep::TokioSleeper,
+    websocket::{KeepAlive, KeepAliveTask, ListenerTask, SenderTask, WebSocket},
 };
 use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
 use future_form::{FutureForm, Sendable};
@@ -41,37 +42,24 @@ pub struct TokioWebSocketClient<R: Signer<Sendable> + Clone> {
     signer: R,
     audience: Audience,
     socket: WebSocket<ConnectStream, Sendable>,
+    /// Carried across reconnects via [`Reconnect`]. Defaults to
+    /// [`KeepAlive::balanced`]; use [`Self::with_keepalive`] to
+    /// override.
+    keepalive: KeepAlive,
 }
 
 impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
-    /// Create a new [`TokioWebSocketClient`] connection.
+    /// Create a new [`TokioWebSocketClient`] connection with
+    /// [`KeepAlive::balanced`] settings.
     ///
-    /// Performs the handshake protocol to authenticate both sides.
-    ///
-    /// # Arguments
-    ///
-    /// * `address` - The WebSocket URI to connect to
-    /// * `signer` - The client's signer for authentication
-    /// * `audience` - The expected server identity ([`Audience::Known`] for a specific peer,
-    ///   [`Audience::Discover`] for service discovery)
-    ///
-    /// # Returns
-    ///
-    /// A tuple of:
-    /// - The authenticated client instance (wrapped in [`Authenticated`] to prove handshake completed)
-    /// - A future for the listener task (receives incoming messages)
-    /// - A future for the sender task (sends outgoing messages)
-    ///
-    /// Both futures should be spawned as background tasks.
+    /// Performs the handshake protocol to authenticate both sides and
+    /// spawns a keepalive task that pings the server every 30 s. The
+    /// `keepalive_task` element of the returned tuple must be spawned
+    /// for the keepalive to fire.
     ///
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if internal state is inconsistent after a successful handshake (should never happen).
-    #[allow(clippy::expect_used)]
     pub async fn new<'a>(
         address: Uri,
         signer: R,
@@ -81,31 +69,29 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             Authenticated<Self, Sendable>,
             ListenerTask<'a>,
             SenderTask<'a>,
+            KeepAliveTask<Sendable>,
         ),
         ClientConnectError,
     >
     where
         R: 'a,
     {
-        Self::with_max_message_size(address, signer, audience, DEFAULT_MAX_MESSAGE_SIZE).await
+        Self::with_options(
+            address,
+            signer,
+            audience,
+            DEFAULT_MAX_MESSAGE_SIZE,
+            KeepAlive::balanced(),
+        )
+        .await
     }
 
-    /// Create a new [`TokioWebSocketClient`] with a custom tungstenite
-    /// `max_message_size` (and matching `max_frame_size`).
-    ///
-    /// Use this when connecting to a server that accepts messages larger
-    /// than [`DEFAULT_MAX_MESSAGE_SIZE`] (50 MiB). See [`Self::new`] for
-    /// parameter semantics; this constructor is identical except that it
-    /// raises both tungstenite size limits to `max_message_size`.
+    /// Like [`Self::new`] but with a custom tungstenite `max_message_size`
+    /// (and matching `max_frame_size`).
     ///
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if internal state is inconsistent after a successful handshake (should never happen).
-    #[allow(clippy::expect_used)]
     pub async fn with_max_message_size<'a>(
         address: Uri,
         signer: R,
@@ -116,35 +102,107 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             Authenticated<Self, Sendable>,
             ListenerTask<'a>,
             SenderTask<'a>,
+            KeepAliveTask<Sendable>,
         ),
         ClientConnectError,
     >
     where
         R: 'a,
     {
-        tracing::info!("Connecting to WebSocket server at {address}");
+        Self::with_options(
+            address,
+            signer,
+            audience,
+            max_message_size,
+            KeepAlive::balanced(),
+        )
+        .await
+    }
+
+    /// Like [`Self::new`] but with an explicit [`KeepAlive`] config
+    /// (mostly for tests that need aggressive timings).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection could not be established or handshake fails.
+    pub async fn with_keepalive<'a>(
+        address: Uri,
+        signer: R,
+        audience: Audience,
+        keepalive: KeepAlive,
+    ) -> Result<
+        (
+            Authenticated<Self, Sendable>,
+            ListenerTask<'a>,
+            SenderTask<'a>,
+            KeepAliveTask<Sendable>,
+        ),
+        ClientConnectError,
+    >
+    where
+        R: 'a,
+    {
+        Self::with_options(
+            address,
+            signer,
+            audience,
+            DEFAULT_MAX_MESSAGE_SIZE,
+            keepalive,
+        )
+        .await
+    }
+
+    /// Full constructor exposing every option in one call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection could not be established or handshake fails.
+    pub async fn with_options<'a>(
+        address: Uri,
+        signer: R,
+        audience: Audience,
+        max_message_size: usize,
+        keepalive: KeepAlive,
+    ) -> Result<
+        (
+            Authenticated<Self, Sendable>,
+            ListenerTask<'a>,
+            SenderTask<'a>,
+            KeepAliveTask<Sendable>,
+        ),
+        ClientConnectError,
+    >
+    where
+        R: 'a,
+    {
+        tracing::info!("Connecting to WebSocket server at {address} (keepalive: true)");
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(max_message_size);
         ws_config.max_frame_size = Some(max_message_size);
         let (ws_stream, _resp) =
             connect_async_with_config(address.clone(), Some(ws_config)).await?;
 
-        // Perform handshake
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let (authenticated, sender_fut) = handshake::initiate::<Sendable, _, _, _, _>(
-            WebSocketHandshake::new(ws_stream),
-            |ws_handshake, peer_id| {
-                let (socket, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
-                (socket, Sendable::from_future(sender_fut))
-            },
-            &signer,
-            audience,
-            now,
-            nonce,
-        )
-        .await?;
+        let (authenticated, (sender_fut, keepalive_task)) =
+            handshake::initiate::<Sendable, _, _, _, _>(
+                WebSocketHandshake::new(ws_stream),
+                |ws_handshake, peer_id| {
+                    let (socket, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                        ws_handshake.into_inner(),
+                        peer_id,
+                        keepalive,
+                        TokioSleeper,
+                    );
+                    (socket, (Sendable::from_future(sender_fut), keepalive_task))
+                },
+                &signer,
+                audience,
+                now,
+                nonce,
+            )
+            .await?;
 
         let server_id = authenticated.peer_id();
         tracing::info!("Handshake complete: connected to {server_id}");
@@ -154,15 +212,15 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
         let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
         let sender = SenderTask::new(sender_fut);
 
-        // Lift the Authenticated proof from WebSocket to TokioWebSocketClient
         let authenticated_client = authenticated.map(|_socket| TokioWebSocketClient {
             address,
             signer,
             audience,
             socket,
+            keepalive,
         });
 
-        Ok((authenticated_client, listener, sender))
+        Ok((authenticated_client, listener, sender, keepalive_task))
     }
 
     /// Start listening for incoming messages.
@@ -248,12 +306,23 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ReconnectionError>> {
         async move {
-            let (authenticated, listener, sender) = TokioWebSocketClient::<R>::new(
-                self.address.clone(),
-                self.signer.clone(),
-                self.audience,
-            )
-            .await?;
+            // Build the new connection first so a failure leaves the
+            // old one intact.
+            let (authenticated, listener, sender, keepalive_task) =
+                TokioWebSocketClient::<R>::with_options(
+                    self.address.clone(),
+                    self.signer.clone(),
+                    self.audience,
+                    DEFAULT_MAX_MESSAGE_SIZE,
+                    self.keepalive,
+                )
+                .await?;
+
+            // Step 1 of the `Reconnect` contract: close the old
+            // connection's channels. Sender + keepalive exit cleanly;
+            // the listener still leaks until the TCP socket closes
+            // (FIXME: needs CancellationToken plumbing).
+            self.socket.close_channels();
 
             // Extract the inner client from the Authenticated wrapper
             *self = authenticated.into_inner();
@@ -266,6 +335,13 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
                 if let Err(e) = sender.await {
                     tracing::info!("WebSocket client sender disconnected after reconnect: {e:?}");
                 }
+            });
+            tokio::spawn(async move {
+                let outcome = keepalive_task.await;
+                tracing::debug!(
+                    ?outcome,
+                    "WebSocket client keepalive exited after reconnect"
+                );
             });
 
             Ok(())

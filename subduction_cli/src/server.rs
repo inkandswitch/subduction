@@ -25,9 +25,10 @@ use subduction_http_longpoll::server::LongPollHandler;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
+    sleep::TokioSleeper,
     timeout::FuturesTimerTimeout,
     tokio::{TokioSpawn, unified::UnifiedWebSocket},
-    websocket::WebSocket,
+    websocket::{KeepAlive, WebSocket},
 };
 use tokio::{net::TcpListener, task::JoinSet, time};
 use tokio_util::sync::CancellationToken;
@@ -411,6 +412,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let accept_handler = lp_handler;
     let max_message_size = args.max_message_size;
     let max_frame_size = args.max_frame_size();
+    let ws_keepalive = KeepAlive::balanced();
 
     let accept_keyhive = keyhive_protocol.clone();
     let accept_task = tokio::spawn(async move {
@@ -424,6 +426,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             handshake_max_drift,
             max_message_size,
             max_frame_size,
+            ws_keepalive,
             server_peer_id,
             discovery_audience,
             ws_enabled,
@@ -630,6 +633,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let peer_max_message_size = args.max_message_size;
         let peer_max_frame_size = args.max_frame_size();
         let peer_keyhive = keyhive_protocol.clone();
+        let peer_keepalive = KeepAlive::balanced();
 
         tokio::spawn(async move {
             match try_connect_ws(
@@ -642,6 +646,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 peer_cancel,
                 peer_max_message_size,
                 peer_max_frame_size,
+                peer_keepalive,
             )
             .await
             {
@@ -699,6 +704,7 @@ async fn accept_loop(
     handshake_max_drift: Duration,
     max_message_size: usize,
     max_frame_size: usize,
+    ws_keepalive: KeepAlive,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     ws_enabled: bool,
@@ -750,6 +756,7 @@ async fn accept_loop(
                                     handshake_max_drift,
                                     max_message_size,
                                     max_frame_size,
+                                    ws_keepalive,
                                     server_peer_id,
                                     task_discovery,
                                 )
@@ -796,6 +803,7 @@ async fn handle_websocket(
     handshake_max_drift: Duration,
     max_message_size: usize,
     max_frame_size: usize,
+    keepalive: KeepAlive,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
 ) {
@@ -823,7 +831,12 @@ async fn handle_websocket(
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         |ws_handshake, peer_id| {
-            let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
+            let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                ws_handshake.into_inner(),
+                peer_id,
+                keepalive,
+                TokioSleeper,
+            );
 
             let listen_ws = ws.clone();
             tokio::spawn(async move {
@@ -836,6 +849,11 @@ async fn handle_websocket(
                 if let Err(e) = sender_fut.await {
                     tracing::info!("WebSocket sender disconnected: {e}");
                 }
+            });
+
+            tokio::spawn(async move {
+                let outcome = keepalive_task.await;
+                tracing::debug!(?outcome, "WebSocket keepalive task exited");
             });
 
             let unified_ws = UnifiedWebSocket::Accepted(ws);
@@ -1010,6 +1028,7 @@ async fn try_connect_ws(
     cancel: CancellationToken,
     max_message_size: usize,
     max_frame_size: usize,
+    keepalive: KeepAlive,
 ) -> Result<PeerId, eyre::Error> {
     let uri_str = uri.to_string();
     tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
@@ -1026,12 +1045,19 @@ async fn try_connect_ws(
 
     let listen_uri = uri_str.clone();
     let sender_uri = uri_str.clone();
+    let keepalive_uri = uri_str.clone();
     let listen_cancel = cancel.clone();
+    let keepalive_cancel = cancel.clone();
 
     let (authenticated, ()) = handshake::initiate::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         move |ws_handshake, peer_id| {
-            let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
+            let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                ws_handshake.into_inner(),
+                peer_id,
+                keepalive,
+                TokioSleeper,
+            );
 
             let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
@@ -1059,6 +1085,18 @@ async fn try_connect_ws(
                         if let Err(e) = result {
                             tracing::info!("WebSocket sender disconnected for {sender_uri}: {e}");
                         }
+                    }
+                }
+            });
+
+            let keepalive_fut = keepalive_task.into_future();
+            tokio::spawn(async move {
+                tokio::select! {
+                    () = keepalive_cancel.cancelled() => {
+                        tracing::debug!("Shutting down keepalive for peer {keepalive_uri}");
+                    }
+                    outcome = keepalive_fut => {
+                        tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri} exited");
                     }
                 }
             });

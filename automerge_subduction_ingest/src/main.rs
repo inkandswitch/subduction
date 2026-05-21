@@ -269,13 +269,17 @@ async fn main() -> Result<()> {
     eprintln!("service name: {service_name}");
     let audience = Audience::discover(service_name.as_bytes());
 
-    let (authenticated, listener_task, sender_task) =
+    let (authenticated, listener_task, sender_task, keepalive_task) =
         TokioWebSocketClient::new(uri, signer, audience)
             .await
             .wrap_err("failed to connect to server")?;
 
     tokio::spawn(listener_task.into_future());
     tokio::spawn(sender_task.into_future());
+    tokio::spawn(async move {
+        let outcome = keepalive_task.await;
+        tracing::debug!(?outcome, "keepalive task exited");
+    });
 
     let server_peer_id = authenticated.peer_id();
     eprintln!("connected to peer {server_peer_id}");

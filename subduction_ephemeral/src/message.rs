@@ -318,10 +318,6 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
                     have: bytes.len(),
                 })?;
 
-            // Defensive: should be unreachable given the outer match
-            // arm, but we return a structured error rather than
-            // `unreachable!()` so a future refactor that reorders arms
-            // cannot turn this into a panic on adversarial input.
             let (min_size, type_name) = match tag {
                 tags::SUBSCRIBE => (min_sizes::SUBSCRIBE, "EphemeralSubscribe"),
                 tags::UNSUBSCRIBE => (min_sizes::UNSUBSCRIBE, "EphemeralUnsubscribe"),

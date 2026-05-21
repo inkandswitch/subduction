@@ -11,6 +11,7 @@ extern crate alloc;
 
 pub mod error;
 pub mod handshake;
+pub mod sleep;
 #[cfg(feature = "futures-timer")]
 pub mod timeout;
 pub mod websocket;
