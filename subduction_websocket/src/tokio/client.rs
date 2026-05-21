@@ -6,7 +6,7 @@ use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
     error::{DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    sleep::FuturesTimerSleeper,
+    sleep::TokioSleeper,
     websocket::{KeepAlive, KeepAliveTask, ListenerTask, SenderTask, WebSocket},
 };
 use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
@@ -241,7 +241,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
                         ws_handshake.into_inner(),
                         peer_id,
                         keepalive,
-                        FuturesTimerSleeper,
+                        TokioSleeper,
                     );
                     (socket, (Sendable::from_future(sender_fut), keepalive_task))
                 },

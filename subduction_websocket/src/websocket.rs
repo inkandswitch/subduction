@@ -268,6 +268,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
     /// the disconnect through the normal channel-closed paths.
     ///
     /// `sleeper` provides the in-between waits — typically
+    /// [`TokioSleeper`](crate::sleep::TokioSleeper) or
     /// [`FuturesTimerSleeper`](crate::sleep::FuturesTimerSleeper).
     /// Required by the signature even when `keepalive` is `None`.
     pub fn new_with_keepalive<S: Sleeper>(
@@ -419,7 +420,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                 }
                 Ok(tungstenite::Message::Pong(p)) => {
                     tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received pong");
-                    self.pong_received.store(true, Ordering::SeqCst);
+                    self.pong_received.store(true, Ordering::Relaxed);
                 }
                 Ok(tungstenite::Message::Frame(f)) => {
                     tracing::warn!("unexpected frame: {:x?}", f);
@@ -480,10 +481,11 @@ async fn keepalive_loop<S: Sleeper>(
 
         // Clear before sending so a stale Pong from a previous cycle
         // can't satisfy this one.
-        pong_received.store(false, Ordering::SeqCst);
+        pong_received.store(false, Ordering::Relaxed);
 
-        let payload: [u8; 8] = rand::random();
-        let ping = tungstenite::Message::Ping(payload.to_vec().into());
+        // Empty payload: we don't verify the Pong reply matches a
+        // specific Ping, so a unique payload would just be overhead.
+        let ping = tungstenite::Message::Ping(Vec::new().into());
         if outbound_tx.send(ping).await.is_err() {
             tracing::debug!(?peer_id, "keepalive: outbound closed; exiting");
             return KeepAliveOutcome::ConnectionClosed;
@@ -492,7 +494,7 @@ async fn keepalive_loop<S: Sleeper>(
 
         sleeper.sleep(config.pong_timeout).await;
 
-        if pong_received.load(Ordering::SeqCst) {
+        if pong_received.load(Ordering::Relaxed) {
             if consecutive_misses > 0 {
                 tracing::debug!(?peer_id, "keepalive: pong recovered after misses");
             }
@@ -694,7 +696,7 @@ mod tests {
             tokio::spawn(async move {
                 while let Ok(msg) = outbound_rx.recv().await {
                     if matches!(msg, tungstenite::Message::Ping(_)) {
-                        pong_received.store(true, Ordering::SeqCst);
+                        pong_received.store(true, Ordering::Relaxed);
                     }
                 }
             })
@@ -751,7 +753,7 @@ mod tests {
                         // close after ping 3. A correct loop resets on
                         // ping 2 and never reaches the threshold.
                         if seen.is_multiple_of(2) {
-                            pong_received.store(true, Ordering::SeqCst);
+                            pong_received.store(true, Ordering::Relaxed);
                         }
                     }
                 }

@@ -350,10 +350,10 @@ async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
     // it within ~240ms.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // The new connection is alive at the server. We assert "at least
-    // one" rather than "exactly one" because the leaked original
-    // connection (see doc-comment above) may still be visible until the
-    // server's keepalive notices it.
+    // `>= 1` rather than `== 1`: the old connection may still be
+    // visible (its listener task lingers until the server's keepalive
+    // closes the dead socket — see the FIXME in
+    // `subduction_websocket::tokio::client::reconnect`).
     let after = server_subduction.connected_peer_ids().await.len();
     assert!(
         after >= 1,

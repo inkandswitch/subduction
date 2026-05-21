@@ -4,7 +4,7 @@ use subduction_core::timeout::Timeout;
 
 use crate::{
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    sleep::FuturesTimerSleeper,
+    sleep::TokioSleeper,
     tokio::unified::UnifiedWebSocket,
     websocket::{KeepAlive, WebSocket},
 };
@@ -296,7 +296,7 @@ where
                                                     ws_handshake.into_inner(),
                                                     peer_id,
                                                     keepalive_for_closure,
-                                                    FuturesTimerSleeper,
+                                                    TokioSleeper,
                                                 );
 
                                                 let listen_ws = ws.clone();
@@ -604,7 +604,7 @@ where
                     ws_handshake.into_inner(),
                     peer_id,
                     keepalive_config,
-                    FuturesTimerSleeper,
+                    TokioSleeper,
                 );
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
@@ -739,7 +739,7 @@ where
                     ws_handshake.into_inner(),
                     peer_id,
                     keepalive_config,
-                    FuturesTimerSleeper,
+                    TokioSleeper,
                 );
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 

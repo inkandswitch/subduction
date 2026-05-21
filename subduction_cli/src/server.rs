@@ -25,7 +25,7 @@ use subduction_http_longpoll::server::LongPollHandler;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
-    sleep::FuturesTimerSleeper,
+    sleep::TokioSleeper,
     timeout::FuturesTimerTimeout,
     tokio::{TokioSpawn, unified::UnifiedWebSocket},
     websocket::{KeepAlive, WebSocket},
@@ -835,7 +835,7 @@ async fn handle_websocket(
                 ws_handshake.into_inner(),
                 peer_id,
                 Some(keepalive),
-                FuturesTimerSleeper,
+                TokioSleeper,
             );
 
             let listen_ws = ws.clone();
@@ -1059,7 +1059,7 @@ async fn try_connect_ws(
                     ws_handshake.into_inner(),
                     peer_id,
                     Some(keepalive),
-                    FuturesTimerSleeper,
+                    TokioSleeper,
                 );
 
             let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
