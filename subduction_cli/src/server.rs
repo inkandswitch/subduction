@@ -880,13 +880,12 @@ async fn handle_websocket(
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         |ws_handshake, peer_id| {
-            let (ws, sender_fut, keepalive_fut) =
-                WebSocket::new_with_keepalive(
-                    ws_handshake.into_inner(),
-                    peer_id,
-                    keepalive,
-                    FuturesTimerSleeper,
-                );
+            let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
+                ws_handshake.into_inner(),
+                peer_id,
+                keepalive,
+                FuturesTimerSleeper,
+            );
 
             let listen_ws = ws.clone();
             tokio::spawn(async move {

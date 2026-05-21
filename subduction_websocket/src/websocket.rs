@@ -450,10 +450,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                     // false-positive disconnect us). If the channel
                     // is full or closed we just drop the pong reply;
                     // the remote will retry on its next ping cycle.
-                    if let Err(e) = self
-                        .outbound_tx
-                        .try_send(tungstenite::Message::Pong(p))
-                    {
+                    if let Err(e) = self.outbound_tx.try_send(tungstenite::Message::Pong(p)) {
                         tracing::warn!(
                             error = ?e,
                             peer_id = ?self.peer_id,

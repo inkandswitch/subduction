@@ -187,9 +187,8 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             clippy::expect_used,
             reason = "internal invariant: documented in #[doc] above"
         )]
-        let kp = kp.expect(
-            "with_options invariant: Some(KeepAlive) input must yield Some(KeepAliveTask)",
-        );
+        let kp = kp
+            .expect("with_options invariant: Some(KeepAlive) input must yield Some(KeepAliveTask)");
         Ok((auth, listener, sender, kp))
     }
 
