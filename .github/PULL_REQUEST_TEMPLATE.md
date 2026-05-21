@@ -69,4 +69,4 @@ Delete this section otherwise.
 - [ ] `cargo +nightly fmt --all -- --check` is clean
 - [ ] Public API changes have doc comments
 - [ ] User-visible changes are reflected in the relevant `README.md` or `design/` doc
-- [ ] Cohort version bumps applied if this is a release-blocking change
+- [ ] Required version updates for this release-blocking change have been applied
