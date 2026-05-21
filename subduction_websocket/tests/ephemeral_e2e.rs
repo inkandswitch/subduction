@@ -86,7 +86,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
     let bound = server.address();
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_auth, listener, sender) =
+    let (client_auth, listener, sender, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer.clone(), Audience::known(server_peer_id))
             .await?;
 
@@ -169,7 +169,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
     let bound = server.address();
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_auth, listener, sender) =
+    let (client_auth, listener, sender, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer.clone(), Audience::known(server_peer_id))
             .await?;
 

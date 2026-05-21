@@ -228,7 +228,7 @@ async fn client_reconnect() -> TestResult {
     let bound = server.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
 
-    let (mut client_ws, listener_fut, sender_fut) =
+    let (mut client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -645,7 +645,7 @@ async fn large_message_handling() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) =
+    let (client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -739,7 +739,7 @@ async fn message_ordering() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) =
+    let (client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -985,7 +985,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
     tokio::spawn(client_listener_fut);
 
     let uri: Uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, ws_listener_fut, ws_sender_fut) =
+    let (client_ws, ws_listener_fut, ws_sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {

@@ -190,7 +190,7 @@ async fn batch_sync() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) =
+    let (client_ws, listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     tokio::spawn(async {
@@ -347,7 +347,7 @@ async fn second_sync_round_is_empty() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, ws_listener, ws_sender) =
+    let (client_ws, ws_listener, ws_sender, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
     tokio::spawn(async { ws_listener.await.map_err(|e| eyre::eyre!("{e:?}")) });
     tokio::spawn(async { ws_sender.await.map_err(|e| eyre::eyre!("{e:?}")) });
@@ -585,7 +585,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
     // server's view here, and want to be sure the server's keepalive
     // path is what does the detection (not the client's).
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, client_ws_listener_fut, sender_fut) =
+    let (client_ws, client_ws_listener_fut, sender_fut, _keepalive_task) =
         TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id)).await?;
 
     // Capture the WebSocket listener handle so we can wedge the client.
