@@ -169,9 +169,7 @@ pub enum KeepAliveOutcome {
     /// were still sent every cycle; the pongs are what didn't come
     /// back), so the keepalive task forcibly closed the inbound and
     /// outbound channels.
-    #[error(
-        "keepalive task exited: peer missed {missed} consecutive pong replies"
-    )]
+    #[error("keepalive task exited: peer missed {missed} consecutive pong replies")]
     Timeout {
         /// Number of consecutive missed pongs at the moment of close.
         missed: u32,
@@ -495,10 +493,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                     // high-priority channel for control frames so
                     // pongs never compete with user data — tracked as
                     // a follow-up.
-                    if let Err(e) = self
-                        .outbound_tx
-                        .try_send(tungstenite::Message::Pong(p))
-                    {
+                    if let Err(e) = self.outbound_tx.try_send(tungstenite::Message::Pong(p)) {
                         tracing::warn!(
                             error = ?e,
                             peer_id = ?self.peer_id,
