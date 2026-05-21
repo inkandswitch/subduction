@@ -13,7 +13,7 @@ use core::{
 use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable, future_form};
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture};
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{peer::id::PeerId, transport::Transport};
 
@@ -150,23 +150,27 @@ pub enum KeepAliveOutcome {
 
 /// Background task that pings the peer and tears down the connection
 /// on timeout. Must be spawned for keepalive to take effect.
-pub struct KeepAliveTask(BoxFuture<'static, KeepAliveOutcome>);
+///
+/// Parameterized by [`FutureForm`]: `KeepAliveTask<Sendable>` is
+/// `Send`-spawnable on multi-threaded runtimes; `KeepAliveTask<Local>`
+/// is for single-threaded runtimes (Wasm).
+pub struct KeepAliveTask<K: FutureForm>(K::Future<'static, KeepAliveOutcome>);
 
-impl core::fmt::Debug for KeepAliveTask {
+impl<K: FutureForm> core::fmt::Debug for KeepAliveTask<K> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("KeepAliveTask").finish_non_exhaustive()
     }
 }
 
-impl KeepAliveTask {
-    pub(crate) fn new(fut: BoxFuture<'static, KeepAliveOutcome>) -> Self {
+impl<K: FutureForm> KeepAliveTask<K> {
+    pub(crate) const fn new(fut: K::Future<'static, KeepAliveOutcome>) -> Self {
         Self(fut)
     }
 }
 
-impl IntoFuture for KeepAliveTask {
+impl<K: FutureForm> IntoFuture for KeepAliveTask<K> {
     type Output = KeepAliveOutcome;
-    type IntoFuture = BoxFuture<'static, KeepAliveOutcome>;
+    type IntoFuture = K::Future<'static, KeepAliveOutcome>;
 
     fn into_future(self) -> Self::IntoFuture {
         self.0
@@ -250,55 +254,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
     /// task captures only the channel receiver and write half, so it
     /// doesn't keep the outbound channel alive past its own exit.
     ///
-    /// For liveness detection see [`Self::new_with_keepalive`].
+    /// For liveness detection see
+    /// [`new_with_keepalive`](WebSocket::<T, Sendable>::new_with_keepalive).
     pub fn new(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
     ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, K>) {
         tracing::info!("new WebSocket connection for peer {peer_id:?} (keepalive: false)");
         Self::new_inner(ws, peer_id)
-    }
-
-    /// Create a new WebSocket transport with optional keepalive.
-    ///
-    /// Returns the transport, a sender task, and (when keepalive is
-    /// configured) a keepalive task. All three should be spawned. The
-    /// keepalive task closes both channels on
-    /// [`KeepAliveOutcome::Timeout`]; the rest of the stack observes
-    /// the disconnect through the normal channel-closed paths.
-    ///
-    /// `sleeper` provides the in-between waits — typically
-    /// [`TokioSleeper`](crate::sleep::TokioSleeper) or
-    /// [`FuturesTimerSleeper`](crate::sleep::FuturesTimerSleeper).
-    /// Required by the signature even when `keepalive` is `None`.
-    pub fn new_with_keepalive<S: Sleeper>(
-        ws: WebSocketStream<T>,
-        peer_id: PeerId,
-        keepalive: Option<KeepAlive>,
-        sleeper: S,
-    ) -> (
-        Self,
-        impl Future<Output = Result<(), RunError>> + use<T, K, S>,
-        Option<KeepAliveTask>,
-    ) {
-        tracing::info!(
-            "new WebSocket connection for peer {peer_id:?} (keepalive: {})",
-            keepalive.is_some()
-        );
-        let (this, sender_task) = Self::new_inner(ws, peer_id);
-
-        let keepalive_task = keepalive.map(|config| {
-            KeepAliveTask::new(Box::pin(keepalive_loop(
-                config,
-                peer_id,
-                this.outbound_tx.clone(),
-                this.inbound_writer.clone(),
-                this.pong_received.clone(),
-                sleeper,
-            )))
-        });
-
-        (this, sender_task, keepalive_task)
     }
 
     /// Shared body of [`Self::new`] and [`Self::new_with_keepalive`].
@@ -445,6 +408,49 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
     }
 }
 
+impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
+    /// Create a new WebSocket transport with Ping/Pong keepalive.
+    ///
+    /// Returns the transport, a sender task, and a keepalive task —
+    /// all three should be spawned. The keepalive task closes both
+    /// channels on [`KeepAliveOutcome::Timeout`]; the rest of the
+    /// stack observes the disconnect through the normal channel-closed
+    /// paths.
+    ///
+    /// `sleeper` provides the in-between waits — typically
+    /// [`TokioSleeper`](crate::sleep::TokioSleeper) or
+    /// [`FuturesTimerSleeper`](crate::sleep::FuturesTimerSleeper).
+    ///
+    /// This constructor is `Sendable`-specific. A `Local` (e.g. Wasm)
+    /// counterpart can be added as an additive `impl WebSocket<T, Local>`
+    /// block when needed.
+    pub fn new_with_keepalive<S: Sleeper<Sendable> + Send>(
+        ws: WebSocketStream<T>,
+        peer_id: PeerId,
+        keepalive: KeepAlive,
+        sleeper: S,
+    ) -> (
+        Self,
+        impl Future<Output = Result<(), RunError>> + use<T, S>,
+        KeepAliveTask<Sendable>,
+    ) {
+        tracing::info!("new WebSocket connection for peer {peer_id:?} (keepalive: true)");
+        let (this, sender_task) = Self::new_inner(ws, peer_id);
+
+        let body = keepalive_loop::<S, Sendable>(
+            keepalive,
+            peer_id,
+            this.outbound_tx.clone(),
+            this.inbound_writer.clone(),
+            this.pong_received.clone(),
+            sleeper,
+        );
+        let task = KeepAliveTask::new(body.boxed());
+
+        (this, sender_task, task)
+    }
+}
+
 /// Check if a WebSocket error is an expected disconnect (not a real error).
 ///
 /// These are normal occurrences when the remote end closes without a proper
@@ -463,14 +469,18 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
 ///
 /// Cycle: `sleep(ping)` → clear flag → send Ping → `sleep(pong)` →
 /// check flag. Threshold consecutive misses trigger disconnect.
-async fn keepalive_loop<S: Sleeper>(
+async fn keepalive_loop<S, K>(
     config: KeepAlive,
     peer_id: PeerId,
     outbound_tx: async_channel::Sender<tungstenite::Message>,
     inbound_writer: async_channel::Sender<Vec<u8>>,
     pong_received: Arc<AtomicBool>,
     sleeper: S,
-) -> KeepAliveOutcome {
+) -> KeepAliveOutcome
+where
+    S: Sleeper<K>,
+    K: FutureForm + ?Sized,
+{
     use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
     let mut consecutive_misses: u32 = 0;

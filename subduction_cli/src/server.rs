@@ -831,10 +831,10 @@ async fn handle_websocket(
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         |ws_handshake, peer_id| {
-            let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
+            let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
                 ws_handshake.into_inner(),
                 peer_id,
-                Some(keepalive),
+                keepalive,
                 TokioSleeper,
             );
 
@@ -851,12 +851,10 @@ async fn handle_websocket(
                 }
             });
 
-            if let Some(keepalive_fut) = keepalive_fut {
-                tokio::spawn(async move {
-                    let outcome = keepalive_fut.await;
-                    tracing::debug!(?outcome, "WebSocket keepalive task exited");
-                });
-            }
+            tokio::spawn(async move {
+                let outcome = keepalive_task.await;
+                tracing::debug!(?outcome, "WebSocket keepalive task exited");
+            });
 
             let unified_ws = UnifiedWebSocket::Accepted(ws);
             (
@@ -1054,13 +1052,12 @@ async fn try_connect_ws(
     let (authenticated, ()) = handshake::initiate::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         move |ws_handshake, peer_id| {
-            let (ws, sender_fut, keepalive_fut) =
-                WebSocket::new_with_keepalive(
-                    ws_handshake.into_inner(),
-                    peer_id,
-                    Some(keepalive),
-                    TokioSleeper,
-                );
+            let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                ws_handshake.into_inner(),
+                peer_id,
+                keepalive,
+                TokioSleeper,
+            );
 
             let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
@@ -1092,19 +1089,17 @@ async fn try_connect_ws(
                 }
             });
 
-            if let Some(keepalive_fut) = keepalive_fut {
-                let keepalive_fut = keepalive_fut.into_future();
-                tokio::spawn(async move {
-                    tokio::select! {
-                        () = keepalive_cancel.cancelled() => {
-                            tracing::debug!("Shutting down keepalive for peer {keepalive_uri}");
-                        }
-                        outcome = keepalive_fut => {
-                            tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri} exited");
-                        }
+            let keepalive_fut = keepalive_task.into_future();
+            tokio::spawn(async move {
+                tokio::select! {
+                    () = keepalive_cancel.cancelled() => {
+                        tracing::debug!("Shutting down keepalive for peer {keepalive_uri}");
                     }
-                });
-            }
+                    outcome = keepalive_fut => {
+                        tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri} exited");
+                    }
+                }
+            });
 
             (
                 MessageTransport::new(UnifiedTransport::WebSocket(ws_conn)),

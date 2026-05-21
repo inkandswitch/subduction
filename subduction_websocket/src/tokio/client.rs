@@ -148,13 +148,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics only if the internal `with_options` constructor violates
-    /// its documented invariant (returning `None` for the keepalive task
-    /// despite being passed `Some(KeepAlive)`). This is a bug, not a
-    /// runtime condition.
     pub async fn with_keepalive<'a>(
         address: Uri,
         signer: R,
@@ -165,31 +158,59 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             Authenticated<Self, Sendable>,
             ListenerTask<'a>,
             SenderTask<'a>,
-            KeepAliveTask,
+            KeepAliveTask<Sendable>,
         ),
         ClientConnectError,
     >
     where
         R: 'a,
     {
-        let (auth, listener, sender, kp) = Self::with_options(
+        tracing::info!("Connecting to WebSocket server at {address} (keepalive: true)");
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        ws_config.max_frame_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
+        let (ws_stream, _resp) =
+            connect_async_with_config(address.clone(), Some(ws_config)).await?;
+
+        let now = TimestampSeconds::now();
+        let nonce = Nonce::random();
+
+        let (authenticated, (sender_fut, keepalive_task)) =
+            handshake::initiate::<Sendable, _, _, _, _>(
+                WebSocketHandshake::new(ws_stream),
+                |ws_handshake, peer_id| {
+                    let (socket, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                        ws_handshake.into_inner(),
+                        peer_id,
+                        keepalive,
+                        TokioSleeper,
+                    );
+                    (socket, (Sendable::from_future(sender_fut), keepalive_task))
+                },
+                &signer,
+                audience,
+                now,
+                nonce,
+            )
+            .await?;
+
+        let server_id = authenticated.peer_id();
+        tracing::info!("Handshake complete: connected to {server_id}");
+
+        let socket = authenticated.inner().clone();
+        let listener_socket = socket.clone();
+        let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
+        let sender = SenderTask::new(sender_fut);
+
+        let authenticated_client = authenticated.map(|_socket| TokioWebSocketClient {
             address,
             signer,
             audience,
-            DEFAULT_MAX_MESSAGE_SIZE,
-            Some(keepalive),
-        )
-        .await?;
-        // `with_options` guarantees `Some(KeepAliveTask)` whenever it's
-        // called with `Some(KeepAlive)`. Violating this is a bug in
-        // `with_options`, not a runtime condition, so panic loudly.
-        #[allow(
-            clippy::expect_used,
-            reason = "internal invariant: documented in #[doc] above"
-        )]
-        let kp = kp
-            .expect("with_options invariant: Some(KeepAlive) input must yield Some(KeepAliveTask)");
-        Ok((auth, listener, sender, kp))
+            socket,
+            keepalive: Some(keepalive),
+        });
+
+        Ok((authenticated_client, listener, sender, keepalive_task))
     }
 
     /// Full constructor exposing every option in one call.
@@ -212,7 +233,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             Authenticated<Self, Sendable>,
             ListenerTask<'a>,
             SenderTask<'a>,
-            Option<KeepAliveTask>,
+            Option<KeepAliveTask<Sendable>>,
         ),
         ClientConnectError,
     >
@@ -237,13 +258,26 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             handshake::initiate::<Sendable, _, _, _, _>(
                 WebSocketHandshake::new(ws_stream),
                 |ws_handshake, peer_id| {
-                    let (socket, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
-                        ws_handshake.into_inner(),
-                        peer_id,
-                        keepalive,
-                        TokioSleeper,
-                    );
-                    (socket, (Sendable::from_future(sender_fut), keepalive_task))
+                    let stream = ws_handshake.into_inner();
+                    match keepalive {
+                        Some(ka) => {
+                            let (socket, sender_fut, keepalive_task) =
+                                WebSocket::new_with_keepalive(
+                                    stream,
+                                    peer_id,
+                                    ka,
+                                    TokioSleeper,
+                                );
+                            (
+                                socket,
+                                (Sendable::from_future(sender_fut), Some(keepalive_task)),
+                            )
+                        }
+                        None => {
+                            let (socket, sender_fut) = WebSocket::new(stream, peer_id);
+                            (socket, (Sendable::from_future(sender_fut), None))
+                        }
+                    }
                 },
                 &signer,
                 audience,
@@ -357,7 +391,7 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
         async move {
             // Build the new connection first so a failure leaves the
             // old one intact.
-            let (authenticated, listener, sender, keepalive_task) =
+            let (authenticated, listener, sender, maybe_keepalive_task) =
                 TokioWebSocketClient::<R>::with_options(
                     self.address.clone(),
                     self.signer.clone(),
@@ -385,7 +419,7 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
                     tracing::info!("WebSocket client sender disconnected after reconnect: {e:?}");
                 }
             });
-            if let Some(keepalive_task) = keepalive_task {
+            if let Some(keepalive_task) = maybe_keepalive_task {
                 tokio::spawn(async move {
                     let outcome = keepalive_task.await;
                     tracing::debug!(

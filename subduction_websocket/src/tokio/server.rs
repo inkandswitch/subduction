@@ -13,6 +13,7 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
+use futures::FutureExt;
 use sedimentree_core::depth::DepthMetric;
 use subduction_core::{
     authenticated::Authenticated,
@@ -292,12 +293,21 @@ where
                                             WebSocketHandshake::new(ws_stream),
                                             move |ws_handshake, peer_id| {
                                                 // Create WebSocket wrapper with verified PeerId
-                                                let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
-                                                    ws_handshake.into_inner(),
-                                                    peer_id,
-                                                    keepalive_for_closure,
-                                                    TokioSleeper,
-                                                );
+                                                let stream = ws_handshake.into_inner();
+                                                let (ws, sender_fut, maybe_keepalive_fut): (_, futures::future::BoxFuture<'static, _>, _) =
+                                                    match keepalive_for_closure {
+                                                        Some(ka) => {
+                                                            let (ws, sender_fut, keepalive_task) =
+                                                                WebSocket::new_with_keepalive(
+                                                                    stream, peer_id, ka, TokioSleeper,
+                                                                );
+                                                            (ws, sender_fut.boxed(), Some(keepalive_task))
+                                                        }
+                                                        None => {
+                                                            let (ws, sender_fut) = WebSocket::new(stream, peer_id);
+                                                            (ws, sender_fut.boxed(), None)
+                                                        }
+                                                    };
 
                                                 let listen_ws = ws.clone();
                                                 listen_tracker.spawn(async move {
@@ -326,7 +336,7 @@ where
                                                     }
                                                 });
 
-                                                if let Some(keepalive_fut) = keepalive_fut {
+                                                if let Some(keepalive_fut) = maybe_keepalive_fut {
                                                     let keepalive_fut = keepalive_fut.into_future();
                                                     keepalive_tracker.spawn(async move {
                                                         tokio::select! {
@@ -600,12 +610,19 @@ where
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
-                    ws_handshake.into_inner(),
-                    peer_id,
-                    keepalive_config,
-                    TokioSleeper,
-                );
+                let stream = ws_handshake.into_inner();
+                let (ws, sender_fut, maybe_keepalive_fut): (_, futures::future::BoxFuture<'static, _>, _) =
+                    match keepalive_config {
+                        Some(ka) => {
+                            let (ws, sender_fut, keepalive_task) =
+                                WebSocket::new_with_keepalive(stream, peer_id, ka, TokioSleeper);
+                            (ws, sender_fut.boxed(), Some(keepalive_task))
+                        }
+                        None => {
+                            let (ws, sender_fut) = WebSocket::new(stream, peer_id);
+                            (ws, sender_fut.boxed(), None)
+                        }
+                    };
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -637,7 +654,7 @@ where
                     }
                 });
 
-                if let Some(keepalive_fut) = keepalive_fut {
+                if let Some(keepalive_fut) = maybe_keepalive_fut {
                     let keepalive_cancel = cancel_token;
                     let keepalive_fut = keepalive_fut.into_future();
                     keepalive_tracker.spawn(async move {
@@ -735,12 +752,19 @@ where
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
-                    ws_handshake.into_inner(),
-                    peer_id,
-                    keepalive_config,
-                    TokioSleeper,
-                );
+                let stream = ws_handshake.into_inner();
+                let (ws, sender_fut, maybe_keepalive_fut): (_, futures::future::BoxFuture<'static, _>, _) =
+                    match keepalive_config {
+                        Some(ka) => {
+                            let (ws, sender_fut, keepalive_task) =
+                                WebSocket::new_with_keepalive(stream, peer_id, ka, TokioSleeper);
+                            (ws, sender_fut.boxed(), Some(keepalive_task))
+                        }
+                        None => {
+                            let (ws, sender_fut) = WebSocket::new(stream, peer_id);
+                            (ws, sender_fut.boxed(), None)
+                        }
+                    };
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -772,7 +796,7 @@ where
                     }
                 });
 
-                if let Some(keepalive_fut) = keepalive_fut {
+                if let Some(keepalive_fut) = maybe_keepalive_fut {
                     let keepalive_cancel = cancel_token;
                     let keepalive_fut = keepalive_fut.into_future();
                     keepalive_tracker.spawn(async move {

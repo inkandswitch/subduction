@@ -1,22 +1,25 @@
 //! Pluggable sleep strategy for [`websocket::keepalive_loop`](crate::websocket).
 //!
 //! Decoupled from a specific timer crate so the standalone build of
-//! this crate doesn't pull one in. Two canned implementations:
-//! [`TokioSleeper`] (used by the `tokio` module) and
-//! [`FuturesTimerSleeper`] (runtime-agnostic, behind the `futures-timer`
-//! feature).
+//! this crate doesn't pull one in. Parameterized by [`FutureForm`] so
+//! `Send`-required (`Sendable`) and single-threaded (`Local`) runtimes
+//! can each plug in their own sleep primitive.
 
 use core::time::Duration;
 
-use futures::future::BoxFuture;
+use future_form::{FutureForm, Sendable};
 
 #[cfg(any(feature = "futures-timer", feature = "tokio_base"))]
 use alloc::boxed::Box;
 
-/// Strategy for "sleep for `dur`".
-pub trait Sleeper: Clone + Send + Sync + 'static {
+/// Strategy for "sleep for `dur`", parameterized over [`FutureForm`].
+///
+/// `Sleeper<Sendable>` produces `Send` futures suitable for `tokio::spawn`;
+/// `Sleeper<Local>` produces single-threaded futures for runtimes like
+/// `wasm-bindgen-futures`.
+pub trait Sleeper<K: FutureForm + ?Sized>: Clone + 'static {
     /// Return a future that resolves after `dur` has elapsed.
-    fn sleep(&self, dur: Duration) -> BoxFuture<'static, ()>;
+    fn sleep(&self, dur: Duration) -> K::Future<'static, ()>;
 }
 
 /// [`Sleeper`] backed by `tokio::time::sleep`. Integrates with
@@ -26,8 +29,8 @@ pub trait Sleeper: Clone + Send + Sync + 'static {
 pub struct TokioSleeper;
 
 #[cfg(feature = "tokio_base")]
-impl Sleeper for TokioSleeper {
-    fn sleep(&self, dur: Duration) -> BoxFuture<'static, ()> {
+impl Sleeper<Sendable> for TokioSleeper {
+    fn sleep(&self, dur: Duration) -> <Sendable as FutureForm>::Future<'static, ()> {
         Box::pin(tokio::time::sleep(dur))
     }
 }
@@ -39,8 +42,8 @@ impl Sleeper for TokioSleeper {
 pub struct FuturesTimerSleeper;
 
 #[cfg(feature = "futures-timer")]
-impl Sleeper for FuturesTimerSleeper {
-    fn sleep(&self, dur: Duration) -> BoxFuture<'static, ()> {
+impl Sleeper<Sendable> for FuturesTimerSleeper {
+    fn sleep(&self, dur: Duration) -> <Sendable as FutureForm>::Future<'static, ()> {
         Box::pin(futures_timer::Delay::new(dur))
     }
 }
