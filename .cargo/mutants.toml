@@ -1,0 +1,72 @@
+# cargo-mutants configuration.
+# https://mutants.rs/options.html#config-files
+#
+# Single source of truth for both local and CI runs. Tune carefully —
+# this file gates whether `cargo mutants` finds new gaps in our test
+# suite (the goal) or wastes hours chasing false positives.
+
+# Exclude generated, infrastructural, or test-only files. cargo-mutants
+# already skips `#[cfg(test)]` blocks and `mod tests` modules, but does
+# NOT skip files under `tests/` directories used for integration tests,
+# nor anything under `benches/` or `examples/`. We add those plus a few
+# project-specific exclusions.
+exclude_globs = [
+    # Integration tests, benches, examples — these *are* the tests we
+    # measure against, not subjects under test.
+    "**/tests/**",
+    "**/benches/**",
+    "**/examples/**",
+
+    # Shared test-only utilities. Mutating these would cause spurious
+    # test failures unrelated to production code coverage.
+    "**/test_utils.rs",
+    "**/test_utils/**",
+
+    # Generated / build-script output.
+    "**/build.rs",
+
+    # Workspace-tool, not a library.
+    "automerge_subduction_ingest/**",
+
+    # Wasm shim crates: their surface is overwhelmingly thin `#[wasm_bindgen]`
+    # delegations to inner crates, and they can't be exercised by host
+    # tests. Coverage comes from the underlying crates and from Playwright.
+    "subduction_wasm/**",
+    "sedimentree_wasm/**",
+    "automerge_sedimentree_wasm/**",
+    "automerge_subduction_wasm/**",
+
+    # CLI entry points and runtime glue — too much wiring, too little
+    # logic. We get value from in-tree integration tests instead.
+    "subduction_cli/src/main.rs",
+    "subduction_cli/src/server.rs",
+]
+
+# Skip specific mutation patterns that are almost always either trivially
+# detectable or pointless to mutate:
+#   - `Debug` / `Display` impls (often whitespace-sensitive but never
+#     part of program correctness)
+#   - `Drop` impls (rarely meaningfully tested at unit level)
+#   - `unimplemented!()` / `todo!()` / `unreachable!()` macro calls
+exclude_re = [
+    "impl .*Debug for ",
+    "impl .*Display for ",
+    "impl .*Drop for ",
+]
+
+# Be a little patient with builds. The workspace is large, and the
+# default 5× of baseline can flap on shared CI runners. 2.0 means a
+# mutant has 2× as long as the unmutated test run to be killed before
+# we declare it timeout-survivor.
+timeout_multiplier = 2.0
+
+# Minimum cap on a single mutant test run, in seconds, regardless of
+# baseline time. Some property-based tests (`bolero`) bias the
+# distribution heavily; this prevents a fast baseline from making us
+# kill legitimate mutant tests early.
+minimum_test_timeout = 60
+
+# Pass `--features arbitrary` so bolero-driven property tests run
+# during mutation testing. Without this, ~half the proptest coverage is
+# silently disabled and survivors balloon.
+additional_cargo_test_args = ["--features", "arbitrary"]

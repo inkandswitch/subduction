@@ -381,6 +381,95 @@
       echo ""
       echo "✓ All property tests passed"
     '';
+
+    "test:mutants" = cmd "Run cargo-mutants against the current working diff (vs main)" ''
+      set -e
+
+      # Default base: origin/main if present, else local main. Override
+      # with `test:mutants <base-ref>`.
+      BASE="''${1:-}"
+      if [ -z "$BASE" ]; then
+        if ${pkgs.git}/bin/git rev-parse --verify --quiet origin/main >/dev/null; then
+          BASE="origin/main"
+        else
+          BASE="main"
+        fi
+      fi
+
+      DIFF_FILE=$(${pkgs.coreutils}/bin/mktemp -t subduction-mutants-diff.XXXXXX.patch)
+      cleanup() { ${pkgs.coreutils}/bin/rm -f "$DIFF_FILE"; }
+      trap cleanup EXIT INT TERM
+
+      echo "===> Computing diff vs $BASE..."
+      ${pkgs.git}/bin/git diff "$BASE...HEAD" --no-color --binary > "$DIFF_FILE"
+
+      if [ ! -s "$DIFF_FILE" ]; then
+        echo "No diff vs $BASE. Skipping mutation run."
+        exit 0
+      fi
+
+      echo "===> Running cargo-mutants on changed lines only..."
+      ${pkgs.cargo-mutants}/bin/cargo-mutants mutants \
+        --in-diff "$DIFF_FILE" \
+        --no-shuffle \
+        --jobs 4
+
+      echo ""
+      echo "✓ Mutation testing on diff passed (no survivors in changed code)"
+    '';
+
+    "test:mutants:full" = cmd "Run cargo-mutants across the entire workspace (slow; hours)" ''
+      set -e
+
+      echo "===> Running cargo-mutants on the full workspace..."
+      echo "    This is slow — expect hours, not minutes."
+      echo "    Use 'test:mutants' for a quick diff-only check."
+      echo ""
+
+      ${pkgs.cargo-mutants}/bin/cargo-mutants mutants \
+        --no-shuffle \
+        --jobs 4
+
+      echo ""
+      echo "✓ Full-workspace mutation testing passed"
+    '';
+
+    "test:mutants:crate" = cmd "Run cargo-mutants on a single crate" ''
+      set -e
+
+      if [ -z "''${1:-}" ]; then
+        echo "Usage: test:mutants:crate <crate-name>"
+        echo ""
+        echo "Examples:"
+        echo "  test:mutants:crate sedimentree_core"
+        echo "  test:mutants:crate subduction_core"
+        echo "  test:mutants:crate subduction_crypto"
+        echo "  test:mutants:crate subduction_ephemeral"
+        echo "  test:mutants:crate subduction_keyhive"
+        exit 1
+      fi
+
+      CRATE="$1"
+
+      if [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
+        echo "Error: crate directory not found: $CRATE"
+        exit 1
+      fi
+
+      echo "===> Running cargo-mutants on $CRATE..."
+      ${pkgs.cargo-mutants}/bin/cargo-mutants mutants \
+        --package "$CRATE" \
+        --no-shuffle \
+        --jobs 4
+
+      echo ""
+      echo "✓ Mutation testing on $CRATE passed"
+    '';
+
+    "test:mutants:list" = cmd "List mutants that would be generated (no test run)" ''
+      set -e
+      ${pkgs.cargo-mutants}/bin/cargo-mutants mutants --list "''$@"
+    '';
   };
 
   wasm = {
