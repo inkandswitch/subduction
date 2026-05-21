@@ -1,0 +1,179 @@
+name: Bug report
+description: Report something that's misbehaving in Subduction.
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. The more concrete
+        information you can give us, the faster we can investigate.
+
+        Before filing, please [search existing
+        issues](https://github.com/inkandswitch/subduction/issues?q=is%3Aissue)
+        to avoid duplicates.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go to [Security Advisories](https://github.com/inkandswitch/subduction/security/advisories/new)).
+          required: true
+
+  - type: checkboxes
+    id: crates
+    attributes:
+      label: Affected crate(s)
+      description: Check every crate you believe is involved. Leave empty if unsure.
+      options:
+        - label: automerge_sedimentree
+        - label: automerge_sedimentree_wasm
+        - label: automerge_subduction_ingest
+        - label: automerge_subduction_wasm
+        - label: sedimentree_core
+        - label: sedimentree_fs_storage
+        - label: sedimentree_wasm
+        - label: subduction_cli
+        - label: subduction_core
+        - label: subduction_crypto
+        - label: subduction_ephemeral
+        - label: subduction_http_longpoll
+        - label: subduction_iroh
+        - label: subduction_keyhive
+        - label: subduction_keyhive_policy
+        - label: subduction_wasm
+        - label: subduction_websocket
+        - label: Nix module / packaging
+        - label: CI / tooling
+        - label: Docs
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: |
+        The release tag (e.g. `v0.13.0`), git SHA, or crate version you
+        observed the issue on. For Wasm packages, include the npm version.
+      placeholder: "v0.13.0 / commit fa0ab0dd / @automerge/subduction 0.12.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      description: |
+        Host OS where you saw the bug. For Wasm bugs, this is the OS
+        the browser / Node.js process is running on.
+      multiple: true
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - iOS
+        - Android
+        - NixOS
+        - Other / N/A (please describe in "Environment" below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: arch
+    attributes:
+      label: System architecture
+      description: |
+        Hardware or Wasm architecture. For native code this is your CPU;
+        for Wasm bugs choose `wasm32-unknown-unknown` (or whichever
+        target triple was built). Use "Other" + the Environment field
+        for unusual targets (`wasm32-wasip1`, `thumbv6m-none-eabi`, …).
+      multiple: true
+      options:
+        - x86_64
+        - aarch64 (arm64)
+        - wasm32-unknown-unknown
+        - Other (please describe in "Environment" below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Anything else about the runtime environment. Examples:
+
+        - **Browser**: Chromium 132 / Firefox 134 / Safari 18 (Wasm bugs)
+        - **Node.js version** (Wasm-on-Node bugs)
+        - **Container**: Docker image (e.g. `rust:1.90-slim`), Kubernetes
+        - **Cloud / VM**: AWS Lambda, Fly.io, GCP Cloud Run, bare-metal, …
+        - **Deployment**: systemd unit, NixOS module, behind reverse proxy
+          (nginx / Caddy / Cloudflare), with TLS termination, …
+        - **Non-standard Rust target triple** (`wasm32-wasip1`,
+          `thumbv6m-none-eabi`, custom `--target=…`)
+        - **Toolchain quirks**: cross-compiling, custom `RUSTFLAGS`, etc.
+
+        Anything that someone trying to reproduce should mirror.
+      placeholder: |
+        - Chromium 132 on Linux (Arch, kernel 6.12.5)
+        - Wasm build via `bodge:debug subduction_wasm`
+        - Behind Cloudflare → nginx → subduction_cli (containerized,
+          `rust:1.90-slim`, deployed via Helm chart)
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the actual observed behaviour.
+      placeholder: |
+        After ~30 seconds of idle, the client's WebSocket connection drops
+        with `RecvError` and never reconnects.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: |
+        The connection should stay open indefinitely, or reconnect
+        automatically on transient drops.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: |
+        Minimal steps or code that reproduces the issue. A failing test
+        case in the relevant `tests/` directory is ideal.
+      placeholder: |
+        1. Start `subduction_cli server --port 8080`
+        2. Connect a client with `subduction_cli client --peer ws://localhost:8080`
+        3. Wait 60 seconds
+        4. Observe the client disconnects with `RecvError`
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: |
+        Paste any errors, panic traces, or `RUST_LOG=debug` output here.
+        Long traces are fine — they'll be collapsed automatically.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Anything else that might help — related issues, deployment
+        topology (peer count, behind a load balancer, etc.), recent
+        changes that may have introduced the regression.
