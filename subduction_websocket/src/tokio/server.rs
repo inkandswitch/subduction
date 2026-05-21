@@ -67,12 +67,12 @@ pub struct TokioWebSocketServer<
     /// lets the outbound methods use the configured value instead of
     /// falling back to the transport default.
     max_message_size: usize,
-    /// Optional Ping/Pong keepalive applied to all WebSocket connections
-    /// (inbound and outbound) managed by this server. `None` disables
-    /// keepalive entirely. Servers default to [`KeepAlive::balanced`] so
-    /// that idle connections survive standard 60s LB/NAT drops and dead
-    /// peers are detected within ~80 s (`2 × (30 s + 10 s)`).
-    keepalive: Option<KeepAlive>,
+    /// Ping/Pong keepalive applied to every WebSocket connection
+    /// (inbound and outbound) managed by this server. Defaults to
+    /// [`KeepAlive::balanced`] (30 s ping / 10 s pong / 2 misses →
+    /// dead-peer detection in ~80 s, idle-connection survival across
+    /// the typical 60 s LB / NAT idle drop).
+    keepalive: KeepAlive,
 }
 
 impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
@@ -137,18 +137,15 @@ where
             address,
             handshake_max_drift,
             max_message_size,
-            Some(KeepAlive::balanced()),
+            KeepAlive::balanced(),
             subduction,
             TaskTracker::new(),
         )
         .await
     }
 
-    /// Like [`new`](Self::new) but with explicit keepalive control.
-    ///
-    /// Pass `None` to disable Ping/Pong keepalive entirely. Otherwise the
-    /// supplied [`KeepAlive`] config is applied to every WebSocket
-    /// (inbound and outbound) the server manages.
+    /// Like [`new`](Self::new) but with an explicit [`KeepAlive`]
+    /// config (e.g. for tests that need aggressive timings).
     ///
     /// # Errors
     ///
@@ -157,7 +154,7 @@ where
         address: SocketAddr,
         handshake_max_drift: Duration,
         max_message_size: usize,
-        keepalive: Option<KeepAlive>,
+        keepalive: KeepAlive,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
         tasks: TaskTracker,
     ) -> Result<Self, tungstenite::Error> {
@@ -195,7 +192,7 @@ where
             address,
             handshake_max_drift,
             max_message_size,
-            Some(KeepAlive::balanced()),
+            KeepAlive::balanced(),
             subduction,
             tasks,
         )
@@ -213,7 +210,7 @@ where
         address: SocketAddr,
         handshake_max_drift: Duration,
         max_message_size: usize,
-        keepalive: Option<KeepAlive>,
+        keepalive: KeepAlive,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
         tasks: TaskTracker,
     ) -> Result<Self, tungstenite::Error> {
@@ -286,28 +283,19 @@ where
                                         let sender_cancel = task_cancel.clone();
                                         let listen_tracker = task_tracker.clone();
                                         let sender_tracker = task_tracker.clone();
-                                        let keepalive_for_closure = keepalive;
                                         let keepalive_tracker = task_tracker.clone();
                                         let keepalive_cancel = task_cancel.clone();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
                                             move |ws_handshake, peer_id| {
                                                 // Create WebSocket wrapper with verified PeerId
-                                                let stream = ws_handshake.into_inner();
-                                                let (ws, sender_fut, maybe_keepalive_fut): (_, futures::future::BoxFuture<'static, _>, _) =
-                                                    match keepalive_for_closure {
-                                                        Some(ka) => {
-                                                            let (ws, sender_fut, keepalive_task) =
-                                                                WebSocket::new_with_keepalive(
-                                                                    stream, peer_id, ka, TokioSleeper,
-                                                                );
-                                                            (ws, sender_fut.boxed(), Some(keepalive_task))
-                                                        }
-                                                        None => {
-                                                            let (ws, sender_fut) = WebSocket::new(stream, peer_id);
-                                                            (ws, sender_fut.boxed(), None)
-                                                        }
-                                                    };
+                                                let (ws, sender_fut, keepalive_task) =
+                                                    WebSocket::new_with_keepalive(
+                                                        ws_handshake.into_inner(),
+                                                        peer_id,
+                                                        keepalive,
+                                                        TokioSleeper,
+                                                    );
 
                                                 let listen_ws = ws.clone();
                                                 listen_tracker.spawn(async move {
@@ -336,19 +324,17 @@ where
                                                     }
                                                 });
 
-                                                if let Some(keepalive_fut) = maybe_keepalive_fut {
-                                                    let keepalive_fut = keepalive_fut.into_future();
-                                                    keepalive_tracker.spawn(async move {
-                                                        tokio::select! {
-                                                            () = keepalive_cancel.cancelled() => {
-                                                                tracing::debug!("WebSocket keepalive cancelled");
-                                                            }
-                                                            outcome = keepalive_fut => {
-                                                                tracing::debug!(?outcome, "WebSocket keepalive exited");
-                                                            }
+                                                let keepalive_fut = keepalive_task.into_future();
+                                                keepalive_tracker.spawn(async move {
+                                                    tokio::select! {
+                                                        () = keepalive_cancel.cancelled() => {
+                                                            tracing::debug!("WebSocket keepalive cancelled");
                                                         }
-                                                    });
-                                                }
+                                                        outcome = keepalive_fut => {
+                                                            tracing::debug!(?outcome, "WebSocket keepalive exited");
+                                                        }
+                                                    }
+                                                });
 
                                                 (UnifiedWebSocket::Accepted(ws), ())
                                             },
@@ -440,7 +426,7 @@ where
             timeout,
             handshake_max_drift,
             max_message_size,
-            Some(KeepAlive::balanced()),
+            KeepAlive::balanced(),
             signer,
             service_name,
             storage,
@@ -451,10 +437,8 @@ where
         .await
     }
 
-    /// Like [`setup`](Self::setup) but with explicit keepalive control.
-    ///
-    /// Pass `None` for `keepalive` to disable Ping/Pong liveness
-    /// detection on every connection.
+    /// Like [`setup`](Self::setup) but with an explicit [`KeepAlive`]
+    /// config.
     ///
     /// # Errors
     ///
@@ -465,7 +449,7 @@ where
         timeout: O,
         handshake_max_drift: Duration,
         max_message_size: usize,
-        keepalive: Option<KeepAlive>,
+        keepalive: KeepAlive,
         signer: Sig,
         service_name: Option<&str>,
         storage: S,
@@ -605,24 +589,17 @@ where
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
         let keepalive_uri_str = uri_str.clone();
-        let keepalive_config = self.keepalive;
+        let keepalive = self.keepalive;
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let stream = ws_handshake.into_inner();
-                let (ws, sender_fut, maybe_keepalive_fut): (_, futures::future::BoxFuture<'static, _>, _) =
-                    match keepalive_config {
-                        Some(ka) => {
-                            let (ws, sender_fut, keepalive_task) =
-                                WebSocket::new_with_keepalive(stream, peer_id, ka, TokioSleeper);
-                            (ws, sender_fut.boxed(), Some(keepalive_task))
-                        }
-                        None => {
-                            let (ws, sender_fut) = WebSocket::new(stream, peer_id);
-                            (ws, sender_fut.boxed(), None)
-                        }
-                    };
+                let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                    ws_handshake.into_inner(),
+                    peer_id,
+                    keepalive,
+                    TokioSleeper,
+                );
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -654,20 +631,18 @@ where
                     }
                 });
 
-                if let Some(keepalive_fut) = maybe_keepalive_fut {
-                    let keepalive_cancel = cancel_token;
-                    let keepalive_fut = keepalive_fut.into_future();
-                    keepalive_tracker.spawn(async move {
-                        tokio::select! {
-                            () = keepalive_cancel.cancelled() => {
-                                tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
-                            }
-                            outcome = keepalive_fut => {
-                                tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
-                            }
+                let keepalive_cancel = cancel_token;
+                let keepalive_fut = keepalive_task.into_future();
+                keepalive_tracker.spawn(async move {
+                    tokio::select! {
+                        () = keepalive_cancel.cancelled() => {
+                            tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
                         }
-                    });
-                }
+                        outcome = keepalive_fut => {
+                            tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
+                        }
+                    }
+                });
 
                 (ws_conn, ())
             },
@@ -747,24 +722,17 @@ where
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
         let keepalive_uri_str = uri_str.clone();
-        let keepalive_config = self.keepalive;
+        let keepalive = self.keepalive;
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let stream = ws_handshake.into_inner();
-                let (ws, sender_fut, maybe_keepalive_fut): (_, futures::future::BoxFuture<'static, _>, _) =
-                    match keepalive_config {
-                        Some(ka) => {
-                            let (ws, sender_fut, keepalive_task) =
-                                WebSocket::new_with_keepalive(stream, peer_id, ka, TokioSleeper);
-                            (ws, sender_fut.boxed(), Some(keepalive_task))
-                        }
-                        None => {
-                            let (ws, sender_fut) = WebSocket::new(stream, peer_id);
-                            (ws, sender_fut.boxed(), None)
-                        }
-                    };
+                let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
+                    ws_handshake.into_inner(),
+                    peer_id,
+                    keepalive,
+                    TokioSleeper,
+                );
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -796,20 +764,18 @@ where
                     }
                 });
 
-                if let Some(keepalive_fut) = maybe_keepalive_fut {
-                    let keepalive_cancel = cancel_token;
-                    let keepalive_fut = keepalive_fut.into_future();
-                    keepalive_tracker.spawn(async move {
-                        tokio::select! {
-                            () = keepalive_cancel.cancelled() => {
-                                tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
-                            }
-                            outcome = keepalive_fut => {
-                                tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
-                            }
+                let keepalive_cancel = cancel_token;
+                let keepalive_fut = keepalive_task.into_future();
+                keepalive_tracker.spawn(async move {
+                    tokio::select! {
+                        () = keepalive_cancel.cancelled() => {
+                            tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
                         }
-                    });
-                }
+                        outcome = keepalive_fut => {
+                            tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
+                        }
+                    }
+                });
 
                 (ws_conn, ())
             },

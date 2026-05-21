@@ -255,7 +255,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
     /// doesn't keep the outbound channel alive past its own exit.
     ///
     /// For liveness detection see
-    /// [`new_with_keepalive`](WebSocket::<T, Sendable>::new_with_keepalive).
+    /// [`WebSocket::<T, Sendable>::new_with_keepalive`].
     pub fn new(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
@@ -575,16 +575,7 @@ mod tests {
     use futures::io::Cursor;
     use testresult::TestResult;
 
-    /// Test [`Sleeper`] using `tokio::time::sleep`. Doesn't require the
-    /// `futures-timer` feature.
-    #[derive(Clone, Copy, Default)]
-    struct TokioSleeper;
-
-    impl Sleeper for TokioSleeper {
-        fn sleep(&self, dur: Duration) -> BoxFuture<'static, ()> {
-            Box::pin(tokio::time::sleep(dur))
-        }
-    }
+    use crate::sleep::TokioSleeper;
 
     #[allow(clippy::expect_used, reason = "test-only helper")]
     fn nz(n: u32) -> NonZeroU32 {
