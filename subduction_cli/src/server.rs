@@ -183,7 +183,6 @@ impl ServerArgs {
         self.max_frame_size_override
             .unwrap_or(self.max_message_size)
     }
-
 }
 
 /// Default interval for refreshing storage metrics (1 minute).

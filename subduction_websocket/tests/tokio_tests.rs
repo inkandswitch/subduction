@@ -262,29 +262,9 @@ async fn client_reconnect() -> TestResult {
     Ok(())
 }
 
-/// **(H)** Reconnect path must wire up a fresh keepalive task. We can't
-/// observe the new `KeepAliveTask` handle directly (the `Reconnect` impl
-/// spawns it internally and drops the handle by design), so we verify the
-/// behavioural consequence: with aggressive server-side keepalive enabled,
-/// the server's view of `connected_peer_ids()` grows by one across the
-/// reconnect _and_ stays connected across multiple ping cycles. The
-/// latter can only hold if the new connection's listener (the thing that
-/// answers server pings) is alive.
-///
-/// A regression that broke listener installation on the new connection
-/// would show up as the server tearing the new connection down within
+/// After reconnect, the new connection's listener answers server pings —
+/// otherwise the server would tear the connection down within
 /// `threshold × (ping + pong)` ms.
-///
-/// > [!NOTE]
-/// > This test does NOT assert that the _original_ keepalive task has
-/// > exited. The current `Reconnect::reconnect` implementation
-/// > (`subduction_websocket/src/tokio/client.rs`) only replaces
-/// > `*self = …`; it does not signal or cancel the old connection's
-/// > listener / sender / keepalive tasks, so they keep running on the
-/// > old TCP socket until that socket itself fails. This is a
-/// > pre-existing resource leak unrelated to keepalive (the same leak
-/// > affected the pre-keepalive listener and sender tasks). Worth a
-/// > follow-up issue but outside the scope of this PR.
 #[tokio::test]
 async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
     init_tracing();

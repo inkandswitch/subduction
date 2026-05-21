@@ -421,14 +421,8 @@ async fn second_sync_round_is_empty() -> TestResult {
     Ok(())
 }
 
-/// End-to-end: with keepalive enabled and a short ping interval, an
-/// otherwise-idle connection should survive multiple ping cycles. The
-/// peers are healthy (they automatically respond to pings via the
-/// listener loop), so neither side should declare a timeout.
-///
-/// This is a regression test that the new keepalive plumbing doesn't
-/// false-positive on a quiet but healthy link, and that the inbound
-/// data channel isn't perturbed by the Pong traffic.
+/// Idle healthy peer survives multiple keepalive cycles (no false-
+/// positive Timeout).
 #[tokio::test]
 async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     init_tracing();
@@ -532,27 +526,9 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     Ok(())
 }
 
-/// **(F)** End-to-end sad-path companion to
-/// `keepalive_does_not_disconnect_idle_healthy_peer`: when a peer stops
-/// responding to keepalive Pings, the other side must (a) notice within
-/// the configured threshold window and (b) propagate the timeout all the
-/// way through `Subduction`'s connection lifecycle so the peer disappears
-/// from `connected_peer_ids()`.
-///
-/// This exercises three integration layers the unit tests don't:
-///
-/// 1. The keepalive loop's channel-close actually shuts down the
-///    underlying WebSocket plumbing.
-/// 2. `Subduction`'s connection loop observes the inbound channel close
-///    and invokes `on_peer_disconnect`.
-/// 3. The peer is removed from `connected_peer_ids()` (the operator-
-///    visible observable that the keepalive PR's stated goal is about).
-///
-/// We simulate a wedged client by aborting its listener task — the
-/// underlying TCP socket stays open, but no inbound frames are read,
-/// so the server's Pings arrive but no Pong replies come back. This is
-/// stricter than killing the TCP socket (which the listener would also
-/// notice on the next read error, bypassing the keepalive path).
+/// Sad-path E2E: wedged client (listener aborted) → server's keepalive
+/// detects → peer disappears from `connected_peer_ids()`. Exercises the
+/// full keepalive→channel-close→`on_peer_disconnect` chain.
 #[tokio::test]
 async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult {
     init_tracing();
