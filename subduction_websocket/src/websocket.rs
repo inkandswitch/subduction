@@ -58,10 +58,12 @@ impl KeepAlive {
     ///
     /// # Panics
     ///
-    /// If 2 somethow turns out to be nonzero
+    /// Never. `NonZeroU32::new(2)` is statically `Some`; the `expect`
+    /// is only there because this is a `const fn` and `match` would
+    /// be noisier.
     #[must_use]
     pub const fn balanced() -> Self {
-        #[allow(clippy::expect_used)]
+        #[allow(clippy::expect_used, reason = "2 is statically nonzero")]
         let two = NonZeroU32::new(2).expect("2 should be a valid nonzero u32");
         Self {
             ping_interval: Duration::from_secs(30),

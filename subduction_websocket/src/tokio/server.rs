@@ -175,7 +175,7 @@ where
     /// task — including per-peer `connection_loop`s.
     ///
     /// Equivalent to [`Self::new_with_tracker_and_keepalive`] with
-    /// `keepalive = Some(KeepAlive::balanced())`.
+    /// `keepalive = KeepAlive::balanced()`.
     ///
     /// # Errors
     ///
