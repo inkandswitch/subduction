@@ -133,6 +133,7 @@
           cargo-deny
           cargo-expand
           cargo-flamegraph
+          cargo-mutants
           cargo-nextest
           cargo-release
           cargo-outdated
