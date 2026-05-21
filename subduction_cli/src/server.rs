@@ -1,6 +1,6 @@
 //! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, sync::Arc, time::Duration};
 
 use eyre::Result;
 use future_form::Sendable;
@@ -25,6 +25,7 @@ use subduction_http_longpoll::server::LongPollHandler;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
+    sleep::FuturesTimerSleeper,
     timeout::FuturesTimerTimeout,
     tokio::{TokioSpawn, unified::UnifiedWebSocket},
     websocket::{KeepAlive, WebSocket},
@@ -140,9 +141,13 @@ pub(crate) struct ServerArgs {
 
     /// Number of consecutive missed pongs before the connection is
     /// torn down. Single transient misses (e.g., a GC pause on the
-    /// peer) are forgiven by keeping this above 1. Default 2.
-    #[arg(long = "ws-missed-pong-threshold", default_value_t = 2)]
-    pub(crate) ws_missed_pong_threshold: u32,
+    /// peer) are forgiven by keeping this above 1. Default 2; minimum
+    /// 1 (`0` is rejected at parse time).
+    #[arg(
+        long = "ws-missed-pong-threshold",
+        default_value_t = NonZeroU32::new(2).expect("2 is non-zero"),
+    )]
+    pub(crate) ws_missed_pong_threshold: NonZeroU32,
 
     /// Metrics server port (Prometheus endpoint)
     #[arg(long, default_value = "9090")]
@@ -876,7 +881,12 @@ async fn handle_websocket(
         WebSocketHandshake::new(ws_stream),
         |ws_handshake, peer_id| {
             let (ws, sender_fut, keepalive_fut) =
-                WebSocket::new_with_keepalive(ws_handshake.into_inner(), peer_id, keepalive);
+                WebSocket::new_with_keepalive(
+                    ws_handshake.into_inner(),
+                    peer_id,
+                    keepalive,
+                    FuturesTimerSleeper,
+                );
 
             let listen_ws = ws.clone();
             tokio::spawn(async move {
@@ -1095,7 +1105,12 @@ async fn try_connect_ws(
         WebSocketHandshake::new(ws_stream),
         move |ws_handshake, peer_id| {
             let (ws, sender_fut, keepalive_fut) =
-                WebSocket::new_with_keepalive(ws_handshake.into_inner(), peer_id, keepalive);
+                WebSocket::new_with_keepalive(
+                    ws_handshake.into_inner(),
+                    peer_id,
+                    keepalive,
+                    FuturesTimerSleeper,
+                );
 
             let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 

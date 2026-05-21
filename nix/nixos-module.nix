@@ -327,15 +327,18 @@ in {
                   "--max-frame-size"
                   (toString cfg.server.maxFrameSize)
                 ]
-                ++ lib.optionals (!cfg.server.wsKeepAlive.enable) ["--ws-no-keepalive"]
-                ++ [
-                  "--ws-ping-interval"
-                  (toString cfg.server.wsKeepAlive.pingInterval)
-                  "--ws-pong-timeout"
-                  (toString cfg.server.wsKeepAlive.pongTimeout)
-                  "--ws-missed-pong-threshold"
-                  (toString cfg.server.wsKeepAlive.missedPongThreshold)
-                ]
+                ++ (
+                  if cfg.server.wsKeepAlive.enable
+                  then [
+                    "--ws-ping-interval"
+                    (toString cfg.server.wsKeepAlive.pingInterval)
+                    "--ws-pong-timeout"
+                    (toString cfg.server.wsKeepAlive.pongTimeout)
+                    "--ws-missed-pong-threshold"
+                    (toString cfg.server.wsKeepAlive.missedPongThreshold)
+                  ]
+                  else ["--ws-no-keepalive"]
+                )
                 ++ lib.optionals cfg.server.enableMetrics [
                   "--metrics"
                   "--metrics-port"

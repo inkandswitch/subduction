@@ -6,7 +6,8 @@ use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
     error::{DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    websocket::{KeepAlive, KeepAliveOutcome, KeepAliveTask, ListenerTask, SenderTask, WebSocket},
+    sleep::FuturesTimerSleeper,
+    websocket::{KeepAlive, KeepAliveTask, ListenerTask, SenderTask, WebSocket},
 };
 use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
 use future_form::{FutureForm, Sendable};
@@ -147,6 +148,13 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the internal `with_options` constructor violates
+    /// its documented invariant (returning `None` for the keepalive task
+    /// despite being passed `Some(KeepAlive)`). This is a bug, not a
+    /// runtime condition.
     pub async fn with_keepalive<'a>(
         address: Uri,
         signer: R,
@@ -172,16 +180,16 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             Some(keepalive),
         )
         .await?;
-        // `with_options` guarantees `Some` when the keepalive arg is `Some`.
-        // We unwrap with a fallback that should never fire; the fallback is
-        // a documented invariant rather than a panic site.
-        let kp = kp.unwrap_or_else(|| {
-            tracing::error!(
-                "internal invariant violated: with_options returned None despite \
-                 Some(KeepAlive) being passed; producing a no-op keepalive task"
-            );
-            KeepAliveTask::new(Box::pin(async { KeepAliveOutcome::ConnectionClosed }))
-        });
+        // `with_options` guarantees `Some(KeepAliveTask)` whenever it's
+        // called with `Some(KeepAlive)`. Violating this is a bug in
+        // `with_options`, not a runtime condition, so panic loudly.
+        #[allow(
+            clippy::expect_used,
+            reason = "internal invariant: documented in #[doc] above"
+        )]
+        let kp = kp.expect(
+            "with_options invariant: Some(KeepAlive) input must yield Some(KeepAliveTask)",
+        );
         Ok((auth, listener, sender, kp))
     }
 
@@ -234,6 +242,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
                         ws_handshake.into_inner(),
                         peer_id,
                         keepalive,
+                        FuturesTimerSleeper,
                     );
                     (socket, (Sendable::from_future(sender_fut), keepalive_task))
                 },

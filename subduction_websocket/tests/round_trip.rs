@@ -444,7 +444,8 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     let aggressive_keepalive = KeepAlive {
         ping_interval: Duration::from_millis(100),
         pong_timeout: Duration::from_millis(50),
-        missed_pong_threshold: 2,
+        #[allow(clippy::expect_used, reason = "test-only literal")]
+        missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
     };
 
     let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()

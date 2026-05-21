@@ -5,6 +5,7 @@ use core::{
     fmt::Debug,
     future::{Future, IntoFuture},
     marker::PhantomData,
+    num::NonZeroU32,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -16,7 +17,10 @@ use futures::future::BoxFuture;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{peer::id::PeerId, transport::Transport};
 
-use crate::error::{DisconnectionError, RecvError, RunError, SendError};
+use crate::{
+    error::{DisconnectionError, RecvError, RunError, SendError},
+    sleep::Sleeper,
+};
 
 /// Channel capacity for outbound messages.
 ///
@@ -55,23 +59,32 @@ pub struct KeepAlive {
     /// Number of consecutive missed pongs before the connection is
     /// declared dead and torn down. Single transient misses (e.g., GC
     /// pauses, brief network jitter) are forgiven by setting this above 1.
-    pub missed_pong_threshold: u32,
+    ///
+    /// `NonZeroU32` so that `0` ("zero misses tolerated, ever") is
+    /// unrepresentable — that combination is indistinguishable from a
+    /// threshold of `1`, and accepting it silently was a footgun.
+    pub missed_pong_threshold: NonZeroU32,
 }
 
 impl KeepAlive {
     /// Balanced defaults: 30 s ping interval, 10 s pong timeout, 2
     /// consecutive misses before close. Dead-link detection latency is
-    /// roughly `ping_interval + ping_interval + pong_timeout` = 70 s.
+    /// roughly `ping_interval × missed_pong_threshold + pong_timeout` = 70 s.
     ///
     /// Picked to stay comfortably under typical 60 s load-balancer /
     /// NAT idle drops (the first ping at 30 s prevents the idle drop)
     /// while tolerating a single transient slow cycle.
     #[must_use]
     pub const fn balanced() -> Self {
+        // `2 != 0` so this folds at compile time; the `else` branch is
+        // structurally unreachable.
+        let Some(two) = NonZeroU32::new(2) else {
+            unreachable!()
+        };
         Self {
             ping_interval: Duration::from_secs(30),
             pong_timeout: Duration::from_secs(10),
-            missed_pong_threshold: 2,
+            missed_pong_threshold: two,
         }
     }
 }
@@ -94,6 +107,9 @@ impl core::fmt::Debug for ListenerTask<'_> {
 }
 
 impl<'a> ListenerTask<'a> {
+    // Only called from `tokio::client`; silences the dead-code warning
+    // when building without the `tokio_*` features.
+    #[cfg_attr(not(feature = "tokio_base"), allow(dead_code))]
     pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
         Self(fut)
     }
@@ -120,6 +136,9 @@ impl core::fmt::Debug for SenderTask<'_> {
 }
 
 impl<'a> SenderTask<'a> {
+    // Only called from `tokio::client`; silences the dead-code warning
+    // when building without the `tokio_*` features.
+    #[cfg_attr(not(feature = "tokio_base"), allow(dead_code))]
     pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
         Self(fut)
     }
@@ -271,9 +290,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
         ws: WebSocketStream<T>,
         peer_id: PeerId,
     ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, K>) {
-        let (this, sender, no_keepalive) = Self::new_with_keepalive(ws, peer_id, None);
-        debug_assert!(no_keepalive.is_none(), "keepalive is None => no task");
-        (this, sender)
+        tracing::info!("new WebSocket connection for peer {peer_id:?} (keepalive: false)");
+        Self::new_inner(ws, peer_id)
     }
 
     /// Create a new WebSocket transport with optional keepalive.
@@ -287,37 +305,68 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
     /// the inbound and outbound channels so the rest of the stack observes
     /// the disconnect via the normal channel-closed paths.
     ///
-    /// When `keepalive` is `None`, no keepalive task is spawned and the
-    /// returned `Option<KeepAliveTask>` is `None`.
-    pub fn new_with_keepalive(
+    /// `sleeper` provides the strategy for the in-between waits — typically
+    /// [`FuturesTimerSleeper`](crate::sleep::FuturesTimerSleeper) (gated
+    /// behind the `futures-timer` feature) or a custom impl bridging to
+    /// the host runtime. When `keepalive` is `None`, no keepalive task is
+    /// spawned and the returned `Option<KeepAliveTask>` is `None` — the
+    /// `sleeper` argument is unused in that case but still required by the
+    /// type signature.
+    pub fn new_with_keepalive<S: Sleeper>(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
         keepalive: Option<KeepAlive>,
+        sleeper: S,
     ) -> (
         Self,
-        impl Future<Output = Result<(), RunError>> + use<T, K>,
+        impl Future<Output = Result<(), RunError>> + use<T, K, S>,
         Option<KeepAliveTask>,
     ) {
         tracing::info!(
             "new WebSocket connection for peer {peer_id:?} (keepalive: {})",
             keepalive.is_some()
         );
+        let (this, sender_task) = Self::new_inner(ws, peer_id);
+
+        let keepalive_task = keepalive.map(|config| {
+            KeepAliveTask::new(Box::pin(keepalive_loop(
+                config,
+                peer_id,
+                this.outbound_tx.clone(),
+                this.inbound_writer.clone(),
+                this.pong_received.clone(),
+                sleeper,
+            )))
+        });
+
+        (this, sender_task, keepalive_task)
+    }
+
+    /// Shared body of [`Self::new`] and [`Self::new_with_keepalive`].
+    ///
+    /// Wires up the channels, the sender task future, and the
+    /// `pong_received` flag. Doesn't construct the keepalive task — the
+    /// caller adds that when needed so this helper has no `Sleeper`
+    /// dependency.
+    fn new_inner(
+        ws: WebSocketStream<T>,
+        peer_id: PeerId,
+    ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, K>) {
         let (ws_writer, ws_reader) = ws.split();
         let (inbound_writer, inbound_reader) = async_channel::bounded(128);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let chan_id = rand::random::<u64>();
-        // Initialise `true`: the first keepalive cycle wouldn't count this
-        // as a "miss" because no Ping has been sent yet. The first
-        // ping_interval-delayed cycle clears it before sending the Ping,
-        // restoring the correct check semantics from cycle two onward.
-        let pong_received = Arc::new(AtomicBool::new(true));
+        // Initial value is irrelevant: the keepalive loop (if any) clears
+        // this flag _before_ sending each ping, so cycle 1 only sees
+        // whatever pong arrives during the post-ping window.
+        let pong_received = Arc::new(AtomicBool::new(false));
 
         let ws_sender = Arc::new(Mutex::new(ws_writer));
 
         let sender_task = {
             let ws_sender = ws_sender.clone();
             async move {
-                tracing::info!("starting WebSocket sender task for peer {:?}", peer_id);
+                tracing::info!("starting WebSocket sender task for peer {peer_id:?}");
 
                 let mut ws_sender = ws_sender.lock().await;
 
@@ -330,19 +379,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                 Ok(())
             }
         };
-
-        let keepalive_task = keepalive.map(|config| {
-            let outbound_tx = outbound_tx.clone();
-            let inbound_writer = inbound_writer.clone();
-            let pong_received = pong_received.clone();
-            KeepAliveTask::new(Box::pin(keepalive_loop(
-                config,
-                peer_id,
-                outbound_tx,
-                inbound_writer,
-                pong_received,
-            )))
-        });
 
         let ws = Self {
             chan_id,
@@ -358,7 +394,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
             _phantom: PhantomData,
         };
 
-        (ws, sender_task, keepalive_task)
+        (ws, sender_task)
     }
 
     /// Get the [`PeerId`] associated with this transport.
@@ -406,13 +442,24 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
                     tracing::warn!("unexpected text message: {}", text);
                 }
                 Ok(tungstenite::Message::Ping(p)) => {
-                    tracing::debug!(size = p.len(), "received ping");
-                    self.outbound_tx
-                        .send(tungstenite::Message::Pong(p))
-                        .await
-                        .unwrap_or_else(|_| {
-                            tracing::error!("failed to send pong");
-                        });
+                    tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received ping");
+                    // Use try_send so a backpressured outbound queue
+                    // cannot stall the listener (which would prevent
+                    // _our_ pong responses from being processed and
+                    // could lead the remote peer's keepalive to
+                    // false-positive disconnect us). If the channel
+                    // is full or closed we just drop the pong reply;
+                    // the remote will retry on its next ping cycle.
+                    if let Err(e) = self
+                        .outbound_tx
+                        .try_send(tungstenite::Message::Pong(p))
+                    {
+                        tracing::warn!(
+                            error = ?e,
+                            peer_id = ?self.peer_id,
+                            "failed to enqueue pong reply"
+                        );
+                    }
                 }
                 Ok(tungstenite::Message::Pong(p)) => {
                     tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received pong");
@@ -465,20 +512,27 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
 /// The task exits with [`KeepAliveOutcome::ConnectionClosed`] when the
 /// outbound channel is already closed (so we can't even send a ping)
 /// or with [`KeepAliveOutcome::Timeout`] when too many pongs were missed.
-async fn keepalive_loop(
+///
+/// The `sleeper` parameter abstracts over the timer implementation so
+/// this loop can run on any async runtime — the crate ships a
+/// [`FuturesTimerSleeper`](crate::sleep::FuturesTimerSleeper) for the
+/// common case, but tests can substitute a deterministic sleeper.
+async fn keepalive_loop<S: Sleeper>(
     config: KeepAlive,
     peer_id: PeerId,
     outbound_tx: async_channel::Sender<tungstenite::Message>,
     inbound_writer: async_channel::Sender<Vec<u8>>,
     pong_received: Arc<AtomicBool>,
+    sleeper: S,
 ) -> KeepAliveOutcome {
     use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
     let mut consecutive_misses: u32 = 0;
+    let threshold = config.missed_pong_threshold.get();
 
     loop {
         // Sleep until the next ping moment.
-        futures_timer::Delay::new(config.ping_interval).await;
+        sleeper.sleep(config.ping_interval).await;
 
         // Clear the flag BEFORE sending so a stale Pong from an earlier
         // cycle can't satisfy this one.
@@ -496,7 +550,7 @@ async fn keepalive_loop(
         tracing::trace!(?peer_id, "keepalive: sent ping");
 
         // Wait for the pong deadline.
-        futures_timer::Delay::new(config.pong_timeout).await;
+        sleeper.sleep(config.pong_timeout).await;
 
         if pong_received.load(Ordering::SeqCst) {
             if consecutive_misses > 0 {
@@ -510,11 +564,11 @@ async fn keepalive_loop(
         tracing::warn!(
             ?peer_id,
             misses = consecutive_misses,
-            threshold = config.missed_pong_threshold,
+            threshold,
             "keepalive: pong missed"
         );
 
-        if consecutive_misses >= config.missed_pong_threshold {
+        if consecutive_misses >= threshold {
             tracing::warn!(
                 ?peer_id,
                 misses = consecutive_misses,
@@ -522,13 +576,15 @@ async fn keepalive_loop(
             );
             // Best-effort: nudge a Close frame onto the outbound queue
             // so the peer sees a clean WebSocket close instead of a TCP
-            // reset. Ignore failures — the sender task may already be
-            // exiting.
+            // reset. Use `try_send` so a saturated or already-closing
+            // sender doesn't strand us in `.await` — we're about to
+            // close the channel anyway, the Close frame is purely a
+            // courtesy.
             let close_frame = tungstenite::Message::Close(Some(CloseFrame {
                 code: CloseCode::Away,
                 reason: "keepalive timeout".into(),
             }));
-            drop(outbound_tx.send(close_frame).await);
+            drop(outbound_tx.try_send(close_frame));
 
             outbound_tx.close();
             inbound_writer.close();
@@ -571,6 +627,25 @@ mod tests {
     use futures::io::Cursor;
     use testresult::TestResult;
 
+    /// Test-only [`Sleeper`] backed by `tokio::time::sleep`.
+    ///
+    /// Keeps the unit tests independent of the `futures-timer` feature so
+    /// the lib's keepalive logic is reachable from `cargo test
+    /// -p subduction_websocket` even with default features.
+    #[derive(Clone, Copy, Default)]
+    struct TokioSleeper;
+
+    impl Sleeper for TokioSleeper {
+        fn sleep(&self, dur: Duration) -> BoxFuture<'static, ()> {
+            Box::pin(tokio::time::sleep(dur))
+        }
+    }
+
+    #[allow(clippy::expect_used, reason = "test-only helper")]
+    fn nz(n: u32) -> NonZeroU32 {
+        NonZeroU32::new(n).expect("non-zero")
+    }
+
     async fn create_mock_websocket_stream() -> WebSocketStream<Cursor<Vec<u8>>> {
         use async_tungstenite::WebSocketStream;
         use futures::io::Cursor;
@@ -607,36 +682,37 @@ mod tests {
         let kp = KeepAlive::balanced();
         assert_eq!(kp.ping_interval, Duration::from_secs(30));
         assert_eq!(kp.pong_timeout, Duration::from_secs(10));
-        assert_eq!(kp.missed_pong_threshold, 2);
+        assert_eq!(kp.missed_pong_threshold, nz(2));
     }
 
-    /// Sanity: `new_with_keepalive(.., None)` returns no keepalive task.
+    /// Sanity: `new_with_keepalive(.., None, _)` returns no keepalive task.
     #[tokio::test]
     async fn new_with_keepalive_none_returns_no_task() {
         let ws = create_mock_websocket_stream().await;
         let peer_id = PeerId::new([7u8; 32]);
 
         let (_socket, _sender, keepalive_task): (WebSocket<_, Sendable>, _, _) =
-            WebSocket::new_with_keepalive(ws, peer_id, None);
+            WebSocket::new_with_keepalive(ws, peer_id, None, TokioSleeper);
 
         assert!(keepalive_task.is_none());
     }
 
-    /// Sanity: `new_with_keepalive(.., Some(_))` returns a keepalive task.
+    /// Sanity: `new_with_keepalive(.., Some(_), _)` returns a keepalive task.
     #[tokio::test]
     async fn new_with_keepalive_some_returns_task() {
         let ws = create_mock_websocket_stream().await;
         let peer_id = PeerId::new([7u8; 32]);
 
         let (_socket, _sender, keepalive_task): (WebSocket<_, Sendable>, _, _) =
-            WebSocket::new_with_keepalive(ws, peer_id, Some(KeepAlive::balanced()));
+            WebSocket::new_with_keepalive(ws, peer_id, Some(KeepAlive::balanced()), TokioSleeper);
 
         assert!(keepalive_task.is_some());
     }
 
     /// Drive `keepalive_loop` directly with a tight config and an
     /// always-quiet pong flag. After `missed_pong_threshold` cycles, the
-    /// loop must close both channels and return [`KeepAliveOutcome::Timeout`].
+    /// loop must close both channels and return [`KeepAliveOutcome::Timeout`],
+    /// and the final outbound message must be a Close frame.
     #[tokio::test]
     async fn keepalive_loop_times_out_on_silent_peer() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
@@ -646,17 +722,17 @@ mod tests {
         // Drain the outbound channel so the keepalive task's Ping sends
         // don't block on a full channel — but never set `pong_received`.
         let outbound_drain = tokio::spawn(async move {
-            let mut pings = 0u32;
-            while outbound_rx.recv().await.is_ok() {
-                pings += 1;
+            let mut msgs = Vec::new();
+            while let Ok(msg) = outbound_rx.recv().await {
+                msgs.push(msg);
             }
-            pings
+            msgs
         });
 
         let config = KeepAlive {
             ping_interval: Duration::from_millis(40),
             pong_timeout: Duration::from_millis(20),
-            missed_pong_threshold: 2,
+            missed_pong_threshold: nz(2),
         };
         let outcome = keepalive_loop(
             config,
@@ -664,26 +740,35 @@ mod tests {
             outbound_tx,
             inbound_writer.clone(),
             pong_received,
+            TokioSleeper,
         )
         .await;
 
         // Allow the drain task to observe the channel close.
-        let pings = outbound_drain.await?;
+        let outbound_msgs = outbound_drain.await?;
 
         let KeepAliveOutcome::Timeout { missed } = outcome else {
             return Err(format!("expected Timeout outcome, got {outcome:?}").into());
         };
-        assert!(
-            missed >= 2,
-            "should have missed at least the threshold count: got {missed}"
-        );
+        assert_eq!(missed, 2, "should close on exactly the threshold count");
 
         assert!(
             inbound_writer.is_closed(),
             "inbound_writer should be closed"
         );
-        // At least 2 pings (one per missed cycle) + 1 close frame; in practice 2 or 3.
-        assert!(pings >= 2, "expected >=2 outbound messages, got {pings}");
+        // Two pings (one per missed cycle) + best-effort close frame.
+        // The close frame is `try_send` so it _may_ be dropped under
+        // saturation, but with capacity 16 it always lands.
+        let ping_count = outbound_msgs
+            .iter()
+            .filter(|m| matches!(m, tungstenite::Message::Ping(_)))
+            .count();
+        assert_eq!(ping_count, 2, "expected 2 pings, got: {outbound_msgs:?}");
+        assert!(
+            matches!(outbound_msgs.last(), Some(tungstenite::Message::Close(_))),
+            "expected final message to be Close, got: {:?}",
+            outbound_msgs.last()
+        );
         // Inbound is closed, so a recv attempt returns Err immediately.
         assert!(inbound_reader.recv().await.is_err());
         Ok(())
@@ -715,7 +800,7 @@ mod tests {
         let config = KeepAlive {
             ping_interval: Duration::from_millis(20),
             pong_timeout: Duration::from_millis(10),
-            missed_pong_threshold: 2,
+            missed_pong_threshold: nz(2),
         };
         // Run the loop for long enough to exceed the natural timeout
         // window if the responsive peer weren't working. With 20 ms
@@ -729,6 +814,7 @@ mod tests {
                 outbound_tx.clone(),
                 inbound_writer.clone(),
                 pong_received,
+                TokioSleeper,
             ),
         )
         .await;
@@ -745,6 +831,71 @@ mod tests {
         // Cleanup: closing the channel exits the loop.
         outbound_tx.close();
         responsive_peer.await?;
+        Ok(())
+    }
+
+    /// Transient single miss followed by a recovered pong must reset
+    /// the consecutive-miss counter — the loop should keep pinging
+    /// rather than tearing down on a subsequent (single) miss.
+    ///
+    /// This exercises the `consecutive_misses = 0; continue;` branch
+    /// that the silent/responsive pair didn't reach.
+    #[tokio::test]
+    async fn keepalive_loop_resets_misses_after_recovery() -> TestResult {
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let pong_received = Arc::new(AtomicBool::new(false));
+
+        // Pattern: drop pings 1 and 3, respond to pings 2 and 4+.
+        // With threshold = 2, a non-resetting loop would close after
+        // ping 3 (misses = 2). A correct loop resets on ping 2 and
+        // never reaches the threshold.
+        let pattern_runner = {
+            let pong_received = pong_received.clone();
+            tokio::spawn(async move {
+                let mut seen = 0u32;
+                while let Ok(msg) = outbound_rx.recv().await {
+                    if matches!(msg, tungstenite::Message::Ping(_)) {
+                        seen += 1;
+                        // Respond on even-numbered pings only.
+                        if seen.is_multiple_of(2) {
+                            pong_received.store(true, Ordering::SeqCst);
+                        }
+                    }
+                }
+                seen
+            })
+        };
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_millis(20),
+            pong_timeout: Duration::from_millis(10),
+            missed_pong_threshold: nz(2),
+        };
+        // Run for 5+ ping cycles' worth so we see both alternations.
+        let outcome_or_timeout = tokio::time::timeout(
+            Duration::from_millis(180),
+            keepalive_loop(
+                config,
+                PeerId::new([42u8; 32]),
+                outbound_tx.clone(),
+                inbound_writer.clone(),
+                pong_received,
+                TokioSleeper,
+            ),
+        )
+        .await;
+
+        if let Ok(unexpected) = outcome_or_timeout {
+            return Err(format!(
+                "keepalive_loop should still be running (recovery should reset misses), got {unexpected:?}"
+            )
+            .into());
+        }
+
+        outbound_tx.close();
+        let seen = pattern_runner.await?;
+        assert!(seen >= 4, "expected at least 4 ping cycles, saw {seen}");
         Ok(())
     }
 }
