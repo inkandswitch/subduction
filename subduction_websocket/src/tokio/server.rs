@@ -13,7 +13,6 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use futures::FutureExt;
 use sedimentree_core::depth::DepthMetric;
 use subduction_core::{
     authenticated::Authenticated,
