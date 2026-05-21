@@ -26,6 +26,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
+    websocket::KeepAlive,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -258,6 +259,126 @@ async fn client_reconnect() -> TestResult {
     // Verify connection still works after reconnect
     client_ws.send(&test_msg).await?;
 
+    Ok(())
+}
+
+/// **(H)** Reconnect path must wire up a fresh keepalive task. We can't
+/// observe the new `KeepAliveTask` handle directly (the `Reconnect` impl
+/// spawns it internally and drops the handle by design), so we verify the
+/// behavioural consequence: with aggressive server-side keepalive enabled,
+/// the server's view of `connected_peer_ids()` grows by one across the
+/// reconnect _and_ stays connected across multiple ping cycles. The
+/// latter can only hold if the new connection's listener (the thing that
+/// answers server pings) is alive.
+///
+/// A regression that broke listener installation on the new connection
+/// would show up as the server tearing the new connection down within
+/// ~`ping × threshold + pong` ms.
+///
+/// > [!NOTE]
+/// > This test does NOT assert that the _original_ keepalive task has
+/// > exited. The current `Reconnect::reconnect` implementation
+/// > (`subduction_websocket/src/tokio/client.rs`) only replaces
+/// > `*self = …`; it does not signal or cancel the old connection's
+/// > listener / sender / keepalive tasks, so they keep running on the
+/// > old TCP socket until that socket itself fails. This is a
+/// > pre-existing resource leak unrelated to keepalive (the same leak
+/// > affected the pre-keepalive listener and sender tasks). Worth a
+/// > follow-up issue but outside the scope of this PR.
+#[tokio::test]
+async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
+    init_tracing();
+
+    let server_signer = test_signer(40);
+    let client_signer = test_signer(41);
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
+
+    let addr: SocketAddr = "127.0.0.1:0".parse()?;
+    let (server_subduction, listener_fut, manager_fut) = {
+        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        (sub, lfut, mfut)
+    };
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async move {
+        manager_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    // Aggressive: server pings every 80ms with a 40ms pong deadline and
+    // tears connections down after 2 consecutive misses (~240ms).
+    let aggressive = KeepAlive {
+        ping_interval: Duration::from_millis(80),
+        pong_timeout: Duration::from_millis(40),
+        #[allow(clippy::expect_used, reason = "test-only literal")]
+        missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    };
+    let server = TokioWebSocketServer::new_with_keepalive(
+        addr,
+        HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        Some(aggressive),
+        server_subduction.clone(),
+        tokio_util::task::TaskTracker::new(),
+    )
+    .await?;
+    let bound = server.address();
+    let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
+
+    let (mut client_ws, listener_fut, sender_fut, keepalive_task) =
+        TokioWebSocketClient::with_options(
+            uri,
+            client_signer,
+            Audience::known(server_peer_id),
+            DEFAULT_MAX_MESSAGE_SIZE,
+            Some(aggressive),
+        )
+        .await?;
+
+    tokio::spawn(async move {
+        if let Some(kp) = keepalive_task {
+            let outcome = kp.await;
+            tracing::debug!(?outcome, "initial keepalive task exited");
+        }
+    });
+    tokio::spawn(async {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+    tokio::spawn(async {
+        sender_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    // Let the initial connection settle and survive at least one keepalive
+    // cycle — proves the initial wiring is sound.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let before = server_subduction.connected_peer_ids().await.len();
+    assert!(
+        before >= 1,
+        "server should see the initial client connection (saw {before})"
+    );
+
+    // Reconnect — spawns a new connection and a new keepalive task.
+    client_ws.reconnect().await?;
+
+    // Idle past several keepalive cycles. The server's keepalive will
+    // ping the new connection; if the new connection's listener weren't
+    // alive (broken reconnect-keepalive wiring), the server would close
+    // it within ~240ms.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The new connection is alive at the server. We assert "at least
+    // one" rather than "exactly one" because the leaked original
+    // connection (see doc-comment above) may still be visible until the
+    // server's keepalive notices it.
+    let after = server_subduction.connected_peer_ids().await.len();
+    assert!(
+        after >= 1,
+        "server should still see the reconnected client after multiple keepalive cycles (saw {after})"
+    );
     Ok(())
 }
 

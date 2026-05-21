@@ -35,6 +35,7 @@ tungstenite = { workspace = true }
 [dev-dependencies]
 arbitrary = { workspace = true }
 async-lock = { workspace = true }
+bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 eyre = { workspace = true }

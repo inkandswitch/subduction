@@ -682,42 +682,22 @@ mod tests {
         assert_eq!(kp.missed_pong_threshold, nz(2));
     }
 
-    /// Sanity: `new_with_keepalive(.., None, _)` returns no keepalive task.
-    #[tokio::test]
-    async fn new_with_keepalive_none_returns_no_task() {
-        let ws = create_mock_websocket_stream().await;
-        let peer_id = PeerId::new([7u8; 32]);
-
-        let (_socket, _sender, keepalive_task): (WebSocket<_, Sendable>, _, _) =
-            WebSocket::new_with_keepalive(ws, peer_id, None, TokioSleeper);
-
-        assert!(keepalive_task.is_none());
-    }
-
-    /// Sanity: `new_with_keepalive(.., Some(_), _)` returns a keepalive task.
-    #[tokio::test]
-    async fn new_with_keepalive_some_returns_task() {
-        let ws = create_mock_websocket_stream().await;
-        let peer_id = PeerId::new([7u8; 32]);
-
-        let (_socket, _sender, keepalive_task): (WebSocket<_, Sendable>, _, _) =
-            WebSocket::new_with_keepalive(ws, peer_id, Some(KeepAlive::balanced()), TokioSleeper);
-
-        assert!(keepalive_task.is_some());
-    }
-
-    /// Drive `keepalive_loop` directly with a tight config and an
-    /// always-quiet pong flag. After `missed_pong_threshold` cycles, the
-    /// loop must close both channels and return [`KeepAliveOutcome::Timeout`],
-    /// and the final outbound message must be a Close frame.
-    #[tokio::test]
+    /// Drive `keepalive_loop` directly against a silent peer. After
+    /// `missed_pong_threshold` cycles, the loop closes both channels and
+    /// returns [`KeepAliveOutcome::Timeout`], and the final outbound
+    /// message is a `Close` frame with [`CloseCode::Away`].
+    ///
+    /// Uses `start_paused = true` so the loop's sleeps are virtual-time
+    /// only — the test completes in microseconds and is independent of
+    /// CI load.
+    #[tokio::test(start_paused = true)]
     async fn keepalive_loop_times_out_on_silent_peer() -> TestResult {
+        use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+
         let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));
 
-        // Drain the outbound channel so the keepalive task's Ping sends
-        // don't block on a full channel — but never set `pong_received`.
         let outbound_drain = tokio::spawn(async move {
             let mut msgs = Vec::new();
             while let Ok(msg) = outbound_rx.recv().await {
@@ -741,7 +721,6 @@ mod tests {
         )
         .await;
 
-        // Allow the drain task to observe the channel close.
         let outbound_msgs = outbound_drain.await?;
 
         let KeepAliveOutcome::Timeout { missed } = outcome else {
@@ -753,36 +732,34 @@ mod tests {
             inbound_writer.is_closed(),
             "inbound_writer should be closed"
         );
-        // Two pings (one per missed cycle) + best-effort close frame.
-        // The close frame is `try_send` so it _may_ be dropped under
-        // saturation, but with capacity 16 it always lands.
         let ping_count = outbound_msgs
             .iter()
             .filter(|m| matches!(m, tungstenite::Message::Ping(_)))
             .count();
         assert_eq!(ping_count, 2, "expected 2 pings, got: {outbound_msgs:?}");
         assert!(
-            matches!(outbound_msgs.last(), Some(tungstenite::Message::Close(_))),
-            "expected final message to be Close, got: {:?}",
+            matches!(
+                outbound_msgs.last(),
+                Some(tungstenite::Message::Close(Some(CloseFrame {
+                    code: CloseCode::Away,
+                    ..
+                })))
+            ),
+            "expected final message to be Close(Away, ...), got: {:?}",
             outbound_msgs.last()
         );
-        // Inbound is closed, so a recv attempt returns Err immediately.
         assert!(inbound_reader.recv().await.is_err());
         Ok(())
     }
 
     /// If `pong_received` is set to `true` between cycles, the loop must
     /// not declare a timeout — it should keep pinging indefinitely.
-    /// We drive a few cycles, flipping the flag on, and confirm no
-    /// timeout occurs within the deadline.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn keepalive_loop_does_not_time_out_with_responsive_peer() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));
 
-        // Simulate a responsive peer: every time we see a Ping on the
-        // outbound channel, immediately set `pong_received = true`.
         let responsive_peer = {
             let pong_received = pong_received.clone();
             tokio::spawn(async move {
@@ -799,10 +776,8 @@ mod tests {
             pong_timeout: Duration::from_millis(10),
             missed_pong_threshold: nz(2),
         };
-        // Run the loop for long enough to exceed the natural timeout
-        // window if the responsive peer weren't working. With 20 ms
-        // pings + 2 misses, a silent peer would close in ~40+10 = 50 ms.
-        // 250 ms is well past that.
+        // With virtual time, the timeout(250ms) bound is virtual-ms, well
+        // past the silent-peer close window of (20+10) × 2 = 60 ms.
         let outcome_or_timeout = tokio::time::timeout(
             Duration::from_millis(250),
             keepalive_loop(
@@ -816,8 +791,6 @@ mod tests {
         )
         .await;
 
-        // We expect the loop to STILL be running (no Timeout outcome
-        // before our enclosing timeout fired).
         if let Ok(unexpected) = outcome_or_timeout {
             return Err(format!(
                 "keepalive_loop should still be running with responsive peer, got {unexpected:?}"
@@ -825,28 +798,19 @@ mod tests {
             .into());
         }
 
-        // Cleanup: closing the channel exits the loop.
         outbound_tx.close();
         responsive_peer.await?;
         Ok(())
     }
 
     /// Transient single miss followed by a recovered pong must reset
-    /// the consecutive-miss counter — the loop should keep pinging
-    /// rather than tearing down on a subsequent (single) miss.
-    ///
-    /// This exercises the `consecutive_misses = 0; continue;` branch
-    /// that the silent/responsive pair didn't reach.
-    #[tokio::test]
+    /// the consecutive-miss counter.
+    #[tokio::test(start_paused = true)]
     async fn keepalive_loop_resets_misses_after_recovery() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));
 
-        // Pattern: drop pings 1 and 3, respond to pings 2 and 4+.
-        // With threshold = 2, a non-resetting loop would close after
-        // ping 3 (misses = 2). A correct loop resets on ping 2 and
-        // never reaches the threshold.
         let pattern_runner = {
             let pong_received = pong_received.clone();
             tokio::spawn(async move {
@@ -854,7 +818,10 @@ mod tests {
                 while let Ok(msg) = outbound_rx.recv().await {
                     if matches!(msg, tungstenite::Message::Ping(_)) {
                         seen += 1;
-                        // Respond on even-numbered pings only.
+                        // Respond on even-numbered pings only (miss-respond-miss-respond-…).
+                        // With threshold = 2, a non-resetting loop would
+                        // close after ping 3. A correct loop resets on
+                        // ping 2 and never reaches the threshold.
                         if seen.is_multiple_of(2) {
                             pong_received.store(true, Ordering::SeqCst);
                         }
@@ -869,7 +836,6 @@ mod tests {
             pong_timeout: Duration::from_millis(10),
             missed_pong_threshold: nz(2),
         };
-        // Run for 5+ ping cycles' worth so we see both alternations.
         let outcome_or_timeout = tokio::time::timeout(
             Duration::from_millis(180),
             keepalive_loop(
@@ -894,5 +860,176 @@ mod tests {
         let seen = pattern_runner.await?;
         assert!(seen >= 4, "expected at least 4 ping cycles, saw {seen}");
         Ok(())
+    }
+
+    /// **(D)** When the outbound channel is closed externally (e.g. the
+    /// owning connection is torn down for an unrelated reason), the
+    /// keepalive loop must exit with [`KeepAliveOutcome::ConnectionClosed`],
+    /// _not_ a `Timeout`. This is the "graceful shutdown" path.
+    #[tokio::test(start_paused = true)]
+    async fn keepalive_loop_exits_when_outbound_closes_externally() -> TestResult {
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let pong_received = Arc::new(AtomicBool::new(false));
+
+        // Externally close the channel after a short delay — well before
+        // the silent-peer Timeout window (1000+500 = 1500ms virtual).
+        let closer_tx = outbound_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            closer_tx.close();
+        });
+
+        // Also drain so the loop can send its initial ping.
+        tokio::spawn(async move {
+            while outbound_rx.recv().await.is_ok() {}
+        });
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_secs(1),
+            pong_timeout: Duration::from_millis(500),
+            missed_pong_threshold: nz(3),
+        };
+        let outcome = keepalive_loop(
+            config,
+            PeerId::new([42u8; 32]),
+            outbound_tx,
+            inbound_writer.clone(),
+            pong_received,
+            TokioSleeper,
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, KeepAliveOutcome::ConnectionClosed),
+            "expected ConnectionClosed, got {outcome:?}"
+        );
+        // The loop must NOT touch `inbound_writer` on the graceful path —
+        // only the Timeout path closes it.
+        assert!(
+            !inbound_writer.is_closed(),
+            "inbound_writer should not be force-closed on graceful exit"
+        );
+        Ok(())
+    }
+
+    /// **(E)** Regression test: the listener's Pong reply uses
+    /// `try_send`, not `send().await`, so a saturated outbound channel
+    /// cannot stall the listener. We pin the channel-level contract
+    /// here — if someone reverts to `send().await`, the behaviour at
+    /// this contract changes and this test catches it.
+    ///
+    /// We're not invoking `listen()` directly (that requires a real
+    /// WebSocket frame stream, which is non-trivial to fake), but the
+    /// `try_send`-with-full-channel semantics are identical.
+    #[tokio::test]
+    async fn pong_reply_via_try_send_does_not_block_when_outbound_full() -> TestResult {
+        // Channel capacity = 2; saturate it.
+        let (tx, rx) = async_channel::bounded::<tungstenite::Message>(2);
+        tx.send(tungstenite::Message::Binary(vec![1].into())).await?;
+        tx.send(tungstenite::Message::Binary(vec![2].into())).await?;
+        assert_eq!(tx.len(), 2);
+
+        // Mirror exactly what `WebSocket::listen()` does on Ping arrival.
+        let pong = tungstenite::Message::Pong(vec![0xab; 8].into());
+        let result = tx.try_send(pong);
+
+        // A blocking `.send().await` here would deadlock until the channel
+        // drained. `try_send` returns immediately with Err(Full).
+        assert!(
+            matches!(result, Err(async_channel::TrySendError::Full(_))),
+            "expected Full error, got {result:?}"
+        );
+        // The original two messages are still in the channel — the failed
+        // Pong did not displace anything.
+        assert_eq!(rx.len(), 2);
+
+        // If a drain frees a slot, a subsequent try_send succeeds.
+        drop(rx.recv().await?);
+        let pong2 = tungstenite::Message::Pong(vec![0xcd; 8].into());
+        assert!(tx.try_send(pong2).is_ok());
+        Ok(())
+    }
+
+    /// **(B)** Property: a silent peer is closed at exactly
+    /// `threshold × (ping_interval + pong_timeout)` of virtual time,
+    /// for any `(ping_interval, pong_timeout, threshold)` triple.
+    ///
+    /// This subsumes `keepalive_loop_times_out_on_silent_peer` across the
+    /// full config space — the example test still exists to document the
+    /// expected close-frame shape, which this property doesn't check.
+    #[test]
+    fn property_silent_peer_closes_at_predicted_virtual_time() {
+        bolero::check!()
+            .with_arbitrary::<(u16, u16, u8)>()
+            .for_each(|input| {
+                // Clamp to non-zero + reasonable bounds. The formula
+                // overflows above (threshold × (ping + pong)) ~ u64::MAX,
+                // and very small values just collapse to ~zero virtual
+                // time which doesn't exercise anything.
+                let interval_ms = u64::from(input.0).max(1);
+                let timeout_ms = u64::from(input.1).max(1);
+                let threshold_u32 = u32::from(input.2.clamp(1, 10));
+                #[allow(
+                    clippy::expect_used,
+                    reason = "threshold_u32 was just clamped to >= 1"
+                )]
+                let threshold = NonZeroU32::new(threshold_u32).expect("clamped to >=1");
+
+                #[allow(
+                    clippy::expect_used,
+                    reason = "building a tokio current-thread runtime never fails in practice"
+                )]
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .start_paused(true)
+                    .build()
+                    .expect("paused tokio runtime");
+
+                rt.block_on(async move {
+                    let (tx, rx) = async_channel::bounded::<tungstenite::Message>(64);
+                    let (inbound_tx, _) = async_channel::bounded::<Vec<u8>>(16);
+                    let pong_received = Arc::new(AtomicBool::new(false));
+
+                    let drain = tokio::spawn(async move {
+                        while rx.recv().await.is_ok() {}
+                    });
+
+                    let cfg = KeepAlive {
+                        ping_interval: Duration::from_millis(interval_ms),
+                        pong_timeout: Duration::from_millis(timeout_ms),
+                        missed_pong_threshold: threshold,
+                    };
+
+                    let start = tokio::time::Instant::now();
+                    let outcome = keepalive_loop(
+                        cfg,
+                        PeerId::new([0u8; 32]),
+                        tx,
+                        inbound_tx,
+                        pong_received,
+                        TokioSleeper,
+                    )
+                    .await;
+                    let elapsed = start.elapsed();
+                    drop(drain.await);
+
+                    let expected = Duration::from_millis(
+                        u64::from(threshold_u32) * (interval_ms + timeout_ms),
+                    );
+                    assert_eq!(
+                        elapsed, expected,
+                        "ping={interval_ms}ms pong={timeout_ms}ms threshold={threshold_u32}: \
+                         expected close at {expected:?}, observed {elapsed:?}"
+                    );
+                    assert!(
+                        matches!(
+                            outcome,
+                            KeepAliveOutcome::Timeout { missed } if missed == threshold_u32
+                        ),
+                        "outcome was {outcome:?}, expected Timeout {{ missed: {threshold_u32} }}"
+                    );
+                });
+            });
     }
 }

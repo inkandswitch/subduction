@@ -5414,6 +5414,7 @@ dependencies = [
  "async-lock",
  "async-tungstenite",
  "blake3",
+ "bolero",
  "criterion",
  "eyre",
  "future_form",
