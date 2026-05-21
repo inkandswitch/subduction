@@ -1,6 +1,6 @@
 //! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
-use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use eyre::Result;
 use future_form::Sendable;
@@ -115,42 +115,6 @@ pub(crate) struct ServerArgs {
     #[arg(long = "max-frame-size", value_name = "MAX_FRAME_SIZE")]
     pub(crate) max_frame_size_override: Option<usize>,
 
-    /// Disable WebSocket Ping/Pong keepalive entirely.
-    ///
-    /// By default the server pings every connection every
-    /// `--ws-ping-interval` seconds and tears down connections that miss
-    /// `--ws-missed-pong-threshold` consecutive pongs. Disabling is
-    /// rarely useful; idle connections behind 60 s load-balancer drops
-    /// will be silently lost.
-    #[arg(long = "ws-no-keepalive")]
-    pub(crate) ws_no_keepalive: bool,
-
-    /// Interval in seconds between WebSocket keepalive Pings.
-    ///
-    /// Should be comfortably under typical 60 s load-balancer /
-    /// NAT idle-drop windows. Default 30 s keeps an idle connection
-    /// alive across the 60 s threshold.
-    #[arg(long = "ws-ping-interval", default_value_t = 30)]
-    pub(crate) ws_ping_interval_secs: u64,
-
-    /// Maximum wait in seconds for a Pong response after each Ping.
-    /// If the deadline passes without a Pong, the cycle counts as one
-    /// miss. Typically less than `--ws-ping-interval`; the loop accepts
-    /// any non-negative value, but larger pong timeouts just lengthen
-    /// the effective cycle without adding safety.
-    #[arg(long = "ws-pong-timeout", default_value_t = 10)]
-    pub(crate) ws_pong_timeout_secs: u64,
-
-    /// Number of consecutive missed pongs before the connection is
-    /// torn down. Single transient misses (e.g., a GC pause on the
-    /// peer) are forgiven by keeping this above 1. Default 2; minimum
-    /// 1 (`0` is rejected at parse time).
-    #[arg(
-        long = "ws-missed-pong-threshold",
-        default_value_t = NonZeroU32::new(2).expect("2 is non-zero"),
-    )]
-    pub(crate) ws_missed_pong_threshold: NonZeroU32,
-
     /// Metrics server port (Prometheus endpoint)
     #[arg(long, default_value = "9090")]
     pub(crate) metrics_port: u16,
@@ -220,20 +184,6 @@ impl ServerArgs {
             .unwrap_or(self.max_message_size)
     }
 
-    /// Resolve the effective WebSocket keepalive configuration.
-    ///
-    /// Returns `None` when `--ws-no-keepalive` was passed; otherwise
-    /// constructs a [`KeepAlive`] from the other `--ws-*` flags.
-    pub(crate) const fn ws_keepalive(&self) -> Option<KeepAlive> {
-        if self.ws_no_keepalive {
-            return None;
-        }
-        Some(KeepAlive {
-            ping_interval: Duration::from_secs(self.ws_ping_interval_secs),
-            pong_timeout: Duration::from_secs(self.ws_pong_timeout_secs),
-            missed_pong_threshold: self.ws_missed_pong_threshold,
-        })
-    }
 }
 
 /// Default interval for refreshing storage metrics (1 minute).
@@ -463,7 +413,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let accept_handler = lp_handler;
     let max_message_size = args.max_message_size;
     let max_frame_size = args.max_frame_size();
-    let ws_keepalive = args.ws_keepalive();
+    let ws_keepalive = KeepAlive::balanced();
 
     let accept_keyhive = keyhive_protocol.clone();
     let accept_task = tokio::spawn(async move {
@@ -684,7 +634,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         let peer_max_message_size = args.max_message_size;
         let peer_max_frame_size = args.max_frame_size();
         let peer_keyhive = keyhive_protocol.clone();
-        let peer_keepalive = args.ws_keepalive();
+        let peer_keepalive = KeepAlive::balanced();
 
         tokio::spawn(async move {
             match try_connect_ws(
@@ -755,7 +705,7 @@ async fn accept_loop(
     handshake_max_drift: Duration,
     max_message_size: usize,
     max_frame_size: usize,
-    ws_keepalive: Option<KeepAlive>,
+    ws_keepalive: KeepAlive,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     ws_enabled: bool,
@@ -854,7 +804,7 @@ async fn handle_websocket(
     handshake_max_drift: Duration,
     max_message_size: usize,
     max_frame_size: usize,
-    keepalive: Option<KeepAlive>,
+    keepalive: KeepAlive,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
 ) {
@@ -885,7 +835,7 @@ async fn handle_websocket(
             let (ws, sender_fut, keepalive_fut) = WebSocket::new_with_keepalive(
                 ws_handshake.into_inner(),
                 peer_id,
-                keepalive,
+                Some(keepalive),
                 FuturesTimerSleeper,
             );
 
@@ -1081,7 +1031,7 @@ async fn try_connect_ws(
     cancel: CancellationToken,
     max_message_size: usize,
     max_frame_size: usize,
-    keepalive: Option<KeepAlive>,
+    keepalive: KeepAlive,
 ) -> Result<PeerId, eyre::Error> {
     let uri_str = uri.to_string();
     tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
@@ -1109,7 +1059,7 @@ async fn try_connect_ws(
                 WebSocket::new_with_keepalive(
                     ws_handshake.into_inner(),
                     peer_id,
-                    keepalive,
+                    Some(keepalive),
                     FuturesTimerSleeper,
                 );
 
