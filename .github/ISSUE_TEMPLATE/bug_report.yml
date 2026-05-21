@@ -128,7 +128,7 @@ body:
     id: what-happened
     attributes:
       label: What happened?
-      description: Describe the actual observed behaviour.
+      description: Describe the actual observed behavior.
       placeholder: |
         After ~30 seconds of idle, the client's WebSocket connection drops
         with `RecvError` and never reconnects.

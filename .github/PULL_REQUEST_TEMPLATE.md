@@ -35,9 +35,9 @@ or `Refs #123` for related-but-not-closing.
 
 - [ ] Bug fix (non-breaking)
 - [ ] New feature (non-breaking)
-- [ ] Breaking change (API, wire format, or behaviour)
+- [ ] Breaking change (API, wire format, or behavior)
 - [ ] Performance improvement
-- [ ] Refactor / cleanup (no behaviour change)
+- [ ] Refactor / cleanup (no behavior change)
 - [ ] Documentation
 - [ ] CI / build / tooling
 - [ ] Dependency bump
@@ -46,7 +46,7 @@ or `Refs #123` for related-but-not-closing.
 
 <!--
 Concrete steps: which tests / benches / manual runs. If you added
-new test cases, mention them; if behaviour is hard to test, explain
+new test cases, mention them; if behavior is hard to test, explain
 why.
 -->
 

@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose new functionality or a behaviour change in Subduction.
+description: Propose new functionality or a behavior change in Subduction.
 title: "[feat]: "
 labels: ["enhancement", "triage"]
 body:
