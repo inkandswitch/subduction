@@ -46,6 +46,18 @@ body:
         - label: CI / tooling
         - label: Docs
 
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: |
+        The release tag (e.g. `v0.13.0`), git SHA, or crate version
+        you're proposing this against. Helps us know whether the
+        feature already landed in a newer release.
+      placeholder: "v0.13.0 / commit fa0ab0dd / @automerge/subduction 0.12.0"
+    validations:
+      required: true
+
   - type: textarea
     id: problem
     attributes:
@@ -58,6 +70,32 @@ body:
         Running multiple subduction_cli instances behind a load balancer
         requires sticky sessions because there's no way to coordinate
         ephemeral pub/sub state between instances.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior or workaround
+      description: |
+        Concretely: what happens today, or what workaround are you
+        using? Include code snippets, error messages, or steps that
+        let someone evaluating the proposal see the same friction.
+        This is the feature-request analog of "reproduction steps".
+        For features that don't exist yet, describe what users do
+        instead and where that breaks down.
+      placeholder: |
+        Today we run two `subduction_cli` instances behind nginx with
+        `ip_hash`. When a client reconnects after a network blip and
+        lands on the other instance, in-flight `EphemeralPayload`
+        messages on its `Topic` are dropped because the subscription
+        state lives in the original process's memory.
+
+        Repro:
+        1. Start two instances on ports 8080/8081 with the same signer.
+        2. Connect client A → 8080, subscribe to topic `T`.
+        3. Send from B → 8081 on topic `T`.
+        4. Observe A never receives the message.
     validations:
       required: true
 
