@@ -89,8 +89,7 @@ pub fn install_panic_hook() {
 /// First start function in the `__wbindgen_start` chain wins.
 #[cfg(target_arch = "wasm32")]
 pub fn install_basic_tracing() {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     use wasm_tracing::{WasmLayer, WasmLayerConfig};
 
     if tracing::dispatcher::has_been_set() {
@@ -105,7 +104,9 @@ pub fn install_basic_tracing() {
     // `has_been_set`, but be defensive: a race in the (currently
     // single-threaded) Wasm runtime is implausible but cheap to
     // guard against.
-    { tracing_subscriber::registry().with(wasm_layer).try_init() };
+    {
+        tracing_subscriber::registry().with(wasm_layer).try_init()
+    };
 }
 
 /// Stub for non-wasm32 targets so callers can always reference the

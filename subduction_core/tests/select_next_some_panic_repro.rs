@@ -168,7 +168,10 @@ async fn claim_1d_extended_select_biased_drain_cycle() {
     assert_eq!(received, 50);
     // We pushed roughly 17 futures (every 3rd of 50); count is
     // approximate due to drain-vs-msg ordering.
-    assert!(drained > 0, "should have drained at least one pushed future");
+    assert!(
+        drained > 0,
+        "should have drained at least one pushed future"
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────
