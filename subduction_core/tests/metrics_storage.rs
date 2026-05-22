@@ -194,8 +194,7 @@ async fn delete_fragment_removes_from_inner() -> TestResult {
     let ms = MetricsStorage::new(inner);
     Storage::<Sendable>::delete_fragment(&ms, sed_id, head).await?;
 
-    let loaded =
-        Storage::<Sendable>::load_fragment(ms.inner(), sed_id, head).await?;
+    let loaded = Storage::<Sendable>::load_fragment(ms.inner(), sed_id, head).await?;
     assert!(
         loaded.is_none(),
         "fragment should be gone from inner storage after delete"
