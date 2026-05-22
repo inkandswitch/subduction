@@ -35,7 +35,12 @@ pub mod storage_ops;
 #[cfg(feature = "serde")]
 mod syncpoints;
 
-#[cfg(any(test, feature = "test-utils"))]
+// `test_utils` imports from `crate::protocol`, which is `serde`-gated.
+// The `test-utils` feature already pulls in `serde` transitively, so the
+// `serde` predicate here only governs the plain `cargo test` path (no
+// explicit features), preventing `test_utils` from being compiled before
+// `protocol` exists.
+#[cfg(any(all(test, feature = "serde"), feature = "test-utils"))]
 #[allow(
     clippy::expect_used,
     clippy::indexing_slicing,
