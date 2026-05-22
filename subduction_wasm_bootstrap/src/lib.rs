@@ -105,7 +105,7 @@ pub fn install_basic_tracing() {
     // `has_been_set`, but be defensive: a race in the (currently
     // single-threaded) Wasm runtime is implausible but cheap to
     // guard against.
-    let _ = tracing_subscriber::registry().with(wasm_layer).try_init();
+    { tracing_subscriber::registry().with(wasm_layer).try_init() };
 }
 
 /// Stub for non-wasm32 targets so callers can always reference the
