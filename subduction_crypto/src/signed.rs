@@ -1088,8 +1088,7 @@ mod mutant_coverage {
             "MIN_SIGNED_SIZE must equal SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_SIZE"
         );
         assert_eq!(
-            MIN_SIGNED_SIZE,
-            100,
+            MIN_SIGNED_SIZE, 100,
             "MIN_SIGNED_SIZE must be 4 + 32 + 64 = 100"
         );
     }
