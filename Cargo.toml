@@ -54,7 +54,7 @@ arbitrary = "1.4"
 async-channel = { version = "2.5", default-features = false }
 async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
-automerge = "0.8.0"
+automerge = { git = "https://github.com/automerge/automerge", branch = "fragments" }
 axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
@@ -79,6 +79,7 @@ futures-util = { version = "0.3.31", default-features = false, features = ["allo
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 http-body-util = "0.1"
+#iroh = "1.0.0-rc.0"
 iroh = "0.98.2"
 hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
