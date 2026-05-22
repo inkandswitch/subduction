@@ -135,10 +135,10 @@ impl<SendErr: core::error::Error> CallError<SendErr> {
     }
 
     /// Map the inner send-error type.
-    pub fn map_send<SendErr2: core::error::Error>(
+    pub fn map_send<OutErr: core::error::Error>(
         self,
-        f: impl FnOnce(SendErr) -> SendErr2,
-    ) -> CallError<SendErr2> {
+        f: impl FnOnce(SendErr) -> OutErr,
+    ) -> CallError<OutErr> {
         match self {
             Self::Send(e) => CallError::Send(f(e)),
             Self::ResponseDropped => CallError::ResponseDropped,

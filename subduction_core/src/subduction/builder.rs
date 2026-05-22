@@ -284,8 +284,8 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize>
     }
 }
 
-impl<Sign, Sp, Store, Timer, Metric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS>
+impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Timer, Met, SHARDS>
 {
     /// Set the discovery ID for discovery-mode connections.
     ///
@@ -310,10 +310,10 @@ impl<Sign, Sp, Store, Timer, Metric, const SHARDS: usize>
     /// Override the depth metric used to assign commit depths.
     ///
     /// Defaults to [`CountLeadingZeroBytes`].
-    pub fn depth_metric<Metric2: DepthMetric>(
+    pub fn depth_metric<Metric: DepthMetric>(
         self,
-        metric: Metric2,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric2, SHARDS> {
+        metric: Metric,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
