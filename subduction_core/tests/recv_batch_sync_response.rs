@@ -76,6 +76,7 @@ fn make_subduction() -> (
 async fn make_test_commit(id: &SedimentreeId, data: &[u8]) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
+    #[allow(clippy::indexing_slicing)]
     let head = CommitId::new({
         let mut bytes = [0u8; 32];
         let n = data.len().min(32);

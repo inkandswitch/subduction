@@ -66,7 +66,12 @@ timeout_multiplier = 2.0
 # kill legitimate mutant tests early.
 minimum_test_timeout = 60
 
-# Pass `--features arbitrary` so bolero-driven property tests run
-# during mutation testing. Without this, ~half the proptest coverage is
-# silently disabled and survivors balloon.
-additional_cargo_test_args = ["--features", "arbitrary"]
+# Pass `--features arbitrary,metrics` so:
+#   - bolero-driven property tests run during mutation testing.
+#     Without `arbitrary`, ~half the proptest coverage is silently
+#     disabled and survivors balloon.
+#   - feature-gated metrics-storage tests run. Without `metrics`,
+#     `subduction_core/tests/metrics_storage.rs` (which covers the
+#     `MetricsStorage` wrapper delegation paths) is skipped and ~40
+#     mutants in `subduction_core/src/storage/metrics.rs` survive.
+additional_cargo_test_args = ["--features", "arbitrary,metrics"]
