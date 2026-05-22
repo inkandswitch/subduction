@@ -21,7 +21,7 @@
 //! ```
 
 use alloc::{rc::Rc, vec::Vec};
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
 use js_sys::{Function, Promise, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -75,7 +75,8 @@ pub struct WasmMessagePortTransport {
     port: Rc<Port>,
     queue: SharedQueue,
     _onmessage: Closure<dyn FnMut(JsValue)>,
-    on_disconnect: RefCell<Option<Function>>,
+    /// The JS `onDisconnect` callback, if registered.
+    on_disconnect: Cell<Option<Function>>,
 }
 
 impl core::fmt::Debug for WasmMessagePortTransport {
@@ -119,7 +120,7 @@ impl WasmMessagePortTransport {
             port: Rc::new(port),
             queue,
             _onmessage: onmessage,
-            on_disconnect: RefCell::new(None),
+            on_disconnect: Cell::new(None),
         }
     }
 
@@ -161,7 +162,7 @@ impl WasmMessagePortTransport {
     /// Disconnect (close the port) and fire the `onDisconnect` callback if registered.
     pub fn disconnect(&self) -> Promise {
         self.port.close();
-        if let Some(cb) = self.on_disconnect.borrow_mut().take()
+        if let Some(cb) = self.on_disconnect.take()
             && let Err(e) = cb.call0(&JsValue::NULL)
         {
             tracing::error!("onDisconnect callback threw: {e:?}");
@@ -173,9 +174,13 @@ impl WasmMessagePortTransport {
     ///
     /// Part of the [`Transport`](super::JsTransport) interface contract.
     /// Typically called by internal wiring rather than directly by user code.
+    ///
+    /// Safe to call from inside an `onDisconnect` callback to re-register
+    /// a new callback for a future disconnect — [`Cell::set`] does not
+    /// borrow the cell.
     #[wasm_bindgen(js_name = onDisconnect)]
     pub fn on_disconnect(&self, callback: &js_sys::Function) {
-        *self.on_disconnect.borrow_mut() = Some(callback.clone());
+        self.on_disconnect.set(Some(callback.clone()));
     }
 }
 

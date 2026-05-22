@@ -40,7 +40,7 @@
 //!
 //! Each cdylib's `#[wasm_bindgen(start)]` calls [`init_basic`]:
 //!
-//! ```no_run
+//! ```text
 //! #[wasm_bindgen::prelude::wasm_bindgen(start, private)]
 //! pub fn start_my_crate() {
 //!     subduction_wasm_bootstrap::init_basic();
@@ -53,7 +53,7 @@
 //! [`install_panic_hook`] from this crate directly and runs its own
 //! tracing init:
 //!
-//! ```no_run
+//! ```text
 //! #[wasm_bindgen::prelude::wasm_bindgen(start, private)]
 //! pub fn start_umbrella() {
 //!     subduction_wasm_bootstrap::install_panic_hook();
@@ -114,9 +114,7 @@ pub fn install_basic_tracing() {
     // `has_been_set`, but be defensive: a race in the (currently
     // single-threaded) Wasm runtime is implausible but cheap to
     // guard against.
-    {
-        tracing_subscriber::registry().with(wasm_layer).try_init()
-    };
+    let _result = tracing_subscriber::registry().with(wasm_layer).try_init();
 }
 
 /// Stub for non-wasm32 targets so callers can always reference the

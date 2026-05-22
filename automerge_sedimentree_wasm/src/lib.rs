@@ -53,8 +53,6 @@ impl WasmSedimentreeAutomerge {
         Self(automerge)
     }
 
-    // NOTE `js_` prefix to avoid conflict
-    // with CommitStore::fragment (trait method)
     /// Build the fragment state for a given head.
     ///
     /// # Errors
@@ -68,17 +66,34 @@ impl WasmSedimentreeAutomerge {
         hash_metric: &WasmHashMetric,
     ) -> Result<WasmFragmentState, WasmFragmentError> {
         let head_id = CommitId::from(head);
+        let known_snapshot = known_states.0.borrow().clone();
         Ok(self
-            .fragment(head_id, &known_states.0.borrow(), hash_metric)
+            .fragment(head_id, &known_snapshot, hash_metric)
             .map(WasmFragmentState)?)
     }
 
     // NOTE `js_` prefix to avoid conflict
     /// Build a fragment store starting from the given head digests.
     ///
+    /// # Re-entrancy
+    ///
+    /// The traversal calls into JS via `getChangeMetaByHash`. To avoid
+    /// holding a `RefCell` borrow across that JS call (which would
+    /// panic if the JS callback touched the same store), this method
+    /// clones the store's inner map up front, runs the traversal
+    /// against the owned clone, then merges the working map back into
+    /// the cell once the traversal has finished.
+    ///
+    /// This is a deterministic function: JS callbacks must not mutate
+    /// the same `FragmentStateStore` during the call, and must not
+    /// call `buildFragmentStore` recursively. Re-entrant JS writes to
+    /// the store may be silently overwritten by the merge.
+    ///
     /// # Errors
     ///
-    /// Returns a `WasmFragmentError` if building the fragment store fails.
+    /// Returns a `WasmFragmentError` if building the fragment store
+    /// fails. On error, the working map's partial state is discarded
+    /// rather than merged back into the cell.
     #[wasm_bindgen(js_name = buildFragmentStore)]
     pub fn js_build_fragment_store(
         &self,
@@ -91,14 +106,32 @@ impl WasmSedimentreeAutomerge {
             .map(|js_id| CommitId::from(WasmCommitId::from(&js_id)))
             .collect();
 
-        let fresh = self
-            .build_fragment_store(&heads, &mut known_fragment_states.0.borrow_mut(), strategy)?
+        // Clone the cell's contents into an owned working map. The
+        // borrow is released at the end of this statement, so JS
+        // callbacks invoked deeper in the call stack are free to
+        // re-enter `WasmFragmentStateStore`.
+        let mut working = known_fragment_states.0.borrow().clone();
+
+        let fresh: Vec<_> = self
+            .build_fragment_store(&heads, &mut working, strategy)?
             .into_iter()
             .cloned()
-            .map(WasmFragmentState)
             .collect();
 
-        Ok(fresh)
+        // The traversal (and any JS callbacks it invoked) has fully
+        // returned. Re-acquire the borrow briefly to merge the
+        // working map back into the cell. Last-write-wins from
+        // `working` for any keys present in both; this is correct
+        // because `build_fragment_store` is the authoritative
+        // computation.
+        {
+            let mut guard = known_fragment_states.0.borrow_mut();
+            for (k, v) in working {
+                guard.insert(k, v);
+            }
+        }
+
+        Ok(fresh.into_iter().map(WasmFragmentState).collect())
     }
 }
 
