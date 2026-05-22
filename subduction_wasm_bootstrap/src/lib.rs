@@ -22,13 +22,27 @@
 //! `@inkandswitch/subduction`, `@automerge/sedimentree`) emitted
 //! `tracing` events that vanished. This crate closes that gap.
 //!
+//! # Why this crate is NOT `no_std`
+//!
+//! Unlike the workspace's foundational data-structure crates
+//! (`sedimentree_core`, `subduction_core`, etc.) which use
+//! `#![cfg_attr(not(feature = "std"), no_std)]`, this crate is
+//! unconditionally `std`. Every dep it has is `std`-only:
+//!
+//! - `console_error_panic_hook` calls `std::panic::set_hook`.
+//!   Installing a panic hook is fundamentally an `std` operation.
+//! - `tracing-subscriber`'s `registry` feature pulls in `std`
+//!   transitively (see its `[features]`: `registry = [...,  "std"]`).
+//! - `wasm-tracing` builds its `WasmLayer` on top of
+//!   `tracing_subscriber::registry::*`, also needing `std`.
+//!
 //! # How callers use it
 //!
 //! Each cdylib's `#[wasm_bindgen(start)]` calls [`init_basic`]:
 //!
 //! ```no_run
-//! #[wasm_bindgen::prelude::wasm_bindgen(start)]
-//! pub fn start() {
+//! #[wasm_bindgen::prelude::wasm_bindgen(start, private)]
+//! pub fn start_my_crate() {
 //!     subduction_wasm_bootstrap::init_basic();
 //! }
 //! ```
@@ -40,8 +54,8 @@
 //! tracing init:
 //!
 //! ```no_run
-//! #[wasm_bindgen::prelude::wasm_bindgen(start)]
-//! pub fn start() {
+//! #[wasm_bindgen::prelude::wasm_bindgen(start, private)]
+//! pub fn start_umbrella() {
 //!     subduction_wasm_bootstrap::install_panic_hook();
 //!     init_umbrella_tracing();  // not in this crate
 //! }
@@ -62,11 +76,7 @@
 //!   before attempting `try_init`, so the umbrella's richer subscriber
 //!   (installed by its start, which runs FIRST) wins.
 
-#![no_std]
 #![forbid(unsafe_code)]
-
-#[cfg(target_arch = "wasm32")]
-extern crate std;
 
 /// Install the [`console_error_panic_hook`] so Rust panics produce
 /// readable messages in the browser's `console.error` instead of
@@ -112,7 +122,7 @@ pub fn install_basic_tracing() {
 /// Stub for non-wasm32 targets so callers can always reference the
 /// function unconditionally.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn install_basic_tracing() {}
+pub const fn install_basic_tracing() {}
 
 /// Install both the panic hook and a baseline tracing subscriber.
 ///

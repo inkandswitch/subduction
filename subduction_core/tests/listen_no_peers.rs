@@ -8,7 +8,12 @@
 //! If the panic is real, this test will crash. If not, it idles and
 //! then exits cleanly when shutdown fires.
 
-#![allow(clippy::expect_used, clippy::indexing_slicing)]
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::missing_docs_in_private_items,
+    clippy::type_complexity
+)]
 
 use std::{sync::Arc, time::Duration};
 

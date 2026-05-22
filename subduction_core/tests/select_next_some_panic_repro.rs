@@ -10,6 +10,20 @@
 //! independently, before deciding what (if anything) to change in
 //! production code.
 
+// Test-file allows: reproducer tests deliberately use the assertion
+// macros (`panic!`, `unwrap`, `expect`) that production code lints
+// against. Also `never_loop` because some probes wrap a single
+// iteration in `for _ in 0..N { select_biased!{ ... break; } }` to
+// keep the structure parallel across iteration-count variants.
+#![allow(
+    clippy::expect_used,
+    clippy::missing_docs_in_private_items,
+    clippy::never_loop,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::doc_markdown
+)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::{
