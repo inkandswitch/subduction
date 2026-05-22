@@ -1580,6 +1580,9 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
+        // Per-item traces happen inside `Sedimentree::add_commit` and
+        // `Sedimentree::add_fragment` at `trace!` level, matching the
+        // batch-sync ingest path's per-item silence at `debug!`.
         self.sedimentrees
             .with_entry_or_default(id, |tree| {
                 for commit in commit_payloads {
@@ -1669,17 +1672,34 @@ where
             }
         };
 
+        // Precompute identifiers once, outside the peer loop, so per-item
+        // logging doesn't pay an N×P BLAKE3 cost on the fragment side.
+        let commit_heads: Vec<CommitId> = broadcast_commits
+            .iter()
+            .map(|v| v.payload().head())
+            .collect();
+        let fragment_digests: Vec<Digest<Fragment>> = broadcast_fragments
+            .iter()
+            .map(|v| Digest::hash(v.payload()))
+            .collect();
+
         'peer: for conn in conns {
             let peer_id = conn.peer_id();
             tracing::debug!(
-                "Propagating batch ({} commits, {} fragments) for sedimentree {:?} to {}",
-                broadcast_commits.len(),
-                broadcast_fragments.len(),
-                id,
-                peer_id
+                ?id,
+                peer = %peer_id,
+                commits = broadcast_commits.len(),
+                fragments = broadcast_fragments.len(),
+                "batch: propagating to peer"
             );
 
-            for verified in &broadcast_commits {
+            for (verified, head) in broadcast_commits.iter().zip(&commit_heads) {
+                tracing::trace!(
+                    ?id,
+                    peer = %peer_id,
+                    ?head,
+                    "batch: propagating commit to peer"
+                );
                 let msg: H::Message = SyncMessage::LooseCommit {
                     id,
                     commit: verified.signed().clone(),
@@ -1696,7 +1716,13 @@ where
                 }
             }
 
-            for verified in &broadcast_fragments {
+            for (verified, digest) in broadcast_fragments.iter().zip(&fragment_digests) {
+                tracing::trace!(
+                    ?id,
+                    peer = %peer_id,
+                    ?digest,
+                    "batch: propagating fragment to peer"
+                );
                 let msg: H::Message = SyncMessage::Fragment {
                     id,
                     fragment: verified.signed().clone(),
