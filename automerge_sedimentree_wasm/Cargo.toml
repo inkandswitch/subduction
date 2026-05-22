@@ -24,7 +24,8 @@ getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
-subduction_wasm = { workspace = true }
+subduction_wasm = { workspace = true, features = ["std"] }
+subduction_wasm_bootstrap = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }

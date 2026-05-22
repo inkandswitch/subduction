@@ -19,10 +19,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 automerge = { workspace = true, features = ["wasm"] }
-console_error_panic_hook = { version = "0.1.7", optional = true }
+console_error_panic_hook = { workspace = true }
 automerge_sedimentree_wasm = { workspace = true }
 js-sys = { workspace = true }
-subduction_wasm = { workspace = true }
+subduction_wasm = { workspace = true, features = ["std"] }
+subduction_wasm_bootstrap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 wasm-bindgen = { workspace = true }
@@ -33,14 +34,9 @@ wasm_refgen = { workspace = true }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [features]
-default = ["console_error_panic_hook", "idb", "standalone", "std", "wasm-tracing"]
-console_error_panic_hook = ["dep:console_error_panic_hook"]
+default = ["idb", "std", "wasm-tracing"]
 # IndexedDB storage backend (browser-only).
 idb = ["subduction_wasm/idb"]
-# Enable the #[wasm_bindgen(start)] entry point. Disable when using
-# this crate as a dependency of another cdylib crate that defines
-# its own start function (wasm-bindgen allows only one per module).
-standalone = []
 std = [
   "automerge_sedimentree_wasm/std",
   "subduction_wasm/std",

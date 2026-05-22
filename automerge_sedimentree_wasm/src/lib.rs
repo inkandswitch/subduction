@@ -9,6 +9,17 @@ extern crate std;
 
 extern crate alloc;
 
+/// Entry point called when the Wasm module is instantiated.
+///
+/// Installs the panic hook and a baseline `tracing` subscriber via
+/// [`subduction_wasm_bootstrap::init_basic`]. Both are idempotent and
+/// chain-safe. See `subduction_wasm::start` for the rationale on
+/// `start, private`.
+#[wasm_bindgen::prelude::wasm_bindgen(start, private)]
+pub fn start_automerge_sedimentree_wasm() {
+    subduction_wasm_bootstrap::init_basic();
+}
+
 pub mod error;
 pub mod fragment;
 

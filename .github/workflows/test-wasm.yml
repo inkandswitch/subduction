@@ -64,8 +64,11 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: cd ./subduction_wasm && pnpm exec playwright install-deps
 
-      - name: Test on Wasm (Node)
+      - name: Test on Wasm (Node) — subduction_wasm
         run: wasm-pack test --node subduction_wasm
+
+      - name: Test on Wasm (Node) — sedimentree_wasm
+        run: wasm-pack test --node sedimentree_wasm
 
       - name: Build Wasm packages
         run: cd ./subduction_wasm && pnpm build
