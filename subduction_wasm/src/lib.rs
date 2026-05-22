@@ -49,8 +49,15 @@ pub fn start_subduction_wasm() {
 ///
 /// Gated behind the `e2e_panic_probe` feature so it doesn't ship in
 /// default release builds.
+///
+/// # Panics
+///
+/// **Always.** This function's entire purpose is to panic — that is the
+/// signal the E2E probe spec measures. If `message` is `Some(s)`, the
+/// panic message is `s`; otherwise it is `"default-e2e-panic-marker"`.
 #[cfg(feature = "e2e_panic_probe")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = "__testPanicForE2E")]
+#[allow(clippy::panic, clippy::needless_pass_by_value)]
 pub fn test_panic_for_e2e(message: Option<alloc::string::String>) {
     let msg = message.unwrap_or_else(|| "default-e2e-panic-marker".into());
     panic!("{msg}");

@@ -1,5 +1,5 @@
 //! Regression coverage for the `MessagePortTransport::on_disconnect`
-//! re-entrancy fix (Cell instead of RefCell).
+//! re-entrancy fix (`Cell` instead of `RefCell`).
 //!
 //! Pre-fix, `disconnect()` held a `RefMut` on `on_disconnect` across
 //! the JS callback's invocation (Rust 2024 let-chain temporary scope
