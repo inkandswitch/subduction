@@ -255,8 +255,6 @@ impl WebCryptoSigner {
         Ok(())
     }
 
-
-
     /// Sign a message and return the 64-byte Ed25519 signature.
     ///
     /// # Errors
