@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! Transport (one impl per backend)
-//!   └── MessageTransport<T>   — adds Connection<K, M> for any M
+//!   └── MessageTransport<T>   — adds Connection<Async, WireMsg> for any WireMsg
 //! ```
 //!
 //! Each backend (WebSocket, iroh, HTTP long-poll, `MessagePort`)
@@ -25,7 +25,8 @@ use future_form::FutureForm;
 ///
 /// Implement this for transport backends (WebSocket, QUIC, HTTP long-poll,
 /// `MessagePort`, etc). Wrap in [`MessageTransport`] to get a typed
-/// [`Connection<K, M>`](crate::connection::Connection) for any message type.
+/// [`Connection<Async, WireMsg>`](crate::connection::Connection) for any
+/// message type.
 ///
 /// # Contract
 ///

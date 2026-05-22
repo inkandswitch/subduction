@@ -128,7 +128,7 @@ pub struct SubductionBuilder<
 
 /// Internal helper: stores an optional pre-populated `ShardedMap`.
 ///
-/// Using a wrapper struct avoids placing the const generic `N` on
+/// Using a wrapper struct avoids placing the const generic `SHARDS` on
 /// fields that don't otherwise need it.
 #[derive(Debug)]
 struct SedimentreesOption<const SHARDS: usize>(
@@ -154,7 +154,7 @@ impl<const SHARDS: usize>
     /// `timer` — must be set via their respective methods before
     /// calling [`build`](SubductionBuilder::build).
     ///
-    /// The const generic `N` controls the number of shards in the
+    /// The const generic `SHARDS` controls the number of shards in the
     /// internal [`ShardedMap`]. Defaults to 256 if not specified.
     #[must_use]
     pub fn new() -> Self {
