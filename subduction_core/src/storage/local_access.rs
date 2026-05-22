@@ -26,13 +26,13 @@ use super::traits::Storage;
 ///
 /// This bypasses the capability model — only use from trusted code paths.
 #[derive(Debug)]
-pub struct LocalStorageAccess<S> {
-    storage: Arc<S>,
+pub struct LocalStorageAccess<Store> {
+    storage: Arc<Store>,
 }
 
-impl<S> LocalStorageAccess<S> {
+impl<Store> LocalStorageAccess<Store> {
     /// Create a new local storage access wrapper.
-    pub const fn new(storage: Arc<S>) -> Self {
+    pub const fn new(storage: Arc<Store>) -> Self {
         Self { storage }
     }
 
@@ -40,7 +40,7 @@ impl<S> LocalStorageAccess<S> {
     ///
     /// This is useful when you need to pass the storage to other components.
     #[must_use]
-    pub const fn storage(&self) -> &Arc<S> {
+    pub const fn storage(&self) -> &Arc<Store> {
         &self.storage
     }
 
@@ -48,11 +48,11 @@ impl<S> LocalStorageAccess<S> {
 
     /// Load all sedimentree IDs from storage.
     #[must_use]
-    pub fn load_all_sedimentree_ids<K: FutureForm>(
+    pub fn load_all_sedimentree_ids<Async: FutureForm>(
         &self,
-    ) -> K::Future<'_, Result<Set<SedimentreeId>, S::Error>>
+    ) -> Async::Future<'_, Result<Set<SedimentreeId>, Store::Error>>
     where
-        S: Storage<K>,
+        Store: Storage<Async>,
     {
         self.storage.load_all_sedimentree_ids()
     }
@@ -61,12 +61,12 @@ impl<S> LocalStorageAccess<S> {
     ///
     /// Used for hydration at startup.
     #[must_use]
-    pub fn load_loose_commits<K: FutureForm>(
+    pub fn load_loose_commits<Async: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, S::Error>>
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Store::Error>>
     where
-        S: Storage<K>,
+        Store: Storage<Async>,
     {
         self.storage.load_loose_commits(sedimentree_id)
     }
@@ -75,18 +75,18 @@ impl<S> LocalStorageAccess<S> {
     ///
     /// Used for hydration at startup.
     #[must_use]
-    pub fn load_fragments<K: FutureForm>(
+    pub fn load_fragments<Async: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, S::Error>>
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Store::Error>>
     where
-        S: Storage<K>,
+        Store: Storage<Async>,
     {
         self.storage.load_fragments(sedimentree_id)
     }
 }
 
-impl<S> Clone for LocalStorageAccess<S> {
+impl<Store> Clone for LocalStorageAccess<Store> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),

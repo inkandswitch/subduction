@@ -60,7 +60,7 @@ impl MemoryStorage {
 pub struct MemoryStorageError(#[from] sedimentree_core::codec::error::DecodeError);
 
 #[future_form(Sendable, Local)]
-impl<K: FutureForm> Storage<K> for MemoryStorage {
+impl<Async: FutureForm> Storage<Async> for MemoryStorage {
     type Error = MemoryStorageError;
 
     // ==================== Sedimentree IDs ====================
@@ -68,8 +68,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn save_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::save_sedimentree_id");
             self.ids.lock().await.insert(sedimentree_id);
             Ok(())
@@ -79,16 +79,18 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn delete_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::delete_sedimentree_id");
             self.ids.lock().await.remove(&sedimentree_id);
             Ok(())
         })
     }
 
-    fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        K::from_future(async move {
+    fn load_all_sedimentree_ids(
+        &self,
+    ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!("MemoryStorage::load_all_sedimentree_ids");
             Ok(self.ids.lock().await.iter().copied().collect())
         })
@@ -100,8 +102,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         verified: VerifiedMeta<LooseCommit>,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let commit_id = verified.payload().head();
             let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
@@ -121,8 +123,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn list_commit_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::list_commit_ids");
             let locked = self.commits.lock().await;
             Ok(locked
@@ -135,8 +137,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_loose_commits");
             let locked = self.commits.lock().await;
             locked
@@ -158,8 +160,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         commit_id: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 ?commit_id,
@@ -184,8 +186,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         commit_id: CommitId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 ?commit_id,
@@ -201,8 +203,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::delete_loose_commits");
             self.commits.lock().await.remove(&sedimentree_id);
             Ok(())
@@ -215,8 +217,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         verified: VerifiedMeta<Fragment>,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let fragment_head = verified.payload().head();
             let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
@@ -237,8 +239,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         fragment_head: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 ?fragment_head,
@@ -262,8 +264,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::list_fragment_ids");
             let locked = self.fragments.lock().await;
             Ok(locked
@@ -276,8 +278,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_fragments");
             let locked = self.fragments.lock().await;
             locked
@@ -299,8 +301,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         fragment_head: CommitId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 ?fragment_head,
@@ -316,8 +318,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn delete_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::delete_fragments");
             self.fragments.lock().await.remove(&sedimentree_id);
             Ok(())
@@ -331,8 +333,8 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         sedimentree_id: SedimentreeId,
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> K::Future<'_, Result<usize, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<usize, Self::Error>> {
+        Async::from_future(async move {
             let num_commits = commits.len();
             let num_fragments = fragments.len();
             tracing::debug!(

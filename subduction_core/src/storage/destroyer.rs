@@ -23,17 +23,17 @@ use super::traits::Storage;
 /// - Administrative cleanup
 ///
 /// Created via [`StoragePowerbox::local_destroyer`][crate::storage::powerbox::StoragePowerbox::local_destroyer].
-pub struct Destroyer<K: FutureForm, S: Storage<K>> {
-    storage: Arc<S>,
+pub struct Destroyer<Async: FutureForm, Store: Storage<Async>> {
+    storage: Arc<Store>,
     sedimentree_id: SedimentreeId,
-    _marker: PhantomData<K>,
+    _marker: PhantomData<Async>,
 }
 
-impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
+impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
     /// Create a new destroyer capability.
     ///
     /// This should only be called for local operations, never for peer requests.
-    pub(crate) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
+    pub(crate) const fn new(storage: Arc<Store>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,
             sedimentree_id,
@@ -49,32 +49,38 @@ impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
 
     /// Delete a single loose commit and its blob by [`CommitId`].
     #[must_use]
-    pub fn delete_loose_commit(&self, commit_id: CommitId) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn delete_loose_commit(
+        &self,
+        commit_id: CommitId,
+    ) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage
             .delete_loose_commit(self.sedimentree_id, commit_id)
     }
 
     /// Delete all loose commits and their blobs for this sedimentree.
     #[must_use]
-    pub fn delete_loose_commits(&self) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn delete_loose_commits(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.delete_loose_commits(self.sedimentree_id)
     }
 
     /// Delete a fragment and its blob by fragment head [`CommitId`].
     #[must_use]
-    pub fn delete_fragment(&self, fragment_head: CommitId) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn delete_fragment(
+        &self,
+        fragment_head: CommitId,
+    ) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage
             .delete_fragment(self.sedimentree_id, fragment_head)
     }
 
     /// Delete all fragments and their blobs for this sedimentree.
     #[must_use]
-    pub fn delete_fragments(&self) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn delete_fragments(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.delete_fragments(self.sedimentree_id)
     }
 }
 
-impl<K: FutureForm, S: Storage<K>> Clone for Destroyer<K, S> {
+impl<Async: FutureForm, Store: Storage<Async>> Clone for Destroyer<Async, Store> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
@@ -84,7 +90,7 @@ impl<K: FutureForm, S: Storage<K>> Clone for Destroyer<K, S> {
     }
 }
 
-impl<K: FutureForm, S: Storage<K>> core::fmt::Debug for Destroyer<K, S> {
+impl<Async: FutureForm, Store: Storage<Async>> core::fmt::Debug for Destroyer<Async, Store> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Destroyer")
             .field("sedimentree_id", &self.sedimentree_id)

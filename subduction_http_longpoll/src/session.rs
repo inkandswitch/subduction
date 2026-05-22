@@ -15,8 +15,13 @@ use subduction_core::{authenticated::Authenticated, peer::id::PeerId};
 use crate::transport::HttpLongPollTransport;
 
 // NOTE: SessionStore and SessionEntry are concrete on `Sendable` (not generic
-// over `K: FutureForm`) because `HttpLongPollTransport<O>` only implements
-// `Connection<Sendable>`. This mirrors the `subduction_websocket` pattern.
+// over `Async: FutureForm`) because they are exclusively used by the
+// multi-threaded HTTP server, which requires `Send + Sync` state. The
+// underlying `HttpLongPollTransport` itself is FutureForm-generic and
+// implements `Transport<Async>` for both `Sendable` and `Local`; the
+// `Sendable` choice here lives on `SessionEntry::authenticated:
+// Option<Authenticated<HttpLongPollTransport, Sendable>>`. This mirrors the
+// `subduction_websocket` pattern.
 
 /// An opaque session identifier, assigned after successful handshake.
 ///

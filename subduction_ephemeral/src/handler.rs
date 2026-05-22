@@ -47,12 +47,17 @@ use crate::{
 /// Construct via [`new()`](Self::new), which returns both the handler
 /// and a receiver for inbound [`EphemeralEvent`]s.
 #[allow(clippy::type_complexity)]
-pub struct EphemeralHandler<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock> {
+pub struct EphemeralHandler<
+    Async: FutureForm,
+    Conn: Clone + 'static,
+    E: EphemeralPolicy<Async>,
+    Clk: Clock,
+> {
     /// Inbound subscriptions: which peers are subscribed to receive ephemeral messages from us.
     ephemeral_subscriptions: Arc<Mutex<Map<Topic, Set<PeerId>>>>,
     /// Outbound subscriptions: sedimentree IDs we want to receive ephemeral messages for.
     outgoing_subscriptions: Arc<Mutex<Set<Topic>>>,
-    connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+    connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     policy: E,
     callback_tx: Sender<EphemeralEvent>,
     max_payload_size: usize,
@@ -61,8 +66,8 @@ pub struct EphemeralHandler<F: FutureForm, C: Clone + 'static, E: EphemeralPolic
     nonce_cache: Arc<Mutex<EphemeralNonceCache>>,
 }
 
-impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone, Clk: Clock> Clone
-    for EphemeralHandler<F, C, E, Clk>
+impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async> + Clone, Clk: Clock> Clone
+    for EphemeralHandler<Async, Conn, E, Clk>
 {
     fn clone(&self) -> Self {
         Self {
@@ -79,16 +84,16 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F> + Clone, Clk: Cloc
     }
 }
 
-impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock> core::fmt::Debug
-    for EphemeralHandler<F, C, E, Clk>
+impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock>
+    core::fmt::Debug for EphemeralHandler<Async, Conn, E, Clk>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("EphemeralHandler").finish_non_exhaustive()
     }
 }
 
-impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
-    EphemeralHandler<F, C, E, Clk>
+impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock>
+    EphemeralHandler<Async, Conn, E, Clk>
 {
     /// Create a new ephemeral handler.
     ///
@@ -96,7 +101,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// The `connections` map is shared with `Subduction` / `SyncHandler`.
     #[allow(clippy::type_complexity)]
     pub fn new(
-        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         policy: E,
         config: EphemeralConfig,
         clock: Clk,
@@ -137,7 +142,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// fire-and-forget semantics.
     pub async fn publish(&self, msg: EphemeralMessage)
     where
-        C: Connection<F, EphemeralMessage>,
+        Conn: Connection<Async, EphemeralMessage>,
     {
         let EphemeralMessage::Ephemeral(ref signed) = msg else {
             warn!("publish called with non-Ephemeral message, ignoring");
@@ -217,7 +222,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
 
         // Collect target connections while holding the lock, then drop it
         // before awaiting sends to avoid holding the mutex across .await.
-        let targets: Vec<Authenticated<C, F>> = {
+        let targets: Vec<Authenticated<Conn, Async>> = {
             let conns = self.connections.lock().await;
             authorized_peers
                 .iter()
@@ -248,7 +253,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// also receive the subscription request.
     pub async fn subscribe(&self, topics: NonEmpty<Topic>)
     where
-        C: Connection<F, EphemeralMessage>,
+        Conn: Connection<Async, EphemeralMessage>,
     {
         {
             let mut outgoing = self.outgoing_subscriptions.lock().await;
@@ -267,7 +272,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// from outgoing subscription tracking.
     pub async fn unsubscribe(&self, topics: NonEmpty<Topic>)
     where
-        C: Connection<F, EphemeralMessage>,
+        Conn: Connection<Async, EphemeralMessage>,
     {
         {
             let mut outgoing = self.outgoing_subscriptions.lock().await;
@@ -286,7 +291,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
     /// ephemeral messages for our subscribed topics.
     pub async fn subscribe_peer(&self, peer_id: PeerId)
     where
-        C: Connection<F, EphemeralMessage>,
+        Conn: Connection<Async, EphemeralMessage>,
     {
         let topics: NonEmpty<Topic> = {
             let outgoing = self.outgoing_subscriptions.lock().await;
@@ -299,7 +304,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
 
         let msg = EphemeralMessage::Subscribe { topics };
 
-        let targets: Vec<Authenticated<C, F>> = {
+        let targets: Vec<Authenticated<Conn, Async>> = {
             let conns = self.connections.lock().await;
             conns
                 .get(&peer_id)
@@ -321,9 +326,9 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>, Clk: Clock>
 
     async fn send_to_all_peers(&self, msg: &EphemeralMessage)
     where
-        C: Connection<F, EphemeralMessage>,
+        Conn: Connection<Async, EphemeralMessage>,
     {
-        let targets: Vec<Authenticated<C, F>> = {
+        let targets: Vec<Authenticated<Conn, Async>> = {
             let conns = self.connections.lock().await;
             conns
                 .values()
@@ -353,33 +358,35 @@ pub enum EphemeralHandlerError<SendErr: core::error::Error> {
 
 #[future_form::future_form(
     Sendable where
-        C: Connection<Sendable, EphemeralMessage>
+        Conn: Connection<Sendable, EphemeralMessage>
             + Clone + Send + Sync + 'static,
         E: EphemeralPolicy<Sendable> + Send + Sync,
         E::SubscribeDisallowed: Send + 'static,
         E::PublishDisallowed: Send + 'static,
-        C::SendError: Send + 'static,
+        Conn::SendError: Send + 'static,
         Clk: Clock + Send + Sync,
     Local where
-        C: Connection<Local, EphemeralMessage>
+        Conn: Connection<Local, EphemeralMessage>
             + Clone + 'static,
         E: EphemeralPolicy<Local>,
         Clk: Clock
 )]
-impl<K: FutureForm, C, E, Clk> Handler<K, C> for EphemeralHandler<K, C, E, Clk> {
+impl<Async: FutureForm, Conn, E, Clk> Handler<Async, Conn>
+    for EphemeralHandler<Async, Conn, E, Clk>
+{
     type Message = EphemeralMessage;
-    type HandlerError = EphemeralHandlerError<C::SendError>;
+    type HandlerError = EphemeralHandlerError<Conn::SendError>;
 
     fn handle<'a>(
         &'a self,
-        conn: &'a Authenticated<C, K>,
+        conn: &'a Authenticated<Conn, Async>,
         message: EphemeralMessage,
-    ) -> K::Future<'a, Result<(), Self::HandlerError>> {
-        K::from_future(async move { self.dispatch(conn, message).await })
+    ) -> Async::Future<'a, Result<(), Self::HandlerError>> {
+        Async::from_future(async move { self.dispatch(conn, message).await })
     }
 
-    fn on_peer_disconnect(&self, peer: PeerId) -> K::Future<'_, ()> {
-        K::from_future(async move {
+    fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()> {
+        Async::from_future(async move {
             let mut subs = self.ephemeral_subscriptions.lock().await;
             subs.retain(|_id, peers| {
                 peers.remove(&peer);
@@ -394,17 +401,17 @@ impl<K: FutureForm, C, E, Clk> Handler<K, C> for EphemeralHandler<K, C, E, Clk> 
 }
 
 impl<
-    F: FutureForm,
-    C: Connection<F, EphemeralMessage> + Clone + 'static,
-    E: EphemeralPolicy<F>,
+    Async: FutureForm,
+    Conn: Connection<Async, EphemeralMessage> + Clone + 'static,
+    E: EphemeralPolicy<Async>,
     Clk: Clock,
-> EphemeralHandler<F, C, E, Clk>
+> EphemeralHandler<Async, Conn, E, Clk>
 {
     async fn dispatch(
         &self,
-        conn: &Authenticated<C, F>,
+        conn: &Authenticated<Conn, Async>,
         message: EphemeralMessage,
-    ) -> Result<(), EphemeralHandlerError<C::SendError>> {
+    ) -> Result<(), EphemeralHandlerError<Conn::SendError>> {
         match message {
             EphemeralMessage::Ephemeral { .. } => {
                 self.recv_ephemeral(conn, message).await;
@@ -437,7 +444,7 @@ impl<
     ///
     /// [`design/ephemeral.md`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#recv-ephemeralhandlerrecv_ephemeral
     #[allow(clippy::too_many_lines)]
-    async fn recv_ephemeral(&self, conn: &Authenticated<C, F>, message: EphemeralMessage) {
+    async fn recv_ephemeral(&self, conn: &Authenticated<Conn, Async>, message: EphemeralMessage) {
         let EphemeralMessage::Ephemeral(ref signed) = message else {
             return;
         };
@@ -602,7 +609,7 @@ impl<
 
         // Collect target connections while holding the lock, then drop it
         // before awaiting sends to avoid holding the mutex across .await.
-        let targets: Vec<Authenticated<C, F>> = {
+        let targets: Vec<Authenticated<Conn, Async>> = {
             let conns = self.connections.lock().await;
             authorized_peers
                 .iter()
@@ -631,7 +638,7 @@ impl<
     ///
     /// Policy checks are batched first (no lock held), then all
     /// authorized topics are inserted under a single lock acquisition.
-    async fn recv_subscribe(&self, conn: &Authenticated<C, F>, topics: NonEmpty<Topic>) {
+    async fn recv_subscribe(&self, conn: &Authenticated<Conn, Async>, topics: NonEmpty<Topic>) {
         let peer = conn.peer_id();
         let mut authorized = Vec::new();
         let mut rejected = Vec::new();
@@ -672,7 +679,7 @@ impl<
     }
 
     /// Handle an unsubscribe request from a peer.
-    async fn recv_unsubscribe(&self, conn: &Authenticated<C, F>, topics: NonEmpty<Topic>) {
+    async fn recv_unsubscribe(&self, conn: &Authenticated<Conn, Async>, topics: NonEmpty<Topic>) {
         let peer = conn.peer_id();
         let mut subs = self.ephemeral_subscriptions.lock().await;
 

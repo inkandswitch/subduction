@@ -7,10 +7,10 @@
 //! # Architecture
 //!
 //! ```text
-//! ManagedConnection<C, K, O>
-//!   ├── Authenticated<C, K>   — the connection + verified peer identity
-//!   ├── Arc<Multiplexer>      — pending map + request ID counter
-//!   └── O                     — timeout strategy (e.g., TokioTimeout, JsTimeout)
+//! ManagedConnection<Conn, Async, Timer>
+//!   ├── Authenticated<Conn, Async>   — the connection + verified peer identity
+//!   ├── Arc<Multiplexer>             — pending map + request ID counter
+//!   └── Timer                        — timeout strategy (e.g., TokioTimeout, JsTimeout)
 //! ```
 //!
 //! The [`call`](ManagedConnection::call) method sends a
@@ -39,13 +39,13 @@ use crate::{
 
 /// A connection paired with its request-response multiplexer and timeout.
 #[derive(Debug)]
-pub struct ManagedConnection<C: Clone, K: FutureForm, O> {
-    authenticated: Authenticated<C, K>,
+pub struct ManagedConnection<Conn: Clone, Async: FutureForm, Timer> {
+    authenticated: Authenticated<Conn, Async>,
     multiplexer: Arc<Multiplexer>,
-    timer: O,
+    timer: Timer,
 }
 
-impl<C: Clone, K: FutureForm, O: Clone> Clone for ManagedConnection<C, K, O> {
+impl<Conn: Clone, Async: FutureForm, Timer: Clone> Clone for ManagedConnection<Conn, Async, Timer> {
     fn clone(&self) -> Self {
         Self {
             authenticated: self.authenticated.clone(),
@@ -55,18 +55,20 @@ impl<C: Clone, K: FutureForm, O: Clone> Clone for ManagedConnection<C, K, O> {
     }
 }
 
-impl<C: Clone + PartialEq, K: FutureForm, O> PartialEq for ManagedConnection<C, K, O> {
+impl<Conn: Clone + PartialEq, Async: FutureForm, Timer> PartialEq
+    for ManagedConnection<Conn, Async, Timer>
+{
     fn eq(&self, other: &Self) -> bool {
         self.authenticated == other.authenticated
     }
 }
 
-impl<C: Clone, K: FutureForm, O> ManagedConnection<C, K, O> {
+impl<Conn: Clone, Async: FutureForm, Timer> ManagedConnection<Conn, Async, Timer> {
     /// Create a new managed connection.
     pub const fn new(
-        authenticated: Authenticated<C, K>,
+        authenticated: Authenticated<Conn, Async>,
         multiplexer: Arc<Multiplexer>,
-        timer: O,
+        timer: Timer,
     ) -> Self {
         Self {
             authenticated,
@@ -83,7 +85,7 @@ impl<C: Clone, K: FutureForm, O> ManagedConnection<C, K, O> {
 
     /// Access the authenticated connection.
     #[must_use]
-    pub const fn authenticated(&self) -> &Authenticated<C, K> {
+    pub const fn authenticated(&self) -> &Authenticated<Conn, Async> {
         &self.authenticated
     }
 
@@ -95,7 +97,7 @@ impl<C: Clone, K: FutureForm, O> ManagedConnection<C, K, O> {
 
     /// Consume the managed connection, returning the authenticated connection.
     #[must_use]
-    pub fn into_authenticated(self) -> Authenticated<C, K> {
+    pub fn into_authenticated(self) -> Authenticated<Conn, Async> {
         self.authenticated
     }
 
@@ -107,10 +109,10 @@ impl<C: Clone, K: FutureForm, O> ManagedConnection<C, K, O> {
 
 /// Error from a roundtrip [`call`](ManagedConnection::call).
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum CallError<S: core::error::Error> {
+pub enum CallError<SendErr: core::error::Error> {
     /// The transport failed to send the request.
     #[error("send error: {0}")]
-    Send(S),
+    Send(SendErr),
 
     /// The response channel was dropped (peer disconnected).
     #[error("response channel dropped")]
@@ -121,7 +123,7 @@ pub enum CallError<S: core::error::Error> {
     Timeout,
 }
 
-impl<S: core::error::Error> CallError<S> {
+impl<SendErr: core::error::Error> CallError<SendErr> {
     /// Short error name suitable for JS `Error.name` or logging.
     #[must_use]
     pub const fn error_name(&self) -> &'static str {
@@ -133,7 +135,10 @@ impl<S: core::error::Error> CallError<S> {
     }
 
     /// Map the inner send-error type.
-    pub fn map_send<S2: core::error::Error>(self, f: impl FnOnce(S) -> S2) -> CallError<S2> {
+    pub fn map_send<OutErr: core::error::Error>(
+        self,
+        f: impl FnOnce(SendErr) -> OutErr,
+    ) -> CallError<OutErr> {
         match self {
             Self::Send(e) => CallError::Send(f(e)),
             Self::ResponseDropped => CallError::ResponseDropped,
@@ -146,8 +151,8 @@ impl<S: core::error::Error> CallError<S> {
 ///
 /// This trait bridges the `Sendable` and `Local` implementations of
 /// [`ManagedConnection::call`], making the method available in code
-/// generic over `K: FutureForm`.
-pub trait ManagedCall<K: FutureForm, M>: Sized {
+/// generic over `Async: FutureForm`.
+pub trait ManagedCall<Async: FutureForm, WireMsg>: Sized {
     /// The connection's send-error type.
     type SendError: core::error::Error;
 
@@ -160,40 +165,40 @@ pub trait ManagedCall<K: FutureForm, M>: Sized {
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<BatchSyncResponse, CallError<Self::SendError>>>;
+    ) -> Async::Future<'_, Result<BatchSyncResponse, CallError<Self::SendError>>>;
 }
 
-impl<C: Clone, O> ManagedConnection<C, Sendable, O>
+impl<Conn: Clone, Timer> ManagedConnection<Conn, Sendable, Timer>
 where
-    O: Timeout<Sendable> + Send + Sync,
+    Timer: Timeout<Sendable> + Send + Sync,
 {
     /// Send a [`BatchSyncRequest`] and await the matching [`BatchSyncResponse`].
     ///
     /// The request is wrapped in `SyncMessage::BatchSyncRequest`, converted to
-    /// the handler's wire type `M` via `From<SyncMessage>`, and sent via
+    /// the handler's wire type `WireMsg` via `From<SyncMessage>`, and sent via
     /// `Connection::send`. The response arrives via the `Multiplexer`'s
     /// pending map, which is resolved by the `Subduction` listen loop.
     ///
     /// # Errors
     ///
     /// Returns [`CallError`] on send failure, dropped response, or timeout.
-    pub fn call_inner<M>(
+    pub fn call_inner<WireMsg>(
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
-    ) -> futures::future::BoxFuture<'_, Result<BatchSyncResponse, CallError<C::SendError>>>
+    ) -> futures::future::BoxFuture<'_, Result<BatchSyncResponse, CallError<Conn::SendError>>>
     where
-        C: Connection<Sendable, M> + PartialEq + Send + Sync,
-        C::SendError: Send + 'static,
-        M: Encode + Decode + From<SyncMessage> + Send,
+        Conn: Connection<Sendable, WireMsg> + PartialEq + Send + Sync,
+        Conn::SendError: Send + 'static,
+        WireMsg: Encode + Decode + From<SyncMessage> + Send,
     {
         let time_limit = timeout.unwrap_or(self.multiplexer.default_time_limit());
         async move {
             let req_id = req.req_id;
             let rx = self.multiplexer.register_pending(req_id).await;
 
-            let wire_msg: M = SyncMessage::BatchSyncRequest(req).into();
-            Connection::<Sendable, M>::send(&self.authenticated, &wire_msg)
+            let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
+            Connection::<Sendable, WireMsg>::send(&self.authenticated, &wire_msg)
                 .await
                 .map_err(CallError::Send)?;
 
@@ -217,14 +222,15 @@ where
     }
 }
 
-impl<C, M, O> ManagedCall<Sendable, M> for ManagedConnection<C, Sendable, O>
+impl<Conn, WireMsg, Timer> ManagedCall<Sendable, WireMsg>
+    for ManagedConnection<Conn, Sendable, Timer>
 where
-    C: Connection<Sendable, M> + PartialEq + Clone + Send + Sync,
-    C::SendError: Send + 'static,
-    M: Encode + Decode + From<SyncMessage> + Send,
-    O: Timeout<Sendable> + Send + Sync,
+    Conn: Connection<Sendable, WireMsg> + PartialEq + Clone + Send + Sync,
+    Conn::SendError: Send + 'static,
+    WireMsg: Encode + Decode + From<SyncMessage> + Send,
+    Timer: Timeout<Sendable> + Send + Sync,
 {
-    type SendError = C::SendError;
+    type SendError = Conn::SendError;
 
     fn call(
         &self,
@@ -235,9 +241,9 @@ where
     }
 }
 
-impl<C: Clone, O> ManagedConnection<C, Local, O>
+impl<Conn: Clone, Timer> ManagedConnection<Conn, Local, Timer>
 where
-    O: Timeout<Local>,
+    Timer: Timeout<Local>,
 {
     /// Send a [`BatchSyncRequest`] and await the matching [`BatchSyncResponse`].
     ///
@@ -246,22 +252,22 @@ where
     /// # Errors
     ///
     /// Returns [`CallError`] on send failure, dropped response, or timeout.
-    pub fn call_inner<M>(
+    pub fn call_inner<WireMsg>(
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
-    ) -> futures::future::LocalBoxFuture<'_, Result<BatchSyncResponse, CallError<C::SendError>>>
+    ) -> futures::future::LocalBoxFuture<'_, Result<BatchSyncResponse, CallError<Conn::SendError>>>
     where
-        C: Connection<Local, M> + PartialEq,
-        M: Encode + Decode + From<SyncMessage>,
+        Conn: Connection<Local, WireMsg> + PartialEq,
+        WireMsg: Encode + Decode + From<SyncMessage>,
     {
         let time_limit = timeout.unwrap_or(self.multiplexer.default_time_limit());
         async move {
             let req_id = req.req_id;
             let rx = self.multiplexer.register_pending(req_id).await;
 
-            let wire_msg: M = SyncMessage::BatchSyncRequest(req).into();
-            Connection::<Local, M>::send(&self.authenticated, &wire_msg)
+            let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
+            Connection::<Local, WireMsg>::send(&self.authenticated, &wire_msg)
                 .await
                 .map_err(CallError::Send)?;
 
@@ -285,13 +291,13 @@ where
     }
 }
 
-impl<C, M, O> ManagedCall<Local, M> for ManagedConnection<C, Local, O>
+impl<Conn, WireMsg, Timer> ManagedCall<Local, WireMsg> for ManagedConnection<Conn, Local, Timer>
 where
-    C: Connection<Local, M> + PartialEq + Clone,
-    M: Encode + Decode + From<SyncMessage>,
-    O: Timeout<Local>,
+    Conn: Connection<Local, WireMsg> + PartialEq + Clone,
+    WireMsg: Encode + Decode + From<SyncMessage>,
+    Timer: Timeout<Local>,
 {
-    type SendError = C::SendError;
+    type SendError = Conn::SendError;
 
     fn call(
         &self,

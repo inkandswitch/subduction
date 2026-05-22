@@ -24,17 +24,17 @@ use super::{fetcher::Fetcher, traits::Storage};
 /// Created via [`Subduction::authorize_put`][crate::subduction::Subduction].
 ///
 /// A `Putter` also grants fetch access (put implies fetch).
-pub struct Putter<K: FutureForm, S: Storage<K>> {
-    storage: Arc<S>,
+pub struct Putter<Async: FutureForm, Store: Storage<Async>> {
+    storage: Arc<Store>,
     sedimentree_id: SedimentreeId,
-    _marker: PhantomData<K>,
+    _marker: PhantomData<Async>,
 }
 
-impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
+impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
     /// Create a new putter capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(super) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
+    pub(super) const fn new(storage: Arc<Store>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,
             sedimentree_id,
@@ -52,7 +52,7 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     ///
     /// This is useful when you have put access but only need to fetch.
     #[must_use]
-    pub fn as_fetcher(&self) -> Fetcher<K, S> {
+    pub fn as_fetcher(&self) -> Fetcher<Async, Store> {
         Fetcher::new(self.storage.clone(), self.sedimentree_id)
     }
 
@@ -69,14 +69,14 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     pub fn save_commit(
         &self,
         verified: VerifiedMeta<LooseCommit>,
-    ) -> K::Future<'_, Result<(), S::Error>> {
+    ) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage
             .save_loose_commit(self.sedimentree_id, verified)
     }
 
     /// List all commit IDs for this sedimentree.
     #[must_use]
-    pub fn list_commit_ids(&self) -> K::Future<'_, Result<Set<CommitId>, S::Error>> {
+    pub fn list_commit_ids(&self) -> Async::Future<'_, Result<Set<CommitId>, Store::Error>> {
         self.storage.list_commit_ids(self.sedimentree_id)
     }
 
@@ -84,7 +84,7 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     #[must_use]
     pub fn load_loose_commits(
         &self,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, S::Error>> {
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Store::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
@@ -101,7 +101,7 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     pub fn save_fragment(
         &self,
         verified: VerifiedMeta<Fragment>,
-    ) -> K::Future<'_, Result<(), S::Error>> {
+    ) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.save_fragment(self.sedimentree_id, verified)
     }
 
@@ -112,20 +112,22 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     pub fn load_fragment(
         &self,
         fragment_head: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, S::Error>> {
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Store::Error>> {
         self.storage
             .load_fragment(self.sedimentree_id, fragment_head)
     }
 
     /// List all fragment head [`CommitId`] values for this sedimentree.
     #[must_use]
-    pub fn list_fragment_ids(&self) -> K::Future<'_, Result<Set<CommitId>, S::Error>> {
+    pub fn list_fragment_ids(&self) -> Async::Future<'_, Result<Set<CommitId>, Store::Error>> {
         self.storage.list_fragment_ids(self.sedimentree_id)
     }
 
     /// Load all fragments with their blobs for this sedimentree.
     #[must_use]
-    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, S::Error>> {
+    pub fn load_fragments(
+        &self,
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Store::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
 
@@ -139,7 +141,7 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
         &self,
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> K::Future<'_, Result<usize, S::Error>> {
+    ) -> Async::Future<'_, Result<usize, Store::Error>> {
         self.storage
             .save_batch(self.sedimentree_id, commits, fragments)
     }
@@ -150,12 +152,12 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     ///
     /// This is bookkeeping to track which sedimentrees exist.
     #[must_use]
-    pub fn save_sedimentree_id(&self) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn save_sedimentree_id(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.save_sedimentree_id(self.sedimentree_id)
     }
 }
 
-impl<K: FutureForm, S: Storage<K>> Clone for Putter<K, S> {
+impl<Async: FutureForm, Store: Storage<Async>> Clone for Putter<Async, Store> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
@@ -165,7 +167,7 @@ impl<K: FutureForm, S: Storage<K>> Clone for Putter<K, S> {
     }
 }
 
-impl<K: FutureForm, S: Storage<K>> core::fmt::Debug for Putter<K, S> {
+impl<Async: FutureForm, Store: Storage<Async>> core::fmt::Debug for Putter<Async, Store> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Putter")
             .field("sedimentree_id", &self.sedimentree_id)

@@ -23,32 +23,32 @@ use crate::{metrics, storage::traits::Storage};
 /// This wrapper delegates all storage operations to an inner storage implementation
 /// while recording metrics for each operation.
 #[derive(Debug, Clone)]
-pub struct MetricsStorage<S> {
-    inner: S,
+pub struct MetricsStorage<Store> {
+    inner: Store,
 }
 
-impl<S> MetricsStorage<S> {
+impl<Store> MetricsStorage<Store> {
     /// Create a new `MetricsStorage` wrapper around the given storage.
     #[must_use]
-    pub const fn new(inner: S) -> Self {
+    pub const fn new(inner: Store) -> Self {
         Self { inner }
     }
 
     /// Get a reference to the inner storage.
     #[must_use]
-    pub const fn inner(&self) -> &S {
+    pub const fn inner(&self) -> &Store {
         &self.inner
     }
 
     /// Get a mutable reference to the inner storage.
     #[must_use]
-    pub const fn inner_mut(&mut self) -> &mut S {
+    pub const fn inner_mut(&mut self) -> &mut Store {
         &mut self.inner
     }
 
     /// Unwrap this wrapper and return the inner storage.
     #[must_use]
-    pub fn into_inner(self) -> S {
+    pub fn into_inner(self) -> Store {
         self.inner
     }
 }
@@ -66,8 +66,8 @@ pub trait RefreshMetrics {
     fn refresh_metrics(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-impl<S: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S> {
-    type Error = S::Error;
+impl<Store: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<Store> {
+    type Error = Store::Error;
 
     async fn refresh_metrics(&self) -> Result<(), Self::Error> {
         let sedimentree_ids = Storage::<Sendable>::load_all_sedimentree_ids(&self.inner).await?;
@@ -104,17 +104,17 @@ impl<S: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S> {
     }
 }
 
-#[future_form(Sendable where S: Storage<Sendable> + Send + Sync, Local where S: Storage<Local>)]
-impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
-    type Error = S::Error;
+#[future_form(Sendable where Store: Storage<Sendable> + Send + Sync, Local where Store: Storage<Local>)]
+impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
+    type Error = Store::Error;
 
     // ==================== Sedimentree IDs ====================
 
     fn save_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_sedimentree_id(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -128,8 +128,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn delete_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_sedimentree_id(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -140,8 +140,10 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         })
     }
 
-    fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        K::from_future(async move {
+    fn load_all_sedimentree_ids(
+        &self,
+    ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_all_sedimentree_ids().await;
             metrics::storage_operation_duration(
@@ -158,8 +160,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         verified: VerifiedMeta<LooseCommit>,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_loose_commit(sedimentree_id, verified).await;
             metrics::storage_operation_duration("save_loose_commit", start.elapsed().as_secs_f64());
@@ -170,8 +172,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn list_commit_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.list_commit_ids(sedimentree_id).await;
             metrics::storage_operation_duration("list_commit_ids", start.elapsed().as_secs_f64());
@@ -182,8 +184,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_loose_commits(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -198,8 +200,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         commit_id: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -214,8 +216,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         commit_id: CommitId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -232,8 +234,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_loose_commits(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -250,8 +252,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         verified: VerifiedMeta<Fragment>,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_fragment(sedimentree_id, verified).await;
             metrics::storage_operation_duration("save_fragment", start.elapsed().as_secs_f64());
@@ -263,8 +265,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         fragment_head: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -278,8 +280,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.list_fragment_ids(sedimentree_id).await;
             metrics::storage_operation_duration("list_fragment_ids", start.elapsed().as_secs_f64());
@@ -290,8 +292,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_fragments(sedimentree_id).await;
             metrics::storage_operation_duration("load_fragments", start.elapsed().as_secs_f64());
@@ -303,8 +305,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         fragment_head: CommitId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -318,8 +320,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn delete_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_fragments(sedimentree_id).await;
             metrics::storage_operation_duration("delete_fragments", start.elapsed().as_secs_f64());
@@ -334,8 +336,8 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         sedimentree_id: SedimentreeId,
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> K::Future<'_, Result<usize, Self::Error>> {
-        K::from_future(async move {
+    ) -> Async::Future<'_, Result<usize, Self::Error>> {
+        Async::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner

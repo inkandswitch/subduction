@@ -159,23 +159,23 @@ pub enum KeepAliveOutcome {
 /// Parameterized by [`FutureForm`]: `KeepAliveTask<Sendable>` is
 /// `Send`-spawnable on multi-threaded runtimes; `KeepAliveTask<Local>`
 /// is for single-threaded runtimes (Wasm).
-pub struct KeepAliveTask<K: FutureForm>(K::Future<'static, KeepAliveOutcome>);
+pub struct KeepAliveTask<Async: FutureForm>(Async::Future<'static, KeepAliveOutcome>);
 
-impl<K: FutureForm> core::fmt::Debug for KeepAliveTask<K> {
+impl<Async: FutureForm> core::fmt::Debug for KeepAliveTask<Async> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("KeepAliveTask").finish_non_exhaustive()
     }
 }
 
-impl<K: FutureForm> KeepAliveTask<K> {
-    pub(crate) const fn new(fut: K::Future<'static, KeepAliveOutcome>) -> Self {
+impl<Async: FutureForm> KeepAliveTask<Async> {
+    pub(crate) const fn new(fut: Async::Future<'static, KeepAliveOutcome>) -> Self {
         Self(fut)
     }
 }
 
-impl<K: FutureForm> IntoFuture for KeepAliveTask<K> {
+impl<Async: FutureForm> IntoFuture for KeepAliveTask<Async> {
     type Output = KeepAliveOutcome;
-    type IntoFuture = K::Future<'static, KeepAliveOutcome>;
+    type IntoFuture = Async::Future<'static, KeepAliveOutcome>;
 
     fn into_future(self) -> Self::IntoFuture {
         self.0
@@ -186,9 +186,9 @@ impl<K: FutureForm> IntoFuture for KeepAliveTask<K> {
 ///
 /// Parameterized over:
 /// - `T`: the underlying async I/O stream (e.g., `TcpStream`, `ConnectStream`)
-/// - `K`: the async future form (`Local` or `Sendable`)
+/// - `Async`: the async future form (`Local` or `Sendable`)
 #[derive(Debug)]
-pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> {
+pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> {
     chan_id: u64,
     peer_id: PeerId,
 
@@ -208,7 +208,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> {
     /// keepalive task. Unused (but cheap) when keepalive is disabled.
     pong_received: Arc<AtomicBool>,
 
-    _phantom: PhantomData<K>,
+    _phantom: PhantomData<Async>,
 }
 
 #[future_form(
@@ -217,30 +217,30 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> {
     Local where
         T: AsyncRead + AsyncWrite + Unpin + Send
 )]
-impl<T, K: FutureForm> Transport<K> for WebSocket<T, K> {
+impl<T, Async: FutureForm> Transport<Async> for WebSocket<T, Async> {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
-        K::from_future(async { Ok(()) })
+        Async::from_future(async { Ok(()) })
     }
 
-    fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send_bytes(&self, bytes: &[u8]) -> Async::Future<'_, Result<(), Self::SendError>> {
         let msg = tungstenite::Message::Binary(bytes.to_vec().into());
         let tx = self.outbound_tx.clone();
-        K::from_future(async move {
+        Async::from_future(async move {
             tx.send(msg).await.map_err(|_| SendError)?;
             Ok(())
         })
     }
 
-    fn recv_bytes(&self) -> K::Future<'_, Result<Vec<u8>, Self::RecvError>> {
+    fn recv_bytes(&self) -> Async::Future<'_, Result<Vec<u8>, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
         tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
 
-        K::from_future(async move {
+        Async::from_future(async move {
             let bytes = chan.recv().await.map_err(|_| {
                 tracing::error!("inbound channel closed unexpectedly");
                 RecvError
@@ -252,7 +252,7 @@ impl<T, K: FutureForm> Transport<K> for WebSocket<T, K> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
+impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
     /// Create a new WebSocket transport without keepalive.
     ///
     /// Returns the transport and a sender task to spawn. The sender
@@ -264,7 +264,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
     pub fn new(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
-    ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, K>) {
+    ) -> (
+        Self,
+        impl Future<Output = Result<(), RunError>> + use<T, Async>,
+    ) {
         tracing::info!("new WebSocket connection for peer {peer_id:?} (keepalive: false)");
         Self::new_inner(ws, peer_id)
     }
@@ -273,7 +276,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
     fn new_inner(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
-    ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, K>) {
+    ) -> (
+        Self,
+        impl Future<Output = Result<(), RunError>> + use<T, Async>,
+    ) {
         let (ws_writer, ws_reader) = ws.split();
         let (inbound_writer, inbound_reader) = async_channel::bounded(128);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
@@ -474,7 +480,7 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
 ///
 /// Cycle: `sleep(ping)` → clear flag → send Ping → `sleep(pong)` →
 /// check flag. Threshold consecutive misses trigger disconnect.
-async fn keepalive_loop<S, K>(
+async fn keepalive_loop<S, Async>(
     config: KeepAlive,
     peer_id: PeerId,
     outbound_tx: async_channel::Sender<tungstenite::Message>,
@@ -483,8 +489,8 @@ async fn keepalive_loop<S, K>(
     sleeper: S,
 ) -> KeepAliveOutcome
 where
-    S: Sleeper<K>,
-    K: FutureForm + ?Sized,
+    S: Sleeper<Async>,
+    Async: FutureForm + ?Sized,
 {
     use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
@@ -548,7 +554,7 @@ where
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> Clone for WebSocket<T, K> {
+impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> Clone for WebSocket<T, Async> {
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,
@@ -564,7 +570,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> Clone for WebSocket<T, K>
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> PartialEq for WebSocket<T, K> {
+impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> PartialEq for WebSocket<T, Async> {
     fn eq(&self, other: &Self) -> bool {
         self.peer_id == other.peer_id
             && Arc::ptr_eq(&self.ws_reader, &other.ws_reader)

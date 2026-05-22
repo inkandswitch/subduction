@@ -17,19 +17,19 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 pub struct OpenPolicy;
 
 #[future_form(Sendable, Local)]
-impl<K: FutureForm> ConnectionPolicy<K> for OpenPolicy {
+impl<Async: FutureForm> ConnectionPolicy<Async> for OpenPolicy {
     type ConnectionDisallowed = Infallible;
 
     fn authorize_connect(
         &self,
         _peer: PeerId,
-    ) -> K::Future<'_, Result<(), Self::ConnectionDisallowed>> {
-        K::from_future(async { Ok(()) })
+    ) -> Async::Future<'_, Result<(), Self::ConnectionDisallowed>> {
+        Async::from_future(async { Ok(()) })
     }
 }
 
 #[future_form(Sendable, Local)]
-impl<K: FutureForm> StoragePolicy<K> for OpenPolicy {
+impl<Async: FutureForm> StoragePolicy<Async> for OpenPolicy {
     type FetchDisallowed = Infallible;
     type PutDisallowed = Infallible;
 
@@ -37,8 +37,8 @@ impl<K: FutureForm> StoragePolicy<K> for OpenPolicy {
         &self,
         _peer: PeerId,
         _sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::FetchDisallowed>> {
-        K::from_future(async { Ok(()) })
+    ) -> Async::Future<'_, Result<(), Self::FetchDisallowed>> {
+        Async::from_future(async { Ok(()) })
     }
 
     fn authorize_put(
@@ -46,16 +46,16 @@ impl<K: FutureForm> StoragePolicy<K> for OpenPolicy {
         _requestor: PeerId,
         _author: VerifiedAuthor,
         _sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::PutDisallowed>> {
-        K::from_future(async { Ok(()) })
+    ) -> Async::Future<'_, Result<(), Self::PutDisallowed>> {
+        Async::from_future(async { Ok(()) })
     }
 
     fn filter_authorized_fetch(
         &self,
         _peer: PeerId,
         ids: Vec<SedimentreeId>,
-    ) -> K::Future<'_, Vec<SedimentreeId>> {
+    ) -> Async::Future<'_, Vec<SedimentreeId>> {
         // OpenPolicy allows everything
-        K::from_future(async { ids })
+        Async::from_future(async { ids })
     }
 }

@@ -101,18 +101,18 @@ impl<T> DerefMut for WebSocketHandshake<T> {
     Sendable where T: AsyncRead + AsyncWrite + Unpin + Send,
     Local where T: AsyncRead + AsyncWrite + Unpin
 )]
-impl<K: FutureForm, T> Handshake<K> for WebSocketHandshake<T> {
+impl<Async: FutureForm, T> Handshake<Async> for WebSocketHandshake<T> {
     type Error = WebSocketHandshakeError;
 
-    fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
+    fn send(&mut self, bytes: Vec<u8>) -> Async::Future<'_, Result<(), Self::Error>> {
+        Async::from_future(async move {
             SinkExt::send(&mut self.0, tungstenite::Message::Binary(bytes.into())).await?;
             Ok(())
         })
     }
 
-    fn recv(&mut self) -> K::Future<'_, Result<Vec<u8>, Self::Error>> {
-        K::from_future(async move {
+    fn recv(&mut self) -> Async::Future<'_, Result<Vec<u8>, Self::Error>> {
+        Async::from_future(async move {
             loop {
                 let msg = self
                     .0

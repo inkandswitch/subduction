@@ -45,11 +45,11 @@ impl MemorySigner {
 }
 
 #[future_form(Sendable, Local)]
-impl<K: FutureForm> Signer<K> for MemorySigner {
-    fn sign(&self, message: &[u8]) -> K::Future<'_, Signature> {
+impl<Async: FutureForm> Signer<Async> for MemorySigner {
+    fn sign(&self, message: &[u8]) -> Async::Future<'_, Signature> {
         use ed25519_dalek::Signer as _;
         let signature = self.signing_key.sign(message);
-        K::from_future(async move { signature })
+        Async::from_future(async move { signature })
     }
 
     fn verifying_key(&self) -> VerifyingKey {

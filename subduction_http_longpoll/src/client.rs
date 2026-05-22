@@ -45,21 +45,21 @@ use crate::{
 
 /// Result of a successful connection, containing the authenticated connection
 /// and background task futures that the caller must spawn.
-pub struct ConnectResult<K: FutureForm> {
+pub struct ConnectResult<Async: FutureForm> {
     /// The authenticated connection, ready for registration with Subduction.
-    pub authenticated: subduction_core::authenticated::Authenticated<HttpLongPollTransport, K>,
+    pub authenticated: subduction_core::authenticated::Authenticated<HttpLongPollTransport, Async>,
 
     /// The session ID assigned by the server.
     pub session_id: SessionId,
 
     /// Background recv-polling task. Must be spawned to drive inbound messages.
-    pub poll_task: K::Future<'static, ()>,
+    pub poll_task: Async::Future<'static, ()>,
 
     /// Background send task. Must be spawned to drive outbound messages.
-    pub send_task: K::Future<'static, ()>,
+    pub send_task: Async::Future<'static, ()>,
 }
 
-impl<K: FutureForm> core::fmt::Debug for ConnectResult<K> {
+impl<Async: FutureForm> core::fmt::Debug for ConnectResult<Async> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectResult")
             .field("session_id", &self.session_id)
@@ -107,7 +107,7 @@ impl<H> HttpLongPollClient<H> {
 ///
 /// Prefer the convenience methods [`HttpLongPollClient::connect`] and
 /// [`HttpLongPollClient::connect_discover`] over calling this trait directly.
-pub trait Connect<K: FutureForm, Sig: Signer<K>> {
+pub trait Connect<Async: FutureForm, Sign: Signer<Async>> {
     /// Connect with a specific [`Audience`] (known peer ID or service discovery).
     ///
     /// # Errors
@@ -116,29 +116,29 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
     #[allow(clippy::type_complexity)]
     fn connect_with_audience<'a>(
         &'a self,
-        signer: &'a Sig,
+        signer: &'a Sign,
         audience: Audience,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>>;
+    ) -> Async::Future<'a, Result<ConnectResult<Async>, ClientError>>;
 }
 
-#[future_form(Sendable where H: Send + Sync, Sig: Sync, H::Error: Send, Local)]
-impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static> Connect<K, Sig>
+#[future_form(Sendable where H: Send + Sync, Sign: Sync, H::Error: Send, Local)]
+impl<Async: FutureForm, Sign: Signer<Async>, H: HttpClient<Async> + 'static> Connect<Async, Sign>
     for HttpLongPollClient<H>
 {
     fn connect_with_audience<'a>(
         &'a self,
-        signer: &'a Sig,
+        signer: &'a Sign,
         audience: Audience,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>> {
+    ) -> Async::Future<'a, Result<ConnectResult<Async>, ClientError>> {
         let http = self.http.clone();
         let base_url = self.base_url.clone();
 
-        K::from_future(async move {
+        Async::from_future(async move {
             let nonce = Nonce::random();
 
-            let mut client_handshake = ClientHttpHandshake::<K, H> {
+            let mut client_handshake = ClientHttpHandshake::<Async, H> {
                 http: http.clone(),
                 base_url: base_url.clone(),
                 session_id: None,
@@ -147,7 +147,7 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static> Connect<K, Sig>
             };
 
             #[allow(clippy::expect_used)]
-            let (authenticated, session_id) = handshake::initiate::<K, _, _, _, _>(
+            let (authenticated, session_id) = handshake::initiate::<Async, _, _, _, _>(
                 &mut client_handshake,
                 |handshake, peer_id| {
                     let session_id = handshake
@@ -177,16 +177,17 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static> Connect<K, Sig>
             let poll_http = http.clone();
             let poll_conn = conn.clone();
 
-            let poll_task = K::from_future(async move {
-                poll_loop::<K, H>(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
+            let poll_task = Async::from_future(async move {
+                poll_loop::<Async, H>(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
             });
 
             let send_url = format!("{base_url}/lp/send");
             let send_http = http;
             let send_conn = conn;
 
-            let send_task = K::from_future(async move {
-                send_loop::<K, H>(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
+            let send_task = Async::from_future(async move {
+                send_loop::<Async, H>(send_http, send_url, session_id, send_conn, send_cancel_rx)
+                    .await;
             });
 
             Ok(ConnectResult {
@@ -202,23 +203,23 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static> Connect<K, Sig>
 impl<H> HttpLongPollClient<H> {
     /// Connect to the server with a known peer ID.
     ///
-    /// The [`FutureForm`] variant `K` is inferred from the HTTP client `H`:
+    /// The [`FutureForm`] variant `Async` is inferred from the HTTP client `H`:
     /// [`Sendable`](future_form::Sendable) for native clients,
     /// [`Local`](future_form::Local) for browser `fetch()`.
     ///
     /// # Errors
     ///
     /// Returns [`ClientError`] if the handshake or connection setup fails.
-    pub fn connect<'a, K: FutureForm, Sig: Signer<K>>(
+    pub fn connect<'a, Async: FutureForm, Sign: Signer<Async>>(
         &'a self,
-        signer: &'a Sig,
+        signer: &'a Sign,
         expected_peer_id: PeerId,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>>
+    ) -> Async::Future<'a, Result<ConnectResult<Async>, ClientError>>
     where
-        Self: Connect<K, Sig>,
+        Self: Connect<Async, Sign>,
     {
-        Connect::<K, Sig>::connect_with_audience(
+        Connect::<Async, Sign>::connect_with_audience(
             self,
             signer,
             Audience::known(expected_peer_id),
@@ -228,23 +229,23 @@ impl<H> HttpLongPollClient<H> {
 
     /// Connect to the server using service discovery.
     ///
-    /// The [`FutureForm`] variant `K` is inferred from the HTTP client `H`:
+    /// The [`FutureForm`] variant `Async` is inferred from the HTTP client `H`:
     /// [`Sendable`](future_form::Sendable) for native clients,
     /// [`Local`](future_form::Local) for browser `fetch()`.
     ///
     /// # Errors
     ///
     /// Returns [`ClientError`] if the handshake or connection setup fails.
-    pub fn connect_discover<'a, K: FutureForm, Sig: Signer<K>>(
+    pub fn connect_discover<'a, Async: FutureForm, Sign: Signer<Async>>(
         &'a self,
-        signer: &'a Sig,
+        signer: &'a Sign,
         service_name: &str,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>>
+    ) -> Async::Future<'a, Result<ConnectResult<Async>, ClientError>>
     where
-        Self: Connect<K, Sig>,
+        Self: Connect<Async, Sign>,
     {
-        Connect::<K, Sig>::connect_with_audience(
+        Connect::<Async, Sign>::connect_with_audience(
             self,
             signer,
             Audience::discover(service_name.as_bytes()),
@@ -259,7 +260,7 @@ impl<H> HttpLongPollClient<H> {
 
 /// Background task that continuously polls `POST /lp/recv` and pushes
 /// raw bytes into the connection's inbound channel.
-async fn poll_loop<K: FutureForm, H: HttpClient<K>>(
+async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
     http: H,
     url: String,
     session_id: SessionId,
@@ -312,7 +313,7 @@ async fn poll_loop<K: FutureForm, H: HttpClient<K>>(
 
 /// Background task that drains the connection's outbound channel and sends
 /// each message via `POST /lp/send`.
-async fn send_loop<K: FutureForm, H: HttpClient<K>>(
+async fn send_loop<Async: FutureForm, H: HttpClient<Async>>(
     http: H,
     url: String,
     session_id: SessionId,
@@ -370,23 +371,25 @@ async fn send_loop<K: FutureForm, H: HttpClient<K>>(
 /// 2. `recv()` — returns the response bytes captured during `send()`
 ///
 /// This maps the streaming `Handshake` interface to a single HTTP round-trip.
-struct ClientHttpHandshake<K: FutureForm, H: HttpClient<K>> {
+struct ClientHttpHandshake<Async: FutureForm, H: HttpClient<Async>> {
     http: H,
     base_url: String,
     session_id: Option<SessionId>,
     response_bytes: Option<Vec<u8>>,
-    _k: core::marker::PhantomData<K>,
+    _k: core::marker::PhantomData<Async>,
 }
 
 #[future_form(Sendable where H: Send, Local)]
-impl<K: FutureForm, H: HttpClient<K>> handshake::Handshake<K> for &mut ClientHttpHandshake<K, H> {
+impl<Async: FutureForm, H: HttpClient<Async>> handshake::Handshake<Async>
+    for &mut ClientHttpHandshake<Async, H>
+{
     type Error = ClientError;
 
-    fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>> {
+    fn send(&mut self, bytes: Vec<u8>) -> Async::Future<'_, Result<(), Self::Error>> {
         let url = format!("{}/lp/handshake", self.base_url);
         let http = self.http.clone();
 
-        K::from_future(async move {
+        Async::from_future(async move {
             let resp = http
                 .post(&url, &[("content-type", "application/octet-stream")], bytes)
                 .await
@@ -419,9 +422,9 @@ impl<K: FutureForm, H: HttpClient<K>> handshake::Handshake<K> for &mut ClientHtt
         })
     }
 
-    fn recv(&mut self) -> K::Future<'_, Result<Vec<u8>, Self::Error>> {
+    fn recv(&mut self) -> Async::Future<'_, Result<Vec<u8>, Self::Error>> {
         let bytes = self.response_bytes.take();
-        K::from_future(async move {
+        Async::from_future(async move {
             bytes.ok_or_else(|| {
                 ClientError::HandshakeDecode(
                     "no response bytes available (send not called?)".into(),

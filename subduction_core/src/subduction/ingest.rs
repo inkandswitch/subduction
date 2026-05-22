@@ -40,19 +40,19 @@ use super::error::IoError;
 /// Policy-rejected diffs are logged and silently ignored (returns `Ok(())`).
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn recv_batch_sync_response<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, M>,
-    M: Encode + Decode,
-    P: StoragePolicy<F>,
-    const N: usize,
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+    Auth: StoragePolicy<Async>,
+    const SHARDS: usize,
 >(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, N>,
-    storage: &StoragePowerbox<S, P>,
+    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    storage: &StoragePowerbox<Store, Auth>,
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
-) -> Result<(), IoError<F, S, C, M>> {
+) -> Result<(), IoError<Async, Store, Conn, WireMsg>> {
     tracing::info!(
         "received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
         id,
@@ -61,7 +61,7 @@ pub(crate) async fn recv_batch_sync_response<
         diff.missing_fragments.len()
     );
 
-    let mut putter_cache: Map<PeerId, Putter<F, S>> = Map::new();
+    let mut putter_cache: Map<PeerId, Putter<Async, Store>> = Map::new();
 
     // Collect verified commits and fragments grouped by author,
     // so we can call save_batch once per author instead of once per item.
@@ -90,7 +90,7 @@ pub(crate) async fn recv_batch_sync_response<
 
         #[allow(clippy::map_entry)]
         if !putter_cache.contains_key(&author_id) {
-            match storage.get_putter::<F>(*from, author, id).await {
+            match storage.get_putter::<Async>(*from, author, id).await {
                 Ok(p) => {
                     putter_cache.insert(author_id, p);
                 }
@@ -134,7 +134,7 @@ pub(crate) async fn recv_batch_sync_response<
 
         #[allow(clippy::map_entry)]
         if !putter_cache.contains_key(&author_id) {
-            match storage.get_putter::<F>(*from, author, id).await {
+            match storage.get_putter::<Async>(*from, author, id).await {
                 Ok(p) => {
                     putter_cache.insert(author_id, p);
                 }
@@ -207,11 +207,15 @@ pub(crate) async fn recv_batch_sync_response<
 /// Persists to storage first (cancel-safe: idempotent CAS writes),
 /// then updates the in-memory tree. Returns whether the commit was
 /// newly added (`false` if already present).
-pub(crate) async fn insert_commit_locally<F: FutureForm, S: Storage<F>, const N: usize>(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, N>,
-    putter: &Putter<F, S>,
+pub(crate) async fn insert_commit_locally<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    const SHARDS: usize,
+>(
+    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
-) -> Result<bool, S::Error> {
+) -> Result<bool, Store::Error> {
     let id = putter.sedimentree_id();
     let commit = verified_meta.payload().clone();
 
@@ -230,11 +234,15 @@ pub(crate) async fn insert_commit_locally<F: FutureForm, S: Storage<F>, const N:
 /// Insert a verified fragment into storage and the in-memory tree.
 ///
 /// See [`insert_commit_locally`] for cancel-safety rationale.
-pub(crate) async fn insert_fragment_locally<F: FutureForm, S: Storage<F>, const N: usize>(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, N>,
-    putter: &Putter<F, S>,
+pub(crate) async fn insert_fragment_locally<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    const SHARDS: usize,
+>(
+    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
-) -> Result<bool, S::Error> {
+) -> Result<bool, Store::Error> {
     let id = putter.sedimentree_id();
     let fragment = verified_meta.payload().clone();
 
@@ -252,9 +260,9 @@ pub(crate) async fn insert_fragment_locally<F: FutureForm, S: Storage<F>, const 
 ///
 /// Prunes dominated fragments and loose commits covered by fragments,
 /// keeping only the minimal covering set. Storage retains the full history.
-pub(crate) async fn minimize_tree<M: DepthMetric, const N: usize>(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, N>,
-    depth_metric: &M,
+pub(crate) async fn minimize_tree<Metric: DepthMetric, const SHARDS: usize>(
+    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    depth_metric: &Metric,
     id: SedimentreeId,
 ) {
     sedimentrees
@@ -268,20 +276,24 @@ pub(crate) async fn minimize_tree<M: DepthMetric, const N: usize>(
 ///
 /// Searches through both loose commits and fragments for the given
 /// sedimentree, returning the first blob whose digest matches.
-pub(crate) async fn get_blob<F: FutureForm, S: Storage<F>, P: StoragePolicy<F>>(
-    storage: &StoragePowerbox<S, P>,
+pub(crate) async fn get_blob<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Auth: StoragePolicy<Async>,
+>(
+    storage: &StoragePowerbox<Store, Auth>,
     id: SedimentreeId,
     digest: Digest<Blob>,
-) -> Result<Option<Blob>, S::Error> {
+) -> Result<Option<Blob>, Store::Error> {
     let local_access = storage.hydration_access();
 
-    for verified in local_access.load_loose_commits::<F>(id).await? {
+    for verified in local_access.load_loose_commits::<Async>(id).await? {
         if verified.payload().blob_meta().digest() == digest {
             return Ok(Some(verified.blob().clone()));
         }
     }
 
-    for verified in local_access.load_fragments::<F>(id).await? {
+    for verified in local_access.load_fragments::<Async>(id).await? {
         if verified.payload().summary().blob_meta().digest() == digest {
             return Ok(Some(verified.blob().clone()));
         }

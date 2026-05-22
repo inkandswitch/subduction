@@ -68,7 +68,7 @@ use subduction_crypto::verified_meta::VerifiedMeta;
 /// [`load_fragment`](Storage::load_fragment)) are available for targeted
 /// lookups (e.g., fetching a specific blob).
 #[allow(clippy::type_complexity)]
-pub trait Storage<K: FutureForm + ?Sized> {
+pub trait Storage<Async: FutureForm + ?Sized> {
     /// The error type for storage operations.
     type Error: core::error::Error;
 
@@ -78,16 +78,18 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn save_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Delete a sedimentree ID.
     fn delete_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Get all sedimentree IDs that have data stored.
-    fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
+    fn load_all_sedimentree_ids(
+        &self,
+    ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
 
     // ==================== Loose Commits (compound with blob) ====================
 
@@ -100,7 +102,7 @@ pub trait Storage<K: FutureForm + ?Sized> {
         &self,
         sedimentree_id: SedimentreeId,
         verified: VerifiedMeta<LooseCommit>,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// List all [`CommitId`] values for a sedimentree.
     ///
@@ -110,7 +112,7 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn list_commit_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>>;
+    ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>>;
 
     /// Load all loose commits with their blobs for a sedimentree.
     ///
@@ -123,7 +125,7 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>;
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>;
 
     /// Load a single loose commit by [`CommitId`].
     ///
@@ -134,20 +136,20 @@ pub trait Storage<K: FutureForm + ?Sized> {
         &self,
         sedimentree_id: SedimentreeId,
         commit_id: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>;
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>;
 
     /// Delete a single loose commit and its blob by [`CommitId`].
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
         commit_id: CommitId,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Delete all loose commits and their blobs for a sedimentree.
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     // ==================== Fragments (compound with blob) ====================
 
@@ -159,7 +161,7 @@ pub trait Storage<K: FutureForm + ?Sized> {
         &self,
         sedimentree_id: SedimentreeId,
         verified: VerifiedMeta<Fragment>,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Load a fragment with its blob by fragment head [`CommitId`].
     ///
@@ -170,7 +172,7 @@ pub trait Storage<K: FutureForm + ?Sized> {
         &self,
         sedimentree_id: SedimentreeId,
         fragment_head: CommitId,
-    ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>;
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>;
 
     /// List all fragment head [`CommitId`] values for a sedimentree.
     ///
@@ -179,7 +181,7 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn list_fragment_ids(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<CommitId>, Self::Error>>;
+    ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>>;
 
     /// Load all fragments with their blobs for a sedimentree.
     ///
@@ -188,20 +190,20 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>;
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>;
 
     /// Delete a fragment and its blob by fragment head [`CommitId`].
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
         fragment_head: CommitId,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Delete all fragments and their blobs for a sedimentree.
     fn delete_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     // ==================== Batch Operations ====================
 
@@ -235,5 +237,5 @@ pub trait Storage<K: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> K::Future<'_, Result<usize, Self::Error>>;
+    ) -> Async::Future<'_, Result<usize, Self::Error>>;
 }

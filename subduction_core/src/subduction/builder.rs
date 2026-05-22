@@ -106,34 +106,36 @@ pub struct Unset;
 /// See the [module documentation](self) for a full example.
 #[derive(Debug)]
 pub struct SubductionBuilder<
-    Sig = Unset,
+    Sign = Unset,
     Sp = Unset,
-    Sto = Unset,
-    Tmr = Unset,
-    M = CountLeadingZeroBytes,
-    const N: usize = 256,
+    Store = Unset,
+    Timer = Unset,
+    Metric = CountLeadingZeroBytes,
+    const SHARDS: usize = 256,
 > {
-    signer: Sig,
+    signer: Sign,
     spawner: Sp,
-    storage: Sto,
-    timer: Tmr,
+    storage: Store,
+    timer: Timer,
 
     discovery_id: Option<DiscoveryId>,
     default_call_timeout: Option<Duration>,
-    depth_metric: M,
+    depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
-    sedimentrees: SedimentreesOption<N>,
+    sedimentrees: SedimentreesOption<SHARDS>,
 }
 
 /// Internal helper: stores an optional pre-populated `ShardedMap`.
 ///
-/// Using a wrapper struct avoids placing the const generic `N` on
+/// Using a wrapper struct avoids placing the const generic `SHARDS` on
 /// fields that don't otherwise need it.
 #[derive(Debug)]
-struct SedimentreesOption<const N: usize>(Option<Arc<ShardedMap<SedimentreeId, Sedimentree, N>>>);
+struct SedimentreesOption<const SHARDS: usize>(
+    Option<Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>>,
+);
 
-impl<const N: usize> Default for SedimentreesOption<N> {
+impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
     fn default() -> Self {
         Self(None)
     }
@@ -143,14 +145,16 @@ impl<const N: usize> Default for SedimentreesOption<N> {
 // Constructor
 // -----------------------------------------------------------------------
 
-impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, N> {
+impl<const SHARDS: usize>
+    SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS>
+{
     /// Create a new builder with all defaults.
     ///
     /// The four required fields — `signer`, `spawner`, `storage`, and
     /// `timer` — must be set via their respective methods before
     /// calling [`build`](SubductionBuilder::build).
     ///
-    /// The const generic `N` controls the number of shards in the
+    /// The const generic `SHARDS` controls the number of shards in the
     /// internal [`ShardedMap`]. Defaults to 256 if not specified.
     #[must_use]
     pub fn new() -> Self {
@@ -169,19 +173,24 @@ impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZ
     }
 }
 
-impl<const N: usize> Default
-    for SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, N>
+impl<const SHARDS: usize> Default
+    for SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS>
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, Tmr, M, N> {
+impl<Sp, Store, Timer, Metric, const SHARDS: usize>
+    SubductionBuilder<Unset, Sp, Store, Timer, Metric, SHARDS>
+{
     /// Set the signer for peer identity and handshake authentication.
     ///
     /// This is a required field.
-    pub fn signer<Sig>(self, signer: Sig) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
+    pub fn signer<Sign>(
+        self,
+        signer: Sign,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
         SubductionBuilder {
             signer,
             spawner: self.spawner,
@@ -197,13 +206,18 @@ impl<Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, Tmr, M, 
     }
 }
 
-impl<Sig, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, Tmr, M, N> {
+impl<Sign, Store, Timer, Metric, const SHARDS: usize>
+    SubductionBuilder<Sign, Unset, Store, Timer, Metric, SHARDS>
+{
     /// Set the task spawner for background work.
     ///
     /// This is a required field. Common implementations:
     /// - `TokioSpawn` for native async (requires `Sendable`)
     /// - `WasmSpawn` for browser environments (requires `Local`)
-    pub fn spawner<Sp>(self, spawner: Sp) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
+    pub fn spawner<Sp>(
+        self,
+        spawner: Sp,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner,
@@ -219,16 +233,18 @@ impl<Sig, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, Tmr, M
     }
 }
 
-impl<Sig, Sp, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, Tmr, M, N> {
+impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, SHARDS>
+{
     /// Set the storage backend and authorization policy.
     ///
     /// This is a required field. The `storage` backend provides
     /// persistence, and the `policy` controls per-peer access.
-    pub fn storage<S, P>(
+    pub fn storage<Store, Auth>(
         self,
-        storage: S,
-        policy: Arc<P>,
-    ) -> SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tmr, M, N> {
+        storage: Store,
+        policy: Arc<Auth>,
+    ) -> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
@@ -244,13 +260,15 @@ impl<Sig, Sp, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, Tmr, M, 
     }
 }
 
-impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Unset, M, N> {
+impl<Sign, Sp, Store, Metric, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Unset, Metric, SHARDS>
+{
     /// Set the timeout strategy for roundtrip calls.
     ///
     /// This is a required field. Common implementations:
     /// - `TokioTimeout` for native async
     /// - `JsTimeout` for browser environments
-    pub fn timer<O>(self, timer: O) -> SubductionBuilder<Sig, Sp, Sto, O, M, N> {
+    pub fn timer<O>(self, timer: O) -> SubductionBuilder<Sign, Sp, Store, O, Metric, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
@@ -266,7 +284,9 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Unset, M, 
     }
 }
 
-impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
+impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Timer, Met, SHARDS>
+{
     /// Set the discovery ID for discovery-mode connections.
     ///
     /// Defaults to `None` (peer-to-peer mode only).
@@ -290,10 +310,10 @@ impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, 
     /// Override the depth metric used to assign commit depths.
     ///
     /// Defaults to [`CountLeadingZeroBytes`].
-    pub fn depth_metric<M2: DepthMetric>(
+    pub fn depth_metric<Metric: DepthMetric>(
         self,
-        metric: M2,
-    ) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M2, N> {
+        metric: Metric,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
@@ -334,7 +354,7 @@ impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, 
     #[must_use]
     pub fn sedimentrees(
         mut self,
-        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
     ) -> Self {
         self.sedimentrees = SedimentreesOption(Some(sedimentrees));
         self
@@ -345,8 +365,8 @@ impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, 
 // Build methods (only available when all required fields are set)
 // -----------------------------------------------------------------------
 
-impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
-    SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tmr, M, N>
+impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, SHARDS>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -374,32 +394,32 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     ///     .build::<Sendable, MyConnection>();
     /// ```
     #[allow(clippy::type_complexity)]
-    pub fn build<'a, F, C>(
+    pub fn build<'a, Async, Conn>(
         self,
     ) -> (
-        Arc<Subduction<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tmr, M, N>>,
-        Arc<SyncHandler<F, S, C, P, M, N>>,
-        ListenerFuture<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tmr, M, N>,
-        crate::connection::manager::ManagerFuture<F>,
+        Arc<Subduction<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Metric, SHARDS>>,
+        Arc<SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>>,
+        ListenerFuture<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Metric, SHARDS>,
+        crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        F: SubductionFutureForm<'a, S, C, SyncMessage, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, SyncMessage, SyncHandler<F, S, C, P, M, N>, P, Sig, M, N>,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
-        P: ConnectionPolicy<F> + StoragePolicy<F>,
-        Sig: Signer<F>,
-        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
-        Sp: Spawn<F> + Send + Sync + 'static,
-        M: Clone,
-        SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
-            Into<ListenError<F, S, C, SyncMessage>>,
-        crate::connection::managed::ManagedConnection<C, F, Tmr>:
+        Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS> + 'static,
+        Async: StartListener<'a, Store, Conn, SyncMessage, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Metric, SHARDS>,
+        Store: Storage<Async>,
+        Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'a,
+        Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+        Sign: Signer<Async>,
+        Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Async> + Send + Sync + 'static,
+        Metric: Clone,
+        SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
+            Into<ListenError<Async, Store, Conn, SyncMessage>>,
+        crate::connection::managed::ManagedConnection<Conn, Async, Timer>:
             crate::connection::managed::ManagedCall<
-                    F,
+                    Async,
                     SyncMessage,
-                    SendError = <C as Connection<F, SyncMessage>>::SendError,
+                    SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
                 >,
     {
         let sedimentrees = self
@@ -407,7 +427,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             .0
             .unwrap_or_else(|| Arc::new(ShardedMap::new()));
 
-        let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>> =
+        let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -476,31 +496,32 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     ///     .build_with_handler::<Sendable, MyConnection, _>(handler);
     /// ```
     #[allow(clippy::type_complexity)]
-    pub fn build_with_handler<'a, F, C, H>(
+    pub fn build_with_handler<'a, Async, Conn, Hdl>(
         self,
-        handler: Arc<H>,
+        handler: Arc<Hdl>,
     ) -> (
-        Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
-        ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
-        crate::connection::manager::ManagerFuture<F>,
+        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
+        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+        crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, H::Message, H, P, Sig, M, N>,
-        S: Storage<F>,
-        C: Connection<F, H::Message> + PartialEq + Clone + 'a,
-        P: ConnectionPolicy<F> + StoragePolicy<F>,
-        Sig: Signer<F>,
-        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
-        Sp: Spawn<F> + Send + Sync + 'static,
-        H: Handler<F, C>,
-        H::Message: From<SyncMessage>,
-        H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
-        crate::connection::managed::ManagedConnection<C, F, Tmr>:
+        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
+            + 'static,
+        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Store: Storage<Async>,
+        Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'a,
+        Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+        Sign: Signer<Async>,
+        Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Async> + Send + Sync + 'static,
+        Hdl: Handler<Async, Conn>,
+        Hdl::Message: From<SyncMessage>,
+        Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
+        crate::connection::managed::ManagedConnection<Conn, Async, Timer>:
             crate::connection::managed::ManagedCall<
-                    F,
-                    H::Message,
-                    SendError = <C as Connection<F, H::Message>>::SendError,
+                    Async,
+                    Hdl::Message,
+                    SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
                 >,
     {
         let sedimentrees = self
@@ -508,7 +529,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             .0
             .unwrap_or_else(|| Arc::new(ShardedMap::new()));
 
-        let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>> =
+        let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -542,7 +563,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     /// the `compose` closure. This lets you wrap the `SyncHandler` in a
     /// composed handler that also handles other message types.
     ///
-    /// The closure returns `(Arc<H>, X)` where `X` is any extra data
+    /// The closure returns `(Arc<Hdl>, X)` where `X` is any extra data
     /// the caller wants to extract from the composition step (e.g.,
     /// an [`EphemeralHandler`] that shares the same `connections` map).
     ///
@@ -559,36 +580,36 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
     ///     });
     /// ```
     #[allow(clippy::type_complexity)]
-    pub fn build_composed<'a, F, C, H, X>(
+    pub fn build_composed<'a, Async, Conn, Hdl, X>(
         self,
-        compose: impl FnOnce(Arc<SyncHandler<F, S, C, P, M, N>>) -> (Arc<H>, X),
+        compose: impl FnOnce(Arc<SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>>) -> (Arc<Hdl>, X),
     ) -> (
-        Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
-        ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
-        crate::connection::manager::ManagerFuture<F>,
+        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
+        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+        crate::connection::manager::ManagerFuture<Async>,
         X,
     )
     where
-        F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, H::Message, H, P, Sig, M, N>,
-        S: Storage<F>,
-        C: Connection<F, H::Message> + Connection<F, SyncMessage> + PartialEq + Clone + 'a,
-        P: ConnectionPolicy<F> + StoragePolicy<F>,
-        Sig: Signer<F>,
-        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
-        Sp: Spawn<F> + Send + Sync + 'static,
-        H: Handler<F, C>,
-        H::Message: From<SyncMessage>,
-        H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
-        M: Clone,
-        SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
-            Into<ListenError<F, S, C, SyncMessage>>,
-        crate::connection::managed::ManagedConnection<C, F, Tmr>:
+        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
+        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Store: Storage<Async>,
+        Conn: Connection<Async, Hdl::Message> + Connection<Async, SyncMessage> + PartialEq + Clone + 'a,
+        Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+        Sign: Signer<Async>,
+        Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Async> + Send + Sync + 'static,
+        Hdl: Handler<Async, Conn>,
+        Hdl::Message: From<SyncMessage>,
+        Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
+        Metric: Clone,
+        SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
+            Into<ListenError<Async, Store, Conn, SyncMessage>>,
+        crate::connection::managed::ManagedConnection<Conn, Async, Timer>:
             crate::connection::managed::ManagedCall<
-                    F,
-                    H::Message,
-                    SendError = <C as Connection<F, H::Message>>::SendError,
+                    Async,
+                    Hdl::Message,
+                    SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
                 >,
     {
         let sedimentrees = self
@@ -596,7 +617,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             .0
             .unwrap_or_else(|| Arc::new(ShardedMap::new()));
 
-        let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>> =
+        let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));

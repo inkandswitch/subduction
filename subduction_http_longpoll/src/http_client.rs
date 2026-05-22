@@ -16,7 +16,7 @@ pub mod reqwest_client;
 /// Implementations should handle the mechanics of making HTTP requests
 /// (TLS, connection pooling, etc.) while this trait exposes only what
 /// the long-poll transport needs.
-pub trait HttpClient<K: FutureForm>: Clone {
+pub trait HttpClient<Async: FutureForm>: Clone {
     /// The error type for HTTP operations.
     type Error: core::error::Error + 'static;
 
@@ -26,7 +26,7 @@ pub trait HttpClient<K: FutureForm>: Clone {
         url: &str,
         headers: &[(&str, &str)],
         body: Vec<u8>,
-    ) -> K::Future<'_, Result<HttpResponse, Self::Error>>;
+    ) -> Async::Future<'_, Result<HttpResponse, Self::Error>>;
 }
 
 /// A minimal HTTP response.

@@ -15,7 +15,7 @@ use crate::peer::id::PeerId;
 /// This trait performs authorization checks. To get a capability that bundles
 /// authorization with storage access, use [`Subduction::authorize_fetch`] or
 /// [`Subduction::authorize_put`].
-pub trait StoragePolicy<K: FutureForm> {
+pub trait StoragePolicy<Async: FutureForm> {
     /// Error type returned when fetch is disallowed.
     type FetchDisallowed: Error;
 
@@ -29,7 +29,7 @@ pub trait StoragePolicy<K: FutureForm> {
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::FetchDisallowed>>;
+    ) -> Async::Future<'_, Result<(), Self::FetchDisallowed>>;
 
     /// Authorize putting data for the given sedimentree.
     ///
@@ -43,7 +43,7 @@ pub trait StoragePolicy<K: FutureForm> {
         requestor: PeerId,
         author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<(), Self::PutDisallowed>>;
+    ) -> Async::Future<'_, Result<(), Self::PutDisallowed>>;
 
     /// Filter a list of sedimentree IDs to only those the peer is authorized to fetch.
     ///
@@ -56,5 +56,5 @@ pub trait StoragePolicy<K: FutureForm> {
         &self,
         peer: PeerId,
         ids: Vec<SedimentreeId>,
-    ) -> K::Future<'_, Vec<SedimentreeId>>;
+    ) -> Async::Future<'_, Vec<SedimentreeId>>;
 }

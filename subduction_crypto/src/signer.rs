@@ -26,9 +26,9 @@ use future_form::FutureForm;
 /// ```ignore
 /// Signed::seal::<Sendable, _>(&signer, payload).await
 /// ```
-pub trait Signer<K: FutureForm> {
+pub trait Signer<Async: FutureForm> {
     /// Sign the given message bytes.
-    fn sign(&self, message: &[u8]) -> K::Future<'_, Signature>;
+    fn sign(&self, message: &[u8]) -> Async::Future<'_, Signature>;
 
     /// Get the verifying (public) key corresponding to this signer.
     fn verifying_key(&self) -> VerifyingKey;

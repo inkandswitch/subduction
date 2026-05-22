@@ -126,22 +126,44 @@ impl PeriodicEventCache {
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if event serialization fails.
-    pub(crate) async fn refresh<Signer, T, P, C, L, R, Conn, Store, K>(
+    pub(crate) async fn refresh<
+        Signer,
+        CRef,
+        Plaintext,
+        CipherStore,
+        Listener,
+        Rng,
+        Conn,
+        Store,
+        Async,
+    >(
         &mut self,
-        protocol: &KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>,
+        protocol: &KeyhiveProtocol<
+            Signer,
+            CRef,
+            Plaintext,
+            CipherStore,
+            Listener,
+            Rng,
+            Conn,
+            Store,
+            Async,
+        >,
     ) -> Result<bool, ProtocolError<Conn::SendError>>
     where
-        Signer: AsyncSigner<K> + Clone,
-        T: ContentRef + serde::de::DeserializeOwned,
-        P: for<'de> serde::Deserialize<'de>,
-        C: CiphertextStore<K, T, P> + CiphertextStoreExt<K, T, P> + Clone,
-        L: MembershipListener<K, Signer, T>,
-        R: rand::CryptoRng + rand::RngCore,
-        Conn: KeyhiveConnection<K>,
+        Signer: AsyncSigner<Async> + Clone,
+        CRef: ContentRef + serde::de::DeserializeOwned,
+        Plaintext: for<'de> serde::Deserialize<'de>,
+        CipherStore: CiphertextStore<Async, CRef, Plaintext>
+            + CiphertextStoreExt<Async, CRef, Plaintext>
+            + Clone,
+        Listener: MembershipListener<Async, Signer, CRef>,
+        Rng: rand::CryptoRng + rand::RngCore,
+        Conn: KeyhiveConnection<Async>,
         Conn::SendError: 'static,
         Conn::DisconnectError: 'static,
-        Store: KeyhiveStorage<K>,
-        K: future_form::FutureForm,
+        Store: KeyhiveStorage<Async>,
+        Async: future_form::FutureForm,
     {
         let total = protocol.total_ops().await;
         if self.last_total_ops == Some(total) {
