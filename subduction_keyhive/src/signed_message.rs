@@ -160,7 +160,11 @@ impl SignedMessage {
     }
 
     /// Get a mutable reference to the signed bytes (for testing tamper scenarios).
-    #[cfg(test)]
+    ///
+    /// Only used from `protocol`'s tamper-detection tests; `protocol` itself
+    /// is `serde`-gated, so this method matches that gate to stay alive only
+    /// when there's actually a caller.
+    #[cfg(all(test, feature = "serde"))]
     pub(crate) const fn signed_bytes_mut(&mut self) -> &mut Vec<u8> {
         &mut self.signed
     }
