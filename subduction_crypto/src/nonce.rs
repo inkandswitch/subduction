@@ -56,3 +56,39 @@ impl Nonce {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Mutant-coverage tests for [`Nonce::as_u128`].
+
+    use super::Nonce;
+
+    /// `as_u128` of a non-zero, non-one nonce must return the original
+    /// value. A mutant returning `0` is caught by the non-zero input;
+    /// a mutant returning `1` is caught because we use a distinct value.
+    #[test]
+    fn as_u128_round_trips() {
+        let original = 0x1234_5678_9ABC_DEF0_FEDC_BA98_7654_3210u128;
+        let nonce = Nonce::from_u128(original);
+        assert_eq!(nonce.as_u128(), original, "as_u128 must invert from_u128");
+    }
+
+    /// Round-trip through `from_u128` → `as_u128` across several
+    /// representative values (zero, one, max, and a typical random
+    /// nonce) so the test fails for any constant-return mutant.
+    #[test]
+    fn as_u128_round_trips_across_values() {
+        for &v in &[
+            0u128,
+            1u128,
+            2u128,
+            u128::MAX,
+            u128::MAX - 1,
+            0xDEAD_BEEF_CAFE_BABE_u128,
+            u128::from(u64::MAX),
+        ] {
+            let nonce = Nonce::from_u128(v);
+            assert_eq!(nonce.as_u128(), v, "round-trip failed for {v}");
+        }
+    }
+}

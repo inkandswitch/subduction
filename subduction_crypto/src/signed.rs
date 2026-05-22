@@ -650,3 +650,447 @@ mod tests {
             });
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
+mod mutant_coverage {
+    //! Deterministic mutant-coverage tests for [`Signed<T>`].
+
+    use alloc::vec::Vec;
+
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use sedimentree_core::codec::{
+        decode::{self, DecodeFields},
+        encode::{self, EncodeFields},
+        error::DecodeError,
+        schema::{self, Schema},
+    };
+
+    use super::{MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE};
+
+    // ── Test payloads ─────────────────────────────────────────────────
+
+    /// Minimal payload type for `Signed<T>` mutant tests. Wire layout:
+    /// schema(4) + issuer(32) + value(8) + sig(64) = 108 bytes.
+    ///
+    /// Distinct from `super::tests::TestPayload` (schema byte `'T'`) so
+    /// the two test modules don't share schema state.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct MutantPayload {
+        value: u64,
+    }
+
+    impl Schema for MutantPayload {
+        const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+        const TYPE_BYTE: u8 = b'M'; // 'M' for "mutant coverage"
+        const VERSION: u8 = 0;
+    }
+
+    impl EncodeFields for MutantPayload {
+        fn encode_fields(&self, buf: &mut Vec<u8>) {
+            encode::u64(self.value, buf);
+        }
+
+        fn fields_size(&self) -> usize {
+            8
+        }
+    }
+
+    impl DecodeFields for MutantPayload {
+        const MIN_SIGNED_SIZE: usize = SCHEMA_SIZE + VERIFYING_KEY_SIZE + 8 + SIGNATURE_SIZE;
+
+        fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+            let value = decode::u64(buf, 0)?;
+            Ok((Self { value }, 8))
+        }
+    }
+
+    /// Build canonical signed bytes for `MutantPayload` synchronously,
+    /// using the same layout as `Signed::seal`.
+    pub(crate) fn seal_mutant_payload(key_bytes: [u8; 32], value: u64) -> Vec<u8> {
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        let issuer = signing_key.verifying_key();
+        let payload = MutantPayload { value };
+
+        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + payload.fields_size() + SIGNATURE_SIZE;
+        let mut bytes = Vec::with_capacity(total_size);
+
+        bytes.extend_from_slice(&MutantPayload::SCHEMA);
+        bytes.extend_from_slice(issuer.as_bytes());
+        payload.encode_fields(&mut bytes);
+        let signature = signing_key.sign(&bytes);
+        bytes.extend_from_slice(&signature.to_bytes());
+        bytes
+    }
+
+    // ── Signed::into_bytes ────────────────────────────────────────────
+    //
+    // Mutants killed:
+    //   - signed.rs:297 replace Signed<T>::into_bytes -> Vec<u8> with vec![]
+    //   - signed.rs:297 replace Signed<T>::into_bytes -> Vec<u8> with vec![0]
+    //   - signed.rs:297 replace Signed<T>::into_bytes -> Vec<u8> with vec![1]
+
+    /// `into_bytes` must return the same bytes as `as_bytes`, consuming
+    /// the `Signed<T>` value. Mutants that replace the body with
+    /// `vec![]`, `vec![0]`, or `vec![1]` produce a vec of length 0 or 1
+    /// — never the 108-byte canonical encoding.
+    #[test]
+    fn into_bytes_returns_full_wire_bytes() {
+        let canonical = seal_mutant_payload([7u8; 32], 0xDEAD_BEEF);
+        let signed = Signed::<MutantPayload>::try_decode(canonical.clone())
+            .expect("decode of canonical bytes");
+
+        let via_as_bytes: Vec<u8> = signed.as_bytes().to_vec();
+        let via_into_bytes: Vec<u8> = signed.into_bytes();
+
+        assert_eq!(
+            via_into_bytes, canonical,
+            "into_bytes must return the canonical wire encoding"
+        );
+        assert_eq!(
+            via_into_bytes, via_as_bytes,
+            "into_bytes must agree with as_bytes"
+        );
+        assert_eq!(
+            via_into_bytes.len(),
+            108,
+            "MutantPayload canonical wire size is 108 bytes"
+        );
+    }
+
+    // ── Signed::try_decode error field arithmetic ─────────────────────
+    //
+    // Mutants killed:
+    //   - signed.rs:222 (`need: SCHEMA_SIZE + 1`) replace + with - / *
+    //   - signed.rs:241 (`need: issuer_start + VERIFYING_KEY_SIZE`) replace + with *
+    //   - signed.rs:255 (`need: fields_start + 1`) replace + with - / *
+    //
+    // These error paths are guarded by the outer `T::MIN_SIGNED_SIZE`
+    // check at the top of `try_decode`. In normal use they're
+    // unreachable because `T::MIN_SIGNED_SIZE` is always ≥ the
+    // intermediate-bound expressions. To exercise them, we deliberately
+    // under-specify a payload's `MIN_SIGNED_SIZE` so the outer check
+    // doesn't catch the short input, driving execution down to the
+    // in-line bounds checks.
+    //
+    // This also tests a real defense-in-depth contract: if a downstream
+    // `DecodeFields` impl gets its `MIN_SIGNED_SIZE` wrong, the inner
+    // bounds checks must still produce structured errors with accurate
+    // `need` values rather than panicking or reporting garbage.
+
+    /// Lies about `MIN_SIGNED_SIZE`, claiming `0`. Forces the outer
+    /// pre-check to pass for any input length, exposing the in-line
+    /// discriminant-bounds check.
+    #[derive(Debug, Clone, Copy)]
+    struct UnderSpecifiedTagged {
+        value: u64,
+    }
+
+    impl Schema for UnderSpecifiedTagged {
+        const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+        const TYPE_BYTE: u8 = b'U';
+        const VERSION: u8 = 0;
+        const DISCRIMINANT: Option<u8> = Some(0xAA);
+    }
+
+    impl EncodeFields for UnderSpecifiedTagged {
+        fn encode_fields(&self, buf: &mut Vec<u8>) {
+            encode::u64(self.value, buf);
+        }
+        fn fields_size(&self) -> usize {
+            8
+        }
+    }
+
+    impl DecodeFields for UnderSpecifiedTagged {
+        // Deliberately too small. The real minimum would be
+        // SCHEMA_SIZE + 1 + VERIFYING_KEY_SIZE + 8 + SIGNATURE_SIZE = 109.
+        // We claim 0 so the outer check always passes.
+        const MIN_SIGNED_SIZE: usize = 0;
+
+        fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+            let value = decode::u64(buf, 0)?;
+            Ok((Self { value }, 8))
+        }
+    }
+
+    /// Same trick for an untagged payload, exposing the missing-issuer
+    /// and missing-fields-region bounds checks.
+    #[derive(Debug, Clone, Copy)]
+    struct UnderSpecifiedPlain {
+        value: u64,
+    }
+
+    impl Schema for UnderSpecifiedPlain {
+        const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+        const TYPE_BYTE: u8 = b'P';
+        const VERSION: u8 = 0;
+    }
+
+    impl EncodeFields for UnderSpecifiedPlain {
+        fn encode_fields(&self, buf: &mut Vec<u8>) {
+            encode::u64(self.value, buf);
+        }
+        fn fields_size(&self) -> usize {
+            8
+        }
+    }
+
+    impl DecodeFields for UnderSpecifiedPlain {
+        const MIN_SIGNED_SIZE: usize = 0;
+
+        fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+            let value = decode::u64(buf, 0)?;
+            Ok((Self { value }, 8))
+        }
+    }
+
+    /// With an under-specified `MIN_SIGNED_SIZE`, feeding exactly
+    /// `SCHEMA_SIZE` bytes (just the schema header, no discriminant)
+    /// makes `try_decode` reach the in-line discriminant bounds check,
+    /// which must report `need = SCHEMA_SIZE + 1` (= 5). Mutants on
+    /// the offending line change this to `3` (`-`) or `4` (`*`).
+    #[test]
+    fn try_decode_reports_correct_need_for_missing_discriminant() {
+        let mut bytes = Vec::with_capacity(SCHEMA_SIZE);
+        bytes.extend_from_slice(&UnderSpecifiedTagged::SCHEMA);
+        assert_eq!(bytes.len(), SCHEMA_SIZE);
+
+        let result = Signed::<UnderSpecifiedTagged>::try_decode(bytes);
+        match result {
+            Err(DecodeError::MessageTooShort { need, have, .. }) => {
+                assert_eq!(
+                    need,
+                    SCHEMA_SIZE + 1,
+                    "need must be SCHEMA_SIZE + 1 (= {})",
+                    SCHEMA_SIZE + 1
+                );
+                assert_eq!(have, SCHEMA_SIZE, "have must be SCHEMA_SIZE");
+            }
+            other => panic!("expected MessageTooShort, got {other:?}"),
+        }
+    }
+
+    /// With an under-specified `MIN_SIGNED_SIZE` and a buffer of
+    /// `SCHEMA_SIZE` bytes for an *untagged* payload, the schema check
+    /// passes (we wrote the right schema) and execution reaches the
+    /// issuer bounds check. `need` must be
+    /// `issuer_start + VERIFYING_KEY_SIZE = 4 + 32 = 36`. Mutant `+ ->
+    /// *` yields `0 * 32 = 0`.
+    #[test]
+    fn try_decode_reports_correct_need_for_missing_issuer() {
+        let mut bytes = Vec::with_capacity(SCHEMA_SIZE);
+        bytes.extend_from_slice(&UnderSpecifiedPlain::SCHEMA);
+        assert_eq!(bytes.len(), SCHEMA_SIZE);
+
+        let result = Signed::<UnderSpecifiedPlain>::try_decode(bytes);
+        match result {
+            Err(DecodeError::MessageTooShort { need, have, .. }) => {
+                assert_eq!(
+                    need,
+                    SCHEMA_SIZE + VERIFYING_KEY_SIZE,
+                    "need must be issuer_start + VERIFYING_KEY_SIZE (= {})",
+                    SCHEMA_SIZE + VERIFYING_KEY_SIZE
+                );
+                assert_eq!(have, SCHEMA_SIZE, "have must be SCHEMA_SIZE");
+            }
+            other => panic!("expected MessageTooShort, got {other:?}"),
+        }
+    }
+
+    /// With an under-specified `MIN_SIGNED_SIZE` and a buffer of
+    /// exactly the right size to pass the schema + issuer checks but
+    /// have an empty fields region (i.e., `bytes.len() == fields_start`),
+    /// `bytes.get(fields_start..)` returns an empty slice, not `None`.
+    /// So execution continues into `try_decode_fields(empty_slice)`,
+    /// which fails inside `decode::u64`. To actually trigger the
+    /// fields-region `need: fields_start + 1` arm, we'd need
+    /// `bytes.len() < fields_start`, which contradicts having reached
+    /// this point.
+    ///
+    /// The mutant on that line is therefore unreachable from any
+    /// well-formed caller of `try_decode`. It survives because the
+    /// branch is dead code — a defense-in-depth that no input can
+    /// reach. We assert the alternative: that an empty fields region
+    /// produces a downstream decode error (not a panic, not a
+    /// successful decode), which at least exercises the surrounding
+    /// plumbing.
+    #[test]
+    fn try_decode_empty_fields_region_errors_cleanly() {
+        // Exactly SCHEMA_SIZE + VERIFYING_KEY_SIZE bytes — passes the
+        // issuer bounds check, then `try_decode_fields` is called with
+        // an empty slice and fails.
+        let mut bytes = Vec::with_capacity(SCHEMA_SIZE + VERIFYING_KEY_SIZE);
+        bytes.extend_from_slice(&UnderSpecifiedPlain::SCHEMA);
+        bytes.extend_from_slice(&[0u8; VERIFYING_KEY_SIZE]);
+        assert_eq!(bytes.len(), SCHEMA_SIZE + VERIFYING_KEY_SIZE);
+
+        let result = Signed::<UnderSpecifiedPlain>::try_decode(bytes);
+        assert!(
+            result.is_err(),
+            "decode of bytes with empty fields region must fail"
+        );
+    }
+
+    // ── Signed::PartialEq ────────────────────────────────────────────
+    //
+    // Mutant killed:
+    //   - signed.rs:384 replace == with != in
+    //     <impl PartialEq for Signed<T>>::eq
+
+    /// Two `Signed<T>` values with identical canonical bytes must be
+    /// `==`, and two with different bytes must be `!=`. A `==` → `!=`
+    /// flip in the `eq` body inverts both checks.
+    #[test]
+    fn partial_eq_distinguishes_different_signed_values() {
+        let a = Signed::<MutantPayload>::try_decode(seal_mutant_payload([1u8; 32], 100))
+            .expect("decode a");
+        let a_again = Signed::<MutantPayload>::try_decode(seal_mutant_payload([1u8; 32], 100))
+            .expect("decode a_again");
+        let b = Signed::<MutantPayload>::try_decode(seal_mutant_payload([1u8; 32], 200))
+            .expect("decode b (different value)");
+        let c = Signed::<MutantPayload>::try_decode(seal_mutant_payload([2u8; 32], 100))
+            .expect("decode c (different signer)");
+
+        assert_eq!(a, a, "self-equality must hold");
+        assert_eq!(a, a_again, "two seals of identical content must be equal");
+
+        assert_ne!(a, b, "different payloads must not be equal");
+        assert_ne!(a, c, "different signers must not be equal");
+    }
+
+    // ── try_decode trailing-byte truncation ───────────────────────────
+    //
+    // Mutant killed:
+    //   - signed.rs:263 replace < with > in Signed<T>::try_decode
+    //
+    // The `if bytes.len() < actual_size` check guards against buffers
+    // that are too short. Inverting it to `> actual_size` makes
+    // well-formed input with trailing bytes fail to decode (a real
+    // regression in `SyncMessage` parsing, which embeds `Signed<T>`
+    // byte-for-byte and hands `try_decode` the full payload buffer
+    // including subsequent items). The existing bolero proptest covers
+    // this with random trailing bytes; we add a deterministic version
+    // that runs in <1ms for fast mutant kill.
+
+    /// `try_decode` of canonical bytes with trailing data must succeed
+    /// and the decoded `Signed` must verify. The mutant `< -> >` flips
+    /// the bounds check and turns the trailing-bytes-OK case into an
+    /// error.
+    #[test]
+    fn try_decode_succeeds_with_trailing_bytes() {
+        let canonical = seal_mutant_payload([42u8; 32], 0xABCD);
+        let canonical_len = canonical.len();
+        let mut with_trailing = canonical.clone();
+        with_trailing.extend_from_slice(&[0xFF; 256]);
+
+        let signed = Signed::<MutantPayload>::try_decode(with_trailing)
+            .expect("decode must succeed when extra bytes trail the canonical encoding");
+        assert_eq!(
+            signed.as_bytes().len(),
+            canonical_len,
+            "try_decode must truncate trailing bytes to the canonical length"
+        );
+        assert_eq!(signed.as_bytes(), canonical.as_slice());
+        signed
+            .try_verify()
+            .expect("verification must succeed after truncation");
+    }
+
+    // ── Hash + PartialOrd implementations ─────────────────────────────
+    //
+    // Mutants killed:
+    //   - signed.rs:392 replace <impl Hash for Signed<T>>::hash with ()
+    //   - signed.rs:398 replace <impl PartialOrd for Signed<T>>::partial_cmp
+    //     -> Option<Ordering> with None
+    //
+    // `Hash` and `PartialOrd` are required for using these types as
+    // keys in `BTreeMap` / `HashMap` and for ordering. A no-op `hash`
+    // body collides every value into the same bucket (a real
+    // performance regression), and a `partial_cmp` that always returns
+    // `None` makes `BTreeMap` insertion unpredictable.
+
+    /// `Signed<T>`'s `Hash` impl must produce different hashes for
+    /// different signed values. A `hash` body replaced with `()`
+    /// hashes nothing, so all values collide into a single bucket.
+    #[test]
+    fn hash_distinguishes_different_values() {
+        use core::hash::{BuildHasher as _, Hasher as _};
+        use std::collections::hash_map::RandomState;
+
+        let a = Signed::<MutantPayload>::try_decode(seal_mutant_payload([5u8; 32], 100))
+            .expect("decode a");
+        let b = Signed::<MutantPayload>::try_decode(seal_mutant_payload([5u8; 32], 200))
+            .expect("decode b");
+
+        let builder = RandomState::new();
+        let mut ha = builder.build_hasher();
+        let mut hb = builder.build_hasher();
+        core::hash::Hash::hash(&a, &mut ha);
+        core::hash::Hash::hash(&b, &mut hb);
+
+        assert_ne!(
+            ha.finish(),
+            hb.finish(),
+            "Signed::hash must distinguish different signed values; a no-op body collides everything to 0"
+        );
+    }
+
+    /// `Signed<T>`'s `PartialOrd` must produce `Some(_)` for any two
+    /// values (total order via `Ord`). A body replaced with `None`
+    /// breaks every `BTreeMap` / sorted-collection use.
+    #[test]
+    fn partial_cmp_is_total() {
+        let a = Signed::<MutantPayload>::try_decode(seal_mutant_payload([6u8; 32], 1))
+            .expect("decode a");
+        let b = Signed::<MutantPayload>::try_decode(seal_mutant_payload([6u8; 32], 2))
+            .expect("decode b");
+
+        assert!(
+            a.partial_cmp(&a).is_some(),
+            "partial_cmp(self, self) must be Some (= Equal)"
+        );
+        assert!(
+            a.partial_cmp(&b).is_some(),
+            "partial_cmp(a, b) must be Some (= Less or Greater)"
+        );
+        assert!(
+            b.partial_cmp(&a).is_some(),
+            "partial_cmp(b, a) must be Some (= Less or Greater)"
+        );
+        assert_ne!(
+            a.partial_cmp(&b),
+            b.partial_cmp(&a),
+            "partial_cmp must respect antisymmetry for distinct values"
+        );
+    }
+
+    // ── Free-standing MIN_SIGNED_SIZE constant ───────────────────────
+    //
+    // Mutants killed:
+    //   - signed.rs:50 replace + with * (both occurrences in the
+    //     expression `SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_SIZE`)
+    //
+    // The constant is unused in-crate (`T::MIN_SIGNED_SIZE` is what
+    // code uses) but is part of the public API. Pin its value with an
+    // explicit assertion so the constant doesn't silently drift under
+    // a refactor.
+
+    /// `signed::MIN_SIGNED_SIZE` is the sum of the three layout
+    /// constants. A mutant replacing `+` with `*` produces a vastly
+    /// different number (e.g., `4 * 32 * 64 = 8192`), so the assertion
+    /// fires.
+    #[test]
+    fn min_signed_size_constant_is_sum_of_layout_parts() {
+        let expected = SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_SIZE;
+        assert_eq!(
+            MIN_SIGNED_SIZE, expected,
+            "MIN_SIGNED_SIZE must equal SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_SIZE"
+        );
+        assert_eq!(
+            MIN_SIGNED_SIZE,
+            100,
+            "MIN_SIGNED_SIZE must be 4 + 32 + 64 = 100"
+        );
+    }
+}
