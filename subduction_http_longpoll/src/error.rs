@@ -7,22 +7,6 @@ use thiserror::Error;
 #[error("outbound channel closed")]
 pub struct SendError;
 
-/// Problem while attempting to make a roundtrip call.
-#[derive(Debug, Clone, Copy, Error)]
-pub enum CallError {
-    /// Response oneshot was dropped before a reply arrived.
-    #[error("response dropped")]
-    ResponseDropped,
-
-    /// Timed out waiting for response.
-    #[error("timed out waiting for response")]
-    Timeout,
-
-    /// Outbound channel closed.
-    #[error("outbound channel closed")]
-    ChannelClosed,
-}
-
 /// Inbound channel closed — no more messages from the client.
 #[derive(Debug, Clone, Copy, Error)]
 #[error("inbound channel closed")]

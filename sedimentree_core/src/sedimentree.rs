@@ -270,12 +270,16 @@ impl Sedimentree {
         let id = commit.head();
         match self.commits.entry(id) {
             Entry::Vacant(e) => {
+                tracing::trace!(head = ?id, "Sedimentree: add commit (new)");
                 e.insert(commit);
                 true
             }
             Entry::Occupied(mut e) => {
                 if Digest::hash(&commit) < Digest::hash(e.get()) {
+                    tracing::trace!(head = ?id, "Sedimentree: replace commit (tie-break)");
                     e.insert(commit);
+                } else {
+                    tracing::trace!(head = ?id, "Sedimentree: skip commit (already present)");
                 }
                 false
             }
@@ -289,12 +293,16 @@ impl Sedimentree {
         let id = fragment.head();
         match self.fragments.entry(id) {
             Entry::Vacant(e) => {
+                tracing::trace!(head = ?id, "Sedimentree: add fragment (new)");
                 e.insert(fragment);
                 true
             }
             Entry::Occupied(mut e) => {
                 if Digest::hash(&fragment) < Digest::hash(e.get()) {
+                    tracing::trace!(head = ?id, "Sedimentree: replace fragment (tie-break)");
                     e.insert(fragment);
+                } else {
+                    tracing::trace!(head = ?id, "Sedimentree: skip fragment (already present)");
                 }
                 false
             }

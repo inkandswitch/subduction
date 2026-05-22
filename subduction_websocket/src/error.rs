@@ -9,22 +9,6 @@ use thiserror::Error;
 #[error("sender task stopped")]
 pub struct SendError;
 
-/// Problem while attempting to make a roundtrip call.
-#[derive(Debug, Clone, Copy, Error)]
-pub enum CallError {
-    /// Response oneshot was dropped before a reply arrived.
-    #[error("response dropped")]
-    ResponseDropped,
-
-    /// Timed out waiting for response.
-    #[error("timed out waiting for response")]
-    Timeout,
-
-    /// Outbound channel closed — the sender task has stopped.
-    #[error("sender task stopped")]
-    SenderTaskStopped,
-}
-
 /// Inbound channel closed — the listener task has stopped.
 #[derive(Debug, Clone, Copy, Error)]
 #[error("inbound channel closed")]

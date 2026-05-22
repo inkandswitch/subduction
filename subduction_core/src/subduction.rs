@@ -1492,32 +1492,19 @@ where
     }
 
     /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads
-    /// alongside their blobs into local storage and the in-memory tree only.
+    /// into local storage and the in-memory tree, without propagating to
+    /// peers. Local-only counterpart of [`add_built_batch`](Self::add_built_batch).
     ///
-    /// This is the local-only counterpart to
-    /// [`add_built_batch`](Self::add_built_batch): it signs each payload,
-    /// flushes to storage in a single `save_batch` call, applies the in-memory
-    /// updates under one shard lock, and minimizes once — but does *not*
-    /// follow up with [`sync_with_all_peers`](Self::sync_with_all_peers). Use
-    /// when the caller will trigger sync explicitly (or never), e.g. from a
-    /// background ingestion path.
-    ///
-    /// Commits are inserted before fragments. Passing two empty vectors is a
-    /// no-op (no minimize).
+    /// Commits are inserted before fragments. Empty input is a no-op.
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
-    ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
-    ///   backends `save_batch` may have persisted some items before
-    ///   surfacing an error; this method then returns early and leaves the
-    ///   in-memory tree behind the on-disk state until rehydrate.
-    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
-    ///   digest does not match its payload's claimed
-    ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
-    ///
-    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
-    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    /// * [`WriteError::Io`] (`IoError::Storage`) on storage failure. On
+    ///   non-transactional backends, `save_batch` may have persisted some
+    ///   items before the error; the in-memory tree then lags on-disk state
+    ///   until rehydrate.
+    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if a blob digest
+    ///   doesn't match its claimed [`BlobMeta`].
     pub async fn add_built_batch_locally(
         &self,
         id: SedimentreeId,
@@ -1528,42 +1515,74 @@ where
             return Ok(());
         }
 
-        let putter = self.storage.local_putter::<F>(id);
-        let commit_count = commits.len();
-        let fragment_count = fragments.len();
-        tracing::info!(
-            "bulk-inserting {commit_count} commits and {fragment_count} fragments \
-             into sedimentree {id:?} (no broadcast)"
-        );
+        let (verified_commits, verified_fragments) =
+            self.sign_built_batch(commits, fragments).await?;
+        self.persist_verified_batch(id, verified_commits, verified_fragments)
+            .await
+    }
 
-        // Sign every commit and fragment first; defer all storage I/O so we
-        // can hit the adapter exactly once via `save_batch`.
-        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> = Vec::with_capacity(commit_count);
-        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(commit_count);
+    /// Sign every commit and fragment in an already-built batch.
+    async fn sign_built_batch(
+        &self,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> Result<
+        (Vec<VerifiedMeta<LooseCommit>>, Vec<VerifiedMeta<Fragment>>),
+        WriteError<F, S, C, H::Message, P::PutDisallowed>,
+    > {
+        let mut verified_commits = Vec::with_capacity(commits.len());
         for (commit, blob) in commits {
             let verified_sig = Signed::seal::<F, _>(&self.signer, commit).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            commit_payloads.push(verified_meta.payload().clone());
             verified_commits.push(verified_meta);
         }
 
-        let mut verified_fragments: Vec<VerifiedMeta<Fragment>> =
-            Vec::with_capacity(fragment_count);
-        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(fragment_count);
+        let mut verified_fragments = Vec::with_capacity(fragments.len());
         for (fragment, blob) in fragments {
             let verified_sig = Signed::seal::<F, _>(&self.signer, fragment).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            fragment_payloads.push(verified_meta.payload().clone());
             verified_fragments.push(verified_meta);
         }
 
+        Ok((verified_commits, verified_fragments))
+    }
+
+    /// Flush a signed batch to storage and update the in-memory tree.
+    /// Consumes the verified items; if the caller needs them after this
+    /// (e.g. for wire broadcast), it should clone before calling.
+    async fn persist_verified_batch(
+        &self,
+        id: SedimentreeId,
+        verified_commits: Vec<VerifiedMeta<LooseCommit>>,
+        verified_fragments: Vec<VerifiedMeta<Fragment>>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        let commit_count = verified_commits.len();
+        let fragment_count = verified_fragments.len();
+        tracing::info!(
+            ?id,
+            "bulk-inserting {commit_count} commits and {fragment_count} fragments"
+        );
+
+        let commit_payloads: Vec<LooseCommit> = verified_commits
+            .iter()
+            .map(|v| v.payload().clone())
+            .collect();
+        let fragment_payloads: Vec<Fragment> = verified_fragments
+            .iter()
+            .map(|v| v.payload().clone())
+            .collect();
+
+        let putter = self.storage.local_putter::<F>(id);
         putter
             .save_batch(verified_commits, verified_fragments)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
+        // Per-item traces happen inside `Sedimentree::add_commit` and
+        // `Sedimentree::add_fragment` at `trace!` level, matching the
+        // batch-sync ingest path's per-item silence at `debug!`.
         self.sedimentrees
             .with_entry_or_default(id, |tree| {
                 for commit in commit_payloads {
@@ -1577,10 +1596,171 @@ where
             .await;
 
         tracing::info!(
+            ?id,
             "bulk-insert of {commit_count} commits and {fragment_count} fragments \
              complete, tree minimized"
         );
+
         Ok(())
+    }
+
+    /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads,
+    /// then propagate to peers via per-item
+    /// [`SyncMessage::LooseCommit`](crate::connection::message::SyncMessage::LooseCommit) /
+    /// [`SyncMessage::Fragment`](crate::connection::message::SyncMessage::Fragment)
+    /// pushes — symmetric with [`add_commit`](Self::add_commit) and
+    /// [`add_fragment`](Self::add_fragment).
+    ///
+    /// No `BatchSyncRequest` is issued, so there is no fingerprint
+    /// reconciliation and no implicit peer subscription. Use
+    /// [`add_built_batch_locally`](Self::add_built_batch_locally) +
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) for that.
+    ///
+    /// Commits are inserted (and sent on the wire) before fragments, so a
+    /// receiver processing messages in order sees parents before any
+    /// fragment that summarizes them. Empty input is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] (`IoError::Storage`) on storage failure.
+    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if a blob digest
+    ///   doesn't match its claimed [`BlobMeta`].
+    ///
+    /// Per-peer transport failures are not surfaced as `Err`; disconnected
+    /// peers are logged and removed, matching the singleton APIs.
+    pub async fn add_built_batch(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
+        if commits.is_empty() && fragments.is_empty() {
+            return Ok(());
+        }
+
+        // Sign first, retain a copy of the verified items for the wire
+        // broadcast, then persist (which consumes them). Cancel-safety:
+        // storage is the source of truth; a cancel between persist and
+        // broadcast self-heals on rehydrate.
+        let (verified_commits, verified_fragments) =
+            self.sign_built_batch(commits, fragments).await?;
+        let broadcast_commits = verified_commits.clone();
+        let broadcast_fragments = verified_fragments.clone();
+        self.persist_verified_batch(id, verified_commits, verified_fragments)
+            .await?;
+
+        let self_id = self.peer_id();
+
+        let heads = {
+            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            shard
+                .get(&id)
+                .map(|s| s.heads(&self.depth_metric))
+                .unwrap_or_default()
+        };
+
+        let conns = {
+            let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
+            if subscriber_conns.is_empty() {
+                tracing::debug!(
+                    "No subscribers for sedimentree {:?}, broadcasting batch to all connections",
+                    id
+                );
+                self.all_connections().await
+            } else {
+                subscriber_conns
+            }
+        };
+
+        // Precompute identifiers once, outside the peer loop, so per-item
+        // logging doesn't pay an N×P BLAKE3 cost on the fragment side.
+        let commit_heads: Vec<CommitId> = broadcast_commits
+            .iter()
+            .map(|v| v.payload().head())
+            .collect();
+        let fragment_digests: Vec<Digest<Fragment>> = broadcast_fragments
+            .iter()
+            .map(|v| Digest::hash(v.payload()))
+            .collect();
+
+        'peer: for conn in conns {
+            let peer_id = conn.peer_id();
+            tracing::debug!(
+                ?id,
+                peer = %peer_id,
+                commits = broadcast_commits.len(),
+                fragments = broadcast_fragments.len(),
+                "batch: propagating to peer"
+            );
+
+            for (verified, head) in broadcast_commits.iter().zip(&commit_heads) {
+                tracing::trace!(
+                    ?id,
+                    peer = %peer_id,
+                    ?head,
+                    "batch: propagating commit to peer"
+                );
+                let msg: H::Message = SyncMessage::LooseCommit {
+                    id,
+                    commit: verified.signed().clone(),
+                    blob: verified.blob().clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.send_counter.next(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                }
+                .into();
+
+                if !self.send_or_drop_conn(&conn, msg).await {
+                    continue 'peer;
+                }
+            }
+
+            for (verified, digest) in broadcast_fragments.iter().zip(&fragment_digests) {
+                tracing::trace!(
+                    ?id,
+                    peer = %peer_id,
+                    ?digest,
+                    "batch: propagating fragment to peer"
+                );
+                let msg: H::Message = SyncMessage::Fragment {
+                    id,
+                    fragment: verified.signed().clone(),
+                    blob: verified.blob().clone(),
+                    sender_heads: RemoteHeads {
+                        counter: self.send_counter.next(peer_id).await,
+                        heads: heads.clone(),
+                    },
+                }
+                .into();
+
+                if !self.send_or_drop_conn(&conn, msg).await {
+                    continue 'peer;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Send a message to a connection; on failure log, evict the connection
+    /// and clear the peer's send counter, then report `false`. Returns
+    /// `true` on success.
+    async fn send_or_drop_conn(&self, conn: &Authenticated<C, F>, msg: H::Message) -> bool {
+        if let Err(e) = conn.send(&msg).await {
+            let peer_id = conn.peer_id();
+            tracing::warn!(
+                "peer {} disconnected during batch broadcast: {}",
+                peer_id,
+                IoError::<F, S, C, H::Message>::ConnSend(e)
+            );
+            if self.remove_connection(conn).await == Some(true) {
+                self.send_counter.clear_peer(&peer_id).await;
+            }
+            false
+        } else {
+            true
+        }
     }
 
     /// Handle receiving a batch sync response from a peer.
@@ -1702,63 +1882,6 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sync_with_all_peers(id, true, None).await?;
-        Ok(())
-    }
-
-    /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads
-    /// alongside their blobs, signing each, then minimize once and broadcast.
-    ///
-    /// This is the underlying "do everything in one round-trip" entrypoint used
-    /// by callers that already have payloads in their canonical, post-truncation
-    /// form (notably the Wasm bindings, which carry [`Fragment`] values whose
-    /// checkpoints are already truncated). Unlike
-    /// [`add_commits_batch`](Self::add_commits_batch) and
-    /// [`add_fragments_batch`](Self::add_fragments_batch), this method also
-    /// performs a single [`sync_with_all_peers`](Self::sync_with_all_peers) at
-    /// the end so callers don't need to follow up with a separate broadcast.
-    ///
-    /// Commits are inserted before fragments. Passing two empty vectors is a
-    /// no-op (no minimize, no broadcast).
-    ///
-    /// # Errors
-    ///
-    /// * [`WriteError::Io`] (`IoError::Storage`) if a local storage error
-    ///   occurs while persisting the batch, or if ingestion of inbound data
-    ///   during the trailing [`sync_with_all_peers`](Self::sync_with_all_peers)
-    ///   call hits a storage error. On non-transactional
-    ///   [`Storage`](crate::storage::traits::Storage) backends `save_batch`
-    ///   may have persisted some items before surfacing an error; in that
-    ///   case this method returns early and leaves the in-memory tree
-    ///   behind the on-disk state until rehydrate.
-    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
-    ///   digest does not match its payload's claimed
-    ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
-    ///
-    /// Per-peer transport failures during the trailing broadcast are *not*
-    /// surfaced as `Err`. [`sync_with_all_peers`](Self::sync_with_all_peers)
-    /// reports those out-of-band in its `Ok` value (a per-peer map of
-    /// successes and per-connection [`CallError`](crate::connection::managed::CallError)s);
-    /// this method discards that map. If a caller needs to observe peer-level
-    /// sync outcomes, prefer driving the local insert via
-    /// [`add_built_batch_locally`](Self::add_built_batch_locally) and calling
-    /// [`sync_with_all_peers`](Self::sync_with_all_peers) directly.
-    ///
-    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
-    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
-    pub async fn add_built_batch(
-        &self,
-        id: SedimentreeId,
-        commits: Vec<(LooseCommit, Blob)>,
-        fragments: Vec<(Fragment, Blob)>,
-    ) -> Result<(), WriteError<F, S, C, H::Message, P::PutDisallowed>> {
-        if commits.is_empty() && fragments.is_empty() {
-            return Ok(());
-        }
-
-        // Storage write first (cancel-safety: storage is the source of truth;
-        // a cancel between this and the broadcast self-heals on rehydrate).
-        self.add_built_batch_locally(id, commits, fragments).await?;
         self.sync_with_all_peers(id, true, None).await?;
         Ok(())
     }
