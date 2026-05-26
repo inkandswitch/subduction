@@ -77,6 +77,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
             Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
+            subduction_core::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
         );
 
     // Add a failing connection
@@ -136,6 +137,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
             Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
+            subduction_core::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
         );
 
     // Add a failing connection
@@ -201,6 +203,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
             Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
+            subduction_core::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
         );
 
     // Add a failing connection
@@ -260,6 +263,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
+            subduction_core::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
         );
 
     // Register two connections that will succeed

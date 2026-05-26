@@ -3656,6 +3656,7 @@ mod tests {
                 Duration::from_secs(30),
                 CountLeadingZeroBytes,
                 TestSpawn,
+                crate::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
             );
 
         // Add a failing connection with a different peer ID than the sender
@@ -3725,6 +3726,7 @@ mod tests {
                 Duration::from_secs(30),
                 CountLeadingZeroBytes,
                 TestSpawn,
+                crate::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
             );
 
         // Add a failing connection with a different peer ID than the sender

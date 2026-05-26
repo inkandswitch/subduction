@@ -117,6 +117,7 @@ fn new_dispatch_subduction() -> (
         Duration::from_secs(30),
         CountLeadingZeroBytes,
         TokioSpawn,
+        subduction_core::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
     )
 }
 
