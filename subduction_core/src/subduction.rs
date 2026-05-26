@@ -1922,42 +1922,66 @@ where
     }
 
     /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads
-    /// alongside their blobs, signing each, then minimize once and broadcast.
+    /// alongside their blobs, signing each, then minimize once and
+    /// enqueue a broadcast hint for the background worker.
     ///
-    /// This is the underlying "do everything in one round-trip" entrypoint used
-    /// by callers that already have payloads in their canonical, post-truncation
-    /// form (notably the Wasm bindings, which carry [`Fragment`] values whose
-    /// checkpoints are already truncated). Unlike
+    /// This is the underlying "make-it-durable" entrypoint used by callers
+    /// that already have payloads in their canonical, post-truncation
+    /// form (notably the Wasm bindings, which carry [`Fragment`] values
+    /// whose checkpoints are already truncated). Unlike
     /// [`add_commits_batch`](Self::add_commits_batch) and
-    /// [`add_fragments_batch`](Self::add_fragments_batch), this method also
-    /// performs a single [`sync_with_all_peers`](Self::sync_with_all_peers) at
-    /// the end so callers don't need to follow up with a separate broadcast.
+    /// [`add_fragments_batch`](Self::add_fragments_batch), this method
+    /// also schedules a [`sync_with_all_peers`](Self::sync_with_all_peers)
+    /// to run on the background broadcast worker so callers don't need
+    /// to follow up with a separate broadcast.
     ///
-    /// Commits are inserted before fragments. Passing two empty vectors is a
-    /// no-op (no minimize, no broadcast).
+    /// Returns as soon as the local storage write is durable; the
+    /// broadcast happens off the caller's await path (see Bug 2). A
+    /// byte-connected but protocol-unresponsive peer cannot stall this
+    /// method.
+    ///
+    /// Commits are inserted before fragments. Passing two empty vectors
+    /// is a no-op (no minimize, no broadcast).
+    ///
+    /// # Migration from pre-fix behaviour
+    ///
+    /// Pre-fix, `add_built_batch` blocked on the trailing
+    /// `sync_with_all_peers`. Callers that depended on that — i.e.
+    /// callers that wanted to observe peer-level sync outcomes before
+    /// returning — should replace
+    ///
+    /// ```ignore
+    /// sd.add_built_batch(id, commits, fragments).await?;
+    /// ```
+    ///
+    /// with the explicit two-call form:
+    ///
+    /// ```ignore
+    /// sd.add_built_batch_locally(id, commits, fragments).await?;
+    /// let per_peer = sd.sync_with_all_peers(id, true, None).await?;
+    /// // inspect `per_peer` if desired
+    /// ```
+    ///
+    /// This makes the two phases (durability vs. propagation) visible
+    /// at the call site and lets the caller pick a per-call timeout or
+    /// branch on the per-peer result map.
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] (`IoError::Storage`) if a local storage error
-    ///   occurs while persisting the batch, or if ingestion of inbound data
-    ///   during the trailing [`sync_with_all_peers`](Self::sync_with_all_peers)
-    ///   call hits a storage error. On non-transactional
-    ///   [`Storage`](crate::storage::traits::Storage) backends `save_batch`
-    ///   may have persisted some items before surfacing an error; in that
-    ///   case this method returns early and leaves the in-memory tree
-    ///   behind the on-disk state until rehydrate.
-    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
-    ///   digest does not match its payload's claimed
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a local storage
+    ///   error occurs while persisting the batch. On non-transactional
+    ///   [`Storage`](crate::storage::traits::Storage) backends
+    ///   `save_batch` may have persisted some items before surfacing
+    ///   an error; in that case this method returns early and leaves
+    ///   the in-memory tree behind the on-disk state until rehydrate.
+    /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided
+    ///   blob's digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
     ///
-    /// Per-peer transport failures during the trailing broadcast are *not*
-    /// surfaced as `Err`. [`sync_with_all_peers`](Self::sync_with_all_peers)
-    /// reports those out-of-band in its `Ok` value (a per-peer map of
-    /// successes and per-connection [`CallError`](crate::connection::managed::CallError)s);
-    /// this method discards that map. If a caller needs to observe peer-level
-    /// sync outcomes, prefer driving the local insert via
-    /// [`add_built_batch_locally`](Self::add_built_batch_locally) and calling
-    /// [`sync_with_all_peers`](Self::sync_with_all_peers) directly.
+    /// Per-peer transport failures from the background broadcast are
+    /// *not* surfaced through this method; the worker logs them. If a
+    /// caller needs visibility into per-peer outcomes, use the
+    /// two-call form above.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -1979,49 +2003,20 @@ where
         // deliberately do not await the resulting `sync_with_all_peers`
         // call here: a single byte-connected but protocol-unresponsive
         // peer would otherwise block this storage-durable write for
-        // the full per-call timeout (see Bug 2). If callers need to
-        // observe peer-level sync outcomes, use
-        // [`add_built_batch_and_await_broadcast`](Self::add_built_batch_and_await_broadcast)
-        // instead, or drive the local insert via
-        // [`add_built_batch_locally`](Self::add_built_batch_locally) and
-        // call [`sync_with_all_peers`](Self::sync_with_all_peers)
-        // directly.
+        // the full per-call timeout (see Bug 2). Callers that need to
+        // observe peer-level sync outcomes should drive the local
+        // insert via
+        // [`add_built_batch_locally`](Self::add_built_batch_locally)
+        // and call
+        // [`sync_with_all_peers`](Self::sync_with_all_peers) directly
+        // — this method is exactly that pair with the broadcast
+        // backgrounded.
         //
         // `try_send` on a bounded queue: if the worker is overwhelmed
         // we drop this hint rather than apply backpressure. Storage is
         // already durable; the next write or an explicit sync round
         // will catch up.
         self.enqueue_broadcast_hint(id);
-        Ok(())
-    }
-
-    /// Variant of [`add_built_batch`](Self::add_built_batch) that
-    /// retains the historical "storage durable + broadcast settled"
-    /// semantics: it inserts the batch locally and then awaits
-    /// [`sync_with_all_peers`](Self::sync_with_all_peers) before
-    /// returning.
-    ///
-    /// Prefer this only when the caller explicitly needs to observe
-    /// that connected peers have acknowledged the new data; for the
-    /// common "make my write durable and let sync catch up in the
-    /// background" pattern use `add_built_batch`. Note that this
-    /// method's wall-clock latency is bounded by the per-call timeout
-    /// (default 30 s), not by the local storage write.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`add_built_batch`](Self::add_built_batch).
-    pub async fn add_built_batch_and_await_broadcast(
-        &self,
-        id: SedimentreeId,
-        commits: Vec<(LooseCommit, Blob)>,
-        fragments: Vec<(Fragment, Blob)>,
-    ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
-        if commits.is_empty() && fragments.is_empty() {
-            return Ok(());
-        }
-        self.add_built_batch_locally(id, commits, fragments).await?;
-        self.sync_with_all_peers(id, true, None).await?;
         Ok(())
     }
 
