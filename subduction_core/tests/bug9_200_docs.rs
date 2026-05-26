@@ -9,7 +9,12 @@
 //! (no PRNG, no relay topology, no concurrent authors) so a failure
 //! here is unambiguous and can be inspected with a normal debugger.
 
-#![allow(clippy::expect_used, clippy::indexing_slicing)]
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::doc_markdown
+)]
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -186,7 +191,10 @@ async fn two_peers_200_docs_get_all_heads_match_10x() -> TestResult {
             b_len = b_heads.len(),
         );
 
-        if !matches {
+        if matches {
+            assert_eq!(a_heads.len(), NUM_DOCS, "iter {iter}: A should have {NUM_DOCS} docs");
+            assert_eq!(b_heads.len(), NUM_DOCS, "iter {iter}: B should have {NUM_DOCS} docs");
+        } else {
             failures.push(iter);
             let mut shown = 0usize;
             for id in a_heads.keys().chain(b_heads.keys()).collect::<BTreeSet<_>>() {
@@ -199,9 +207,6 @@ async fn two_peers_200_docs_get_all_heads_match_10x() -> TestResult {
                     shown += 1;
                 }
             }
-        } else {
-            assert_eq!(a_heads.len(), NUM_DOCS, "iter {iter}: A should have {NUM_DOCS} docs");
-            assert_eq!(b_heads.len(), NUM_DOCS, "iter {iter}: B should have {NUM_DOCS} docs");
         }
     }
 
