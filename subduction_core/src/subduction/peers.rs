@@ -118,6 +118,23 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `Some(false)` — connection removed, peer still has other connections
 /// - `Some(true)` — connection removed, was the peer's last connection
 /// - `None` — connection was not found
+///
+/// # Bug 5: defensive multiplexer cleanup on the `None` branch
+///
+/// When `multiplexers` is `Some` and the peer has no entry in
+/// `connections` but **does** have an entry in `multiplexers`, this
+/// function still drops the orphaned multiplexers. This handles the
+/// race where [`SyncHandler::remove_connection`] (which only has access
+/// to the connections map) ran first and removed the peer from
+/// `connections`, then the listener loop calls
+/// [`Subduction::remove_connection`] for the same peer via the
+/// `connection_closed` channel. Without this defensive sweep, the
+/// multiplexer entry would persist with pending oneshot senders, and
+/// any concurrent `sync_with_peer` against that peer would hang for
+/// the per-call timeout.
+///
+/// [`SyncHandler::remove_connection`]: crate::handler::sync::SyncHandler::remove_connection
+/// [`Subduction::remove_connection`]: super::Subduction::remove_connection
 #[allow(clippy::type_complexity)]
 pub(crate) async fn remove_connection<
     Async: FutureForm,
@@ -132,41 +149,13 @@ pub(crate) async fn remove_connection<
     let peer_id = conn.peer_id();
     let mut guard = connections.lock().await;
 
-    if let Some(peer_conns) = guard.remove(&peer_id) {
+    let outcome = if let Some(peer_conns) = guard.remove(&peer_id) {
         match peer_conns.remove_item(conn) {
             RemoveResult::Removed(remaining) => {
                 guard.insert(peer_id, remaining);
-
-                #[cfg(feature = "metrics")]
-                crate::metrics::connection_closed();
-
                 Some(false)
             }
-            RemoveResult::WasLast(_) => {
-                drop(guard);
-                remove_peer_from_subscriptions(subscriptions, peer_id).await;
-
-                // The peer has no more connections — any in-flight
-                // multiplexed call for this peer is wedged on a oneshot
-                // receiver whose sender we hold in `Multiplexer::pending`.
-                // Drop those senders so callers see
-                // `CallError::ResponseDropped` immediately instead of
-                // waiting out the per-call timeout. See Bug 5.
-                if let Some(muxes_map) = multiplexers {
-                    let muxes_to_cancel: Vec<Arc<Multiplexer>> = {
-                        let mut mguard = muxes_map.lock().await;
-                        mguard.remove(&peer_id).unwrap_or_default()
-                    };
-                    for mux in muxes_to_cancel {
-                        mux.cancel_all_pending().await;
-                    }
-                }
-
-                #[cfg(feature = "metrics")]
-                crate::metrics::connection_closed();
-
-                Some(true)
-            }
+            RemoveResult::WasLast(_) => Some(true),
             RemoveResult::NotFound(original) => {
                 guard.insert(peer_id, original);
                 None
@@ -174,5 +163,86 @@ pub(crate) async fn remove_connection<
         }
     } else {
         None
+    };
+    drop(guard);
+
+    match outcome {
+        Some(false) => {
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_closed();
+        }
+        Some(true) => {
+            remove_peer_from_subscriptions(subscriptions, peer_id).await;
+            cancel_peer_multiplexers(multiplexers, peer_id).await;
+
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_closed();
+        }
+        None => {
+            // Defensive sweep — see the function-level docs above.
+            // If the connection wasn't in the map but the peer still
+            // has multiplexer entries, drop them. This catches the
+            // race between SyncHandler-side removal (no muxes) and
+            // listener-side removal.
+            cancel_peer_multiplexers_if_orphaned(connections, multiplexers, peer_id).await;
+        }
+    }
+
+    outcome
+}
+
+/// Drop every multiplexer for `peer_id`, cancelling all pending calls.
+async fn cancel_peer_multiplexers(
+    multiplexers: Option<&Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
+    peer_id: PeerId,
+) {
+    if let Some(muxes_map) = multiplexers {
+        let muxes_to_cancel: Vec<Arc<Multiplexer>> = {
+            let mut mguard = muxes_map.lock().await;
+            mguard.remove(&peer_id).unwrap_or_default()
+        };
+        for mux in muxes_to_cancel {
+            mux.cancel_all_pending().await;
+        }
+    }
+}
+
+/// Drop every multiplexer for `peer_id` *only* if `peer_id` is no
+/// longer present in `connections`. This is the post-race recovery
+/// path: a different code path may already have removed the
+/// connection without touching multiplexers.
+async fn cancel_peer_multiplexers_if_orphaned<
+    Async: FutureForm,
+    Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,
+    WireMsg: Encode + Decode,
+>(
+    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
+    multiplexers: Option<&Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
+    peer_id: PeerId,
+) {
+    let Some(muxes_map) = multiplexers else {
+        return;
+    };
+    // Re-acquire the connections lock briefly to check for the peer.
+    // Doing this *before* touching the multiplexer lock keeps lock
+    // ordering consistent with the rest of the codebase
+    // (connections then multiplexers).
+    let still_connected = connections.lock().await.contains_key(&peer_id);
+    if still_connected {
+        return;
+    }
+    let muxes_to_cancel: Vec<Arc<Multiplexer>> = {
+        let mut mguard = muxes_map.lock().await;
+        mguard.remove(&peer_id).unwrap_or_default()
+    };
+    if !muxes_to_cancel.is_empty() {
+        tracing::debug!(
+            ?peer_id,
+            "cleaning up {} orphaned multiplexer(s) (Bug 5 race recovery)",
+            muxes_to_cancel.len()
+        );
+        for mux in muxes_to_cancel {
+            mux.cancel_all_pending().await;
+        }
     }
 }

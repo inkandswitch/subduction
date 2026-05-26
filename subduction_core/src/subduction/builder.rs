@@ -87,6 +87,14 @@ use super::{
     pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
 };
 
+/// Default capacity of the broadcast worker's coalescing queue.
+///
+/// Bounded so a runaway producer cannot drive memory unbounded; if the
+/// queue fills, storage-write paths drop the broadcast hint and the
+/// next write or an explicit `sync_with_all_peers` round catches up.
+/// See [`SubductionBuilder::broadcast_queue_capacity`].
+pub const DEFAULT_BROADCAST_QUEUE_CAPACITY: usize = 1024;
+
 /// Marker for a required builder field that hasn't been set yet.
 ///
 /// Used as a type-level sentinel: [`SubductionBuilder`] methods that
@@ -123,6 +131,7 @@ pub struct SubductionBuilder<
     depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
+    broadcast_queue_capacity: usize,
     sedimentrees: SedimentreesOption<SHARDS>,
 }
 
@@ -168,6 +177,7 @@ impl<const SHARDS: usize>
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
             max_pending_blob_requests: DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            broadcast_queue_capacity: DEFAULT_BROADCAST_QUEUE_CAPACITY,
             sedimentrees: SedimentreesOption::default(),
         }
     }
@@ -201,6 +211,7 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            broadcast_queue_capacity: self.broadcast_queue_capacity,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -228,6 +239,7 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            broadcast_queue_capacity: self.broadcast_queue_capacity,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -255,6 +267,7 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            broadcast_queue_capacity: self.broadcast_queue_capacity,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -279,6 +292,7 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            broadcast_queue_capacity: self.broadcast_queue_capacity,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -324,6 +338,7 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
             depth_metric: metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            broadcast_queue_capacity: self.broadcast_queue_capacity,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -343,6 +358,25 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     #[must_use]
     pub const fn max_pending_blob_requests(mut self, max: usize) -> Self {
         self.max_pending_blob_requests = max;
+        self
+    }
+
+    /// Override the bounded capacity of the background broadcast
+    /// worker's queue.
+    ///
+    /// Storage-write paths (e.g. `add_built_batch`) push a
+    /// `SedimentreeId` here after the local insert; the worker drains
+    /// and dedups, then runs `sync_with_all_peers`. If the queue is
+    /// full, writes log a `tracing::warn!` and drop the broadcast hint
+    /// — storage is already durable, so the next write or an explicit
+    /// sync round will catch up.
+    ///
+    /// Larger values cushion bursty workloads at the cost of memory;
+    /// `0` is clamped to `1`. Defaults to
+    /// [`DEFAULT_BROADCAST_QUEUE_CAPACITY`] (1024).
+    #[must_use]
+    pub const fn broadcast_queue_capacity(mut self, capacity: usize) -> Self {
+        self.broadcast_queue_capacity = capacity;
         self
     }
 
@@ -463,6 +497,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
+            self.broadcast_queue_capacity,
         );
 
         // The caller must spawn the broadcast worker via
@@ -567,6 +602,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
+            self.broadcast_queue_capacity,
         )
     }
 
@@ -668,6 +704,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
+            self.broadcast_queue_capacity,
         );
 
         (subduction, listener, manager, seed, extra)

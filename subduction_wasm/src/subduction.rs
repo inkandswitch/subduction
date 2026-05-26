@@ -253,6 +253,7 @@ impl WasmSubduction {
             Duration::from_secs(30),
             depth_metric,
             WasmSpawn,
+            subduction_core::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
         );
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -461,6 +462,7 @@ impl WasmSubduction {
             Duration::from_secs(30),
             depth_metric,
             WasmSpawn,
+            subduction_core::subduction::builder::DEFAULT_BROADCAST_QUEUE_CAPACITY,
         );
 
         wasm_bindgen_futures::spawn_local(async move {
