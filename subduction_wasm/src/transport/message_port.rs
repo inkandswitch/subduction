@@ -21,7 +21,7 @@
 //! ```
 
 use alloc::{rc::Rc, vec::Vec};
-use core::cell::{Cell, RefCell};
+use core::cell::RefCell;
 
 use js_sys::{Function, Promise, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -75,8 +75,7 @@ pub struct WasmMessagePortTransport {
     port: Rc<Port>,
     queue: SharedQueue,
     _onmessage: Closure<dyn FnMut(JsValue)>,
-    /// The JS `onDisconnect` callback, if registered.
-    on_disconnect: Cell<Option<Function>>,
+    on_disconnect: RefCell<Option<Function>>,
 }
 
 impl core::fmt::Debug for WasmMessagePortTransport {
@@ -120,7 +119,7 @@ impl WasmMessagePortTransport {
             port: Rc::new(port),
             queue,
             _onmessage: onmessage,
-            on_disconnect: Cell::new(None),
+            on_disconnect: RefCell::new(None),
         }
     }
 
@@ -160,9 +159,21 @@ impl WasmMessagePortTransport {
     }
 
     /// Disconnect (close the port) and fire the `onDisconnect` callback if registered.
+    ///
+    /// # Re-entrancy contract
+    ///
+    /// The JS `onDisconnect` callback must not call back into this same
+    /// transport — neither `disconnect()` recursively nor `onDisconnect(...)`
+    /// to re-register a callback. A `RefMut` is held across the callback
+    /// invocation (Rust 2024 let-chain temporary scope), so re-entry will
+    /// panic.
+    ///
+    /// If you need to re-register a callback after disconnect, do it from
+    /// outside the callback (e.g., schedule via `queueMicrotask` or a
+    /// `Promise.resolve().then(...)`).
     pub fn disconnect(&self) -> Promise {
         self.port.close();
-        if let Some(cb) = self.on_disconnect.take()
+        if let Some(cb) = self.on_disconnect.borrow_mut().take()
             && let Err(e) = cb.call0(&JsValue::NULL)
         {
             tracing::error!("onDisconnect callback threw: {e:?}");
@@ -175,12 +186,11 @@ impl WasmMessagePortTransport {
     /// Part of the [`Transport`](super::JsTransport) interface contract.
     /// Typically called by internal wiring rather than directly by user code.
     ///
-    /// Safe to call from inside an `onDisconnect` callback to re-register
-    /// a new callback for a future disconnect — [`Cell::set`] does not
-    /// borrow the cell.
+    /// **Do not call from inside a running `onDisconnect` callback** —
+    /// see [`disconnect`](Self::disconnect)'s re-entrancy contract.
     #[wasm_bindgen(js_name = onDisconnect)]
     pub fn on_disconnect(&self, callback: &js_sys::Function) {
-        self.on_disconnect.set(Some(callback.clone()));
+        *self.on_disconnect.borrow_mut() = Some(callback.clone());
     }
 }
 
