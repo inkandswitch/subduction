@@ -184,3 +184,131 @@ impl<T: Schema + EncodeFields + DecodeFields + Ord> Ord for VerifiedSignature<T>
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    //! Deterministic regression tests for [`VerifiedSignature<T>`]
+    //! trait impls.
+
+    use alloc::vec::Vec;
+
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use sedimentree_core::codec::{
+        decode::{self, DecodeFields},
+        encode::{self, EncodeFields},
+        error::DecodeError,
+        schema::{self, Schema},
+    };
+
+    use super::VerifiedSignature;
+    use crate::signed::{SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE};
+
+    /// Minimal payload for these tests. Uses a schema byte distinct
+    /// from `signed::regression::Payload` so each module's test
+    /// fixtures stay self-contained.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct Payload {
+        value: u64,
+    }
+
+    impl Schema for Payload {
+        const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+        const TYPE_BYTE: u8 = b'V';
+        const VERSION: u8 = 0;
+    }
+
+    impl EncodeFields for Payload {
+        fn encode_fields(&self, buf: &mut Vec<u8>) {
+            encode::u64(self.value, buf);
+        }
+
+        fn fields_size(&self) -> usize {
+            8
+        }
+    }
+
+    impl DecodeFields for Payload {
+        const MIN_SIGNED_SIZE: usize = SCHEMA_SIZE + VERIFYING_KEY_SIZE + 8 + SIGNATURE_SIZE;
+
+        fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+            let value = decode::u64(buf, 0)?;
+            Ok((Self { value }, 8))
+        }
+    }
+
+    fn seal_payload(key_bytes: [u8; 32], value: u64) -> Vec<u8> {
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        let issuer = signing_key.verifying_key();
+        let payload = Payload { value };
+
+        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + payload.fields_size() + SIGNATURE_SIZE;
+        let mut bytes = Vec::with_capacity(total_size);
+
+        bytes.extend_from_slice(&Payload::SCHEMA);
+        bytes.extend_from_slice(issuer.as_bytes());
+        payload.encode_fields(&mut bytes);
+        let signature = signing_key.sign(&bytes);
+        bytes.extend_from_slice(&signature.to_bytes());
+        bytes
+    }
+
+    fn verified(key_bytes: [u8; 32], value: u64) -> VerifiedSignature<Payload> {
+        Signed::<Payload>::try_decode(seal_payload(key_bytes, value))
+            .expect("decode")
+            .try_verify()
+            .expect("verify")
+    }
+
+    /// `VerifiedSignature<T>::eq` delegates to the underlying
+    /// `Signed<T>` and must distinguish different signed values.
+    #[test]
+    fn partial_eq_distinguishes_different_values() {
+        let a = verified([3u8; 32], 555);
+        let a_again = verified([3u8; 32], 555);
+        let b = verified([3u8; 32], 999);
+
+        assert_eq!(a, a, "self-equality must hold for VerifiedSignature");
+        assert_eq!(
+            a, a_again,
+            "two verified seals of identical content must be equal"
+        );
+        assert_ne!(a, b, "different payloads must verify-equal-distinctly");
+    }
+
+    /// `VerifiedSignature<T>::hash` delegates to the inner `Signed<T>`
+    /// and must distinguish different signed values.
+    #[test]
+    fn hash_distinguishes_different_values() {
+        use core::hash::{BuildHasher as _, Hasher as _};
+        use std::collections::hash_map::RandomState;
+
+        let a = verified([7u8; 32], 100);
+        let b = verified([7u8; 32], 200);
+
+        let builder = RandomState::new();
+        let mut ha = builder.build_hasher();
+        let mut hb = builder.build_hasher();
+        core::hash::Hash::hash(&a, &mut ha);
+        core::hash::Hash::hash(&b, &mut hb);
+
+        assert_ne!(
+            ha.finish(),
+            hb.finish(),
+            "VerifiedSignature::hash must distinguish different signed values"
+        );
+    }
+
+    /// `VerifiedSignature<T>::partial_cmp` must produce `Some(_)` for
+    /// any two values, since `Ord` defines a total order.
+    #[test]
+    fn partial_cmp_is_total() {
+        let a = verified([8u8; 32], 1);
+        let b = verified([8u8; 32], 2);
+
+        assert!(a.partial_cmp(&a).is_some());
+        assert!(a.partial_cmp(&b).is_some());
+        assert!(b.partial_cmp(&a).is_some());
+        assert_ne!(a.partial_cmp(&b), b.partial_cmp(&a));
+    }
+}

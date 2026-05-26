@@ -84,7 +84,10 @@ jobs:
           tool: cargo-mutants
 
       - name: Establish baseline build
-        run: cargo build --workspace --tests --features arbitrary
+        # Workspace-level `--features` only activates the named features
+        # on packages that declare them, so this is safe across the
+        # whole workspace.
+        run: cargo build --workspace --tests --features arbitrary,metrics
 
       - name: Compute diff vs base
         id: diff
@@ -130,17 +133,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        crate:
-          - sedimentree_core
-          - sedimentree_fs_storage
-          - subduction_core
-          - subduction_crypto
-          - subduction_ephemeral
-          - subduction_http_longpoll
-          - subduction_iroh
-          - subduction_keyhive
-          - subduction_websocket
-          - automerge_sedimentree
+        # `features` is passed verbatim to `cargo mutants --features`.
+        # Empty string means no extra features. Keep aligned with each
+        # crate's `Cargo.toml` `[features]` — passing a flag the package
+        # doesn't declare fails the baseline build and produces a
+        # spurious "surviving mutants" issue.
+        include:
+          - crate: sedimentree_core
+            features: arbitrary
+          - crate: sedimentree_fs_storage
+            features: ""
+          - crate: subduction_core
+            features: arbitrary,metrics
+          - crate: subduction_crypto
+            features: arbitrary
+          - crate: subduction_ephemeral
+            features: ""
+          - crate: subduction_http_longpoll
+            features: ""
+          - crate: subduction_iroh
+            features: ""
+          - crate: subduction_keyhive
+            features: ""
+          - crate: subduction_websocket
+            features: ""
+          - crate: automerge_sedimentree
+            features: ""
 
     permissions:
       contents: read
@@ -186,12 +204,40 @@ jobs:
       - name: Run cargo-mutants on ${{ matrix.crate }}
         id: mutants
         run: |
+          # Build the optional --features arg only when a feature list
+          # is configured for this crate; passing `--features ""` is an
+          # error on packages without a `[features]` table.
+          features_arg=()
+          if [ -n "${{ matrix.features }}" ]; then
+            features_arg=(--features "${{ matrix.features }}")
+          fi
+          set +e
           cargo mutants \
             --package ${{ matrix.crate }} \
             --no-shuffle \
             --jobs 4 \
             --colors=always \
-            --output mutants.out
+            --output mutants.out \
+            "${features_arg[@]}"
+          mutants_exit=$?
+          set -e
+          # Detect the actual outcome: distinguish "missed mutants"
+          # (a real signal worth opening an issue for) from "baseline
+          # failed" (a config/dependency bug we shouldn't ping the team
+          # for).
+          missed=0
+          if [ -f mutants.out/missed.txt ]; then
+            missed=$(wc -l < mutants.out/missed.txt)
+          fi
+          baseline_failed=0
+          if [ "$mutants_exit" -ne 0 ] && [ "$missed" -eq 0 ]; then
+            baseline_failed=1
+          fi
+          echo "missed=$missed" >> "$GITHUB_OUTPUT"
+          echo "baseline_failed=$baseline_failed" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$mutants_exit" >> "$GITHUB_OUTPUT"
+          # Propagate failure so the job status reflects the issue.
+          exit "$mutants_exit"
 
       - name: Upload mutants.out
         if: always()
@@ -201,16 +247,27 @@ jobs:
           path: mutants.out
           retention-days: 30
 
-      - name: Open issue on regression
-        if: failure() && github.event_name == 'schedule'
+      - name: Open issue on surviving mutants
+        # Only open a "surviving mutants" issue when cargo-mutants
+        # actually reported missed mutants. A non-zero exit code with
+        # zero missed mutants typically means the baseline build failed
+        # (e.g. a missing feature flag, a flaky dep) — those should
+        # produce a different issue or just be addressed via the failed
+        # job status.
+        if: |
+          always()
+          && github.event_name == 'schedule'
+          && steps.mutants.outputs.missed != '0'
+          && steps.mutants.outputs.missed != ''
         uses: actions/github-script@v7
         with:
           script: |
             const crate = '${{ matrix.crate }}';
+            const missed = '${{ steps.mutants.outputs.missed }}';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const title = `Nightly mutants: surviving mutants in \`${crate}\``;
             const body = [
-              `The scheduled nightly mutation-testing run found surviving mutants in \`${crate}\`.`,
+              `The scheduled nightly mutation-testing run found ${missed} surviving mutant(s) in \`${crate}\`.`,
               ``,
               `- Run: ${runUrl}`,
               `- Date: ${new Date().toISOString().slice(0, 10)}`,
@@ -239,4 +296,53 @@ jobs:
               title,
               body,
               labels: ['mutation-testing', 'tech-debt'],
+            });
+
+      - name: Open issue on baseline failure
+        # Separate signal: cargo-mutants returned non-zero but reported
+        # zero missed mutants. This indicates a config / dependency /
+        # baseline-build problem with mutation testing itself, not a
+        # test-coverage gap.
+        if: |
+          always()
+          && github.event_name == 'schedule'
+          && steps.mutants.outputs.baseline_failed == '1'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const crate = '${{ matrix.crate }}';
+            const exitCode = '${{ steps.mutants.outputs.exit_code }}';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `Nightly mutants: baseline failure in \`${crate}\``;
+            const body = [
+              `The scheduled nightly mutation-testing run could not establish a baseline for \`${crate}\`.`,
+              ``,
+              `cargo-mutants exited with code ${exitCode} but reported zero missed mutants — this is the signature of a baseline-build failure (e.g. a feature flag the package doesn't declare, a missing dev-dep, or a flaky dependency).`,
+              ``,
+              `- Run: ${runUrl}`,
+              `- Date: ${new Date().toISOString().slice(0, 10)}`,
+              ``,
+              `Check the \`Run cargo-mutants on ${crate}\` step output and \`mutants.out/log/baseline.log\` in the artifact. Common fixes:`,
+              `- Adjust the \`features\` entry for this crate in the workflow matrix.`,
+              `- Update \`.cargo/mutants.toml\` if the issue is workspace-wide.`,
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'mutation-testing',
+              per_page: 100,
+            });
+            if (existing.data.some(i => i.title === title)) {
+              core.info(`Issue already open: ${title}`);
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['mutation-testing', 'ci-config'],
             });

@@ -56,3 +56,38 @@ impl Nonce {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Round-trip tests for [`Nonce::as_u128`].
+
+    use super::Nonce;
+
+    /// `as_u128` must invert `from_u128`: a nonce constructed from a
+    /// `u128` decodes back to the same value.
+    #[test]
+    fn as_u128_round_trips() {
+        let original = 0x1234_5678_9ABC_DEF0_FEDC_BA98_7654_3210u128;
+        let nonce = Nonce::from_u128(original);
+        assert_eq!(nonce.as_u128(), original, "as_u128 must invert from_u128");
+    }
+
+    /// `from_u128` → `as_u128` round-trips for representative values
+    /// across the `u128` range (zero, one, max, near-max, a typical
+    /// nonce, and `u64::MAX` lifted into `u128`).
+    #[test]
+    fn as_u128_round_trips_across_values() {
+        for &v in &[
+            0u128,
+            1u128,
+            2u128,
+            u128::MAX,
+            u128::MAX - 1,
+            0xDEAD_BEEF_CAFE_BABE_u128,
+            u128::from(u64::MAX),
+        ] {
+            let nonce = Nonce::from_u128(v);
+            assert_eq!(nonce.as_u128(), v, "round-trip failed for {v}");
+        }
+    }
+}

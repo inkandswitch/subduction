@@ -47,11 +47,27 @@ exclude_globs = [
 #   - `Debug` / `Display` impls (often whitespace-sensitive but never
 #     part of program correctness)
 #   - `Drop` impls (rarely meaningfully tested at unit level)
+#   - `arbitrary::Arbitrary` impls — only used by test data generators;
+#     mutations to their internal arithmetic (e.g., `Vec::with_capacity`
+#     args) are semantically unobservable because the surrounding code
+#     still grows the buffer correctly via `extend_from_slice`. These
+#     mutants survive every possible test, by construction.
 #   - `unimplemented!()` / `todo!()` / `unreachable!()` macro calls
 exclude_re = [
     "impl .*Debug for ",
     "impl .*Display for ",
     "impl .*Drop for ",
+    "impl .*arbitrary::Arbitrary.* for ",
+
+    # subduction_crypto/src/signed.rs:255 is inside a defensive
+    # `bytes.get(fields_start..).ok_or(...)` whose `None` branch is
+    # unreachable from `try_decode`: the outer `T::MIN_SIGNED_SIZE`
+    # check (line 191) and the issuer bounds check (line 237) together
+    # guarantee `bytes.len() >= fields_start` by the time we reach it.
+    # The arithmetic in the `need:` field is defense-in-depth that no
+    # input can exercise, so the `+ -> -` / `+ -> *` mutants there
+    # cannot be killed by any test.
+    "subduction_crypto/src/signed.rs:255:.*Signed<T>::try_decode",
 ]
 
 # Be a little patient with builds. The workspace is large, and the
@@ -66,12 +82,19 @@ timeout_multiplier = 2.0
 # kill legitimate mutant tests early.
 minimum_test_timeout = 60
 
-# Pass `--features arbitrary,metrics` so:
-#   - bolero-driven property tests run during mutation testing.
-#     Without `arbitrary`, ~half the proptest coverage is silently
-#     disabled and survivors balloon.
-#   - feature-gated metrics-storage tests run. Without `metrics`,
-#     `subduction_core/tests/metrics_storage.rs` (which covers the
-#     `MetricsStorage` wrapper delegation paths) is skipped and ~40
-#     mutants in `subduction_core/src/storage/metrics.rs` survive.
-additional_cargo_test_args = ["--features", "arbitrary,metrics"]
+# Note: feature selection is intentionally NOT set here. The nightly
+# matrix passes `--features` per-crate in `.github/workflows/mutants.yml`
+# because most workspace crates don't declare `arbitrary` or `metrics`
+# features, and passing a feature flag the package doesn't recognise
+# fails the baseline build (silently → "0 mutants tested, 0 missed" →
+# the workflow's `failure()` guard fires anyway because cargo-mutants
+# returns non-zero on baseline failure → a spurious "surviving mutants"
+# issue gets opened).
+#
+# Local invocations should mirror the per-crate features used in CI,
+# e.g.:
+#
+#   cargo mutants -p subduction_core --features arbitrary,metrics
+#   cargo mutants -p subduction_crypto --features arbitrary
+#   cargo mutants -p sedimentree_core --features arbitrary
+#   cargo mutants -p subduction_iroh             # no extra features
