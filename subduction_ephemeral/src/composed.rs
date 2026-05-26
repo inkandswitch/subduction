@@ -13,10 +13,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     authenticated::Authenticated,
-    connection::{
-        Connection,
-        message::{BatchSyncResponse, SyncMessage},
-    },
+    connection::{Connection, message::SyncMessage},
     handler::Handler,
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
@@ -40,11 +37,14 @@ pub enum Dispatched {
 /// Trait for wire envelope types that can be dispatched to sub-handlers.
 ///
 /// Implement this on your wire message enum (e.g., `CliWireMessage`,
-/// `WireMessage`) to enable [`ComposedHandler`] dispatch.
+/// `WireMessage`) to enable [`ComposedHandler`] dispatch. The
+/// [`TryAsBatchSyncResponse`](subduction_core::connection::message::TryAsBatchSyncResponse)
+/// supertrait is required by [`Handler::Message`].
 pub trait WireEnvelope:
     sedimentree_core::codec::encode::Encode
     + sedimentree_core::codec::decode::Decode
     + From<SyncMessage>
+    + subduction_core::connection::message::TryAsBatchSyncResponse
     + Clone
     + Send
     + Debug
@@ -52,9 +52,6 @@ pub trait WireEnvelope:
 {
     /// Dispatch this message into its sub-handler variant.
     fn dispatch(self) -> Dispatched;
-
-    /// Extract a [`BatchSyncResponse`] reference for roundtrip routing.
-    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse>;
 }
 
 /// Composed handler that dispatches to sync and ephemeral sub-handlers.
@@ -184,10 +181,6 @@ where
 {
     type Message = W;
     type HandlerError = ComposedHandlerError<SyncH::HandlerError, EphH::HandlerError>;
-
-    fn as_batch_sync_response(msg: &W) -> Option<&BatchSyncResponse> {
-        msg.as_batch_sync_response()
-    }
 
     fn handle<'a>(
         &'a self,

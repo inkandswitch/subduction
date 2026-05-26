@@ -1,7 +1,8 @@
 //! Unit tests for [`ComposedHandler`].
 //!
-//! Uses lightweight mock handlers to verify dispatch, `as_batch_sync_response`
-//! extraction, and `on_peer_disconnect` fan-out.
+//! Uses lightweight mock handlers to verify dispatch,
+//! `try_as_batch_sync_response` extraction, and `on_peer_disconnect`
+//! fan-out.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
@@ -18,7 +19,7 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
-        message::{BatchSyncResponse, RequestId, SyncMessage, SyncResult},
+        message::{BatchSyncResponse, RequestId, SyncMessage, SyncResult, TryAsBatchSyncResponse},
         test_utils::ChannelMockConnection,
     },
     handler::Handler,
@@ -103,28 +104,20 @@ impl Decode for TestWireMessage {
     }
 }
 
+impl subduction_core::connection::message::TryAsBatchSyncResponse for TestWireMessage {
+    fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            Self::Sync(msg) => msg.try_as_batch_sync_response(),
+            Self::Ephemeral(_) => None,
+        }
+    }
+}
+
 impl WireEnvelope for TestWireMessage {
     fn dispatch(self) -> Dispatched {
         match self {
             Self::Sync(msg) => Dispatched::Sync(msg),
             Self::Ephemeral(msg) => Dispatched::Ephemeral(msg),
-        }
-    }
-
-    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
-        match self {
-            Self::Sync(msg) => match msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                SyncMessage::BatchSyncRequest(_)
-                | SyncMessage::BlobsRequest { .. }
-                | SyncMessage::BlobsResponse { .. }
-                | SyncMessage::DataRequestRejected(_)
-                | SyncMessage::Fragment { .. }
-                | SyncMessage::LooseCommit { .. }
-                | SyncMessage::RemoveSubscriptions(_)
-                | SyncMessage::HeadsUpdate { .. } => None,
-            },
-            Self::Ephemeral(_) => None,
         }
     }
 }
@@ -156,20 +149,6 @@ impl Handler<Sendable, TestConn> for TrackingSyncHandler {
                 .expect("tracking channel open");
             Ok(())
         })
-    }
-
-    fn as_batch_sync_response(msg: &SyncMessage) -> Option<&BatchSyncResponse> {
-        match msg {
-            SyncMessage::BatchSyncResponse(resp) => Some(resp),
-            SyncMessage::BatchSyncRequest(_)
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
-            | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::Fragment { .. }
-            | SyncMessage::LooseCommit { .. }
-            | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
-        }
     }
 
     fn on_peer_disconnect(&self, peer: PeerId) -> futures::future::BoxFuture<'_, ()> {
@@ -315,7 +294,7 @@ async fn dispatch_ephemeral_message_to_ephemeral_handler() -> TestResult {
 }
 
 #[test]
-fn as_batch_sync_response_extracts_from_sync() {
+fn try_as_batch_sync_response_extracts_from_sync() {
     let req_id = test_request_id();
     let resp = BatchSyncResponse {
         req_id,
@@ -325,44 +304,26 @@ fn as_batch_sync_response_extracts_from_sync() {
     };
 
     let wire = TestWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
-    let extracted =
-        <ComposedHandler<TrackingSyncHandler, TrackingEphemeralHandler, TestWireMessage> as Handler<
-            Sendable,
-            TestConn,
-        >>::as_batch_sync_response(&wire);
-
-    assert_eq!(extracted, Some(&resp));
+    assert_eq!(wire.try_as_batch_sync_response(), Some(&resp));
 }
 
 #[test]
-fn as_batch_sync_response_returns_none_for_other_sync() {
+fn try_as_batch_sync_response_returns_none_for_other_sync() {
     let wire = TestWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
         id: SedimentreeId::new([0xCC; 32]),
         digests: vec![],
     }));
 
-    let extracted =
-        <ComposedHandler<TrackingSyncHandler, TrackingEphemeralHandler, TestWireMessage> as Handler<
-            Sendable,
-            TestConn,
-        >>::as_batch_sync_response(&wire);
-
-    assert_eq!(extracted, None);
+    assert_eq!(wire.try_as_batch_sync_response(), None);
 }
 
 #[test]
-fn as_batch_sync_response_returns_none_for_ephemeral() {
+fn try_as_batch_sync_response_returns_none_for_ephemeral() {
     let wire = TestWireMessage::Ephemeral(EphemeralMessage::Subscribe {
         topics: NonEmpty::new(Topic::new([0xDD; 32])),
     });
 
-    let extracted =
-        <ComposedHandler<TrackingSyncHandler, TrackingEphemeralHandler, TestWireMessage> as Handler<
-            Sendable,
-            TestConn,
-        >>::as_batch_sync_response(&wire);
-
-    assert_eq!(extracted, None);
+    assert_eq!(wire.try_as_batch_sync_response(), None);
 }
 
 #[tokio::test]

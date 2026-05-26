@@ -92,27 +92,6 @@ impl Handler<Sendable, CliConn> for CliHandler {
     type Message = CliWireMessage;
     type HandlerError = CliListenError;
 
-    fn as_batch_sync_response(
-        msg: &CliWireMessage,
-    ) -> Option<&subduction_core::connection::message::BatchSyncResponse> {
-        match msg {
-            CliWireMessage::Sync(sync_msg) => match sync_msg.as_ref() {
-                subduction_core::connection::message::SyncMessage::BatchSyncResponse(resp) => {
-                    Some(resp)
-                }
-                subduction_core::connection::message::SyncMessage::BatchSyncRequest(_)
-                | subduction_core::connection::message::SyncMessage::BlobsRequest { .. }
-                | subduction_core::connection::message::SyncMessage::BlobsResponse { .. }
-                | subduction_core::connection::message::SyncMessage::DataRequestRejected(_)
-                | subduction_core::connection::message::SyncMessage::Fragment { .. }
-                | subduction_core::connection::message::SyncMessage::LooseCommit { .. }
-                | subduction_core::connection::message::SyncMessage::RemoveSubscriptions(_)
-                | subduction_core::connection::message::SyncMessage::HeadsUpdate { .. } => None,
-            },
-            CliWireMessage::Ephemeral(_) | CliWireMessage::Keyhive(_) => None,
-        }
-    }
-
     fn handle<'a>(
         &'a self,
         conn: &'a Authenticated<CliConn, Sendable>,
@@ -185,8 +164,8 @@ mod tests {
     use subduction_core::{
         connection::message::{
             BatchSyncResponse, RemoveSubscriptions, RequestId, SyncMessage, SyncResult,
+            TryAsBatchSyncResponse,
         },
-        handler::Handler,
         peer::id::PeerId,
         remote_heads::RemoteHeads,
         timestamp::TimestampSeconds,
@@ -198,7 +177,6 @@ mod tests {
     };
     use subduction_keyhive::KeyhiveMessage;
 
-    use super::{CliConn, CliHandler};
     use crate::wire::CliWireMessage;
 
     fn test_peer_id() -> PeerId {
@@ -213,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn as_batch_sync_response_extracts_from_sync() {
+    fn try_as_batch_sync_response_extracts_from_sync() {
         let resp = BatchSyncResponse {
             req_id: test_request_id(),
             id: SedimentreeId::new([0xAA; 32]),
@@ -222,24 +200,22 @@ mod tests {
         };
         let msg = CliWireMessage::Sync(Box::new(SyncMessage::BatchSyncResponse(resp.clone())));
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
-        assert_eq!(extracted, Some(&resp));
+        assert_eq!(msg.try_as_batch_sync_response(), Some(&resp));
     }
 
     #[test]
-    fn as_batch_sync_response_none_for_other_sync() {
+    fn try_as_batch_sync_response_none_for_other_sync() {
         let msg = CliWireMessage::Sync(Box::new(SyncMessage::RemoveSubscriptions(
             RemoveSubscriptions {
                 ids: vec![SedimentreeId::new([0xBB; 32])],
             },
         )));
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
-        assert_eq!(extracted, None);
+        assert_eq!(msg.try_as_batch_sync_response(), None);
     }
 
     #[tokio::test]
-    async fn as_batch_sync_response_none_for_ephemeral() {
+    async fn try_as_batch_sync_response_none_for_ephemeral() {
         let signer = MemorySigner::generate();
         let ep = EphemeralPayload {
             id: Topic::new([0xCC; 32]),
@@ -252,15 +228,13 @@ mod tests {
             verified.into_signed(),
         )));
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
-        assert_eq!(extracted, None);
+        assert_eq!(msg.try_as_batch_sync_response(), None);
     }
 
     #[test]
-    fn as_batch_sync_response_none_for_keyhive() {
+    fn try_as_batch_sync_response_none_for_keyhive() {
         let msg = CliWireMessage::Keyhive(KeyhiveMessage::new(vec![0xDE, 0xAD]));
 
-        let extracted = <CliHandler as Handler<Sendable, CliConn>>::as_batch_sync_response(&msg);
-        assert_eq!(extracted, None);
+        assert_eq!(msg.try_as_batch_sync_response(), None);
     }
 }

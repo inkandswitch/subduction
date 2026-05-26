@@ -37,7 +37,7 @@ use sedimentree_core::{
 };
 use subduction_crypto::signed::Signed;
 
-use crate::peer::id::PeerId;
+use crate::{peer::id::PeerId, remote_heads::RemoteHeads};
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +236,38 @@ impl From<BatchSyncResponse> for SyncMessage {
     }
 }
 
+/// Fallible borrow of a [`BatchSyncResponse`] from a wire message.
+///
+/// Implementors return `Some(&resp)` when the message _is_ a
+/// `BatchSyncResponse`, or `None` otherwise. The
+/// [`Subduction`](crate::subduction::Subduction) listen loop uses this
+/// to route responses to pending roundtrip callers before dispatching
+/// to the handler.
+///
+/// The `Try` prefix mirrors stdlib `TryFrom`/`TryInto` fallibility; the
+/// `As` suffix mirrors `AsRef`-style borrow semantics. Returning
+/// `Option` (rather than `Result<_, ()>`) keeps the call site terse.
+pub trait TryAsBatchSyncResponse {
+    /// Borrow a [`BatchSyncResponse`] from `self` if `self` contains one.
+    fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse>;
+}
+
+impl TryAsBatchSyncResponse for SyncMessage {
+    fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            SyncMessage::BatchSyncResponse(resp) => Some(resp),
+            SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::LooseCommit { .. }
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
+        }
+    }
+}
+
 /// A request to remove subscriptions from specific sedimentrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
@@ -269,8 +301,6 @@ impl From<DataRequestRejected> for SyncMessage {
         SyncMessage::DataRequestRejected(rejection)
     }
 }
-
-use crate::remote_heads::RemoteHeads;
 
 /// A unique identifier for a particular request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

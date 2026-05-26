@@ -257,20 +257,6 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, R, const SHARDS: usize> Handl
     type Message = SyncMessage;
     type HandlerError = ListenError<Async, Store, Conn, SyncMessage>;
 
-    fn as_batch_sync_response(msg: &Self::Message) -> Option<&BatchSyncResponse> {
-        match msg {
-            SyncMessage::BatchSyncResponse(resp) => Some(resp),
-            SyncMessage::BatchSyncRequest(_)
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
-            | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::Fragment { .. }
-            | SyncMessage::LooseCommit { .. }
-            | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
-        }
-    }
-
     fn handle<'a>(
         &'a self,
         conn: &'a Authenticated<Conn, Async>,

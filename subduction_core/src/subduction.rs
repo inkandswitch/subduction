@@ -73,7 +73,7 @@ use crate::{
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult,
+            SyncMessage, SyncResult, TryAsBatchSyncResponse,
         },
         stats::{SendCount, SyncStats},
     },
@@ -316,7 +316,7 @@ where
             manager_receiver,
             queue_sender,
             response_sender,
-            Hdl::is_batch_sync_response_msg,
+            |msg: &Hdl::Message| msg.try_as_batch_sync_response().is_some(),
             closed_sender,
         );
 
@@ -572,7 +572,7 @@ where
                 resp_result = self.response_queue.recv().fuse() => {
                     if let Ok((conn, msg)) = resp_result {
                         let peer_id = conn.peer_id();
-                        if let Some(resp) = Hdl::as_batch_sync_response(&msg) {
+                        if let Some(resp) = msg.try_as_batch_sync_response() {
                             let muxes_for_peer = {
                                 let multiplexers = self.multiplexers.lock().await;
                                 multiplexers.get(&peer_id).cloned()
@@ -625,7 +625,7 @@ where
                         // Safety net: if a BatchSyncResponse ended up in the
                         // request queue (should go through response_queue),
                         // route it to the multiplexer rather than the handler.
-                        if let Some(resp) = Hdl::as_batch_sync_response(&msg) {
+                        if let Some(resp) = msg.try_as_batch_sync_response() {
                             tracing::debug!(
                                 "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
                                  (expected response_queue) — routing to multiplexer"

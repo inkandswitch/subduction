@@ -10,7 +10,7 @@ use js_sys::Uint8Array;
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
     authenticated::Authenticated,
-    connection::message::{BatchSyncResponse, SyncMessage},
+    connection::message::SyncMessage,
     handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
@@ -192,19 +192,6 @@ impl RemoteHeadsNotifier for WasmComposedHandler {
 impl Handler<Local, WasmConn> for WasmComposedHandler {
     type Message = WireMessage;
     type HandlerError = WasmListenError;
-
-    fn as_batch_sync_response(msg: &WireMessage) -> Option<&BatchSyncResponse> {
-        match msg {
-            WireMessage::Sync(sync_msg) => {
-                if let SyncMessage::BatchSyncResponse(resp) = sync_msg.as_ref() {
-                    Some(resp)
-                } else {
-                    None
-                }
-            }
-            WireMessage::Ephemeral(_) | WireMessage::Keyhive(_) => None,
-        }
-    }
 
     fn handle<'a>(
         &'a self,

@@ -19,7 +19,6 @@ use core::marker::PhantomData;
 use rand::rngs::OsRng;
 
 use crate::{KeyhiveMessage, SignedMessage, signed_message::CborError};
-
 // ── Command enum ────────────────────────────────────────────────────────
 
 /// Commands sent from the handle to the actor.
