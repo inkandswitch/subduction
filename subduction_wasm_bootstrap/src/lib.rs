@@ -7,6 +7,12 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(target_arch = "wasm32")]
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+#[cfg(target_arch = "wasm32")]
+use wasm_tracing::{WasmLayer, WasmLayerConfig};
+
 /// Install [`console_error_panic_hook`] so Rust panics produce readable
 /// `console.error` output. Idempotent.
 pub fn install_panic_hook() {
@@ -18,9 +24,6 @@ pub fn install_panic_hook() {
 /// subscriber has already been set.
 #[cfg(target_arch = "wasm32")]
 pub fn install_basic_tracing() {
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-    use wasm_tracing::{WasmLayer, WasmLayerConfig};
-
     if tracing::dispatcher::has_been_set() {
         return;
     }
@@ -32,8 +35,7 @@ pub fn install_basic_tracing() {
     let _result = tracing_subscriber::registry().with(wasm_layer).try_init();
 }
 
-/// Stub for non-wasm32 targets so callers can reference this
-/// unconditionally.
+/// Stub for non-wasm32 targets so callers can reference this unconditionally.
 #[cfg(not(target_arch = "wasm32"))]
 pub const fn install_basic_tracing() {}
 
