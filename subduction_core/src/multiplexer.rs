@@ -129,6 +129,29 @@ impl Multiplexer {
         self.pending.lock().await.remove(req_id);
     }
 
+    /// Cancel every pending call on this multiplexer.
+    ///
+    /// Drops all of the registered `oneshot::Sender`s, which causes
+    /// any awaiting receivers in [`ManagedConnection::call`] to resolve
+    /// with `Err(Canceled)` and surface as
+    /// [`CallError::ResponseDropped`](crate::connection::managed::CallError::ResponseDropped).
+    ///
+    /// Call this when the underlying connection has gone away (peer
+    /// disconnected, transport closed) so that in-flight callers do
+    /// not wait out the per-call timeout for responses that will never
+    /// arrive.
+    pub async fn cancel_all_pending(&self) {
+        let mut pending = self.pending.lock().await;
+        let n = pending.len();
+        pending.clear();
+        if n > 0 {
+            tracing::debug!(
+                "cancelled {n} pending call(s) on multiplexer for peer {:?}",
+                self.peer_id
+            );
+        }
+    }
+
     /// Try to resolve a pending call with an inbound `BatchSyncResponse`.
     ///
     /// Returns `true` if the response matched a pending request and was

@@ -238,7 +238,7 @@ impl WasmSubduction {
             WasmKeyhiveHandler::new(keyhive_handler.clone()),
         ));
 
-        let (core, listener_fut, manager_fut) = Subduction::new(
+        let (core, listener_fut, manager_fut, broadcast_seed) = Subduction::new(
             handler,
             discovery_id,
             signer,
@@ -272,6 +272,12 @@ impl WasmSubduction {
                 }
             }
         });
+
+        // Spawn the broadcast worker (Bug 2).
+        wasm_bindgen_futures::spawn_local(
+            core.clone()
+                .run_broadcast_worker_until_aborted(broadcast_seed),
+        );
 
         // Always drain the ephemeral channel to prevent "channel full" warnings
         // in EphemeralHandler when no JS callback is registered.
@@ -440,7 +446,7 @@ impl WasmSubduction {
             WasmKeyhiveHandler::new(keyhive_handler.clone()),
         ));
 
-        let (core, listener_fut, manager_fut) = Subduction::new(
+        let (core, listener_fut, manager_fut, broadcast_seed) = Subduction::new(
             handler,
             discovery_id,
             signer,
@@ -474,6 +480,12 @@ impl WasmSubduction {
                 }
             }
         });
+
+        // Spawn the broadcast worker (Bug 2).
+        wasm_bindgen_futures::spawn_local(
+            core.clone()
+                .run_broadcast_worker_until_aborted(broadcast_seed),
+        );
 
         // Always drain the ephemeral channel to prevent "channel full" warnings
         // in EphemeralHandler when no JS callback is registered.

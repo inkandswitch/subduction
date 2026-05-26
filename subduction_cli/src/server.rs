@@ -315,8 +315,13 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
     let keyhive_handler =
         CliKeyhiveHandler::new(Arc::clone(&keyhive_protocol), CliConnKeyhiveAdapter::new);
-    let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction, _, _, _) = builder
-        .build_composed(|sync_handler| {
+    let (subduction, listener_fut, manager_fut, broadcast_seed, ephemeral): (
+        CliSubduction,
+        _,
+        _,
+        _,
+        _,
+    ) = builder.build_composed(|sync_handler| {
             let connections = sync_handler.connections();
 
             let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
@@ -347,6 +352,13 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
             (handler, ephemeral_handler)
         });
+
+    // Spawn the broadcast worker (Bug 2).
+    tokio::spawn(
+        subduction
+            .clone()
+            .run_broadcast_worker_until_aborted(broadcast_seed),
+    );
 
     let server_peer_id = subduction.peer_id();
 

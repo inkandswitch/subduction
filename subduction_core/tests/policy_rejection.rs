@@ -157,7 +157,7 @@ fn make_commit_parts(data: &[u8]) -> (CommitId, BTreeSet<CommitId>, Blob) {
 /// `unauthorized_fetch_returns_unauthorized_result` test below.
 #[tokio::test]
 async fn local_add_sedimentree_bypasses_put_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
+    let (subduction, _handler, _listener_fut, _actor_fut, _broadcast_seed) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
@@ -179,7 +179,7 @@ async fn local_add_sedimentree_bypasses_put_policy() {
 
 #[tokio::test]
 async fn local_add_commit_bypasses_put_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
+    let (subduction, _handler, _listener_fut, _actor_fut, _broadcast_seed) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
@@ -200,7 +200,7 @@ async fn local_adds_bypass_id_specific_policy() -> TestResult {
     let allowed_id = SedimentreeId::new([42u8; 32]);
     let other_id = SedimentreeId::new([99u8; 32]);
 
-    let (subduction, _handler, _listener_fut, _actor_fut) =
+    let (subduction, _handler, _listener_fut, _actor_fut, _broadcast_seed) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(
@@ -234,7 +234,7 @@ async fn local_adds_bypass_id_specific_policy() -> TestResult {
 
 #[tokio::test]
 async fn local_add_stores_data_despite_rejecting_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
+    let (subduction, _handler, _listener_fut, _actor_fut, _broadcast_seed) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
@@ -313,7 +313,7 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 
 #[tokio::test]
 async fn multiple_local_adds_succeed_despite_rejecting_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
+    let (subduction, _handler, _listener_fut, _actor_fut, _broadcast_seed) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
@@ -412,7 +412,7 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let relay_peer_id = PeerId::new([1u8; 32]);
 
-    let (subduction, _handler, listener_fut, actor_fut) =
+    let (subduction, _handler, listener_fut, actor_fut, _broadcast_seed) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(
@@ -508,7 +508,7 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
 /// with `SyncResult::Unauthorized` so the peer knows they're not authorized.
 #[tokio::test]
 async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
+    let (subduction, _handler, listener_fut, actor_fut, _broadcast_seed) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))

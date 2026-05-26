@@ -60,7 +60,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    let (sd, _, listener, manager) = SubductionBuilder::new()
+    let (sd, _, listener, manager, _broadcast_seed) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -143,7 +143,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    let (sd, _, listener, manager) = SubductionBuilder::new()
+    let (sd, _, listener, manager, _broadcast_seed) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)

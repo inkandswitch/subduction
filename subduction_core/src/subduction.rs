@@ -198,10 +198,61 @@ pub struct Subduction<
     response_queue: async_channel::Receiver<(Authenticated<Conn, Async>, Hdl::Message)>,
     connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<Conn, Async>)>,
 
+    /// Sender for the background broadcast worker.
+    ///
+    /// Storage-write paths (e.g. [`add_built_batch`](Self::add_built_batch))
+    /// enqueue a [`SedimentreeId`] here after the local write settles;
+    /// the broadcast worker dequeues, coalesces duplicates per drained
+    /// batch, and runs `sync_with_all_peers` for each distinct id with a
+    /// bounded per-call timeout. Write callers do not wait for the
+    /// broadcast to complete — see Bug 2.
+    broadcast_tx: async_channel::Sender<SedimentreeId>,
+
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
 
     _phantom: core::marker::PhantomData<&'a Async>,
+}
+
+/// Seed handed back from [`Subduction::new`] to drive the background
+/// broadcast worker.
+///
+/// The worker runs `sync_with_all_peers` for each [`SedimentreeId`]
+/// enqueued by storage-write paths (e.g.
+/// [`Subduction::add_built_batch`]). Pass this seed to
+/// [`Subduction::run_broadcast_worker`] to obtain the worker future,
+/// then spawn it alongside the listener and manager futures.
+///
+/// The wrapper exists so that the receiver-and-abort-registration pair
+/// can travel through the builder API without leaking into the
+/// `Subduction` struct itself.
+#[derive(Debug)]
+pub struct BroadcastWorkerSeed {
+    pub(crate) receiver: async_channel::Receiver<SedimentreeId>,
+    /// External handle for aborting the worker. Held by the
+    /// `Subduction`-shaped object after `run_broadcast_worker` consumes
+    /// the `abort_reg`; the abort handle is what `shutdown` uses.
+    pub(crate) abort_handle: AbortHandle,
+    pub(crate) abort_reg: Option<AbortRegistration>,
+}
+
+impl BroadcastWorkerSeed {
+    /// Return the [`AbortHandle`] associated with this worker, so the
+    /// caller can store it and abort the worker on shutdown.
+    #[must_use]
+    pub const fn abort_handle(&self) -> &AbortHandle {
+        &self.abort_handle
+    }
+
+    /// Take the [`AbortRegistration`] for this seed.
+    ///
+    /// The caller can wrap the worker future in
+    /// [`futures::future::Abortable`] using this registration so that
+    /// dropping the abort handle (or calling `abort_handle().abort()`)
+    /// terminates the worker. Returns `None` if already taken.
+    pub const fn take_abort_registration(&mut self) -> Option<AbortRegistration> {
+        self.abort_reg.take()
+    }
 }
 
 /// A single fragment for [`Subduction::add_fragments_batch`].
@@ -300,6 +351,7 @@ where
         Arc<Self>,
         ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
+        BroadcastWorkerSeed,
     )
     where
         Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
@@ -311,6 +363,13 @@ where
         let (queue_sender, queue_receiver) = async_channel::bounded(2048);
         let (response_sender, response_receiver) = async_channel::bounded(8192);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
+        // Broadcast worker queue. Bounded so that a runaway producer
+        // can't drive memory unbounded; if it fills up, write paths
+        // fall back to a `try_send` and skip the broadcast hint (the
+        // local store is already durable and a subsequent write or an
+        // explicit sync round will catch up).
+        let (broadcast_sender, broadcast_receiver) =
+            async_channel::bounded::<SedimentreeId>(1024);
         let manager = ConnectionManager::<Async, Authenticated<Conn, Async>, Hdl::Message, Sp>::new(
             spawner,
             manager_receiver,
@@ -322,6 +381,7 @@ where
 
         let (abort_manager_handle, abort_manager_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
+        let (abort_broadcast_handle, abort_broadcast_reg) = AbortHandle::new_pair();
 
         let sd = Arc::new(Self {
             handler,
@@ -344,6 +404,7 @@ where
             msg_queue: queue_receiver,
             response_queue: response_receiver,
             connection_closed: closed_receiver,
+            broadcast_tx: broadcast_sender,
             abort_manager_handle,
             abort_listener_handle,
             _phantom: PhantomData,
@@ -358,6 +419,11 @@ where
                 Async::start_listener(sd, abort_listener_reg),
             ),
             crate::connection::manager::ManagerFuture::new(abortable_manager),
+            BroadcastWorkerSeed {
+                receiver: broadcast_receiver,
+                abort_handle: abort_broadcast_handle,
+                abort_reg: Some(abort_broadcast_reg),
+            },
         )
     }
 
@@ -763,7 +829,16 @@ where
                 .flat_map(NonEmpty::into_iter)
                 .collect()
         };
-        self.multiplexers.lock().await.clear();
+        let drained_muxes: Vec<Arc<Multiplexer>> = {
+            let mut guard = self.multiplexers.lock().await;
+            core::mem::take(&mut *guard)
+                .into_values()
+                .flatten()
+                .collect()
+        };
+        for mux in drained_muxes {
+            mux.cancel_all_pending().await;
+        }
 
         self.send_counter.clear_all().await;
 
@@ -797,7 +872,12 @@ where
         peer_id: &PeerId,
     ) -> Result<bool, Conn::DisconnectionError> {
         let peer_conns = { self.connections.lock().await.remove(peer_id) };
-        self.multiplexers.lock().await.remove(peer_id);
+        let removed_muxes = self.multiplexers.lock().await.remove(peer_id);
+        if let Some(muxes) = removed_muxes {
+            for mux in muxes {
+                mux.cancel_all_pending().await;
+            }
+        }
 
         if let Some(conns) = peer_conns {
             self.send_counter.clear_peer(peer_id).await;
@@ -904,7 +984,13 @@ where
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
     pub async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
-        peers::remove_connection(&self.connections, &self.subscriptions, conn).await
+        peers::remove_connection(
+            &self.connections,
+            &self.subscriptions,
+            Some(&self.multiplexers),
+            conn,
+        )
+        .await
     }
 
     /// Get all connections as a flat list.
@@ -1716,7 +1802,15 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sync_with_all_peers(id, true, None).await?;
+        // Hand the broadcast off to the background worker — same
+        // rationale as `add_built_batch` (Bug 2). Callers that need
+        // to observe broadcast outcomes can call `sync_with_all_peers`
+        // directly.
+        if let Err(e) = self.broadcast_tx.try_send(id) {
+            tracing::warn!(
+                "broadcast worker queue full, skipping push for {id:?}: {e}"
+            );
+        }
         Ok(())
     }
 
@@ -1772,6 +1866,57 @@ where
 
         // Storage write first (cancel-safety: storage is the source of truth;
         // a cancel between this and the broadcast self-heals on rehydrate).
+        self.add_built_batch_locally(id, commits, fragments).await?;
+
+        // Hand the broadcast off to the background worker. We
+        // deliberately do not await the resulting `sync_with_all_peers`
+        // call here: a single byte-connected but protocol-unresponsive
+        // peer would otherwise block this storage-durable write for
+        // the full per-call timeout (see Bug 2). If callers need to
+        // observe peer-level sync outcomes, use
+        // [`add_built_batch_and_await_broadcast`](Self::add_built_batch_and_await_broadcast)
+        // instead, or drive the local insert via
+        // [`add_built_batch_locally`](Self::add_built_batch_locally) and
+        // call [`sync_with_all_peers`](Self::sync_with_all_peers)
+        // directly.
+        //
+        // `try_send` on a bounded queue: if the worker is overwhelmed
+        // we drop this hint rather than apply backpressure. Storage is
+        // already durable; the next write or an explicit sync round
+        // will catch up.
+        if let Err(e) = self.broadcast_tx.try_send(id) {
+            tracing::warn!(
+                "broadcast worker queue full, skipping push for {id:?}: {e}"
+            );
+        }
+        Ok(())
+    }
+
+    /// Variant of [`add_built_batch`](Self::add_built_batch) that
+    /// retains the historical "storage durable + broadcast settled"
+    /// semantics: it inserts the batch locally and then awaits
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) before
+    /// returning.
+    ///
+    /// Prefer this only when the caller explicitly needs to observe
+    /// that connected peers have acknowledged the new data; for the
+    /// common "make my write durable and let sync catch up in the
+    /// background" pattern use `add_built_batch`. Note that this
+    /// method's wall-clock latency is bounded by the per-call timeout
+    /// (default 30 s), not by the local storage write.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`add_built_batch`](Self::add_built_batch).
+    pub async fn add_built_batch_and_await_broadcast(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+        if commits.is_empty() && fragments.is_empty() {
+            return Ok(());
+        }
         self.add_built_batch_locally(id, commits, fragments).await?;
         self.sync_with_all_peers(id, true, None).await?;
         Ok(())
@@ -2472,6 +2617,113 @@ where
         }
 
         (had_success, stats, call_errs, io_errs)
+    }
+
+    /// Drain the broadcast queue, coalescing duplicate
+    /// [`SedimentreeId`]s per drained batch, and invoke
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) for each
+    /// distinct id with the configured per-call timeout.
+    ///
+    /// This is the body of the background broadcast worker. Storage-
+    /// write paths (e.g. [`add_built_batch`](Self::add_built_batch))
+    /// enqueue ids on the channel; this loop picks them up and runs
+    /// the broadcast off the write-caller's await path so a wedged
+    /// peer can not stall write throughput (see Bug 2).
+    ///
+    /// Returns when the broadcast channel is closed (which happens
+    /// when the last `Subduction` clone is dropped or shutdown is
+    /// initiated).
+    /// Convenience wrapper around
+    /// [`run_broadcast_worker`](Self::run_broadcast_worker) that
+    /// transparently consumes the seed's [`AbortRegistration`] so the
+    /// returned future stops when the seed's
+    /// [`AbortHandle`](futures::stream::AbortHandle) is triggered.
+    ///
+    /// Callers should `spawn` this future; it never panics and exits
+    /// cleanly on either channel close or abort.
+    pub async fn run_broadcast_worker_until_aborted(
+        self: Arc<Self>,
+        mut seed: BroadcastWorkerSeed,
+    ) {
+        let reg = seed.abort_reg.take();
+        match reg {
+            Some(reg) => {
+                let worker = self.run_broadcast_worker(seed);
+                let _ = Abortable::new(worker, reg).await;
+            }
+            None => {
+                // Seed was consumed before us; just run unabortable.
+                self.run_broadcast_worker(seed).await;
+            }
+        }
+    }
+
+    /// Drain the broadcast queue, coalescing duplicate
+    /// [`SedimentreeId`]s per drained batch, and invoke
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) for each
+    /// distinct id with the configured per-call timeout.
+    ///
+    /// This is the body of the background broadcast worker. Storage-
+    /// write paths (e.g. [`add_built_batch`](Self::add_built_batch))
+    /// enqueue ids on the channel; this loop picks them up and runs
+    /// the broadcast off the write-caller's await path so a wedged
+    /// peer can not stall write throughput (see Bug 2).
+    ///
+    /// Returns when the broadcast channel is closed (which happens
+    /// when the last `Subduction` clone is dropped or shutdown is
+    /// initiated).
+    ///
+    /// Prefer
+    /// [`run_broadcast_worker_until_aborted`](Self::run_broadcast_worker_until_aborted)
+    /// at call sites — it transparently consumes the seed's
+    /// [`AbortRegistration`] so the worker also stops on
+    /// `AbortHandle::abort()`.
+    pub async fn run_broadcast_worker(
+        self: Arc<Self>,
+        seed: BroadcastWorkerSeed,
+    ) {
+        let receiver = seed.receiver;
+        tracing::debug!("broadcast worker started");
+        while let Ok(first) = receiver.recv().await {
+            // Coalesce: drain everything immediately available, dedup
+            // by SedimentreeId. We use a Set rather than a Vec so a
+            // burst of N writes to the same doc produces one broadcast,
+            // not N.
+            let mut batch: Set<SedimentreeId> = Set::new();
+            batch.insert(first);
+            while let Ok(id) = receiver.try_recv() {
+                batch.insert(id);
+            }
+
+            for id in batch {
+                tracing::debug!(
+                    sedimentree_id = ?id,
+                    "broadcast worker: sync_with_all_peers"
+                );
+                let timeout = Some(self.default_call_timeout);
+                match self.sync_with_all_peers(id, true, timeout).await {
+                    Ok(per_peer) => {
+                        let failed: usize = per_peer
+                            .values()
+                            .filter(|(success, _, _)| !*success)
+                            .count();
+                        if failed > 0 {
+                            tracing::debug!(
+                                sedimentree_id = ?id,
+                                "broadcast worker: {failed} peer(s) did not ack"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            sedimentree_id = ?id,
+                            "broadcast worker: sync_with_all_peers error: {e}"
+                        );
+                    }
+                }
+            }
+        }
+        tracing::debug!("broadcast worker exiting (channel closed)");
     }
 }
 
@@ -3225,7 +3477,7 @@ mod tests {
             CountLeadingZeroBytes,
         ));
 
-        let (subduction, _listener_fut, _actor_fut) =
+        let (subduction, _listener_fut, _actor_fut, _broadcast_seed) =
             Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
                 handler.clone(),
                 None,
@@ -3294,7 +3546,7 @@ mod tests {
             CountLeadingZeroBytes,
         ));
 
-        let (subduction, _listener_fut, _actor_fut) =
+        let (subduction, _listener_fut, _actor_fut, _broadcast_seed) =
             Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
                 handler.clone(),
                 None,

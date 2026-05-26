@@ -105,11 +105,20 @@ fn spawn_subduction(sig: &MemorySigner, discovery_id: Option<DiscoveryId>) -> Te
         builder = builder.discovery_id(id);
     }
 
-    let (subduction, _handler, listener_fut, manager_fut) =
+    let (subduction, _handler, listener_fut, manager_fut, mut broadcast_seed) =
         builder.build::<Sendable, MessageTransport<IrohTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
+
+    let broadcast_abort_reg = broadcast_seed
+        .take_abort_registration()
+        .expect("broadcast worker abort registration consumed twice");
+    let sd_for_worker = subduction.clone();
+    tokio::spawn(async move {
+        let worker = sd_for_worker.run_broadcast_worker(broadcast_seed);
+        let _ = futures::future::Abortable::new(worker, broadcast_abort_reg).await;
+    });
 
     subduction
 }

@@ -109,7 +109,7 @@ impl TestServer {
         let discovery_id = DiscoveryId::new(SERVICE_NAME.as_bytes());
         let discovery_audience: Option<Audience> = Some(Audience::discover_id(discovery_id));
 
-        let (subduction, _handler, listener_fut, manager_fut): (TestSubduction, _, _, _) =
+        let (subduction, _handler, listener_fut, manager_fut, _broadcast_seed): (TestSubduction, _, _, _, _) =
             SubductionBuilder::new()
                 .signer(sig.clone())
                 .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
@@ -240,7 +240,7 @@ async fn serve_http_connection(
 async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     let client_signer = signer(seed);
 
-    let (client, _handler, listener_fut, manager_fut): (TestSubduction, _, _, _) =
+    let (client, _handler, listener_fut, manager_fut, _broadcast_seed): (TestSubduction, _, _, _, _) =
         SubductionBuilder::new()
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
@@ -310,7 +310,7 @@ async fn connected_client_known_peer(
 ) -> TestSubduction {
     let client_signer = signer(seed);
 
-    let (client, _handler, listener_fut, manager_fut): (TestSubduction, _, _, _) =
+    let (client, _handler, listener_fut, manager_fut, _broadcast_seed): (TestSubduction, _, _, _, _) =
         SubductionBuilder::new()
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))

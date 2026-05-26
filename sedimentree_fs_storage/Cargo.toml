@@ -26,6 +26,7 @@ tracing = { workspace = true, default-features = true }
 
 [dev-dependencies]
 future_form = { workspace = true }
+futures = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
 subduction_crypto = { workspace = true, features = ["std"] }
 tempfile = { workspace = true }

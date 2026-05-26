@@ -74,7 +74,7 @@ fn make_commit_pair(sed_id: SedimentreeId, seed: u8) -> (LooseCommit, Blob) {
 fn make_node(signer: MemorySigner, tempdir: &TempDir) -> TestResult<TestSubduction> {
     let storage = FsStorage::new(tempdir.path().to_path_buf())?;
 
-    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+    let (sd, _handler, listener, manager, mut broadcast_seed) = SubductionBuilder::new()
         .signer(signer)
         .storage(storage, Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -83,6 +83,16 @@ fn make_node(signer: MemorySigner, tempdir: &TempDir) -> TestResult<TestSubducti
 
     tokio::spawn(listener);
     tokio::spawn(manager);
+
+    let abort_reg = broadcast_seed
+        .take_abort_registration()
+        .expect("broadcast worker abort registration consumed twice");
+    let sd_for_worker = sd.clone();
+    tokio::spawn(async move {
+        let worker = sd_for_worker.run_broadcast_worker(broadcast_seed);
+        let _ = futures::future::Abortable::new(worker, abort_reg).await;
+    });
+
     Ok(sd)
 }
 

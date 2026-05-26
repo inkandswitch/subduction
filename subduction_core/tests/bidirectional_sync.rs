@@ -71,7 +71,7 @@ fn make_subduction() -> (
     impl Future<Output = Result<(), Aborted>>,
     impl Future<Output = Result<(), Aborted>>,
 ) {
-    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+    let (sd, _handler, listener, manager, _broadcast_seed) = SubductionBuilder::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)

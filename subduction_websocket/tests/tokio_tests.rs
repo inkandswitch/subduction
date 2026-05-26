@@ -157,6 +157,7 @@ fn setup_client_subduction(
         CountLeadingZeroBytes,
     >,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
+    subduction_core::subduction::BroadcastWorkerSeed,
 ) {
     SubductionBuilder::new()
         .signer(signer)
@@ -184,6 +185,7 @@ fn setup_server_subduction(
         CountLeadingZeroBytes,
     >,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
+    subduction_core::subduction::BroadcastWorkerSeed,
 ) {
     SubductionBuilder::new()
         .signer(signer)
@@ -203,7 +205,7 @@ async fn client_reconnect() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        let (sub, _handler, lfut, mfut, _broadcast_seed) = setup_server_subduction(server_signer);
         (sub, lfut, mfut)
     };
 
@@ -275,7 +277,7 @@ async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        let (sub, _handler, lfut, mfut, _broadcast_seed) = setup_server_subduction(server_signer);
         (sub, lfut, mfut)
     };
     tokio::spawn(async move {
@@ -370,7 +372,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        let (sub, _handler, lfut, mfut, _broadcast_seed) = setup_server_subduction(server_signer);
         (sub, lfut, mfut)
     };
 
@@ -445,7 +447,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        let (sub, _handler, lfut, mfut, _broadcast_seed) = setup_server_subduction(server_signer);
         (sub, lfut, mfut)
     };
 
@@ -482,7 +484,7 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     for i in 0..num_clients {
         let client_signer = test_signer(u8::try_from(i)? + 10);
-        let (client, client_handler, listener_fut, actor_fut) =
+        let (client, client_handler, listener_fut, actor_fut, _broadcast_seed) =
             setup_client_subduction(client_signer.clone());
 
         tokio::spawn(actor_fut);
@@ -613,7 +615,7 @@ async fn large_message_handling() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        let (sub, _handler, lfut, mfut, _broadcast_seed) = setup_server_subduction(server_signer);
         (sub, lfut, mfut)
     };
 
@@ -637,7 +639,7 @@ async fn large_message_handling() -> TestResult {
 
     let bound = server.address();
 
-    let (client, _, listener_fut, actor_fut) = setup_client_subduction(client_signer.clone());
+    let (client, _, listener_fut, actor_fut, _broadcast_seed) = setup_client_subduction(client_signer.clone());
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -707,7 +709,7 @@ async fn message_ordering() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        let (sub, _handler, lfut, mfut, _broadcast_seed) = setup_server_subduction(server_signer);
         (sub, lfut, mfut)
     };
 
@@ -731,7 +733,7 @@ async fn message_ordering() -> TestResult {
 
     let bound = server.address();
 
-    let (client, _, listener_fut, actor_fut) = setup_client_subduction(client_signer.clone());
+    let (client, _, listener_fut, actor_fut, _broadcast_seed) = setup_client_subduction(client_signer.clone());
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -952,7 +954,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
     let sed_id = SedimentreeId::new([3u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
+        let (sub, _handler, lfut, mfut, _broadcast_seed) = setup_server_subduction(server_signer);
         (sub, lfut, mfut)
     };
 
@@ -976,7 +978,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
 
     let bound = server.address();
 
-    let (client, _, client_listener_fut, client_actor_fut) =
+    let (client, _, client_listener_fut, client_actor_fut, _broadcast_seed) =
         setup_client_subduction(client_signer.clone());
 
     tokio::spawn(client_actor_fut);

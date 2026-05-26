@@ -76,7 +76,7 @@ type TestSubduction = Arc<
 >;
 
 fn make_subduction() -> TestSubduction {
-    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+    let (subduction, _handler, listener_fut, actor_fut, _broadcast_seed) = SubductionBuilder::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)

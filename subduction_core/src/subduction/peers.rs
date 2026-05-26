@@ -8,7 +8,7 @@
 //! [`Subduction`]: super::Subduction
 //! [`SyncHandler`]: crate::handler::sync::SyncHandler
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
 use future_form::FutureForm;
 use nonempty::NonEmpty;
@@ -23,6 +23,7 @@ use sedimentree_core::{
 use crate::{
     authenticated::Authenticated,
     connection::Connection,
+    multiplexer::Multiplexer,
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     storage::{powerbox::StoragePowerbox, traits::Storage},
@@ -117,6 +118,7 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `Some(false)` — connection removed, peer still has other connections
 /// - `Some(true)` — connection removed, was the peer's last connection
 /// - `None` — connection was not found
+#[allow(clippy::type_complexity)]
 pub(crate) async fn remove_connection<
     Async: FutureForm,
     Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,
@@ -124,6 +126,7 @@ pub(crate) async fn remove_connection<
 >(
     connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
+    multiplexers: Option<&Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
     conn: &Authenticated<Conn, Async>,
 ) -> Option<bool> {
     let peer_id = conn.peer_id();
@@ -142,6 +145,22 @@ pub(crate) async fn remove_connection<
             RemoveResult::WasLast(_) => {
                 drop(guard);
                 remove_peer_from_subscriptions(subscriptions, peer_id).await;
+
+                // The peer has no more connections — any in-flight
+                // multiplexed call for this peer is wedged on a oneshot
+                // receiver whose sender we hold in `Multiplexer::pending`.
+                // Drop those senders so callers see
+                // `CallError::ResponseDropped` immediately instead of
+                // waiting out the per-call timeout. See Bug 5.
+                if let Some(muxes_map) = multiplexers {
+                    let muxes_to_cancel: Vec<Arc<Multiplexer>> = {
+                        let mut mguard = muxes_map.lock().await;
+                        mguard.remove(&peer_id).unwrap_or_default()
+                    };
+                    for mux in muxes_to_cancel {
+                        mux.cancel_all_pending().await;
+                    }
+                }
 
                 #[cfg(feature = "metrics")]
                 crate::metrics::connection_closed();

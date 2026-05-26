@@ -4777,6 +4777,7 @@ version = "0.10.1"
 dependencies = [
  "async-lock",
  "future_form",
+ "futures 0.3.32",
  "hex",
  "sedimentree_core",
  "subduction_core",

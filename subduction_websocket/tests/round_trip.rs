@@ -105,6 +105,7 @@ fn setup_client_subduction(
         CountLeadingZeroBytes,
     >,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
+    subduction_core::subduction::BroadcastWorkerSeed,
 ) {
     SubductionBuilder::new()
         .signer(signer)
@@ -143,7 +144,7 @@ async fn batch_sync() -> TestResult {
 
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+    let (server_subduction, _server_handler, listener_fut, manager_fut, _broadcast_seed) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -183,7 +184,7 @@ async fn batch_sync() -> TestResult {
     // CLIENT SETUP //
     ///////////////////
 
-    let (client, _client_handler, listener_fut, client_manager_fut) =
+    let (client, _client_handler, listener_fut, client_manager_fut, _broadcast_seed) =
         setup_client_subduction(client_signer.clone());
 
     tokio::spawn(client_manager_fut);
@@ -297,7 +298,7 @@ async fn second_sync_round_is_empty() -> TestResult {
 
     // --- Server setup ---
 
-    let (server, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+    let (server, _server_handler, listener_fut, manager_fut, _broadcast_seed) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -341,7 +342,7 @@ async fn second_sync_round_is_empty() -> TestResult {
 
     // --- Client setup ---
 
-    let (client, _client_handler, listener_fut, client_manager_fut) =
+    let (client, _client_handler, listener_fut, client_manager_fut, _broadcast_seed) =
         setup_client_subduction(client_signer.clone());
     tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);
@@ -442,7 +443,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
     };
 
-    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+    let (server_subduction, _server_handler, listener_fut, manager_fut, _broadcast_seed) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -469,7 +470,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     let bound = server.address();
 
     // Client side: also aggressive, just to exercise both directions.
-    let (client, _client_handler, listener_fut, client_manager_fut) =
+    let (client, _client_handler, listener_fut, client_manager_fut, _broadcast_seed) =
         setup_client_subduction(client_signer.clone());
     tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);
@@ -548,7 +549,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
     };
     let detection_budget = Duration::from_secs(1);
 
-    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+    let (server_subduction, _server_handler, listener_fut, manager_fut, _broadcast_seed) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -574,7 +575,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
     .await?;
     let bound = server.address();
 
-    let (client, _client_handler, client_listener_fut, client_manager_fut) =
+    let (client, _client_handler, client_listener_fut, client_manager_fut, _broadcast_seed) =
         setup_client_subduction(client_signer.clone());
     tokio::spawn(client_manager_fut);
     tokio::spawn(client_listener_fut);

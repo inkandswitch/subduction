@@ -61,7 +61,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
         CountLeadingZeroBytes,
     ));
 
-    let (subduction, _listener_fut, _actor_fut) =
+    let (subduction, _listener_fut, _actor_fut, _broadcast_seed) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
@@ -120,7 +120,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
         CountLeadingZeroBytes,
     ));
 
-    let (subduction, _listener_fut, _actor_fut) =
+    let (subduction, _listener_fut, _actor_fut, _broadcast_seed) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
@@ -185,7 +185,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
         CountLeadingZeroBytes,
     ));
 
-    let (subduction, _listener_fut, _actor_fut) =
+    let (subduction, _listener_fut, _actor_fut, _broadcast_seed) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
@@ -244,7 +244,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
         CountLeadingZeroBytes,
     ));
 
-    let (subduction, _listener_fut, _actor_fut) =
+    let (subduction, _listener_fut, _actor_fut, _broadcast_seed) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,

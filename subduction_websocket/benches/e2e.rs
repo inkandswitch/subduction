@@ -354,7 +354,7 @@ async fn connected_client(
     let tasks = TaskTracker::new();
     let spawner = TrackedTokioSpawn::new(tasks.clone());
 
-    let (client, _handler, listener_fut, manager_fut) = SubductionBuilder::new()
+    let (client, _handler, listener_fut, manager_fut, _broadcast_seed) = SubductionBuilder::new()
         .signer(client_signer.clone())
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(spawner)

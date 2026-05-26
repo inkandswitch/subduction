@@ -83,6 +83,7 @@ fn new_dispatch_subduction() -> (
     >,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
+    subduction_core::subduction::BroadcastWorkerSeed,
 ) {
     let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
     let connections = Arc::new(Mutex::new(Map::new()));
@@ -125,7 +126,7 @@ fn new_dispatch_subduction() -> (
 /// store blobs (since blobs must come with their associated metadata).
 #[tokio::test]
 async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut, _broadcast_seed) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -180,7 +181,7 @@ async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
 
 #[tokio::test]
 async fn unsolicited_blobs_are_rejected() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut, _broadcast_seed) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([2u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -222,7 +223,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
 /// with commits/fragments via `BatchSyncResponse`.
 #[tokio::test]
 async fn blobs_response_does_not_store_any_blobs() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut, _broadcast_seed) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([3u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -290,7 +291,7 @@ async fn blobs_response_does_not_store_any_blobs() -> TestResult {
 /// persist blobs (they must come with commits/fragments).
 #[tokio::test]
 async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut, _broadcast_seed) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([4u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -347,7 +348,7 @@ async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
 
 #[tokio::test]
 async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut, _broadcast_seed) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([5u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

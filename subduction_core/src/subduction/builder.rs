@@ -401,6 +401,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Arc<SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>>,
         ListenerFuture<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
+        crate::subduction::BroadcastWorkerSeed,
     )
     where
         Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS> + 'static,
@@ -447,7 +448,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
 
         let send_counter = handler.send_counter().clone();
 
-        let (sd, listener, manager) = Subduction::new(
+        let (sd, listener, manager, seed) = Subduction::new(
             handler.clone(),
             self.discovery_id,
             self.signer,
@@ -464,7 +465,13 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             self.spawner,
         );
 
-        (sd, handler, listener, manager)
+        // The caller must spawn the broadcast worker via
+        // [`Subduction::run_broadcast_worker`] using the returned
+        // [`BroadcastWorkerSeed`]. The default builder does not auto-
+        // spawn it because doing so would require additional bounds on
+        // the spawner and pin `'a = 'static`. See Bug 2 for context.
+
+        (sd, handler, listener, manager, seed)
     }
 
     /// Build a [`Subduction`] instance with a custom [`Handler`].
@@ -503,6 +510,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
         ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
+        crate::subduction::BroadcastWorkerSeed,
     )
     where
         Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
@@ -524,6 +532,12 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
                     SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
                 >,
     {
+        // Note: this builder variant does NOT auto-spawn the broadcast
+        // worker. It runs with an arbitrary `H` that may not implement
+        // `RemoteHeadsNotifier`, which the worker requires. Callers
+        // that want broadcast-on-write behavior must spawn the worker
+        // themselves via [`Subduction::run_broadcast_worker`] using the
+        // returned [`BroadcastWorkerSeed`].
         let sedimentrees = self
             .sedimentrees
             .0
@@ -587,6 +601,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
         ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
+        crate::subduction::BroadcastWorkerSeed,
         X,
     )
     where
@@ -638,7 +653,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         let send_counter = sync_handler.send_counter().clone();
         let (handler, extra) = compose(sync_handler);
 
-        let (subduction, listener, manager) = Subduction::new(
+        let (subduction, listener, manager, seed) = Subduction::new(
             handler,
             self.discovery_id,
             self.signer,
@@ -655,6 +670,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             self.spawner,
         );
 
-        (subduction, listener, manager, extra)
+        (subduction, listener, manager, seed, extra)
     }
 }
