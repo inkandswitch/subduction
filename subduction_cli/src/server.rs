@@ -353,7 +353,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             (handler, ephemeral_handler)
         });
 
-    // Spawn the broadcast worker (Bug 2).
+    // Spawn the background broadcast worker that decouples local
+    // storage durability from network broadcast.
     tokio::spawn(
         subduction
             .clone()

@@ -1,6 +1,7 @@
-//! Bug 5: an in-flight `sync_with_all_peers` against a wedged peer must
-//! abort as soon as the peer is removed/disconnected — it must not
-//! continue waiting for the per-call timeout to expire.
+//! Disconnect cancels in-flight sync calls:
+//! an in-flight `sync_with_all_peers` against a wedged peer must abort
+//! as soon as the peer is removed/disconnected — it must not continue
+//! waiting for the per-call timeout to expire.
 //!
 //! ## Reproduction shape
 //!
@@ -205,7 +206,8 @@ async fn disconnect_single_conn_when_last_cancels_in_flight_sync() -> TestResult
     Ok(())
 }
 
-/// Regression test for the SyncHandler-vs-listener race in Bug 5.
+/// Regression test for the SyncHandler-vs-listener race in the
+/// disconnect-cancels-pending-calls cleanup path.
 /// Simulate the race by removing the connection directly via
 /// `Subduction::remove_connection` (just like the listener loop does)
 /// after manually clearing the muxes-less map state — i.e. demonstrate

@@ -274,7 +274,8 @@ impl WasmSubduction {
             }
         });
 
-        // Spawn the broadcast worker (Bug 2).
+        // Spawn the background broadcast worker that decouples local
+        // storage durability from network broadcast.
         wasm_bindgen_futures::spawn_local(
             core.clone()
                 .run_broadcast_worker_until_aborted(broadcast_seed),
@@ -483,7 +484,8 @@ impl WasmSubduction {
             }
         });
 
-        // Spawn the broadcast worker (Bug 2).
+        // Spawn the background broadcast worker that decouples local
+        // storage durability from network broadcast.
         wasm_bindgen_futures::spawn_local(
             core.clone()
                 .run_broadcast_worker_until_aborted(broadcast_seed),

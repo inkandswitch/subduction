@@ -119,7 +119,7 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `Some(true)` — connection removed, was the peer's last connection
 /// - `None` — connection was not found
 ///
-/// # Bug 5: defensive multiplexer cleanup on the `None` branch
+/// # Defensive multiplexer cleanup on the `None` branch
 ///
 /// When `multiplexers` is `Some` and the peer has no entry in
 /// `connections` but **does** have an entry in `multiplexers`, this
@@ -240,7 +240,7 @@ async fn cancel_peer_multiplexers_if_orphaned<
     if !muxes_to_cancel.is_empty() {
         tracing::debug!(
             ?peer_id,
-            "cleaning up {} orphaned multiplexer(s) (Bug 5 race recovery)",
+            "cleaning up {} orphaned multiplexer(s) (SyncHandler-vs-listener race recovery)",
             muxes_to_cancel.len()
         );
         for mux in muxes_to_cancel {

@@ -1,8 +1,8 @@
 //! Lifecycle regression test for the background broadcast worker
-//! introduced as part of the Bug 2 fix.
+//! that decouples local storage durability from network broadcast.
 //!
 //! `Subduction::shutdown` must terminate a running worker promptly.
-//! Before the fix this would hang because the worker held an
+//! Before this fix the worker would hang because it held an
 //! `Arc<Self>` clone that kept the `broadcast_tx` sender alive, so
 //! closing the channel from the outside was a no-op, and there was
 //! no `AbortHandle` for the worker stored inside `Subduction`. The
@@ -24,7 +24,7 @@
 //! tasks (spawned by `make_node`) hold their own `Arc<Self>` clones.
 //! Cleaning those up requires an explicit `shutdown` (or aborting
 //! their handles individually). That broader cycle is out of scope
-//! for this Bug 2 fix.
+//! for this worker-lifecycle fix.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -97,8 +97,8 @@ async fn shutdown_terminates_broadcast_worker_promptly() -> TestResult {
     assert!(
         result.is_ok(),
         "broadcast worker did not terminate within {BOUND:?} after shutdown(); \
-         the worker is probably still holding an Arc<Self> cycle (Bug 2 \
-         memory-leak regression)"
+         the worker is probably still holding an Arc<Self> cycle \
+         (memory-leak regression)"
     );
 
     Ok(())

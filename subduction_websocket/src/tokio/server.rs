@@ -483,10 +483,11 @@ where
         let (subduction, _handler, listener_fut, manager_fut, broadcast_seed) =
             builder.build::<Sendable, MessageTransport<UnifiedWebSocket>>();
 
-        // Spawn the broadcast worker. Storage-write paths
-        // (e.g. `add_built_batch`) enqueue onto the worker; it drives
-        // `sync_with_all_peers` off the write-caller's await path.
-        // See Bug 2.
+        // Spawn the background broadcast worker that decouples local
+        // storage durability from network broadcast. Storage-write
+        // paths (e.g. `add_built_batch`) enqueue onto the worker; it
+        // drives `sync_with_all_peers` off the write-caller's await
+        // path so a wedged peer cannot stall write throughput.
         tasks.spawn(
             subduction
                 .clone()

@@ -922,9 +922,9 @@ impl<
 
     async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
         // SyncHandler does not own the multiplexer map; pending-call
-        // cancellation is handled by `Subduction::remove_connection`
-        // which is invoked from the listen loop's connection-error
-        // paths. Bug 5's fix lives there.
+        // cancellation on disconnect is handled by
+        // `Subduction::remove_connection`, which is invoked from the
+        // listen loop's connection-error paths.
         peers::remove_connection(&self.connections, &self.subscriptions, None, conn).await
     }
 }

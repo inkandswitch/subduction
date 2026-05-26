@@ -1,4 +1,5 @@
-//! Bug 2: `add_built_batch` (the underlying entrypoint for the wasm
+//! `add_built_batch` storage-vs-broadcast decoupling:
+//! `add_built_batch` (the underlying entrypoint for the wasm
 //! `addBatch`) must return as soon as the local store has accepted the
 //! commits/fragments. It must not block awaiting acks from
 //! protocol-unresponsive peers.

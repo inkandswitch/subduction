@@ -504,7 +504,9 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         // [`Subduction::run_broadcast_worker`] using the returned
         // [`BroadcastWorkerSeed`]. The default builder does not auto-
         // spawn it because doing so would require additional bounds on
-        // the spawner and pin `'a = 'static`. See Bug 2 for context.
+        // the spawner and pin `'a = 'static`. The worker decouples
+        // local storage durability from network broadcast so a wedged
+        // peer cannot stall `add_built_batch` callers.
 
         (sd, handler, listener, manager, seed)
     }

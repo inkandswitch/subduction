@@ -211,7 +211,8 @@ pub struct Subduction<
     /// the broadcast worker dequeues, coalesces duplicates per drained
     /// batch, and runs `sync_with_all_peers` for each distinct id with a
     /// bounded per-call timeout. Write callers do not wait for the
-    /// broadcast to complete — see Bug 2.
+    /// broadcast to complete — this decouples local storage durability
+    /// from network broadcast so a wedged peer cannot stall writes.
     broadcast_tx: async_channel::Sender<SedimentreeId>,
 
     abort_manager_handle: AbortHandle,
@@ -226,7 +227,8 @@ pub struct Subduction<
 }
 
 /// Seed handed back from [`Subduction::new`] to drive the background
-/// broadcast worker (see Bug 2).
+/// broadcast worker that decouples local storage durability from
+/// network broadcast.
 ///
 /// The worker runs `sync_with_all_peers` for each [`SedimentreeId`]
 /// enqueued by storage-write paths (e.g.
@@ -323,9 +325,9 @@ impl Drop for BroadcastWorkerSeed {
         if !self.consumed {
             tracing::error!(
                 "BroadcastWorkerSeed dropped without being consumed — \
-                 Bug 2's broadcast worker was never started, so writes \
-                 will not be propagated to peers until an explicit \
-                 sync round runs. Did you forget to call \
+                 the background broadcast worker was never started, so \
+                 writes will not be propagated to peers until an \
+                 explicit sync round runs. Did you forget to call \
                  Subduction::run_broadcast_worker on the seed returned \
                  from build()?"
             );
@@ -870,9 +872,9 @@ where
     /// Gracefully shut down a specific connection.
     ///
     /// If this is the peer's last connection, also cancels every
-    /// pending multiplexed call against that peer (see Bug 5) so that
-    /// in-flight `sync_with_peer` callers do not wait out the per-call
-    /// timeout for responses that will never arrive.
+    /// pending multiplexed call against that peer so that in-flight
+    /// `sync_with_peer` callers do not wait out the per-call timeout
+    /// for responses that will never arrive.
     ///
     /// # Errors
     ///
@@ -911,7 +913,7 @@ where
         if was_last {
             // Same cleanup as `peers::remove_connection` for the
             // last-connection case: clear send counter, drop pending
-            // multiplexer calls (Bug 5).
+            // multiplexer calls so in-flight sync callers fail fast.
             self.send_counter.clear_peer(&peer_id).await;
             let removed_muxes = self.multiplexers.lock().await.remove(&peer_id);
             if let Some(muxes) = removed_muxes {
@@ -1914,9 +1916,10 @@ where
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
         // Hand the broadcast off to the background worker — same
-        // rationale as `add_built_batch` (Bug 2). Callers that need
-        // to observe broadcast outcomes can call `sync_with_all_peers`
-        // directly.
+        // rationale as `add_built_batch`: decouple storage durability
+        // from network broadcast so a wedged peer cannot stall writes.
+        // Callers that need to observe broadcast outcomes can call
+        // `sync_with_all_peers` directly.
         self.enqueue_broadcast_hint(id);
         Ok(())
     }
@@ -1936,9 +1939,8 @@ where
     /// to follow up with a separate broadcast.
     ///
     /// Returns as soon as the local storage write is durable; the
-    /// broadcast happens off the caller's await path (see Bug 2). A
-    /// byte-connected but protocol-unresponsive peer cannot stall this
-    /// method.
+    /// broadcast happens off the caller's await path. A byte-connected
+    /// but protocol-unresponsive peer cannot stall this method.
     ///
     /// Commits are inserted before fragments. Passing two empty vectors
     /// is a no-op (no minimize, no broadcast).
@@ -2003,9 +2005,8 @@ where
         // deliberately do not await the resulting `sync_with_all_peers`
         // call here: a single byte-connected but protocol-unresponsive
         // peer would otherwise block this storage-durable write for
-        // the full per-call timeout (see Bug 2). Callers that need to
-        // observe peer-level sync outcomes should drive the local
-        // insert via
+        // the full per-call timeout. Callers that need to observe
+        // peer-level sync outcomes should drive the local insert via
         // [`add_built_batch_locally`](Self::add_built_batch_locally)
         // and call
         // [`sync_with_all_peers`](Self::sync_with_all_peers) directly
@@ -2784,7 +2785,7 @@ where
     /// write paths (e.g. [`add_built_batch`](Self::add_built_batch))
     /// enqueue ids on the channel; this loop picks them up and runs
     /// the broadcast off the write-caller's await path so a wedged
-    /// peer can not stall write throughput (see Bug 2).
+    /// peer can not stall write throughput.
     ///
     /// # Lifecycle
     ///
