@@ -158,19 +158,10 @@ impl WasmMessagePortTransport {
         })
     }
 
-    /// Disconnect (close the port) and fire the `onDisconnect` callback if registered.
-    ///
-    /// # Re-entrancy contract
-    ///
-    /// The JS `onDisconnect` callback must not call back into this same
-    /// transport — neither `disconnect()` recursively nor `onDisconnect(...)`
-    /// to re-register a callback. A `RefMut` is held across the callback
-    /// invocation (Rust 2024 let-chain temporary scope), so re-entry will
-    /// panic.
-    ///
-    /// If you need to re-register a callback after disconnect, do it from
-    /// outside the callback (e.g., schedule via `queueMicrotask` or a
-    /// `Promise.resolve().then(...)`).
+    /// Disconnect (close the port) and fire the `onDisconnect` callback
+    /// if registered. The callback must not re-enter this transport
+    /// (neither `disconnect()` nor `onDisconnect(...)`); a `RefMut` is
+    /// held across the call.
     pub fn disconnect(&self) -> Promise {
         self.port.close();
         if let Some(cb) = self.on_disconnect.borrow_mut().take()
@@ -182,12 +173,7 @@ impl WasmMessagePortTransport {
     }
 
     /// Register a callback to be invoked when the transport disconnects.
-    ///
     /// Part of the [`Transport`](super::JsTransport) interface contract.
-    /// Typically called by internal wiring rather than directly by user code.
-    ///
-    /// **Do not call from inside a running `onDisconnect` callback** —
-    /// see [`disconnect`](Self::disconnect)'s re-entrancy contract.
     #[wasm_bindgen(js_name = onDisconnect)]
     pub fn on_disconnect(&self, callback: &js_sys::Function) {
         *self.on_disconnect.borrow_mut() = Some(callback.clone());

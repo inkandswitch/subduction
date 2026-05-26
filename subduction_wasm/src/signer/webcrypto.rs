@@ -321,20 +321,13 @@ impl Signer<Local> for WebCryptoSigner {
     }
 }
 
-/// Await a `web_sys::IdbRequest`, propagating both `onsuccess` and
-/// `onerror` events through a single shared oneshot channel.
-///
-/// Whichever callback fires first takes the sender from the shared
-/// cell and sends through it; the other closure finds an empty cell
-/// and no-ops. On `onsuccess`, the resolved `request.result()` is
-/// sent as `Ok`. On `onerror`, the underlying `DOMException` (read
-/// from `request.error()`) is sent as `Err`.
+/// Await a `web_sys::IdbRequest`. On `onsuccess`, resolves to
+/// `request.result()`. On `onerror`, resolves to `Err` carrying the
+/// underlying `DOMException` from `request.error()`.
 ///
 /// # Errors
 ///
 /// Returns `Err(JsValue)` if the IDB request's `onerror` fires.
-/// The error carries the underlying `DOMException` (e.g.
-/// `ConstraintError`, `QuotaExceededError`, `InvalidStateError`).
 pub async fn await_idb_request(request: &web_sys::IdbRequest) -> Result<JsValue, JsValue> {
     let (tx, rx) = futures::channel::oneshot::channel::<Result<JsValue, JsValue>>();
     let tx_cell: Rc<Cell<Option<_>>> = Rc::new(Cell::new(Some(tx)));
@@ -351,10 +344,6 @@ pub async fn await_idb_request(request: &web_sys::IdbRequest) -> Result<JsValue,
     let req_for_error = request.clone();
     let tx_for_error = Rc::clone(&tx_cell);
     let onerror = Closure::once(move |_event: web_sys::Event| {
-        // `request.error()` returns `Result<Option<DomException>, JsValue>`.
-        // The outer `Result` is for "request hasn't completed" (can't
-        // happen inside onerror); the inner `Option` is `Some` here
-        // by IDB contract. Defensively fall back if it isn't.
         let err: JsValue = match req_for_error.error() {
             Ok(Some(dom_exception)) => dom_exception.into(),
             Ok(None) => {

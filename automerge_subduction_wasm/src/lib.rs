@@ -274,32 +274,9 @@ pub fn set_subduction_log_level(level: &str) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Install the panic hook and initialize the umbrella's rich tracing
-/// stack.
-///
-/// - **Panic hook**: delegates to
-///   [`subduction_wasm_bootstrap::install_panic_hook`] (idempotent via
-///   `console_error_panic_hook::set_once`).
-/// - **Tracing**: installs a tracing-subscriber registry combining
-///   `wasm-tracing`'s [`WasmLayer`] (routes events to
-///   `console.log`/`warn`/`error`) with our [`JsCallbackLayer`] (lets
-///   apps subscribe via a JS callback) and a reloadable level filter
-///   wired to the JS-callable `setSubductionLogLevel`. Level read from
-///   `SUBDUCTION_LOG_LEVEL` in `localStorage` (browser) or
-///   `process.env` (Node), defaulting to `WARN`.
-///
-/// Safe to call any number of times: panic hook is `set_once`,
-/// tracing init is guarded by `dispatcher::has_been_set`.
-///
-/// Compared to the baseline [`subduction_wasm_bootstrap::init_basic`]
-/// (used by the three inner cdylibs), this umbrella version adds the
-/// env-var driven log level, the reloadable filter, and the
-/// `JsCallbackLayer`. The umbrella's `start` function runs FIRST in
-/// the chained `__wbindgen_start` ordering, so it wins the global
-/// subscriber slot when present.
-///
-/// [`WasmLayer`]: wasm_tracing::WasmLayer
-/// [`JsCallbackLayer`]: crate::js_logger::JsCallbackLayer
+/// Install the panic hook and the umbrella's tracing stack
+/// (`WasmLayer` + `JsCallbackLayer` + reloadable level filter).
+/// Idempotent. Whichever subscriber installs first wins.
 #[wasm_bindgen]
 pub fn init() {
     subduction_wasm_bootstrap::install_panic_hook();
@@ -313,14 +290,7 @@ pub fn init() {
     }
 }
 
-/// Entry point called when the Wasm module is instantiated.
-///
-/// Runs `init()` then logs a one-shot startup banner. Uses
-/// `start, private` so it doesn't collide with the chained start
-/// functions from the inner cdylib rlibs that this crate links
-/// (`subduction_wasm`, `sedimentree_wasm`, `automerge_sedimentree_wasm`,
-/// `subduction_wasm_bootstrap`). See `subduction_wasm::start` for
-/// the wasm-bindgen-link rationale.
+/// Module entry point. Runs [`init`] then logs a startup banner.
 #[wasm_bindgen(start, private)]
 pub fn start_automerge_subduction_wasm() {
     init();

@@ -1,14 +1,4 @@
 //! Baseline coverage for `MessagePortTransport::on_disconnect`.
-//!
-//! These tests exercise the disconnect/callback paths that do not
-//! re-enter the transport from within the callback. Re-entrant use
-//! (calling `onDisconnect(...)` or `disconnect()` from inside a
-//! running `onDisconnect` callback) is not supported — see the
-//! re-entrancy contract on
-//! [`WasmMessagePortTransport::disconnect`](subduction_wasm::transport::message_port::WasmMessagePortTransport::disconnect).
-//!
-//! Tests construct a real Node `MessageChannel`, wrap one port in
-//! `MessagePortTransport`, and assert the happy-path semantics hold.
 
 #![cfg(target_arch = "wasm32")]
 #![allow(missing_docs)]
@@ -18,9 +8,6 @@ use subduction_wasm::transport::message_port::WasmMessagePortTransport;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-/// Obtain `globalThis.MessageChannel`, available in Node ≥15 and all
-/// modern browsers. Returns the constructed channel with `port1` and
-/// `port2` properties.
 fn make_message_channel() -> JsValue {
     let global = js_sys::global();
     let ctor = Reflect::get(&global, &JsValue::from_str("MessageChannel"))
@@ -30,7 +17,6 @@ fn make_message_channel() -> JsValue {
         .expect("MessageChannel must be a constructor function");
     js_sys::Reflect::construct(ctor_fn, &js_sys::Array::new())
         .expect("MessageChannel constructor must succeed")
-        .into()
 }
 
 fn port_of(channel: &JsValue, name: &str) -> JsValue {
@@ -38,17 +24,12 @@ fn port_of(channel: &JsValue, name: &str) -> JsValue {
         .unwrap_or_else(|_| panic!("MessageChannel.{name} should be a MessagePort"))
 }
 
-/// Baseline: disconnect with a registered callback fires the callback
-/// and doesn't panic.
 #[wasm_bindgen_test]
 fn disconnect_fires_callback() {
     let channel = make_message_channel();
     let port1 = port_of(&channel, "port1");
     let transport = WasmMessagePortTransport::new(port1);
 
-    // A simple closure that flips a flag in a JS object. We can't
-    // observe Rust-side state from a JS callback easily, so we mutate
-    // a JS-side object.
     let observed = js_sys::Object::new();
     let observed_clone = observed.clone();
     let cb_closure: Closure<dyn FnMut()> = Closure::new(move || {
@@ -64,8 +45,6 @@ fn disconnect_fires_callback() {
     assert_eq!(fired, JsValue::TRUE, "disconnect should fire the callback");
 }
 
-/// Disconnect with no callback registered is a no-op and must not
-/// panic.
 #[wasm_bindgen_test]
 fn disconnect_with_no_callback_does_not_panic() {
     let channel = make_message_channel();
@@ -75,9 +54,6 @@ fn disconnect_with_no_callback_does_not_panic() {
     let _promise = transport.disconnect();
 }
 
-/// Calling disconnect twice (with a callback registered the first
-/// time, none the second time) must not panic. The first call drains
-/// the callback; the second finds an empty slot.
 #[wasm_bindgen_test]
 fn disconnect_twice_does_not_panic() {
     let channel = make_message_channel();

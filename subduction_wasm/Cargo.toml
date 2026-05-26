@@ -85,13 +85,6 @@ wasm-bindgen-test = "0.3"
 
 [features]
 default = []
-# Expose `__testPanicForE2E(message?)` — a deliberate panic trigger
-# used by `e2e/panic_visibility.spec.ts` (and ad-hoc devtools probing)
-# to measure what panic info reaches JS-visible surfaces. OFF by
-# default so production bundles don't expose a "kill this Wasm" entry
-# point to arbitrary JS callers. Build E2E probes with
-# `wasm-pack build --features e2e_panic_probe ...`.
-e2e_panic_probe = []
 # IndexedDB storage backend
 idb = ["sedimentree_wasm/idb"]
 std = [
