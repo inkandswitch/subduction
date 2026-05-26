@@ -192,6 +192,7 @@ pub(crate) async fn remove_connection<
 }
 
 /// Drop every multiplexer for `peer_id`, cancelling all pending calls.
+#[allow(clippy::type_complexity)]
 async fn cancel_peer_multiplexers(
     multiplexers: Option<&Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
     peer_id: PeerId,
@@ -211,6 +212,7 @@ async fn cancel_peer_multiplexers(
 /// longer present in `connections`. This is the post-race recovery
 /// path: a different code path may already have removed the
 /// connection without touching multiplexers.
+#[allow(clippy::type_complexity)]
 async fn cancel_peer_multiplexers_if_orphaned<
     Async: FutureForm,
     Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,

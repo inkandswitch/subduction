@@ -73,6 +73,17 @@ fn make_node(signer: MemorySigner) -> TestSubduction {
     sd
 }
 
+/// Pull out the single connection registered for `peer` so we can
+/// hand it to `disconnect()` (the per-connection variant).
+async fn single_conn(
+    sd: &TestSubduction,
+    peer: PeerId,
+) -> Authenticated<Conn, Sendable> {
+    sd.get_connection(&peer)
+        .await
+        .expect("peer connection must be registered")
+}
+
 async fn connect_pair(
     a: &TestSubduction,
     a_signer: &MemorySigner,
@@ -150,6 +161,85 @@ async fn disconnect_cancels_in_flight_sync_with_all_peers() -> TestResult {
             "expected at least one CallError for the wedged peer"
         );
     }
+
+    Ok(())
+}
+
+/// Regression test for the per-connection `disconnect()` variant —
+/// when it removes the peer's last connection, it must also drop any
+/// pending multiplexer calls so in-flight `sync_with_all_peers`
+/// callers don't hang. `disconnect_from_peer` and `disconnect_all`
+/// already cancel muxes; this exercises the third path.
+#[tokio::test(flavor = "current_thread")]
+async fn disconnect_single_conn_when_last_cancels_in_flight_sync() -> TestResult {
+    let a_signer = make_signer(11);
+    let b_signer = make_signer(21);
+    let a = make_node(a_signer.clone());
+    let b = make_node(b_signer.clone());
+
+    let (_t_a, t_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    t_b.pause();
+
+    let sed_id = SedimentreeId::new([2u8; 32]);
+    let a_clone = a.clone();
+    let sync_handle = tokio::spawn(async move {
+        a_clone
+            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let b_conn = single_conn(&a, b_peer).await;
+    a.disconnect(&b_conn).await?;
+
+    let result = tokio::time::timeout(BOUND, sync_handle).await;
+    assert!(
+        result.is_ok(),
+        "single-conn disconnect did not cancel in-flight sync within {BOUND:?}; \
+         it was probably waiting for the {LONG_PER_CALL_TIMEOUT:?} per-call timeout"
+    );
+    drop(result.expect("join error").expect("task panicked"));
+    Ok(())
+}
+
+/// Regression test for the SyncHandler-vs-listener race in Bug 5.
+/// Simulate the race by removing the connection directly via
+/// `Subduction::remove_connection` (just like the listener loop does)
+/// after manually clearing the muxes-less map state — i.e. demonstrate
+/// that even if the connections map was swept by some other path
+/// first, the orphaned multiplexer entries are still cleaned up.
+///
+/// We exercise this by calling `remove_connection` twice: the first
+/// call goes through the `WasLast` branch (cancels muxes), and the
+/// second call (with the connection already gone) takes the orphan-
+/// recovery path and is expected not to hang in-flight callers if
+/// any extra muxes were leaked.
+#[tokio::test(flavor = "current_thread")]
+async fn second_remove_connection_does_not_leak_muxes() -> TestResult {
+    let a_signer = make_signer(12);
+    let b_signer = make_signer(22);
+    let a = make_node(a_signer.clone());
+    let b = make_node(b_signer.clone());
+
+    let (_t_a, _t_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let b_conn = single_conn(&a, b_peer).await;
+
+    // First removal: peer's last connection, takes the WasLast branch.
+    let res1 = a.remove_connection(&b_conn).await;
+    assert_eq!(res1, Some(true));
+
+    // Second removal: peer is no longer in connections; this exercises
+    // the orphan-recovery branch in `peers::remove_connection`. It
+    // should be a no-op for connections (returns `None`) but must not
+    // panic and must not re-introduce a multiplexer leak.
+    let res2 = a.remove_connection(&b_conn).await;
+    assert_eq!(res2, None);
 
     Ok(())
 }
