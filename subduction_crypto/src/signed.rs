@@ -730,8 +730,8 @@ mod regression {
     #[test]
     fn into_bytes_returns_full_wire_bytes() {
         let canonical = seal_payload([7u8; 32], 0xDEAD_BEEF);
-        let signed = Signed::<Payload>::try_decode(canonical.clone())
-            .expect("decode of canonical bytes");
+        let signed =
+            Signed::<Payload>::try_decode(canonical.clone()).expect("decode of canonical bytes");
 
         let via_as_bytes: Vec<u8> = signed.as_bytes().to_vec();
         let via_into_bytes: Vec<u8> = signed.into_bytes();
