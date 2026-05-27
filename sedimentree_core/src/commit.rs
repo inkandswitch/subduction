@@ -210,6 +210,27 @@ pub trait CommitStore<'a> {
             }
         }
 
+        // Post-pass: dedupe members against transitive ancestor fragments.
+        //
+        // The BFS in `fragment()` walks parents of any shallower-depth commit,
+        // which in a concurrent DAG can re-enter territory that is already
+        // covered by a deeper ancestor fragment reached through a different
+        // boundary path. The inline strip at the bottom of `fragment()` only
+        // handles direct boundary fragments — it can't see deeper ancestors
+        // because they aren't in `known_fragment_states` yet (the loop above
+        // discovers them later). Now that every fresh fragment is built and
+        // the boundary chain is fully populated, strip any member that also
+        // appears in an ancestor's members.
+        for head in &fresh_heads {
+            let ancestor_members = collect_ancestor_members(*head, known_fragment_states);
+            if ancestor_members.is_empty() {
+                continue;
+            }
+            if let Some(state) = known_fragment_states.get_mut(head) {
+                state.retain_members(|c| !ancestor_members.contains(c));
+            }
+        }
+
         let mut fresh = Vec::with_capacity(fresh_heads.len());
         for h in fresh_heads {
             #[allow(clippy::expect_used)]
@@ -335,6 +356,19 @@ pub trait CommitStore<'a> {
             horizon = next_horizon;
         }
 
+        // Post-pass: dedupe members against transitive ancestor fragments.
+        // See the comment in `build_fragment_store` for rationale — the
+        // parallel variant has the same overlap pattern in concurrent DAGs.
+        for head in &all_heads {
+            let ancestor_members = collect_ancestor_members(*head, known_fragment_states);
+            if ancestor_members.is_empty() {
+                continue;
+            }
+            if let Some(state) = known_fragment_states.get_mut(head) {
+                state.retain_members(|c| !ancestor_members.contains(c));
+            }
+        }
+
         let mut fresh = Vec::with_capacity(all_heads.len());
         for head in all_heads {
             #[allow(clippy::expect_used)]
@@ -426,4 +460,47 @@ impl<T> FragmentState<T> {
             blob_meta,
         )
     }
+
+    /// Drop any member (and checkpoint) for which `predicate` returns false.
+    ///
+    /// Used by [`CommitStore::build_fragment_store`] to dedupe members
+    /// against transitive ancestor fragments after the full tree is built.
+    pub fn retain_members<F>(&mut self, mut predicate: F)
+    where
+        F: FnMut(&CommitId) -> bool,
+    {
+        self.members.retain(|c| predicate(c));
+        self.checkpoints.retain(|c| predicate(c));
+    }
+}
+
+/// Walk the boundary chain transitively from `head` through fragments in
+/// `known` and return the union of all reachable ancestor fragments' members.
+///
+/// "Ancestor" here means: a fragment whose head is reachable from `head` by
+/// following `boundary` keys through fragments present in `known`. Boundary
+/// keys that don't resolve to a fragment in `known` (e.g. depth-0 commits
+/// beyond the deepest level) are ignored.
+fn collect_ancestor_members<T>(
+    head: CommitId,
+    known: &Map<CommitId, FragmentState<T>>,
+) -> Set<CommitId> {
+    let mut acc: Set<CommitId> = Set::new();
+    let mut seen: Set<CommitId> = Set::new();
+    let mut to_visit: Vec<CommitId> = match known.get(&head) {
+        Some(state) => state.boundary().keys().copied().collect(),
+        None => return acc,
+    };
+
+    while let Some(b) = to_visit.pop() {
+        if !seen.insert(b) {
+            continue;
+        }
+        if let Some(anc) = known.get(&b) {
+            acc.extend(anc.members().iter().copied());
+            to_visit.extend(anc.boundary().keys().copied());
+        }
+    }
+
+    acc
 }
