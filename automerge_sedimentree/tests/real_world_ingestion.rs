@@ -474,7 +474,7 @@ fn merge_identical_is_idempotent() {
 fn minimize_preserves_all_items_after_ingestion() {
     let doc = Automerge::load(include_bytes!("../test-vectors/S1.am")).unwrap();
     let sed_id = sed_id(include_bytes!("../test-vectors/S1.am"));
-    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).unwrap();
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
 
     let before_fragments = result.sedimentree.fragments().count();
     let before_commits = result.sedimentree.loose_commits().count();
@@ -498,7 +498,7 @@ fn minimize_preserves_all_items_after_ingestion() {
 fn fingerprint_summary_includes_all_items_after_ingestion() {
     let doc = Automerge::load(include_bytes!("../test-vectors/S1.am")).unwrap();
     let sed_id = sed_id(include_bytes!("../test-vectors/S1.am"));
-    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).unwrap();
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
 
     let seed = FingerprintSeed::new(42, 99);
     let summary = result.sedimentree.fingerprint_summarize(&seed);
@@ -525,7 +525,7 @@ fn ingest_minimize_roundtrip(name: &str, bytes: &[u8]) {
     let original_count = doc.get_changes(&[]).len();
 
     let sed_id = sed_id(bytes);
-    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
     let minimized = result.sedimentree.minimize(&CountLeadingZeroBytes);
 
     // `minimize` only prunes Sedimentree entries; blob storage is
@@ -707,9 +707,14 @@ fn egwalker_vector_snapshots() {
 fn egwalker_minimal_hash_snapshots() {
     use sedimentree_core::sedimentree::MinimalTreeHash;
 
-    /// `(name, bytes, expected_hash_hex)` — pinned post-fix.
-    /// If `minimize` ever changes its output for these vectors,
-    /// update the table and explain why in the commit message.
+    /// `(name, bytes, expected_hash_hex)` — pinned after the bundle-format
+    /// rework: per-column DEFLATE in `Bundle`, topo-sorted bundle members
+    /// (small `external` deps list), ingest routed through
+    /// `Automerge::fragments()` instead of `build_fragment_store`.
+    /// The four high-concurrency vectors (A1, A2, C1, C2) re-snapshot
+    /// because fragment blob bytes changed; S1-S3 are unchanged because
+    /// they have no cached fragments and the loose-commit hash structure
+    /// is independent of blob byte format.
     const SNAPSHOTS: &[(&str, &[u8], &str)] = &[
         (
             "S1",
@@ -729,29 +734,29 @@ fn egwalker_minimal_hash_snapshots() {
         (
             "A1",
             include_bytes!("../test-vectors/A1.am"),
-            "55cd0bf902a8f515b50ab8353c8668a89dd1c0a2f38b4e7992ee052eba0b9959",
+            "4098ca35d635e122eb1def270ea61e958dd321e093131c9c1a5a7389c2c2d099",
         ),
         (
             "A2",
             include_bytes!("../test-vectors/A2.am"),
-            "813d197c265e3d72ab7147491ad2d735dc5c5bfad9c351f57891dad45eb6bcfd",
+            "53e6f21b41927101d7b1d669e6c1bc569dd9a7a96d7e53e45cf6ad804cd5438d",
         ),
         (
             "C1",
             include_bytes!("../test-vectors/C1.am"),
-            "1aeb3a9f1f7220af7dc91dcdc62e96005d15a78091e115292d0584e7b0e421ec",
+            "cd8276131bcd6fb67e6763c090cf3a53bd5fb5e43765526d8c17dbe7bbaf1b7b",
         ),
         (
             "C2",
             include_bytes!("../test-vectors/C2.am"),
-            "c2af810d5ceabd50154ed26f81d9f313962de4d9fade24d332d54a9884c3a480",
+            "24b901c5dcf29f37ab66118180cda3233613547f3c65af22820c3742307b872e",
         ),
     ];
 
     for (name, bytes, expected_hex) in SNAPSHOTS {
         let doc = Automerge::load(bytes).expect(name);
         let sed_id = sed_id(bytes);
-        let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+        let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
 
         // Determinism within a single ingest result.
         let h1: MinimalTreeHash = result.sedimentree.minimal_hash(&CountLeadingZeroBytes);
@@ -765,7 +770,7 @@ fn egwalker_minimal_hash_snapshots() {
 
         // Determinism across re-ingest of the same document bytes.
         let result2 =
-            automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("re-ingest");
+            automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
         let h3: MinimalTreeHash = result2.sedimentree.minimal_hash(&CountLeadingZeroBytes);
         assert_eq!(
             h1.as_bytes(),
@@ -796,7 +801,7 @@ fn ingest_double_minimize_roundtrip_s1() {
     let original_heads = doc.get_heads();
 
     let sed_id = sed_id(bytes);
-    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
 
     let once = result.sedimentree.minimize(&CountLeadingZeroBytes);
     let twice = once.minimize(&CountLeadingZeroBytes);
@@ -850,7 +855,7 @@ fn ingest_roundtrip_a2() {
     let original_count = doc.get_changes(&[]).len();
 
     let sed_id = sed_id(bytes);
-    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id).expect("ingest");
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
 
     // Verify ingest accounting: every change is either covered by a
     // fragment or emitted as a loose commit, with no overlap.
