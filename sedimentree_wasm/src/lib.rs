@@ -11,6 +11,13 @@ extern crate std;
 
 extern crate alloc;
 
+/// Module entry point. Installs the panic hook and a baseline
+/// `tracing` subscriber via [`subduction_wasm_bootstrap::init_basic`].
+#[wasm_bindgen::prelude::wasm_bindgen(start, private)]
+pub fn start_sedimentree_wasm() {
+    subduction_wasm_bootstrap::init_basic();
+}
+
 pub mod commit_id;
 pub mod depth;
 pub mod digest;

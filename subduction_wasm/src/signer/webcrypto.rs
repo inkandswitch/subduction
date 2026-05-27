@@ -7,6 +7,9 @@
 //! Works in both window and Web Worker contexts by accessing APIs through
 //! `globalThis` rather than `window`.
 
+use alloc::rc::Rc;
+use core::cell::Cell;
+
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
 use js_sys::Uint8Array;
@@ -155,7 +158,7 @@ impl WebCryptoSigner {
         });
         open_request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
 
-        let db = Self::await_idb_request(&open_request).await?;
+        let db = await_idb_request(&open_request).await?;
         drop(onupgradeneeded);
         let db: web_sys::IdbDatabase = db.into();
 
@@ -163,7 +166,7 @@ impl WebCryptoSigner {
         let tx = db.transaction_with_str(STORE_NAME)?;
         let store = tx.object_store(STORE_NAME)?;
         let get_request = store.get(&KEY_ID.into())?;
-        let result = Self::await_idb_request(&get_request).await?;
+        let result = await_idb_request(&get_request).await?;
         db.close();
 
         if result.is_undefined() || result.is_null() {
@@ -228,7 +231,7 @@ impl WebCryptoSigner {
         });
         open_request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
 
-        let db = Self::await_idb_request(&open_request).await?;
+        let db = await_idb_request(&open_request).await?;
         drop(onupgradeneeded);
         let db: web_sys::IdbDatabase = db.into();
 
@@ -246,35 +249,10 @@ impl WebCryptoSigner {
         )?;
 
         let put_request = store.put_with_key(&data, &KEY_ID.into())?;
-        Self::await_idb_request(&put_request).await?;
+        await_idb_request(&put_request).await?;
         db.close();
 
         Ok(())
-    }
-
-    /// Helper to await an IDB request.
-    async fn await_idb_request(request: &web_sys::IdbRequest) -> Result<JsValue, JsValue> {
-        let (tx, rx) = futures::channel::oneshot::channel::<Result<(), JsValue>>();
-        let tx = core::cell::RefCell::new(Some(tx));
-
-        let onsuccess = Closure::once(move |_event: web_sys::Event| {
-            if let Some(tx) = tx.borrow_mut().take() {
-                drop(tx.send(Ok(())));
-            }
-        });
-
-        let tx_err = core::cell::RefCell::new(Some(()));
-        let onerror = Closure::once(move |_event: web_sys::Event| {
-            tx_err.borrow_mut().take();
-        });
-
-        request.set_onsuccess(Some(onsuccess.as_ref().unchecked_ref()));
-        request.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-
-        rx.await
-            .map_err(|_| JsValue::from_str("IDB request canceled"))??;
-
-        request.result()
     }
 
     /// Sign a message and return the 64-byte Ed25519 signature.
@@ -341,4 +319,46 @@ impl Signer<Local> for WebCryptoSigner {
         VerifyingKey::from_bytes(&self.public_key_bytes)
             .expect("WebCryptoSigner: stored public key bytes are not a valid Ed25519 key")
     }
+}
+
+/// Await a `web_sys::IdbRequest`. On `onsuccess`, resolves to
+/// `request.result()`. On `onerror`, resolves to `Err` carrying the
+/// underlying `DOMException` from `request.error()`.
+///
+/// # Errors
+///
+/// Returns `Err(JsValue)` if the IDB request's `onerror` fires.
+pub async fn await_idb_request(request: &web_sys::IdbRequest) -> Result<JsValue, JsValue> {
+    let (tx, rx) = futures::channel::oneshot::channel::<Result<JsValue, JsValue>>();
+    let tx_cell: Rc<Cell<Option<_>>> = Rc::new(Cell::new(Some(tx)));
+
+    let req_for_success = request.clone();
+    let tx_for_success = Rc::clone(&tx_cell);
+    let onsuccess = Closure::once(move |_event: web_sys::Event| {
+        let result = req_for_success.result();
+        if let Some(tx) = tx_for_success.take() {
+            let _send_result = tx.send(result);
+        }
+    });
+
+    let req_for_error = request.clone();
+    let tx_for_error = Rc::clone(&tx_cell);
+    let onerror = Closure::once(move |_event: web_sys::Event| {
+        let err: JsValue = match req_for_error.error() {
+            Ok(Some(dom_exception)) => dom_exception.into(),
+            Ok(None) => {
+                js_sys::Error::new("IDB request fired onerror without an error value").into()
+            }
+            Err(js_err) => js_err,
+        };
+        if let Some(tx) = tx_for_error.take() {
+            let _send_result = tx.send(Err(err));
+        }
+    });
+
+    request.set_onsuccess(Some(onsuccess.as_ref().unchecked_ref()));
+    request.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+
+    rx.await
+        .map_err(|_| JsValue::from_str("IDB request canceled (oneshot dropped)"))?
 }

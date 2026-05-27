@@ -22,7 +22,6 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
 ed25519-dalek = { workspace = true }
-console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
@@ -37,6 +36,7 @@ subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
 subduction_ephemeral = { workspace = true }
 subduction_keyhive = { workspace = true }
+subduction_wasm_bootstrap = { workspace = true }
 subduction_http_longpoll = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -45,7 +45,7 @@ wasm-bindgen-futures = { workspace = true }
 wasm_refgen = { workspace = true }
 
 [dependencies.web-sys]
-version = "0.3.81"
+version = "0.3.98"
 default-features = false
 features = [
   "BinaryType",
@@ -81,15 +81,10 @@ features = [
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.2"
+wasm-bindgen-test = "0.3"
 
 [features]
-default = ["console_error_panic_hook", "standalone"]
-console_error_panic_hook = ["dep:console_error_panic_hook"]
-# Enable the #[wasm_bindgen(start)] entry point. Disable when using
-# subduction_wasm as a dependency of another cdylib crate that defines
-# its own start function (wasm-bindgen allows only one per module).
-standalone = []
+default = []
 # IndexedDB storage backend
 idb = ["sedimentree_wasm/idb"]
 std = [

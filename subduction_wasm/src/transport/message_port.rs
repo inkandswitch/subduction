@@ -158,10 +158,14 @@ impl WasmMessagePortTransport {
         })
     }
 
-    /// Disconnect (close the port) and fire the `onDisconnect` callback if registered.
+    /// Disconnect (close the port) and fire the `onDisconnect` callback
+    /// if registered. The callback is taken out of the cell before
+    /// invocation, so it may safely re-enter the transport (e.g. to
+    /// register a new callback) without tripping a `BorrowMutError`.
     pub fn disconnect(&self) -> Promise {
         self.port.close();
-        if let Some(cb) = self.on_disconnect.borrow_mut().take()
+        let cb_opt = self.on_disconnect.borrow_mut().take();
+        if let Some(cb) = cb_opt
             && let Err(e) = cb.call0(&JsValue::NULL)
         {
             tracing::error!("onDisconnect callback threw: {e:?}");
@@ -170,9 +174,7 @@ impl WasmMessagePortTransport {
     }
 
     /// Register a callback to be invoked when the transport disconnects.
-    ///
     /// Part of the [`Transport`](super::JsTransport) interface contract.
-    /// Typically called by internal wiring rather than directly by user code.
     #[wasm_bindgen(js_name = onDisconnect)]
     pub fn on_disconnect(&self, callback: &js_sys::Function) {
         *self.on_disconnect.borrow_mut() = Some(callback.clone());

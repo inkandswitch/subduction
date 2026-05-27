@@ -9,6 +9,13 @@ extern crate std;
 
 extern crate alloc;
 
+/// Module entry point. Installs the panic hook and a baseline
+/// `tracing` subscriber via [`subduction_wasm_bootstrap::init_basic`].
+#[wasm_bindgen::prelude::wasm_bindgen(start, private)]
+pub fn start_automerge_sedimentree_wasm() {
+    subduction_wasm_bootstrap::init_basic();
+}
+
 pub mod error;
 pub mod fragment;
 
@@ -42,9 +49,12 @@ impl WasmSedimentreeAutomerge {
         Self(automerge)
     }
 
-    // NOTE `js_` prefix to avoid conflict
-    // with CommitStore::fragment (trait method)
     /// Build the fragment state for a given head.
+    ///
+    /// The traversal calls into JS via `getChangeMetaByHash`. JS
+    /// implementations must not call `FragmentStateStore::insert` or
+    /// `::get` on `known_states` during the call (a `RefCell` borrow
+    /// is held across the JS callback).
     ///
     /// # Errors
     ///
@@ -62,8 +72,12 @@ impl WasmSedimentreeAutomerge {
             .map(WasmFragmentState)?)
     }
 
-    // NOTE `js_` prefix to avoid conflict
     /// Build a fragment store starting from the given head digests.
+    ///
+    /// The traversal calls into JS via `getChangeMetaByHash`. JS
+    /// implementations must not call `FragmentStateStore::insert` or
+    /// `::get` on `known_fragment_states` during the call, and must
+    /// not call `buildFragmentStore` recursively.
     ///
     /// # Errors
     ///

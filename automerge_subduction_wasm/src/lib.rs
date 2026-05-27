@@ -274,21 +274,13 @@ pub fn set_subduction_log_level(level: &str) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Set a panic hook to get better error messages if the code panics.
-///
-/// Also initializes the tracing infrastructure with the JS callback layer.
-///
-/// # Panics
-///
-/// Will (ironically) panic if unable to set the global panic handler.
+/// Install the panic hook and the umbrella's tracing stack
+/// (`WasmLayer` + `JsCallbackLayer` + reloadable level filter).
+/// Idempotent. Whichever subscriber installs first wins.
 #[wasm_bindgen]
-pub fn set_panic_hook() {
-    #[cfg(feature = "console_error_panic_hook")]
-    console_error_panic_hook::set_once();
+pub fn init() {
+    subduction_wasm_bootstrap::install_panic_hook();
 
-    // Only initialize tracing if a global subscriber has not already been set.
-    // This makes set_panic_hook() safe to call multiple times and safe when
-    // the embedding application has already configured tracing.
     if !tracing::dispatcher::has_been_set() {
         let initial_level = read_log_level_from_env()
             .and_then(|s| parse_level_filter(&s))
@@ -298,16 +290,10 @@ pub fn set_panic_hook() {
     }
 }
 
-/// Entry point called when the Wasm module is instantiated.
-///
-/// Only compiled when the `standalone` feature is active. Downstream cdylib
-/// crates that define their own `#[wasm_bindgen(start)]` should depend on
-/// `automerge_subduction_wasm` with `default-features = false` and call
-/// [`set_panic_hook`] from their own start function.
-#[cfg(feature = "standalone")]
-#[wasm_bindgen(start)]
-pub fn start() {
-    set_panic_hook();
+/// Module entry point. Runs [`init`] then logs a startup banner.
+#[wasm_bindgen(start, private)]
+pub fn start_automerge_subduction_wasm() {
+    init();
 
     tracing::info!(
         "automerge_subduction_wasm v{} ({})",

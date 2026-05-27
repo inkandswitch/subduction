@@ -111,6 +111,7 @@
   "devDependencies": {
     "@playwright/test": "^1.55.0",
     "@types/node": "^22.17.2",
+    "fake-indexeddb": "^6.2.5",
     "html-webpack-plugin": "^5.6.4",
     "ts-loader": "^9.5.2",
     "typescript": "^5.9.2",
