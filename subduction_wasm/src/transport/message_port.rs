@@ -159,12 +159,13 @@ impl WasmMessagePortTransport {
     }
 
     /// Disconnect (close the port) and fire the `onDisconnect` callback
-    /// if registered. The callback must not re-enter this transport
-    /// (neither `disconnect()` nor `onDisconnect(...)`); a `RefMut` is
-    /// held across the call.
+    /// if registered. The callback is taken out of the cell before
+    /// invocation, so it may safely re-enter the transport (e.g. to
+    /// register a new callback) without tripping a `BorrowMutError`.
     pub fn disconnect(&self) -> Promise {
         self.port.close();
-        if let Some(cb) = self.on_disconnect.borrow_mut().take()
+        let cb_opt = self.on_disconnect.borrow_mut().take();
+        if let Some(cb) = cb_opt
             && let Err(e) = cb.call0(&JsValue::NULL)
         {
             tracing::error!("onDisconnect callback threw: {e:?}");
