@@ -15,10 +15,11 @@ rust-version.workspace = true
 
 [dependencies]
 automerge = { workspace = true }
+rayon = { workspace = true, optional = true }
 sedimentree_core = { workspace = true }
 
 [dev-dependencies]
-automerge_sedimentree = { path = ".", features = ["std", "test-utils"] }
+automerge_sedimentree = { path = ".", features = ["std"] }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
@@ -27,19 +28,11 @@ testresult = { workspace = true }
 [[bench]]
 name = "egwalker"
 harness = false
-required-features = ["test-utils"]
-
-[[test]]
-name = "real_world_ingestion"
-required-features = ["test-utils"]
 
 [features]
 default = []
+rayon = ["dep:rayon", "sedimentree_core/rayon", "std"]
 std = ["sedimentree_core/std"]
-# Expose IndexedSedimentreeAutomerge as a reference CommitStore impl for
-# tests and benches that cross-validate fragmentation strategies. Not part
-# of the published API.
-test-utils = ["std"]
 
 [lints]
 workspace = true

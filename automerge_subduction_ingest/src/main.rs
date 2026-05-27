@@ -16,7 +16,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use automerge::Automerge;
-use automerge_sedimentree::ingest::{IngestResult, ingest_automerge};
+use automerge_sedimentree::ingest::{IngestResult, ingest_automerge_par};
 use clap::Parser;
 use eyre::{Result, WrapErr, eyre};
 use future_form::Sendable;
@@ -229,7 +229,7 @@ async fn main() -> Result<()> {
 
     // Ingest: automerge → sedimentree.
     eprintln!("ingesting...");
-    let result = ingest_automerge(&doc, sed_id);
+    let result = ingest_automerge_par(&doc, sed_id);
     print_ingest_stats(&result, sed_id);
 
     if args.dry_run {

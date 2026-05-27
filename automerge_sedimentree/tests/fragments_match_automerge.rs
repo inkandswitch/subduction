@@ -1,18 +1,31 @@
-//! Counterpart to `fragment_members_disjoint.rs`: confirms that the
-//! ancestor-disjointness invariant holds when fragmentation is delegated to
-//! `Automerge::fragments()` instead of `sedimentree_core::build_fragment_store`.
+//! Verifies that [`Automerge::fragments`] produces fragments whose
+//! `members` lists are disjoint from the `members` lists of all
+//! ancestors reachable through `boundary`.
 //!
-//! For each egwalker test vector, asks Automerge for the cached fragments
-//! (level >= 1) and verifies that for every fragment F, none of F's `members`
-//! appear in the `members` of any fragment reachable through F's `boundary`.
+//! Why this matters: the ingest adapter remaps loose-commit parents that
+//! point at a non-head fragment member to the containing fragment's head,
+//! so that `Sedimentree::minimize` doesn't treat the loose commit as
+//! covered and prune it. That remap is only safe if a given change
+//! appears in at most one ancestor chain — if a change appeared in both
+//! a fragment F and one of F's transitive boundary ancestors, the remap
+//! would be ambiguous and `minimize` could lose data.
 //!
-//! Note: this does NOT assert that every change belongs to exactly one
-//! fragment across the whole tree. Automerge fragments can legitimately
-//! share members across concurrent siblings (changes reachable from two
-//! concurrent fragment heads whose parents don't see them). The bug we're
-//! tracking is specifically the ancestor-overlap case, where a member of
-//! a fragment also appears in one of its own ancestors — that would break
-//! sedimentree's `minimize` and loose-commit parent remapping.
+//! Scope: this test covers only the ancestor-overlap case. It does NOT
+//! assert global uniqueness across the whole tree — concurrent sibling
+//! fragments are allowed to share members (a change reachable from two
+//! concurrent fragment heads whose `boundary` lists don't see each
+//! other), and that's fine for the remap because no two such siblings
+//! sit on the same ancestor chain.
+//!
+//! For each egwalker test vector this loads the document, asks Automerge
+//! for all cached fragments (level ≥ 1), and checks the invariant by
+//! walking each fragment's `boundary` breadth-first and asserting no
+//! `members` overlap.
+//! Level-0 fragments are single-member loose changes whose `boundary`
+//! points at raw change parents (not fragment heads), so the
+//! ancestor-walk model doesn't apply to them and they're excluded.
+//!
+//! [`Automerge::fragments`]: automerge::Automerge::fragments
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 

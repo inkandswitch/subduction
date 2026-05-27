@@ -6,7 +6,6 @@
 #[cfg(feature = "std")]
 extern crate std;
 
-#[cfg(feature = "test-utils")]
 pub mod indexed;
 pub mod ingest;
 

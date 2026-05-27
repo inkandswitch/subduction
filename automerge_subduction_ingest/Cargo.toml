@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 automerge = { workspace = true }
-automerge_sedimentree = { workspace = true }
+automerge_sedimentree = { workspace = true, features = ["rayon"] }
 bs58 = { version = "0.5", features = ["check"] }
 clap = { workspace = true }
 color-eyre = { workspace = true }
