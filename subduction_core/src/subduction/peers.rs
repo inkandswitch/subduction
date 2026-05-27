@@ -256,12 +256,8 @@ mod tests {
     use async_lock::Mutex;
     use core::time::Duration;
     use future_form::{FutureForm, Sendable};
-    use futures::future::BoxFuture;
     use nonempty::NonEmpty;
-    use sedimentree_core::{
-        codec::{decode::Decode, encode::Encode},
-        collections::Map,
-    };
+    use sedimentree_core::collections::Map;
 
     use crate::{
         authenticated::Authenticated,
