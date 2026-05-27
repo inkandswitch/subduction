@@ -11,9 +11,9 @@
 //!
 //! - `seq` — [`ingest_automerge`] (two `bundle_fragments` calls, no rayon)
 //! - `par` — [`ingest_automerge_par`] (one `bundle_fragments(once(f))` per
-//!    fragment, parallelized via `par_iter`)
+//!   fragment, parallelized via `par_iter`)
 //! - `chk` — [`ingest_automerge_par_chunked`] (fragments split into
-//!    `num_threads` chunks, one `bundle_fragments(chunk)` per worker)
+//!   `num_threads` chunks, one `bundle_fragments(chunk)` per worker)
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 #![cfg(feature = "rayon")]
