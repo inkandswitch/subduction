@@ -24,11 +24,7 @@ use automerge::Automerge;
 use automerge_sedimentree::ingest::{
     ingest_automerge, ingest_automerge_par, ingest_automerge_par_chunked,
 };
-use sedimentree_core::{
-    blob::Blob,
-    crypto::digest::Digest,
-    id::SedimentreeId,
-};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 
 const ITERATIONS: usize = 3;
 
@@ -81,14 +77,13 @@ fn bench_c2_ingest_variants() {
         time_variant("seq", || ingest_automerge(&doc, id).fragment_count);
     let (par_min, par_med, par_max) =
         time_variant("par", || ingest_automerge_par(&doc, id).fragment_count);
-    let (chk_min, chk_med, chk_max) =
-        time_variant("chk", || ingest_automerge_par_chunked(&doc, id).fragment_count);
+    let (chk_min, chk_med, chk_max) = time_variant("chk", || {
+        ingest_automerge_par_chunked(&doc, id).fragment_count
+    });
 
     eprintln!();
     eprintln!("=== C2 ingest variants ({ITERATIONS} iterations each) ===");
-    eprintln!(
-        "variant   min(ms)   med(ms)   max(ms)   speedup_vs_seq"
-    );
+    eprintln!("variant   min(ms)   med(ms)   max(ms)   speedup_vs_seq");
     for (label, min, med, max) in [
         ("seq", seq_min, seq_med, seq_max),
         ("par", par_min, par_med, par_max),
