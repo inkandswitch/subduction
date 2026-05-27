@@ -313,8 +313,14 @@ mod tests {
 
         cancel_peer_multiplexers_if_orphaned(&connections, Some(&multiplexers), peer_id).await;
 
+        // Short timeout: if cancellation was skipped the sender stays alive and
+        // rx.await would hang for the full cargo-mutants 60 s budget.  Fail fast
+        // instead so the mutation is caught rather than timed out.
+        let resolved = tokio::time::timeout(Duration::from_millis(200), rx)
+            .await
+            .expect("pending call receiver must resolve promptly after cancellation");
         assert!(
-            rx.await.is_err(),
+            resolved.is_err(),
             "pending call must be cancelled for an orphaned multiplexer"
         );
     }

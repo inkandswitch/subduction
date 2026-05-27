@@ -187,8 +187,13 @@ mod tests {
 
         mux.cancel_all_pending().await;
 
+        // Use a short timeout so that mutations which leave the sender alive
+        // (and would otherwise hang rx.await for 60 s) fail fast instead.
+        let resolved = tokio::time::timeout(Duration::from_millis(200), rx)
+            .await
+            .expect("receiver must resolve promptly; cancel_all_pending did not drop the sender");
         assert!(
-            rx.await.is_err(),
+            resolved.is_err(),
             "receiver must resolve with Canceled after cancel_all_pending"
         );
     }
