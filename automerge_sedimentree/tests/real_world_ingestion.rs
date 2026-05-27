@@ -769,8 +769,7 @@ fn egwalker_minimal_hash_snapshots() {
         );
 
         // Determinism across re-ingest of the same document bytes.
-        let result2 =
-            automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
+        let result2 = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
         let h3: MinimalTreeHash = result2.sedimentree.minimal_hash(&CountLeadingZeroBytes);
         assert_eq!(
             h1.as_bytes(),

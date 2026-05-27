@@ -42,8 +42,7 @@ fn automerge_fragment_members_disjoint_from_ancestor_members() -> TestResult {
         // loose changes whose boundary points at raw change parents
         // (not fragment heads), so the ancestor-walk model doesn't apply.
         let cached = doc.fragments(1..);
-        let by_head: HashMap<ChangeHash, _> =
-            cached.iter().map(|f| (f.head, f)).collect();
+        let by_head: HashMap<ChangeHash, _> = cached.iter().map(|f| (f.head, f)).collect();
 
         let mut total_overlap = 0usize;
         let mut sample_overlaps: Vec<(ChangeHash, ChangeHash)> = Vec::new();
@@ -89,4 +88,3 @@ fn automerge_fragment_members_disjoint_from_ancestor_members() -> TestResult {
 
     Ok(())
 }
-

@@ -74,10 +74,8 @@ pub fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> Inges
             covered.insert(CommitId::new(m.0));
         }
         let blob = Blob::new(raw);
-        let boundary: BTreeSet<CommitId> =
-            f.boundary.iter().map(|h| CommitId::new(h.0)).collect();
-        let checkpoints: Vec<CommitId> =
-            f.checkpoints.iter().map(|h| CommitId::new(h.0)).collect();
+        let boundary: BTreeSet<CommitId> = f.boundary.iter().map(|h| CommitId::new(h.0)).collect();
+        let checkpoints: Vec<CommitId> = f.checkpoints.iter().map(|h| CommitId::new(h.0)).collect();
         let meta = BlobMeta::new(&blob);
         fragments.push(Fragment::new(
             sedimentree_id,
