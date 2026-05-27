@@ -493,7 +493,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
         Sig: Signer<F>,
         Tmr: Timeout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
-        H: Handler<F, C>,
+        H: Handler<F, C> + crate::remote_heads::RemoteHeadsNotifier,
         H::Message: From<SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
         crate::connection::managed::ManagedConnection<C, F, Tmr>:
@@ -577,7 +577,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
         Sig: Signer<F>,
         Tmr: Timeout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
-        H: Handler<F, C>,
+        H: Handler<F, C> + crate::remote_heads::RemoteHeadsNotifier,
         H::Message: From<SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
         M: Clone,

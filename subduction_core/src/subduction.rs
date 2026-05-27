@@ -222,7 +222,7 @@ impl<
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
     S: Storage<F>,
     C: Connection<F, H::Message> + PartialEq + 'a,
-    H: Handler<F, C>,
+    H: Handler<F, C> + RemoteHeadsNotifier,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     O: Timeout<F> + Clone,
@@ -648,12 +648,24 @@ where
                             continue;
                         }
 
-                        // Normal path: dispatch to handler
+                        // Normal path: dispatch to handler. If this is
+                        // an inbound `BatchSyncRequest { subscribe: true }`,
+                        // propagate the subscription to our own upstream
+                        // peers once the handler has processed it
+                        // (mirroring the outbound broadcast that
+                        // `SyncHandler` already does for commits/fragments).
                         let h = handler.clone();
                         let conn_clone = conn.clone();
+                        let propagate_target = H::as_subscribe_request(&msg)
+                            .map(|sed_id| (sed_id, peer_id, Arc::clone(&self)));
 
                         in_flight.push(async move {
                             let result = h.handle(&conn_clone, msg).await;
+                            if result.is_ok()
+                                && let Some((sed_id, originator, me)) = propagate_target
+                            {
+                                me.propagate_subscription(sed_id, originator).await;
+                            }
                             (conn_clone, result)
                         });
                     } else {
@@ -1761,6 +1773,74 @@ where
         self.add_built_batch_locally(id, commits, fragments).await?;
         self.sync_with_all_peers(id, true, None).await?;
         Ok(())
+    }
+
+    /// Propagate an inbound subscription request to our own upstream peers.
+    ///
+    /// Called from the listen loop when [`Handler::as_subscribe_request`]
+    /// surfaces a `BatchSyncRequest { subscribe: true, .. }`. For every
+    /// currently-connected peer other than `originator` that we do not
+    /// already have an outgoing subscription to for `id`, we issue
+    /// [`sync_with_peer`](Self::sync_with_peer) with `subscribe = true`.
+    ///
+    /// The result: any updates the upstream peer later pushes for `id`
+    /// reach us, and the outbound broadcast loops in
+    /// [`SyncHandler::recv_commit`] / [`recv_fragment`] forward them
+    /// back to the originator (and any other local subscribers).
+    /// Forwarding updates and forwarding requests stay symmetric — see
+    /// `design/protocol.md`.
+    ///
+    /// Idempotency comes from [`outgoing_subscriptions`]: a successful
+    /// `sync_with_peer(subscribe = true)` records `(peer, id)` there,
+    /// and the per-peer check below skips peers already covered. Loops
+    /// between mutually-subscribed servers self-quench after one round.
+    ///
+    /// Errors from individual upstream calls are logged and ignored;
+    /// subscription propagation is best-effort.
+    ///
+    /// [`Handler::as_subscribe_request`]: crate::handler::Handler::as_subscribe_request
+    /// [`SyncHandler::recv_commit`]: crate::handler::sync::SyncHandler
+    /// [`recv_fragment`]: crate::handler::sync::SyncHandler
+    /// [`outgoing_subscriptions`]: Self::outgoing_subscriptions
+    pub(crate) async fn propagate_subscription(
+        self: &Arc<Self>,
+        id: SedimentreeId,
+        originator: PeerId,
+    ) {
+        let peers: Vec<PeerId> = {
+            let conns = self.connections.lock().await;
+            conns
+                .keys()
+                .copied()
+                .filter(|p| *p != originator)
+                .collect()
+        };
+
+        if peers.is_empty() {
+            return;
+        }
+
+        // Snapshot outgoing subscriptions once so the per-peer checks
+        // don't hold the lock across the awaits below.
+        let already_subscribed: Map<PeerId, Set<SedimentreeId>> =
+            self.outgoing_subscriptions.lock().await.clone();
+
+        for peer in peers {
+            if already_subscribed
+                .get(&peer)
+                .is_some_and(|set| set.contains(&id))
+            {
+                continue;
+            }
+            tracing::debug!(
+                "propagating subscription for {id:?} upstream to peer {peer}"
+            );
+            if let Err(e) = self.sync_with_peer(&peer, id, true, None).await {
+                tracing::debug!(
+                    "subscribe propagation to {peer} for {id:?} failed: {e}"
+                );
+            }
+        }
     }
 
     /// Request a batch sync from a given peer for a given sedimentree ID.
@@ -2977,7 +3057,7 @@ pub trait StartListener<
         P::FetchDisallowed: Send + 'static,
         Sig: Signer<Sendable> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
-        H: Handler<Sendable, C, Message = W> + Send + Sync + 'a,
+        H: Handler<Sendable, C, Message = W> + RemoteHeadsNotifier + Send + Sync + 'a,
         H::HandlerError: Into<ListenError<Sendable, S, C, W>> + Send + 'static,
         S::Error: Send + 'static,
         C::DisconnectionError: Send + 'static,
@@ -2990,13 +3070,13 @@ pub trait StartListener<
         P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
         Sig: Signer<Local> + 'a,
         M: DepthMetric + 'a,
-        H: Handler<Local, C, Message = W> + 'a,
+        H: Handler<Local, C, Message = W> + RemoteHeadsNotifier + 'a,
         H::HandlerError: Into<ListenError<Local, S, C, W>>
 )]
 impl<'a, K: FutureForm, C, S, W, H, P, Sig, M, const N: usize>
     StartListener<'a, S, C, W, H, P, Sig, M, N> for K
 where
-    H: Handler<K, C, Message = W>,
+    H: Handler<K, C, Message = W> + RemoteHeadsNotifier,
     H::HandlerError: Into<ListenError<K, S, C, W>>,
     W: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {

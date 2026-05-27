@@ -122,6 +122,29 @@ pub trait Handler<K: FutureForm, C: Clone> {
         Self::as_batch_sync_response(msg).is_some()
     }
 
+    /// Extract the [`SedimentreeId`] of a message that is an incoming
+    /// subscription request (`BatchSyncRequest` with `subscribe: true`).
+    ///
+    /// Returning `Some(id)` tells the listen loop that, after the handler
+    /// has processed the message, the [`Subduction`] instance should
+    /// propagate the subscription to its own upstream peers so that any
+    /// future updates on `id` from those peers can be forwarded back to
+    /// the new subscriber. Returning `None` (the default) suppresses
+    /// propagation.
+    ///
+    /// Implementations for non-sync message types should leave this as
+    /// the default. The standard [`SyncHandler`] overrides it to surface
+    /// `BatchSyncRequest { subscribe: true, .. }`.
+    ///
+    /// [`Subduction`]: crate::subduction::Subduction
+    /// [`SedimentreeId`]: sedimentree_core::id::SedimentreeId
+    /// [`SyncHandler`]: crate::handler::sync::SyncHandler
+    fn as_subscribe_request(
+        _msg: &Self::Message,
+    ) -> Option<sedimentree_core::id::SedimentreeId> {
+        None
+    }
+
     /// Called when a peer's last connection drops.
     ///
     /// Use this hook to clean up per-peer state such as subscription

@@ -271,6 +271,24 @@ impl<K: FutureForm, S, C, P, M, R, const N: usize> Handler<K, C>
         }
     }
 
+    fn as_subscribe_request(msg: &Self::Message) -> Option<SedimentreeId> {
+        // We treat any inbound subscribing BatchSyncRequest as an
+        // instruction to also subscribe upstream so updates can be
+        // forwarded back. See [`Subduction::propagate_subscription`].
+        match msg {
+            SyncMessage::BatchSyncRequest(req) if req.subscribe => Some(req.id),
+            SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::BatchSyncResponse(_)
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::LooseCommit { .. }
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
+        }
+    }
+
     fn handle<'a>(
         &'a self,
         conn: &'a Authenticated<C, K>,

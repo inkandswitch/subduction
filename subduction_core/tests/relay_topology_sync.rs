@@ -449,3 +449,91 @@ async fn relay_topology_concurrent_add_built_batch_calls_converge() -> TestResul
 
     Ok(())
 }
+
+/// When A subscribes to R for a sedimentree that R doesn't yet know
+/// about, R must propagate that subscription upstream to B so any
+/// future commits B pushes can be forwarded back through R to A.
+///
+/// This is the symmetric counterpart of the existing outbound
+/// broadcast in `SyncHandler::recv_commit` / `recv_fragment`:
+/// forwarding updates and forwarding subscription requests are now
+/// both done by every node.
+#[tokio::test]
+async fn relay_topology_propagates_subscriptions_upstream() -> TestResult {
+    let (a, r, b, _a_s, r_signer, b_signer) = setup_relay_topology().await?;
+
+    let sed_id = SedimentreeId::new([42u8; 32]);
+
+    // A subscribes to R for `sed_id`. R has no data yet — this is
+    // purely a subscription registration.
+    let r_peer = PeerId::from(r_signer.verifying_key());
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    // The propagation runs after the handler returns, so give the
+    // listen loop a chance to dispatch it.
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    // R should now be subscribed to B for `sed_id` as a result of the
+    // propagation.
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let r_subscribed_to_b = r.get_peer_subscriptions(b_peer).await;
+    assert!(
+        r_subscribed_to_b.contains(&sed_id),
+        "R failed to propagate A's subscription upstream to B: {r_subscribed_to_b:?}"
+    );
+
+    // End-to-end: a commit pushed at B must reach A through R, even
+    // though A never subscribed directly to B and B never knew about
+    // A. This exercises the full update path:
+    //   B --LooseCommit--> R (because R subscribed to B above)
+    //   R --LooseCommit--> A (because A subscribed to R first)
+    b.add_commit(sed_id, make_head(99), BTreeSet::new(), make_blob(99))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(1));
+    assert_eq!(
+        r.get_commits(sed_id).await.map(|c| c.len()),
+        Some(1),
+        "R did not receive commit from B"
+    );
+    assert_eq!(
+        a.get_commits(sed_id).await.map(|c| c.len()),
+        Some(1),
+        "A did not receive commit relayed from B via R"
+    );
+
+    Ok(())
+}
+
+/// Idempotency: a second subscribe from A for the same sedimentree
+/// must NOT cause R to re-issue its upstream subscribe to B (which
+/// would be wasted wire traffic). We rely on
+/// `outgoing_subscriptions` having recorded the first propagation.
+#[tokio::test]
+async fn relay_topology_repeated_subscribe_does_not_re_propagate() -> TestResult {
+    let (a, r, _b, _a_s, r_signer, b_signer) = setup_relay_topology().await?;
+    let sed_id = SedimentreeId::new([43u8; 32]);
+    let r_peer = PeerId::from(r_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    assert!(r.get_peer_subscriptions(b_peer).await.contains(&sed_id));
+
+    // Second subscribe from A. Propagation should short-circuit because
+    // R already has `(B, sed_id)` in `outgoing_subscriptions`. We can't
+    // easily count wire messages here, but verifying the subscription
+    // set hasn't grown (still exactly the same sedimentree) is a
+    // proxy.
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    let r_subs = r.get_peer_subscriptions(b_peer).await;
+    assert_eq!(r_subs.len(), 1);
+    assert!(r_subs.contains(&sed_id));
+
+    Ok(())
+}
