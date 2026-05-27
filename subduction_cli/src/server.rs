@@ -322,36 +322,36 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         _,
         _,
     ) = builder.build_composed(|sync_handler| {
-            let connections = sync_handler.connections();
+        let connections = sync_handler.connections();
 
-            let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
-                connections,
-                OpenEphemeralPolicy,
-                EphemeralConfig::default(),
-                StdClock,
-            );
+        let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
+            connections,
+            OpenEphemeralPolicy,
+            EphemeralConfig::default(),
+            StdClock,
+        );
 
-            // Drain ephemeral events — the server is a relay, not a consumer.
-            tokio::spawn(async move {
-                while let Ok(event) = ephemeral_rx.recv().await {
-                    tracing::debug!(
-                        sender = %event.sender,
-                        topic = %event.id,
-                        nonce = event.nonce,
-                        payload_size = event.payload.len(),
-                        "ephemeral event relayed"
-                    );
-                }
-            });
-
-            let handler = Arc::new(CliHandler {
-                sync: sync_handler,
-                ephemeral: ephemeral_handler.clone(),
-                keyhive: keyhive_handler,
-            });
-
-            (handler, ephemeral_handler)
+        // Drain ephemeral events — the server is a relay, not a consumer.
+        tokio::spawn(async move {
+            while let Ok(event) = ephemeral_rx.recv().await {
+                tracing::debug!(
+                    sender = %event.sender,
+                    topic = %event.id,
+                    nonce = event.nonce,
+                    payload_size = event.payload.len(),
+                    "ephemeral event relayed"
+                );
+            }
         });
+
+        let handler = Arc::new(CliHandler {
+            sync: sync_handler,
+            ephemeral: ephemeral_handler.clone(),
+            keyhive: keyhive_handler,
+        });
+
+        (handler, ephemeral_handler)
+    });
 
     // Spawn the background broadcast worker that decouples local
     // storage durability from network broadcast.

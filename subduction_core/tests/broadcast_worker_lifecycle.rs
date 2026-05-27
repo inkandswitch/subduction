@@ -33,10 +33,10 @@ use std::{sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use subduction_core::{
-    connection::test_utils::{
-        ChannelMockConnection, TokioSpawn, TokioTimeout, test_signer,
+    connection::{
+        message::SyncMessage,
+        test_utils::{ChannelMockConnection, TokioSpawn, TokioTimeout, test_signer},
     },
-    connection::message::SyncMessage,
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -61,11 +61,7 @@ type TestSubduction = Arc<
 
 const BOUND: Duration = Duration::from_secs(2);
 
-fn make_node()
--> (
-    TestSubduction,
-    tokio::task::JoinHandle<()>,
-) {
+fn make_node() -> (TestSubduction, tokio::task::JoinHandle<()>) {
     let (sd, _h, listener, manager, broadcast_seed) = SubductionBuilder::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))

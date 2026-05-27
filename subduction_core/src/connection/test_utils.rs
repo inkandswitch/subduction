@@ -11,8 +11,10 @@ use core::{
 };
 
 use future_form::{FutureForm, Local, Sendable};
-use futures::FutureExt;
-use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
+use futures::{
+    FutureExt,
+    future::{AbortHandle, BoxFuture, LocalBoxFuture},
+};
 use sedimentree_core::{
     codec::{decode::Decode, encode::Encode},
     commit::CountLeadingZeroBytes,
@@ -604,8 +606,7 @@ impl PausableChannelTransport {
 
 impl PartialEq for PausableChannelTransport {
     fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
-            && self.pause_signal_tx.same_channel(&other.pause_signal_tx)
+        self.inner == other.inner && self.pause_signal_tx.same_channel(&other.pause_signal_tx)
     }
 }
 
@@ -624,9 +625,7 @@ impl Transport<Sendable> for PausableChannelTransport {
             let signal_fut = async move { signal.recv().await }.boxed();
             match futures::future::select(inner, signal_fut).await {
                 futures::future::Either::Left((result, _)) => result,
-                futures::future::Either::Right((_, _inner)) => {
-                    futures::future::pending().await
-                }
+                futures::future::Either::Right((_, _inner)) => futures::future::pending().await,
             }
         })
     }
@@ -641,9 +640,7 @@ impl Transport<Sendable> for PausableChannelTransport {
             let signal_fut = async move { signal.recv().await }.boxed();
             match futures::future::select(inner, signal_fut).await {
                 futures::future::Either::Left((result, _)) => result,
-                futures::future::Either::Right((_, _inner)) => {
-                    futures::future::pending().await
-                }
+                futures::future::Either::Right((_, _inner)) => futures::future::pending().await,
             }
         })
     }

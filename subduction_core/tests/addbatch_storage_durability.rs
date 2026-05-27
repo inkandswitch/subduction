@@ -135,8 +135,7 @@ async fn add_built_batch_returns_when_storage_durable_even_if_peer_wedged() -> T
     let commits = vec![make_commit_pair(sed_id, 1)];
 
     let start = std::time::Instant::now();
-    let result =
-        tokio::time::timeout(BOUND, a.add_built_batch(sed_id, commits, Vec::new())).await;
+    let result = tokio::time::timeout(BOUND, a.add_built_batch(sed_id, commits, Vec::new())).await;
     let elapsed = start.elapsed();
 
     assert!(
@@ -145,7 +144,9 @@ async fn add_built_batch_returns_when_storage_durable_even_if_peer_wedged() -> T
          elapsed={elapsed:?}. It was probably waiting on the trailing \
          sync_with_all_peers broadcast for the full per-call timeout."
     );
-    result.expect("inner timeout").expect("add_built_batch errored");
+    result
+        .expect("inner timeout")
+        .expect("add_built_batch errored");
 
     // Storage must have absorbed the write regardless of broadcast outcome.
     assert_eq!(

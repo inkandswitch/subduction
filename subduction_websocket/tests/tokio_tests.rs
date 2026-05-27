@@ -639,7 +639,8 @@ async fn large_message_handling() -> TestResult {
 
     let bound = server.address();
 
-    let (client, _, listener_fut, actor_fut, _broadcast_seed) = setup_client_subduction(client_signer.clone());
+    let (client, _, listener_fut, actor_fut, _broadcast_seed) =
+        setup_client_subduction(client_signer.clone());
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -733,7 +734,8 @@ async fn message_ordering() -> TestResult {
 
     let bound = server.address();
 
-    let (client, _, listener_fut, actor_fut, _broadcast_seed) = setup_client_subduction(client_signer.clone());
+    let (client, _, listener_fut, actor_fut, _broadcast_seed) =
+        setup_client_subduction(client_signer.clone());
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);

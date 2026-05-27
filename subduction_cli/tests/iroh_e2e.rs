@@ -201,13 +201,18 @@ async fn wait_for_http(base_url: &str) {
 async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) -> TestSubduction {
     let client_signer = signer(client_seed);
 
-    let (subduction, _handler, listener_fut, manager_fut, _broadcast_seed): (TestSubduction, _, _, _, _) =
-        SubductionBuilder::new()
-            .signer(client_signer.clone())
-            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(FuturesTimerTimeout)
-            .build::<Sendable, MessageTransport<HttpLongPollTransport>>();
+    let (subduction, _handler, listener_fut, manager_fut, _broadcast_seed): (
+        TestSubduction,
+        _,
+        _,
+        _,
+        _,
+    ) = SubductionBuilder::new()
+        .signer(client_signer.clone())
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(FuturesTimerTimeout)
+        .build::<Sendable, MessageTransport<HttpLongPollTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

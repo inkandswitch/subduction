@@ -76,10 +76,7 @@ fn make_node(signer: MemorySigner) -> TestSubduction {
 
 /// Pull out the single connection registered for `peer` so we can
 /// hand it to `disconnect()` (the per-connection variant).
-async fn single_conn(
-    sd: &TestSubduction,
-    peer: PeerId,
-) -> Authenticated<Conn, Sendable> {
+async fn single_conn(sd: &TestSubduction, peer: PeerId) -> Authenticated<Conn, Sendable> {
     sd.get_connection(&peer)
         .await
         .expect("peer connection must be registered")

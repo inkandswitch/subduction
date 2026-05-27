@@ -2735,9 +2735,7 @@ where
                 );
             }
             Err(async_channel::TrySendError::Closed(_)) => {
-                tracing::debug!(
-                    "broadcast queue closed (post-shutdown), skipping push for {id:?}"
-                );
+                tracing::debug!("broadcast queue closed (post-shutdown), skipping push for {id:?}");
             }
         }
     }
@@ -2811,10 +2809,7 @@ where
     ///    [`run_broadcast_worker_until_aborted`](Self::run_broadcast_worker_until_aborted))
     ///    and the abort handle is fired.
     #[mutants::skip]
-    pub async fn run_broadcast_worker(
-        self: Arc<Self>,
-        mut seed: BroadcastWorkerSeed,
-    ) {
+    pub async fn run_broadcast_worker(self: Arc<Self>, mut seed: BroadcastWorkerSeed) {
         seed.consumed = true;
         let receiver = seed.receiver.clone();
         // Drop the seed (and any abort plumbing it carries) before we
@@ -2845,9 +2840,7 @@ where
             // If `Subduction` was dropped between the `recv` and now,
             // bail out — there is nothing to broadcast to.
             let Some(sd) = weak.upgrade() else {
-                tracing::debug!(
-                    "broadcast worker exiting (Subduction dropped between batches)"
-                );
+                tracing::debug!("broadcast worker exiting (Subduction dropped between batches)");
                 return;
             };
 

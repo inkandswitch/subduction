@@ -265,8 +265,7 @@ mod tests {
 
     use crate::{
         authenticated::Authenticated,
-        connection::Connection,
-        connection::message::SyncMessage,
+        connection::{Connection, message::SyncMessage},
         multiplexer::Multiplexer,
         peer::id::PeerId,
     };
@@ -280,15 +279,22 @@ mod tests {
         type SendError = core::fmt::Error;
         type RecvError = core::fmt::Error;
 
-        fn disconnect(&self) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
+        fn disconnect(
+            &self,
+        ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
             Sendable::from_future(async { Ok(()) })
         }
 
-        fn send(&self, _: &SyncMessage) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
+        fn send(
+            &self,
+            _: &SyncMessage,
+        ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
             Sendable::from_future(async { Ok(()) })
         }
 
-        fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+        fn recv(
+            &self,
+        ) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
             Sendable::from_future(async { Err(core::fmt::Error) })
         }
     }
