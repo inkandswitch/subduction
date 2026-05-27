@@ -101,10 +101,7 @@ pub fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> Inges
 #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 #[must_use]
 #[allow(clippy::expect_used)] // upstream-invariant violation; see # Panics
-pub fn ingest_automerge_par(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestResult
-where
-    Automerge: Sync,
-{
+pub fn ingest_automerge_par(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestResult {
     let cached = doc.fragments(1..);
     let loose = doc.fragments(0..=0);
 
@@ -139,10 +136,10 @@ where
 #[cfg(feature = "rayon")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 #[must_use]
-pub fn ingest_automerge_par_chunked(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestResult
-where
-    Automerge: Sync,
-{
+pub fn ingest_automerge_par_chunked(
+    doc: &Automerge,
+    sedimentree_id: SedimentreeId,
+) -> IngestResult {
     let cached = doc.fragments(1..);
     let loose = doc.fragments(0..=0);
 
