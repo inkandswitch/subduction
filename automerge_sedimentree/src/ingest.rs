@@ -128,6 +128,46 @@ where
     )
 }
 
+/// Chunked-parallel variant of [`ingest_automerge`].
+///
+/// Splits each fragment list into roughly `num_threads` contiguous chunks
+/// and issues one `bundle_fragments` call per chunk on a rayon worker
+/// thread. Compared to [`ingest_automerge_par`], this amortizes any
+/// per-call overhead of `bundle_fragments` across many fragments rather
+/// than paying it per fragment, at the cost of coarser load balancing
+/// when fragments have widely varying bundling cost.
+#[cfg(feature = "rayon")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
+#[must_use]
+pub fn ingest_automerge_par_chunked(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestResult
+where
+    Automerge: Sync,
+{
+    let cached = doc.fragments(1..);
+    let loose = doc.fragments(0..=0);
+
+    let bundle_chunked = |fragments: &[automerge::Fragment]| -> Vec<Vec<u8>> {
+        let threads = rayon::current_num_threads().max(1);
+        let chunk_size = fragments.len().div_ceil(threads).max(1);
+        fragments
+            .par_chunks(chunk_size)
+            .flat_map_iter(|chunk| doc.bundle_fragments(chunk.iter().cloned()))
+            .collect()
+    };
+
+    let cached_bytes = bundle_chunked(&cached);
+    let loose_bytes = bundle_chunked(&loose);
+
+    finalize(
+        doc,
+        sedimentree_id,
+        &cached,
+        &loose,
+        cached_bytes,
+        loose_bytes,
+    )
+}
+
 /// Common post-processing for the sequential and parallel ingest paths.
 ///
 /// Both variants converge here once they have the bundled blob bytes for

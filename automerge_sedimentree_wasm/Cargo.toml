@@ -32,6 +32,8 @@ wasm_refgen = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+# Pulled in by automerge 0.9 (fragments branch); needs explicit wasm_js opt-in.
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [features]
 default = []
