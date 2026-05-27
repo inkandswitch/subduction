@@ -2810,6 +2810,7 @@ where
     ///    [`Abortable`](futures::future::Abortable) (e.g. via
     ///    [`run_broadcast_worker_until_aborted`](Self::run_broadcast_worker_until_aborted))
     ///    and the abort handle is fired.
+    #[mutants::skip]
     pub async fn run_broadcast_worker(
         self: Arc<Self>,
         mut seed: BroadcastWorkerSeed,

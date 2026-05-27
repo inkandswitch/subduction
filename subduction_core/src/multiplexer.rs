@@ -143,8 +143,8 @@ impl Multiplexer {
     pub async fn cancel_all_pending(&self) {
         let mut pending = self.pending.lock().await;
         let n = pending.len();
-        pending.clear();
         if n > 0 {
+            pending.clear();
             tracing::debug!(
                 "cancelled {n} pending call(s) on multiplexer for peer {:?}",
                 self.peer_id
@@ -167,5 +167,35 @@ impl Multiplexer {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::time::Duration;
+
+    fn test_mux() -> Multiplexer {
+        Multiplexer::new(PeerId::new([1u8; 32]), Duration::from_secs(5))
+    }
+
+    #[tokio::test]
+    async fn cancel_all_pending_drops_registered_senders() {
+        let mux = test_mux();
+        let req_id = mux.next_request_id();
+        let rx = mux.register_pending(req_id).await;
+
+        mux.cancel_all_pending().await;
+
+        assert!(
+            rx.await.is_err(),
+            "receiver must resolve with Canceled after cancel_all_pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_all_pending_is_noop_when_empty() {
+        let mux = test_mux();
+        mux.cancel_all_pending().await;
     }
 }

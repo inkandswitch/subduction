@@ -85,6 +85,7 @@ js-sys = { version = "=0.3.95", default-features = false }
 keyhive_core = "0.4.0"
 keyhive_crypto = "0.2.0"
 metrics = "0.24"
+mutants = "0.0.3"
 metrics-exporter-prometheus = "0.16"
 nonempty = { version = "0.12.0", default-features = false }
 num-bigint = { version = "0.4.6", default-features = false }

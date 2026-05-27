@@ -13,6 +13,7 @@ repository.workspace = true
 
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
+mutants = { workspace = true }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 bijou64 = { workspace = true }

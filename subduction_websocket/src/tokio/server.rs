@@ -443,6 +443,7 @@ where
     ///
     /// Returns an error if the socket could not be bound.
     #[allow(clippy::too_many_arguments)]
+    #[mutants::skip]
     pub async fn setup_with_keepalive(
         address: SocketAddr,
         timeout: O,

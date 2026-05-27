@@ -15,6 +15,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-channel = { workspace = true }
+mutants = { workspace = true }
 async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 blake3 = { workspace = true }

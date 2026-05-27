@@ -248,3 +248,99 @@ async fn cancel_peer_multiplexers_if_orphaned<
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::sync::Arc;
+    use async_lock::Mutex;
+    use core::time::Duration;
+    use future_form::{FutureForm, Sendable};
+    use futures::future::BoxFuture;
+    use nonempty::NonEmpty;
+    use sedimentree_core::{
+        codec::{decode::Decode, encode::Encode},
+        collections::Map,
+    };
+
+    use crate::{
+        authenticated::Authenticated,
+        connection::Connection,
+        connection::message::SyncMessage,
+        multiplexer::Multiplexer,
+        peer::id::PeerId,
+    };
+
+    /// Minimal no-op connection used to populate the connections map in tests.
+    #[derive(Clone, PartialEq, Debug)]
+    struct NullConn(PeerId);
+
+    impl Connection<Sendable, SyncMessage> for NullConn {
+        type DisconnectionError = core::fmt::Error;
+        type SendError = core::fmt::Error;
+        type RecvError = core::fmt::Error;
+
+        fn disconnect(&self) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
+            Sendable::from_future(async { Ok(()) })
+        }
+
+        fn send(&self, _: &SyncMessage) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
+            Sendable::from_future(async { Ok(()) })
+        }
+
+        fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+            Sendable::from_future(async { Err(core::fmt::Error) })
+        }
+    }
+
+    #[tokio::test]
+    async fn orphaned_multiplexer_pending_calls_are_cancelled() {
+        let peer_id = PeerId::new([42u8; 32]);
+
+        let mux = Arc::new(Multiplexer::new(peer_id, Duration::from_secs(5)));
+        let req_id = mux.next_request_id();
+        let rx = mux.register_pending(req_id).await;
+
+        // Peer is not in the connections map (orphaned).
+        let connections: Mutex<Map<PeerId, NonEmpty<Authenticated<NullConn, Sendable>>>> =
+            Mutex::new(Map::new());
+
+        let mut mux_map = Map::new();
+        mux_map.insert(peer_id, vec![Arc::clone(&mux)]);
+        let multiplexers: Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>> = Mutex::new(mux_map);
+
+        cancel_peer_multiplexers_if_orphaned(&connections, Some(&multiplexers), peer_id).await;
+
+        assert!(
+            rx.await.is_err(),
+            "pending call must be cancelled for an orphaned multiplexer"
+        );
+    }
+
+    #[tokio::test]
+    async fn connected_peer_multiplexer_is_not_cancelled() {
+        let peer_id = PeerId::new([43u8; 32]);
+
+        let mux = Arc::new(Multiplexer::new(peer_id, Duration::from_secs(5)));
+        let req_id = mux.next_request_id();
+        let _rx = mux.register_pending(req_id).await;
+
+        // Peer IS in the connections map — should not be touched.
+        let conn = Authenticated::new_for_test(NullConn(peer_id), peer_id);
+        let mut conn_map: Map<PeerId, NonEmpty<Authenticated<NullConn, Sendable>>> = Map::new();
+        conn_map.insert(peer_id, NonEmpty::new(conn));
+        let connections = Mutex::new(conn_map);
+
+        let mut mux_map = Map::new();
+        mux_map.insert(peer_id, vec![Arc::clone(&mux)]);
+        let multiplexers: Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>> = Mutex::new(mux_map);
+
+        cancel_peer_multiplexers_if_orphaned(&connections, Some(&multiplexers), peer_id).await;
+
+        // The mux entry must remain untouched because the peer is still connected.
+        assert!(
+            multiplexers.lock().await.contains_key(&peer_id),
+            "multiplexer must not be removed for a still-connected peer"
+        );
+    }
+}
