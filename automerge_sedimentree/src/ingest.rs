@@ -71,7 +71,14 @@ pub fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> Inges
     let cached_bytes = doc.bundle_fragments(cached.iter().cloned());
     let loose_bytes = doc.bundle_fragments(loose.iter().cloned());
 
-    finalize(doc, sedimentree_id, &cached, &loose, cached_bytes, loose_bytes)
+    finalize(
+        doc,
+        sedimentree_id,
+        &cached,
+        &loose,
+        cached_bytes,
+        loose_bytes,
+    )
 }
 
 /// Parallel variant of [`ingest_automerge`].
@@ -111,7 +118,14 @@ where
     let cached_bytes: Vec<Vec<u8>> = cached.par_iter().map(bundle_one).collect();
     let loose_bytes: Vec<Vec<u8>> = loose.par_iter().map(bundle_one).collect();
 
-    finalize(doc, sedimentree_id, &cached, &loose, cached_bytes, loose_bytes)
+    finalize(
+        doc,
+        sedimentree_id,
+        &cached,
+        &loose,
+        cached_bytes,
+        loose_bytes,
+    )
 }
 
 /// Common post-processing for the sequential and parallel ingest paths.
