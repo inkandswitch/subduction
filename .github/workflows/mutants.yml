@@ -105,13 +105,83 @@ jobs:
       - name: Run cargo-mutants on diff
         if: steps.diff.outputs.size != '0'
         run: |
-          cargo mutants \
-            --in-diff /tmp/mutants.diff \
-            --features arbitrary,metrics,rayon \
-            --no-shuffle \
-            --jobs 4 \
-            --colors=always \
-            --output mutants.out
+          set -uo pipefail
+
+          # Per-package feature map. KEEP IN SYNC with the `mutants-full`
+          # matrix below — cargo-mutants passes `--features` to each
+          # `cargo test --package <pkg>` it spawns, and erroring on
+          # features the package doesn't declare is a baseline build
+          # failure, not a "surviving mutant" signal. So we run
+          # cargo-mutants once per affected crate with that crate's
+          # feature set.
+          declare -A FEATURES=(
+            [sedimentree_core]="arbitrary"
+            [sedimentree_fs_storage]=""
+            [subduction_core]="arbitrary,metrics"
+            [subduction_crypto]="arbitrary"
+            [subduction_ephemeral]=""
+            [subduction_http_longpoll]=""
+            [subduction_iroh]=""
+            [subduction_keyhive]=""
+            [subduction_websocket]=""
+            [automerge_sedimentree]="rayon"
+          )
+
+          # Extract crate names from changed file paths. Top-level dirs
+          # that aren't crate roots (`.github`, `.cargo`, `design`,
+          # `scripts`, `nix`, etc.) won't appear in FEATURES and are
+          # skipped below.
+          mapfile -t affected < <(
+            git diff --name-only "${{ steps.diff.outputs.base_sha }}...HEAD" \
+              | awk -F/ 'NF > 1 && $1 !~ /^\./ {print $1}' \
+              | sort -u
+          )
+
+          # cargo-mutants creates the leaf output dir but not its parents.
+          # On a cold cache this directory doesn't exist; create it once
+          # up front so each per-package `--output mutants.out/$pkg` works.
+          mkdir -p mutants.out
+
+          overall_exit=0
+          any_run=0
+
+          for pkg in "${affected[@]}"; do
+            if [ -z "${FEATURES[$pkg]+set}" ]; then
+              echo "::group::Skipping non-crate directory: $pkg"
+              echo "(no entry in FEATURES map)"
+              echo "::endgroup::"
+              continue
+            fi
+            any_run=1
+            features="${FEATURES[$pkg]}"
+
+            echo "::group::cargo-mutants $pkg (features='${features:-<none>}')"
+
+            args=(cargo mutants
+              --in-diff /tmp/mutants.diff
+              --package "$pkg"
+              --no-shuffle
+              --jobs 4
+              --colors=always
+              --output "mutants.out/$pkg"
+            )
+            if [ -n "$features" ]; then
+              args+=(--features "$features")
+            fi
+
+            if ! "${args[@]}"; then
+              pkg_exit=$?
+              echo "::error::cargo-mutants failed for $pkg (exit $pkg_exit)"
+              overall_exit=$pkg_exit
+            fi
+            echo "::endgroup::"
+          done
+
+          if [ "$any_run" = "0" ]; then
+            echo "No crate-level diff content; nothing to mutate."
+          fi
+
+          exit "$overall_exit"
 
       - name: Skip when diff is empty
         if: steps.diff.outputs.size == '0'
@@ -141,6 +211,10 @@ jobs:
         # crate's `Cargo.toml` `[features]` — passing a flag the package
         # doesn't declare fails the baseline build and produces a
         # spurious "surviving mutants" issue.
+        #
+        # The PR-diff job above duplicates this mapping as a bash
+        # associative array (`FEATURES`). Update both when adding a new
+        # crate or changing a feature set.
         include:
           - crate: sedimentree_core
             features: arbitrary
