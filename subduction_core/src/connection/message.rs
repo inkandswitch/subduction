@@ -1344,6 +1344,139 @@ mod tests {
         }
     }
 
+    mod try_as_batch_sync_response_impl {
+        use super::*;
+        use future_form::Sendable;
+        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+
+        fn sample_response() -> BatchSyncResponse {
+            BatchSyncResponse {
+                req_id: RequestId {
+                    requestor: PeerId::new([7u8; 32]),
+                    nonce: 99,
+                },
+                id: SedimentreeId::new([1u8; 32]),
+                result: SyncResult::NotFound,
+                responder_heads: RemoteHeads::default(),
+            }
+        }
+
+        #[test]
+        fn batch_sync_response_returns_some_with_same_response() {
+            let resp = sample_response();
+            let msg = SyncMessage::BatchSyncResponse(resp.clone());
+            assert_eq!(msg.try_as_batch_sync_response(), Some(&resp));
+        }
+
+        #[test]
+        fn batch_sync_request_returns_none() {
+            let msg = SyncMessage::BatchSyncRequest(BatchSyncRequest {
+                id: SedimentreeId::new([2u8; 32]),
+                req_id: RequestId {
+                    requestor: PeerId::new([8u8; 32]),
+                    nonce: 1,
+                },
+                fingerprint_summary: FingerprintSummary::new(
+                    FingerprintSeed::new(0, 0),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+                subscribe: false,
+            });
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+
+        #[test]
+        fn blobs_request_returns_none() {
+            let msg = SyncMessage::BlobsRequest {
+                id: SedimentreeId::new([3u8; 32]),
+                digests: vec![Digest::force_from_bytes([4u8; 32])],
+            };
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+
+        #[test]
+        fn blobs_response_returns_none() {
+            let msg = SyncMessage::BlobsResponse {
+                id: SedimentreeId::new([5u8; 32]),
+                blobs: vec![Blob::new(Vec::from([1u8; 16]))],
+            };
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+
+        #[test]
+        fn data_request_rejected_returns_none() {
+            let msg = SyncMessage::DataRequestRejected(DataRequestRejected {
+                id: SedimentreeId::new([6u8; 32]),
+            });
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+
+        #[tokio::test]
+        async fn loose_commit_returns_none() {
+            let signer = MemorySigner::from_bytes(&[42u8; 32]);
+            let id = SedimentreeId::new([7u8; 32]);
+            let blob = Blob::new(Vec::new());
+            let commit = LooseCommit::new(
+                id,
+                CommitId::new([0x42; 32]),
+                BTreeSet::new(),
+                sedimentree_core::blob::BlobMeta::new(&blob),
+            );
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
+            let msg = SyncMessage::LooseCommit {
+                id,
+                commit: signed_commit,
+                blob: Blob::new(Vec::from([3u8; 16])),
+                sender_heads: RemoteHeads::default(),
+            };
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+
+        #[tokio::test]
+        async fn fragment_returns_none() {
+            let signer = MemorySigner::from_bytes(&[42u8; 32]);
+            let id = SedimentreeId::new([8u8; 32]);
+            let blob = Blob::new(Vec::new());
+            let fragment = Fragment::new(
+                id,
+                CommitId::new([2u8; 32]),
+                BTreeSet::new(),
+                &[],
+                sedimentree_core::blob::BlobMeta::new(&blob),
+            );
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+                .await
+                .into_signed();
+            let msg = SyncMessage::Fragment {
+                id,
+                fragment: signed_fragment,
+                blob: Blob::new(Vec::from([3u8; 16])),
+                sender_heads: RemoteHeads::default(),
+            };
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+
+        #[test]
+        fn remove_subscriptions_returns_none() {
+            let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
+                ids: vec![SedimentreeId::new([9u8; 32])],
+            });
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+
+        #[test]
+        fn heads_update_returns_none() {
+            let msg = SyncMessage::HeadsUpdate {
+                id: SedimentreeId::new([10u8; 32]),
+                heads: RemoteHeads::default(),
+            };
+            assert_eq!(msg.try_as_batch_sync_response(), None);
+        }
+    }
+
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
         use super::*;
@@ -1365,6 +1498,24 @@ mod tests {
                 .for_each(|resp| {
                     let msg: SyncMessage = resp.clone().into();
                     assert_eq!(msg.request_id(), Some(resp.req_id));
+                });
+        }
+
+        /// `try_as_batch_sync_response().is_some()` iff the variant is
+        /// `BatchSyncResponse`, and on `Some(r)` returns the exact contained
+        /// response. Guards the routing predicate at `subduction.rs:319`
+        /// against future variants that quietly miss the match.
+        #[test]
+        fn prop_try_as_batch_sync_response_iff_variant() {
+            bolero::check!()
+                .with_arbitrary::<SyncMessage>()
+                .for_each(|msg| {
+                    let result = msg.try_as_batch_sync_response();
+                    if let SyncMessage::BatchSyncResponse(expected) = msg {
+                        assert_eq!(result, Some(expected));
+                    } else {
+                        assert_eq!(result, None);
+                    }
                 });
         }
 
