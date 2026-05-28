@@ -22,7 +22,7 @@ ciborium = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 future_form = { workspace = true }
-subduction_core = { workspace = true, optional = true }
+subduction_core = { workspace = true }
 subduction_crypto = { workspace = true, optional = true }
 keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true }
@@ -39,7 +39,7 @@ tracing = { workspace = true }
 [features]
 default = []
 bolero = ["dep:bolero"]
-handler = ["dep:async-channel", "dep:subduction_core", "dep:subduction_crypto", "std"]
+handler = ["dep:async-channel", "dep:subduction_crypto", "std"]
 runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
 serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "std"]
 std = ["thiserror/std"]

@@ -49,7 +49,10 @@ use sedimentree_core::codec::{
     error::{DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
     schema::{self, Schema},
 };
-use subduction_core::timestamp::TimestampSeconds;
+use subduction_core::{
+    connection::message::{BatchSyncResponse, TryAsBatchSyncResponse},
+    timestamp::TimestampSeconds,
+};
 use subduction_crypto::signed::Signed;
 
 use crate::{
@@ -202,6 +205,17 @@ pub enum EphemeralMessage {
         /// The topics that were rejected.
         topics: NonEmpty<Topic>,
     },
+}
+
+/// Ephemeral messages are never `BatchSyncResponse`s; this always
+/// returns `None` so the [`Subduction`] listen loop dispatches the
+/// message through its ephemeral handler.
+///
+/// [`Subduction`]: subduction_core::subduction::Subduction
+impl TryAsBatchSyncResponse for EphemeralMessage {
+    fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        None
+    }
 }
 
 impl Encode for EphemeralMessage {

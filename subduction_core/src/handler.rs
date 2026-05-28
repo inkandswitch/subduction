@@ -54,7 +54,7 @@ use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use crate::{
-    authenticated::Authenticated, connection::message::BatchSyncResponse, peer::id::PeerId,
+    authenticated::Authenticated, connection::message::TryAsBatchSyncResponse, peer::id::PeerId,
 };
 
 /// A handler for messages received from authenticated peers.
@@ -84,7 +84,20 @@ pub trait Handler<Async: FutureForm, Conn: Clone> {
     /// [`SyncMessage`](crate::connection::message::SyncMessage).
     /// Composed handlers typically use a wire envelope type (e.g.,
     /// `WireMessage`) and dispatch to sub-handlers via pattern matching.
-    type Message: Encode + Decode + Clone + Send + core::fmt::Debug + 'static;
+    ///
+    /// The
+    /// [`TryAsBatchSyncResponse`](crate::connection::message::TryAsBatchSyncResponse)
+    /// supertrait lets the
+    /// [`Subduction`](crate::subduction::Subduction) listen loop route
+    /// `BatchSyncResponse`s to pending roundtrip callers without a
+    /// bespoke trait method.
+    type Message: Encode
+        + Decode
+        + Clone
+        + Send
+        + core::fmt::Debug
+        + 'static
+        + TryAsBatchSyncResponse;
 
     /// Error type returned by the handler.
     type HandlerError: core::error::Error;
@@ -101,26 +114,6 @@ pub trait Handler<Async: FutureForm, Conn: Clone> {
         conn: &'a Authenticated<Conn, Async>,
         message: Self::Message,
     ) -> Async::Future<'a, Result<(), Self::HandlerError>>;
-
-    /// Extract a [`BatchSyncResponse`] from a message, if present.
-    ///
-    /// Used by the `Subduction` listen loop to route responses to pending
-    /// roundtrip callers before dispatching to the handler.
-    ///
-    /// The default returns `None` (no response extraction). Override this
-    /// for message types that can contain `BatchSyncResponse` —
-    /// e.g. `SyncMessage`, `WireMessage`.
-    fn as_batch_sync_response(_msg: &Self::Message) -> Option<&BatchSyncResponse> {
-        None
-    }
-
-    /// Check whether a message is a [`BatchSyncResponse`].
-    ///
-    /// Used by the connection manager to route responses through a dedicated
-    /// unbounded channel, bypassing the bounded request queue.
-    fn is_batch_sync_response_msg(msg: &Self::Message) -> bool {
-        Self::as_batch_sync_response(msg).is_some()
-    }
 
     /// Called when a peer's last connection drops.
     ///

@@ -6,17 +6,14 @@
 use alloc::boxed::Box;
 use core::fmt::Debug;
 
-use future_form::{FutureForm, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
     codec::{decode::Decode, encode::Encode},
     id::SedimentreeId,
 };
 use subduction_core::{
     authenticated::Authenticated,
-    connection::{
-        Connection,
-        message::{BatchSyncResponse, SyncMessage},
-    },
+    connection::{Connection, message::SyncMessage},
     handler::Handler,
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
@@ -40,11 +37,14 @@ pub enum Dispatched {
 /// Trait for wire envelope types that can be dispatched to sub-handlers.
 ///
 /// Implement this on your wire message enum (e.g., `CliWireMessage`,
-/// `WireMessage`) to enable [`ComposedHandler`] dispatch.
+/// `WireMessage`) to enable [`ComposedHandler`] dispatch. The
+/// [`TryAsBatchSyncResponse`](subduction_core::connection::message::TryAsBatchSyncResponse)
+/// supertrait is required by [`Handler::Message`].
 pub trait WireEnvelope:
     sedimentree_core::codec::encode::Encode
     + sedimentree_core::codec::decode::Decode
     + From<SyncMessage>
+    + subduction_core::connection::message::TryAsBatchSyncResponse
     + Clone
     + Send
     + Debug
@@ -52,9 +52,6 @@ pub trait WireEnvelope:
 {
     /// Dispatch this message into its sub-handler variant.
     fn dispatch(self) -> Dispatched;
-
-    /// Extract a [`BatchSyncResponse`] reference for roundtrip routing.
-    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse>;
 }
 
 /// Composed handler that dispatches to sync and ephemeral sub-handlers.
@@ -164,28 +161,33 @@ where
     }
 }
 
-impl<C, SyncH, EphH, W> Handler<Sendable, C> for ComposedHandler<SyncH, EphH, W>
+#[future_form(
+    Sendable where
+        C: Clone + Send + Sync + 'static,
+        SyncH: Handler<Sendable, C, Message = SyncMessage> + Send + Sync,
+        SyncH::HandlerError: Send + 'static,
+        EphH: Handler<Sendable, C, Message = EphemeralMessage> + Send + Sync,
+        EphH::HandlerError: Send + 'static,
+    Local where
+        C: Clone + 'static,
+        SyncH: Handler<Local, C, Message = SyncMessage>,
+        EphH: Handler<Local, C, Message = EphemeralMessage>,
+)]
+impl<Async: FutureForm, C, SyncH, EphH, W> Handler<Async, C> for ComposedHandler<SyncH, EphH, W>
 where
-    C: Clone + Send + Sync + 'static,
-    SyncH: Handler<Sendable, C, Message = SyncMessage> + Send + Sync,
-    SyncH::HandlerError: Send + 'static,
-    EphH: Handler<Sendable, C, Message = EphemeralMessage> + Send + Sync,
-    EphH::HandlerError: Send + 'static,
+    SyncH: Handler<Async, C, Message = SyncMessage>,
+    EphH: Handler<Async, C, Message = EphemeralMessage>,
     W: WireEnvelope,
 {
     type Message = W;
     type HandlerError = ComposedHandlerError<SyncH::HandlerError, EphH::HandlerError>;
 
-    fn as_batch_sync_response(msg: &W) -> Option<&BatchSyncResponse> {
-        msg.as_batch_sync_response()
-    }
-
     fn handle<'a>(
         &'a self,
-        conn: &'a Authenticated<C, Sendable>,
+        conn: &'a Authenticated<C, Async>,
         message: W,
-    ) -> futures::future::BoxFuture<'a, Result<(), Self::HandlerError>> {
-        Box::pin(async move {
+    ) -> Async::Future<'a, Result<(), Self::HandlerError>> {
+        Async::from_future(async move {
             match message.dispatch() {
                 Dispatched::Sync(msg) => self
                     .sync
@@ -201,52 +203,8 @@ where
         })
     }
 
-    fn on_peer_disconnect(&self, peer: PeerId) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.sync.on_peer_disconnect(peer).await;
-            self.ephemeral.on_peer_disconnect(peer).await;
-        })
-    }
-}
-
-// Local impl — same logic, different boxing
-impl<C, SyncH, EphH, W> Handler<future_form::Local, C> for ComposedHandler<SyncH, EphH, W>
-where
-    C: Clone + 'static,
-    SyncH: Handler<future_form::Local, C, Message = SyncMessage>,
-    EphH: Handler<future_form::Local, C, Message = EphemeralMessage>,
-    W: WireEnvelope,
-{
-    type Message = W;
-    type HandlerError = ComposedHandlerError<SyncH::HandlerError, EphH::HandlerError>;
-
-    fn as_batch_sync_response(msg: &W) -> Option<&BatchSyncResponse> {
-        msg.as_batch_sync_response()
-    }
-
-    fn handle<'a>(
-        &'a self,
-        conn: &'a Authenticated<C, future_form::Local>,
-        message: W,
-    ) -> futures::future::LocalBoxFuture<'a, Result<(), Self::HandlerError>> {
-        Box::pin(async move {
-            match message.dispatch() {
-                Dispatched::Sync(msg) => self
-                    .sync
-                    .handle(conn, *msg)
-                    .await
-                    .map_err(ComposedHandlerError::Sync),
-                Dispatched::Ephemeral(msg) => self
-                    .ephemeral
-                    .handle(conn, msg)
-                    .await
-                    .map_err(ComposedHandlerError::Ephemeral),
-            }
-        })
-    }
-
-    fn on_peer_disconnect(&self, peer: PeerId) -> futures::future::LocalBoxFuture<'_, ()> {
-        Box::pin(async move {
+    fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()> {
+        Async::from_future(async move {
             self.sync.on_peer_disconnect(peer).await;
             self.ephemeral.on_peer_disconnect(peer).await;
         })

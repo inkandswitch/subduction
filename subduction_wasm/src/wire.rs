@@ -12,7 +12,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
+use subduction_core::connection::message::{
+    BatchSyncResponse, MESSAGE_SCHEMA, SyncMessage, TryAsBatchSyncResponse,
+};
 use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
@@ -49,6 +51,20 @@ impl From<EphemeralMessage> for WireMessage {
 impl From<KeyhiveMessage> for WireMessage {
     fn from(msg: KeyhiveMessage) -> Self {
         Self::Keyhive(msg)
+    }
+}
+
+/// Borrow a [`BatchSyncResponse`] from the wire envelope. Returns
+/// `None` for ephemeral or keyhive messages so the [`Subduction`]
+/// listen loop dispatches them through their respective handlers.
+///
+/// [`Subduction`]: subduction_core::subduction::Subduction
+impl TryAsBatchSyncResponse for WireMessage {
+    fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            WireMessage::Sync(sync) => sync.try_as_batch_sync_response(),
+            WireMessage::Ephemeral(_) | WireMessage::Keyhive(_) => None,
+        }
     }
 }
 

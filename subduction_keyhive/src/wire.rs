@@ -23,6 +23,7 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema, SizeMismatch},
 };
+use subduction_core::connection::message::{BatchSyncResponse, TryAsBatchSyncResponse};
 
 #[cfg(all(feature = "serde", feature = "std"))]
 use crate::signed_message::SignedMessage;
@@ -82,6 +83,14 @@ impl KeyhiveMessage {
     #[must_use]
     pub fn into_payload(self) -> Vec<u8> {
         self.payload
+    }
+}
+
+/// Keyhive messages are never `BatchSyncResponse`s; this always
+/// returns `None`.
+impl TryAsBatchSyncResponse for KeyhiveMessage {
+    fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        None
     }
 }
 
