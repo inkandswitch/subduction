@@ -525,7 +525,8 @@ fn loose_commit_parents_only_reference_known_heads() {
     let sed_id = sed_id(bytes);
     let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
 
-    let fragment_heads: Set<CommitId> = result.sedimentree.fragments().map(Fragment::head).collect();
+    let fragment_heads: Set<CommitId> =
+        result.sedimentree.fragments().map(Fragment::head).collect();
     let loose_heads: Set<CommitId> = result
         .sedimentree
         .loose_commits()
@@ -544,10 +545,11 @@ fn loose_commit_parents_only_reference_known_heads() {
     let mut unknown: Vec<(CommitId, CommitId)> = Vec::new();
     for loose in result.sedimentree.loose_commits() {
         for parent in loose.parents() {
-            if !fragment_heads.contains(parent) && !loose_heads.contains(parent) {
-                if unknown.len() < 5 {
-                    unknown.push((loose.head(), *parent));
-                }
+            if !fragment_heads.contains(parent)
+                && !loose_heads.contains(parent)
+                && unknown.len() < 5
+            {
+                unknown.push((loose.head(), *parent));
             }
         }
     }
@@ -603,13 +605,19 @@ fn parallel_variants_match_sequential() {
 
     // Counts must agree across variants.
     assert_eq!(seq.fragment_count, par.fragment_count, "par fragment_count");
-    assert_eq!(seq.fragment_count, chk.fragment_count, "chunked fragment_count");
+    assert_eq!(
+        seq.fragment_count, chk.fragment_count,
+        "chunked fragment_count"
+    );
     assert_eq!(seq.loose_count, par.loose_count, "par loose_count");
     assert_eq!(seq.loose_count, chk.loose_count, "chunked loose_count");
     assert_eq!(seq.change_count, par.change_count, "par change_count");
     assert_eq!(seq.change_count, chk.change_count, "chunked change_count");
     assert_eq!(seq.covered_count, par.covered_count, "par covered_count");
-    assert_eq!(seq.covered_count, chk.covered_count, "chunked covered_count");
+    assert_eq!(
+        seq.covered_count, chk.covered_count,
+        "chunked covered_count"
+    );
 
     // Logical structure: the set of fragment heads, the set of loose-commit
     // heads, and each loose commit's parent set must be identical. These
@@ -619,7 +627,10 @@ fn parallel_variants_match_sequential() {
         r.sedimentree.fragments().map(Fragment::head).collect()
     };
     let loose_heads = |r: &automerge_sedimentree::ingest::IngestResult| -> BTreeSet<CommitId> {
-        r.sedimentree.loose_commits().map(LooseCommit::head).collect()
+        r.sedimentree
+            .loose_commits()
+            .map(LooseCommit::head)
+            .collect()
     };
     let loose_parents =
         |r: &automerge_sedimentree::ingest::IngestResult| -> Map<CommitId, BTreeSet<CommitId>> {
@@ -629,12 +640,36 @@ fn parallel_variants_match_sequential() {
                 .collect()
         };
 
-    assert_eq!(fragment_heads(&seq), fragment_heads(&par), "par fragment heads diverged");
-    assert_eq!(fragment_heads(&seq), fragment_heads(&chk), "chunked fragment heads diverged");
-    assert_eq!(loose_heads(&seq), loose_heads(&par), "par loose-commit heads diverged");
-    assert_eq!(loose_heads(&seq), loose_heads(&chk), "chunked loose-commit heads diverged");
-    assert_eq!(loose_parents(&seq), loose_parents(&par), "par loose parents diverged");
-    assert_eq!(loose_parents(&seq), loose_parents(&chk), "chunked loose parents diverged");
+    assert_eq!(
+        fragment_heads(&seq),
+        fragment_heads(&par),
+        "par fragment heads diverged"
+    );
+    assert_eq!(
+        fragment_heads(&seq),
+        fragment_heads(&chk),
+        "chunked fragment heads diverged"
+    );
+    assert_eq!(
+        loose_heads(&seq),
+        loose_heads(&par),
+        "par loose-commit heads diverged"
+    );
+    assert_eq!(
+        loose_heads(&seq),
+        loose_heads(&chk),
+        "chunked loose-commit heads diverged"
+    );
+    assert_eq!(
+        loose_parents(&seq),
+        loose_parents(&par),
+        "par loose parents diverged"
+    );
+    assert_eq!(
+        loose_parents(&seq),
+        loose_parents(&chk),
+        "chunked loose parents diverged"
+    );
 }
 
 /// Fingerprint summary after ingestion should include all items.
