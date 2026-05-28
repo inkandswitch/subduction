@@ -501,6 +501,142 @@ fn minimize_preserves_all_items_after_ingestion() {
     );
 }
 
+/// Every parent of every loose commit produced by [`ingest_automerge`] must be
+/// either a fragment head or another loose-commit head in the same
+/// sedimentree. If a parent ever references an _interior_ member of a cached
+/// fragment, the `member_to_head` remap in `finalize` is broken — and
+/// [`Sedimentree::minimize`] will subsequently mistake that loose commit for
+/// covered data and prune it.
+///
+/// Guards the `id != head` filter at `ingest.rs:189` against mutation. With
+/// `!=` flipped to `==`, the map ends up containing only `head → head`
+/// (identity) entries, so interior members are never remapped to their
+/// containing fragment's head and instead leak into loose-commit parent
+/// sets. A1 is the smallest egwalker vector with both cached fragments and
+/// loose commits whose boundary touches interior fragment members, so it
+/// reliably exercises the remap.
+///
+/// [`ingest_automerge`]: automerge_sedimentree::ingest::ingest_automerge
+/// [`Sedimentree::minimize`]: sedimentree_core::sedimentree::Sedimentree::minimize
+#[test]
+fn loose_commit_parents_only_reference_known_heads() {
+    let bytes = include_bytes!("../test-vectors/A1.am");
+    let doc = Automerge::load(bytes).expect("A1");
+    let sed_id = sed_id(bytes);
+    let result = automerge_sedimentree::ingest::ingest_automerge(&doc, sed_id);
+
+    let fragment_heads: Set<CommitId> = result.sedimentree.fragments().map(Fragment::head).collect();
+    let loose_heads: Set<CommitId> = result
+        .sedimentree
+        .loose_commits()
+        .map(LooseCommit::head)
+        .collect();
+
+    assert!(
+        !fragment_heads.is_empty(),
+        "A1 must produce cached fragments for this test to exercise the remap"
+    );
+    assert!(
+        !loose_heads.is_empty(),
+        "A1 must produce loose commits for this test to exercise the remap"
+    );
+
+    let mut unknown: Vec<(CommitId, CommitId)> = Vec::new();
+    for loose in result.sedimentree.loose_commits() {
+        for parent in loose.parents() {
+            if !fragment_heads.contains(parent) && !loose_heads.contains(parent) {
+                if unknown.len() < 5 {
+                    unknown.push((loose.head(), *parent));
+                }
+            }
+        }
+    }
+
+    assert!(
+        unknown.is_empty(),
+        "A1: loose-commit parents reference {} commit(s) that are neither fragment heads \
+         nor loose-commit heads (sample: {unknown:?}). \
+         The member_to_head remap in `finalize` (ingest.rs:189) is broken.",
+        unknown.len(),
+    );
+}
+
+/// The three ingest variants — sequential, per-fragment parallel, and
+/// chunked-parallel — must agree on which commits ended up where (counts,
+/// fragment heads, loose-commit heads, loose-commit parent sets). Blob
+/// byte representation can legitimately differ between variants because
+/// `bundle_fragments` may emit slightly different per-fragment layouts
+/// depending on how many fragments are bundled in a single call — that
+/// surface lives upstream and is exercised by upstream tests.
+///
+/// Guards `ingest_automerge_par` and `ingest_automerge_par_chunked` against
+/// being silently mutated to `Default::default()` — the empty `IngestResult`
+/// would trivially fail the non-empty smoke check below and the count
+/// equalities. A1 (~772 KiB, 7 cached fragments, 184 loose commits) is
+/// the smallest egwalker vector that exercises both code paths.
+#[cfg(feature = "rayon")]
+#[test]
+fn parallel_variants_match_sequential() {
+    use std::collections::BTreeSet;
+
+    use automerge_sedimentree::ingest::{
+        ingest_automerge, ingest_automerge_par, ingest_automerge_par_chunked,
+    };
+
+    let bytes = include_bytes!("../test-vectors/A1.am");
+    let doc = Automerge::load(bytes).expect("A1");
+    let sed_id = sed_id(bytes);
+
+    let seq = ingest_automerge(&doc, sed_id);
+    let par = ingest_automerge_par(&doc, sed_id);
+    let chk = ingest_automerge_par_chunked(&doc, sed_id);
+
+    // Non-empty smoke check: catches `-> Default::default()` mutations that
+    // would otherwise reduce every assertion below to a vacuous `0 == 0`.
+    assert!(seq.fragment_count > 0, "A1 must produce cached fragments");
+    assert!(seq.loose_count > 0, "A1 must produce loose commits");
+    assert!(seq.change_count > 0, "A1 must contain changes");
+    assert!(par.fragment_count > 0, "par result must not be empty");
+    assert!(par.loose_count > 0, "par result must not be empty");
+    assert!(chk.fragment_count > 0, "chunked result must not be empty");
+    assert!(chk.loose_count > 0, "chunked result must not be empty");
+
+    // Counts must agree across variants.
+    assert_eq!(seq.fragment_count, par.fragment_count, "par fragment_count");
+    assert_eq!(seq.fragment_count, chk.fragment_count, "chunked fragment_count");
+    assert_eq!(seq.loose_count, par.loose_count, "par loose_count");
+    assert_eq!(seq.loose_count, chk.loose_count, "chunked loose_count");
+    assert_eq!(seq.change_count, par.change_count, "par change_count");
+    assert_eq!(seq.change_count, chk.change_count, "chunked change_count");
+    assert_eq!(seq.covered_count, par.covered_count, "par covered_count");
+    assert_eq!(seq.covered_count, chk.covered_count, "chunked covered_count");
+
+    // Logical structure: the set of fragment heads, the set of loose-commit
+    // heads, and each loose commit's parent set must be identical. These
+    // are content-addressed identities, so they're insensitive to the
+    // per-fragment blob byte differences described above.
+    let fragment_heads = |r: &automerge_sedimentree::ingest::IngestResult| -> BTreeSet<CommitId> {
+        r.sedimentree.fragments().map(Fragment::head).collect()
+    };
+    let loose_heads = |r: &automerge_sedimentree::ingest::IngestResult| -> BTreeSet<CommitId> {
+        r.sedimentree.loose_commits().map(LooseCommit::head).collect()
+    };
+    let loose_parents =
+        |r: &automerge_sedimentree::ingest::IngestResult| -> Map<CommitId, BTreeSet<CommitId>> {
+            r.sedimentree
+                .loose_commits()
+                .map(|c| (c.head(), c.parents().clone()))
+                .collect()
+        };
+
+    assert_eq!(fragment_heads(&seq), fragment_heads(&par), "par fragment heads diverged");
+    assert_eq!(fragment_heads(&seq), fragment_heads(&chk), "chunked fragment heads diverged");
+    assert_eq!(loose_heads(&seq), loose_heads(&par), "par loose-commit heads diverged");
+    assert_eq!(loose_heads(&seq), loose_heads(&chk), "chunked loose-commit heads diverged");
+    assert_eq!(loose_parents(&seq), loose_parents(&par), "par loose parents diverged");
+    assert_eq!(loose_parents(&seq), loose_parents(&chk), "chunked loose parents diverged");
+}
+
 /// Fingerprint summary after ingestion should include all items.
 #[test]
 fn fingerprint_summary_includes_all_items_after_ingestion() {

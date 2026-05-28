@@ -86,8 +86,10 @@ jobs:
       - name: Establish baseline build
         # Workspace-level `--features` only activates the named features
         # on packages that declare them, so this is safe across the
-        # whole workspace.
-        run: cargo build --workspace --tests --features arbitrary,metrics
+        # whole workspace. `rayon` is declared by `automerge_sedimentree`
+        # and gates its parallel ingest variants + the corresponding
+        # equivalence test.
+        run: cargo build --workspace --tests --features arbitrary,metrics,rayon
 
       - name: Compute diff vs base
         id: diff
@@ -105,6 +107,7 @@ jobs:
         run: |
           cargo mutants \
             --in-diff /tmp/mutants.diff \
+            --features arbitrary,metrics,rayon \
             --no-shuffle \
             --jobs 4 \
             --colors=always \
@@ -158,7 +161,14 @@ jobs:
           - crate: subduction_websocket
             features: ""
           - crate: automerge_sedimentree
-            features: ""
+            # `rayon` activates the per-fragment / chunked parallel ingest
+            # variants. They live behind `#[cfg(feature = "rayon")]` and
+            # their only test caller (`parallel_variants_match_sequential`
+            # in `tests/real_world_ingestion.rs`) is similarly gated.
+            # Without this flag those functions compile to no-ops in the
+            # mutant baseline and the `-> Default::default()` mutations
+            # against them go silently uncaught.
+            features: "rayon"
 
     permissions:
       contents: read
