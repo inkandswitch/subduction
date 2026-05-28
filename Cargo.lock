@@ -283,19 +283,18 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "automerge"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2aab56635599ee2e9df28d9ce180c155b8dbcdd96e4c3f62895fc6a44137d328"
+version = "0.9.0"
+source = "git+https://github.com/automerge/automerge?branch=fragments#a57688012b93c29d5ceb1d26735608955c40a4ca"
 dependencies = [
  "cfg-if",
  "flate2",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "hex",
  "hexane",
  "itertools 0.14.0",
  "js-sys",
  "leb128",
- "rand 0.9.4",
+ "rand 0.10.1",
  "rustc-hash 2.1.2",
  "serde",
  "sha2 0.11.0-rc.5",
@@ -320,7 +319,6 @@ dependencies = [
  "rayon",
  "sedimentree_core",
  "testresult",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -332,6 +330,7 @@ dependencies = [
  "blake3",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "js-sys",
  "sedimentree_core",
  "sedimentree_wasm",
@@ -373,6 +372,7 @@ dependencies = [
  "automerge_sedimentree_wasm",
  "console_error_panic_hook",
  "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "js-sys",
  "subduction_wasm",
  "subduction_wasm_bootstrap",
@@ -2186,8 +2186,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hexane"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f4ecba0bb4e14df997df7cab6d1b584c6432d8865cf2adfced814706d715a7b"
+source = "git+https://github.com/automerge/automerge?branch=fragments#a57688012b93c29d5ceb1d26735608955c40a4ca"
 dependencies = [
  "leb128",
  "thiserror 2.0.18",

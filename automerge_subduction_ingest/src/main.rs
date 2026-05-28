@@ -229,7 +229,7 @@ async fn main() -> Result<()> {
 
     // Ingest: automerge → sedimentree.
     eprintln!("ingesting...");
-    let result = ingest_automerge_par(&doc, sed_id).wrap_err("ingestion failed")?;
+    let result = ingest_automerge_par(&doc, sed_id);
     print_ingest_stats(&result, sed_id);
 
     if args.dry_run {
