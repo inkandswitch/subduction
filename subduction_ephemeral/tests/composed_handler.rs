@@ -8,20 +8,24 @@
 
 use future_form::Sendable;
 use nonempty::NonEmpty;
+use std::collections::BTreeSet;
+
 use sedimentree_core::{
     codec::{
         decode::Decode,
         encode::Encode,
         error::{DecodeError, InvalidSchema},
     },
+    crypto::fingerprint::FingerprintSeed,
     id::SedimentreeId,
+    sedimentree::FingerprintSummary,
 };
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
         message::{
-            BatchSyncResponse, RequestId, SyncMessage, SyncResult, TryAsBatchSyncResponse,
-            TryAsSubscribeRequest,
+            BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult,
+            TryAsBatchSyncResponse, TryAsSubscribeRequest,
         },
         test_utils::ChannelMockConnection,
     },
@@ -336,6 +340,69 @@ fn try_as_batch_sync_response_returns_none_for_ephemeral() {
     });
 
     assert_eq!(wire.try_as_batch_sync_response(), None);
+}
+
+/// Regression: the composed wire envelope delegates
+/// [`TryAsSubscribeRequest`] to its inner [`SyncMessage`] variant, so a
+/// subscribing [`BatchSyncRequest`] reaches the listen-loop's
+/// upstream-propagation path even when the handler is a
+/// [`ComposedHandler`].
+///
+/// This closes the original "KNOWN ISSUE" from the propagation feature:
+/// composed handlers no longer need to override anything for subscription
+/// requests to be forwarded — the message-type trait carries the
+/// behavior across the envelope.
+#[test]
+fn try_as_subscribe_request_extracts_from_sync_when_subscribe_true() {
+    let sed_id = SedimentreeId::new([0xEE; 32]);
+    let req = BatchSyncRequest {
+        id: sed_id,
+        req_id: test_request_id(),
+        fingerprint_summary: FingerprintSummary::new(
+            FingerprintSeed::new(0, 0),
+            BTreeSet::new(),
+            BTreeSet::new(),
+        ),
+        subscribe: true,
+    };
+
+    let wire = TestWireMessage::Sync(Box::new(SyncMessage::BatchSyncRequest(req)));
+    assert_eq!(wire.try_as_subscribe_request(), Some(sed_id));
+}
+
+#[test]
+fn try_as_subscribe_request_returns_none_for_non_subscribe_sync() {
+    // A `BatchSyncRequest { subscribe: false }` is a pull-only sync;
+    // the listen loop must NOT propagate.
+    let req = BatchSyncRequest {
+        id: SedimentreeId::new([0xEF; 32]),
+        req_id: test_request_id(),
+        fingerprint_summary: FingerprintSummary::new(
+            FingerprintSeed::new(0, 0),
+            BTreeSet::new(),
+            BTreeSet::new(),
+        ),
+        subscribe: false,
+    };
+
+    let wire = TestWireMessage::Sync(Box::new(SyncMessage::BatchSyncRequest(req)));
+    assert_eq!(wire.try_as_subscribe_request(), None);
+
+    // Any other sync variant must also return None.
+    let other = TestWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
+        id: SedimentreeId::new([0xCC; 32]),
+        digests: vec![],
+    }));
+    assert_eq!(other.try_as_subscribe_request(), None);
+}
+
+#[test]
+fn try_as_subscribe_request_returns_none_for_ephemeral() {
+    let wire = TestWireMessage::Ephemeral(EphemeralMessage::Subscribe {
+        topics: NonEmpty::new(Topic::new([0xDD; 32])),
+    });
+
+    assert_eq!(wire.try_as_subscribe_request(), None);
 }
 
 #[tokio::test]
