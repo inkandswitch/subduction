@@ -16,8 +16,7 @@ use sedimentree_core::{
     id::SedimentreeId,
 };
 use subduction_core::connection::message::{
-    BatchSyncResponse, MESSAGE_SCHEMA, SyncMessage, TryAsBatchSyncResponse,
-    TryAsSubscribeRequest,
+    BatchSyncResponse, MESSAGE_SCHEMA, SyncMessage, TryAsBatchSyncResponse, TryAsSubscribeRequest,
 };
 use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};

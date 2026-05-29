@@ -262,7 +262,8 @@ async fn relay_topology_propagates_subscriptions_upstream() -> TestResult {
     // A subscribes to R for `sed_id`. R has no data yet — this is
     // purely a subscription registration.
     let r_peer = PeerId::from(r_signer.verifying_key());
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
     // The propagation runs after the handler returns, so give the
@@ -313,7 +314,8 @@ async fn relay_topology_repeated_subscribe_does_not_re_propagate() -> TestResult
     let r_peer = PeerId::from(r_signer.verifying_key());
     let b_peer = PeerId::from(b_signer.verifying_key());
 
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
     assert!(r.get_peer_subscriptions(b_peer).await.contains(&sed_id));
@@ -323,7 +325,8 @@ async fn relay_topology_repeated_subscribe_does_not_re_propagate() -> TestResult
     // easily count wire messages here, but verifying the subscription
     // set hasn't grown (still exactly the same sedimentree) is a
     // proxy.
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
     let r_subs = r.get_peer_subscriptions(b_peer).await;

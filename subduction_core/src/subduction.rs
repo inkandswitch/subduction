@@ -1823,11 +1823,7 @@ where
     ) {
         let peers: Vec<PeerId> = {
             let conns = self.connections.lock().await;
-            conns
-                .keys()
-                .copied()
-                .filter(|p| *p != originator)
-                .collect()
+            conns.keys().copied().filter(|p| *p != originator).collect()
         };
 
         if peers.is_empty() {
@@ -1846,13 +1842,9 @@ where
             {
                 continue;
             }
-            tracing::debug!(
-                "propagating subscription for {id:?} upstream to peer {peer}"
-            );
+            tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
             if let Err(e) = self.sync_with_peer(&peer, id, true, None).await {
-                tracing::debug!(
-                    "subscribe propagation to {peer} for {id:?} failed: {e}"
-                );
+                tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
             }
         }
     }
