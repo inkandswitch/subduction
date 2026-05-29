@@ -14,17 +14,20 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
+use core::convert::Infallible;
+
+use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     authenticated::Authenticated,
     connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
     handler::sync::SyncHandler,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
+    policy::{connection::ConnectionPolicy, open::OpenPolicy, storage::StoragePolicy},
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
 };
-use subduction_crypto::signer::memory::MemorySigner;
+use subduction_crypto::{signer::memory::MemorySigner, verified_author::VerifiedAuthor};
 use testresult::TestResult;
 
 type Conn = MessageTransport<ChannelTransport>;
@@ -537,6 +540,213 @@ async fn relay_topology_concurrent_add_built_batch_calls_converge() -> TestResul
 
     let (_, stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     assert!(stats.is_empty(), "{stats:?}");
+
+    Ok(())
+}
+
+// ─── Policy gate on upstream propagation ────────────────────────────────
+
+/// Storage policy that rejects fetch unless the requesting peer matches
+/// `allowed_fetcher`. Put is always allowed. Used to exercise the
+/// `authorize_fetch` gate the listen loop applies before propagating
+/// inbound subscribe requests upstream.
+#[derive(Clone, Copy)]
+struct RestrictiveFetchPolicy {
+    allowed_fetcher: PeerId,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FetchRejected;
+
+impl core::fmt::Display for FetchRejected {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "fetch rejected by policy")
+    }
+}
+
+impl core::error::Error for FetchRejected {}
+
+impl ConnectionPolicy<Sendable> for RestrictiveFetchPolicy {
+    type ConnectionDisallowed = Infallible;
+
+    fn authorize_connect(
+        &self,
+        _peer: PeerId,
+    ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+        async { Ok(()) }.boxed()
+    }
+}
+
+impl StoragePolicy<Sendable> for RestrictiveFetchPolicy {
+    type FetchDisallowed = FetchRejected;
+    type PutDisallowed = Infallible;
+
+    fn authorize_fetch(
+        &self,
+        peer: PeerId,
+        _sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+        let allowed = self.allowed_fetcher;
+        async move {
+            if peer == allowed {
+                Ok(())
+            } else {
+                Err(FetchRejected)
+            }
+        }
+        .boxed()
+    }
+
+    fn authorize_put(
+        &self,
+        _requestor: PeerId,
+        _author: VerifiedAuthor,
+        _sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        let allowed = self.allowed_fetcher;
+        async move { if peer == allowed { ids } else { Vec::new() } }.boxed()
+    }
+}
+
+#[allow(clippy::type_complexity)]
+type RestrictiveSubduction = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        MemoryStorage,
+        Conn,
+        SyncHandler<Sendable, MemoryStorage, Conn, RestrictiveFetchPolicy, CountLeadingZeroBytes>,
+        RestrictiveFetchPolicy,
+        MemorySigner,
+        InstantTimeout,
+    >,
+>;
+
+fn make_restrictive_node(signer: MemorySigner, allowed_fetcher: PeerId) -> RestrictiveSubduction {
+    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(signer)
+        .storage(
+            MemoryStorage::new(),
+            Arc::new(RestrictiveFetchPolicy { allowed_fetcher }),
+        )
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, Conn>();
+
+    tokio::spawn(listener);
+    tokio::spawn(manager);
+    sd
+}
+
+async fn connect_restrictive_pair_a_r(
+    a: &TestSubduction,
+    a_signer: &MemorySigner,
+    r: &RestrictiveSubduction,
+    r_signer: &MemorySigner,
+) -> TestResult {
+    let (transport_a, transport_r) = ChannelTransport::pair();
+
+    let conn_a = MessageTransport::new(transport_a);
+    let conn_r = MessageTransport::new(transport_r);
+
+    let peer_a = PeerId::from(a_signer.verifying_key());
+    let peer_r = PeerId::from(r_signer.verifying_key());
+
+    let auth_a: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_a, peer_r);
+    let auth_r: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_r, peer_a);
+
+    a.add_connection(auth_a).await?;
+    r.add_connection(auth_r).await?;
+
+    Ok(())
+}
+
+async fn connect_restrictive_pair_r_b(
+    r: &RestrictiveSubduction,
+    r_signer: &MemorySigner,
+    b: &TestSubduction,
+    b_signer: &MemorySigner,
+) -> TestResult {
+    let (transport_r, transport_b) = ChannelTransport::pair();
+
+    let conn_r = MessageTransport::new(transport_r);
+    let conn_b = MessageTransport::new(transport_b);
+
+    let peer_r = PeerId::from(r_signer.verifying_key());
+    let peer_b = PeerId::from(b_signer.verifying_key());
+
+    let auth_r: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_r, peer_b);
+    let auth_b: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_b, peer_r);
+
+    r.add_connection(auth_r).await?;
+    b.add_connection(auth_b).await?;
+
+    Ok(())
+}
+
+/// Regression for the policy gate on upstream-subscription propagation.
+///
+/// When A subscribes to R for a sedimentree that R's policy rejects A
+/// from fetching, R must NOT propagate the subscription upstream to B.
+/// Without the gate, an unauthorized peer could cause R to enrol in
+/// upstream subscriptions whose traffic the egress filter would only
+/// drop on the return path — wasted bandwidth and dangling upstream
+/// subscription state.
+///
+/// Pairs with `relay_topology_propagates_subscriptions_upstream` (which
+/// proves propagation does happen under `OpenPolicy`).
+#[tokio::test]
+async fn relay_topology_unauthorized_subscribe_does_not_propagate() -> TestResult {
+    let a_signer = make_signer(11);
+    let r_signer = make_signer(21);
+    let b_signer = make_signer(31);
+
+    let a_peer = PeerId::from(a_signer.verifying_key());
+    let r_peer = PeerId::from(r_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    // Sanity: A is not the allowed fetcher, so this test is exercising
+    // the rejection path. (If A == b_peer accidentally, the propagation
+    // assertion below would still pass for the wrong reason.)
+    assert_ne!(a_peer, b_peer);
+
+    // R only allows B to fetch. A is unauthorized.
+    let a = make_node(a_signer.clone());
+    let r = make_restrictive_node(r_signer.clone(), b_peer);
+    let b = make_node(b_signer.clone());
+
+    connect_restrictive_pair_a_r(&a, &a_signer, &r, &r_signer).await?;
+    connect_restrictive_pair_r_b(&r, &r_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let sed_id = SedimentreeId::new([99u8; 32]);
+
+    // A's subscribe reaches R. `recv_batch_sync_request` will get a
+    // policy rejection from `get_fetcher` and send back
+    // `SyncResult::Unauthorized`. The handler returns `Ok` and
+    // `propagate_subscription` would run if the policy gate weren't
+    // there. We deliberately don't propagate `?` because the request
+    // surfaces an `Unauthorized` response, not a transport-level error.
+    let _outcome = a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    // The gate must have suppressed propagation: R has no outgoing
+    // subscription to B for `sed_id`.
+    let r_to_b_subs = r.get_peer_subscriptions(b_peer).await;
+    assert!(
+        !r_to_b_subs.contains(&sed_id),
+        "policy gate failed: R propagated A's unauthorized subscribe to B \
+         (R→B subscriptions: {r_to_b_subs:?})"
+    );
 
     Ok(())
 }

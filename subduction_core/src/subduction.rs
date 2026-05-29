@@ -658,6 +658,17 @@ where
                         // peers once the handler has processed it
                         // (mirroring the outbound broadcast that
                         // `SyncHandler` already does for commits/fragments).
+                        //
+                        // Propagation is gated on the originator being
+                        // *authorized* to fetch the sedimentree — handler
+                        // success alone is too permissive because
+                        // `recv_batch_sync_request` returns `Ok(())` after
+                        // sending a `SyncResult::Unauthorized` response.
+                        // Without this check, an unauthorized peer could
+                        // cause us to enrol in upstream subscriptions
+                        // whose traffic we would only filter-drop on the
+                        // return path — wasted bandwidth and dangling
+                        // upstream state.
                         let h = handler.clone();
                         let conn_clone = conn.clone();
                         let propagate_target = msg
@@ -668,6 +679,11 @@ where
                             let result = h.handle(&conn_clone, msg).await;
                             if result.is_ok()
                                 && let Some((sed_id, originator, me)) = propagate_target
+                                && me.storage
+                                    .policy()
+                                    .authorize_fetch(originator, sed_id)
+                                    .await
+                                    .is_ok()
                             {
                                 me.propagate_subscription(sed_id, originator).await;
                             }
@@ -1804,7 +1820,7 @@ where
     /// [`SyncHandler`](crate::handler::sync::SyncHandler) forward them
     /// back to the originator (and any other local subscribers).
     /// Forwarding updates and forwarding requests stay symmetric — see
-    /// `design/protocol.md`.
+    /// `design/sync/subscriptions.md#upstream-propagation-relay-topologies`.
     ///
     /// Idempotency comes from [`outgoing_subscriptions`]: a successful
     /// `sync_with_peer(subscribe = true)` records `(peer, id)` there,
