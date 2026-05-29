@@ -1,4 +1,15 @@
 //! # Automerge integration for Sedimentree
+//!
+//! The ingestion API lives in [`ingest`]. It builds a [`Sedimentree`] from
+//! an [`Automerge`] document via [`Automerge::fragments`] and
+//! [`Automerge::bundle_fragments`] (upstream automerge's native
+//! fragmentizer), replacing the older `CommitStore`-based path that this
+//! crate previously exposed.
+//!
+//! [`Sedimentree`]: sedimentree_core::sedimentree::Sedimentree
+//! [`Automerge`]: automerge::Automerge
+//! [`Automerge::fragments`]: automerge::Automerge::fragments
+//! [`Automerge::bundle_fragments`]: automerge::Automerge::bundle_fragments
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -6,97 +17,6 @@
 #[cfg(feature = "std")]
 extern crate std;
 
-pub mod indexed;
-pub mod ingest;
-
 extern crate alloc;
 
-use alloc::rc::Rc;
-use automerge::{AutoCommit, Automerge, ChangeHash, ChangeMetadata};
-use core::{cell::RefCell, convert::Infallible};
-use sedimentree_core::{
-    collections::Set,
-    commit::{CommitStore, Parents},
-    loose_commit::id::CommitId,
-};
-
-/// A newtype wrapper around [`Automerge`] for use as a Sedimentree commit store.
-#[derive(Debug, Clone)]
-pub struct SedimentreeAutomerge<'a>(&'a Automerge);
-
-impl<'a> From<&'a Automerge> for SedimentreeAutomerge<'a> {
-    fn from(value: &'a Automerge) -> Self {
-        Self(value)
-    }
-}
-
-impl<'a> From<SedimentreeAutomerge<'a>> for &'a Automerge {
-    fn from(value: SedimentreeAutomerge<'a>) -> Self {
-        value.0
-    }
-}
-
-impl<'a> CommitStore<'a> for SedimentreeAutomerge<'a> {
-    type Node = SedimentreeChangeMetadata<'a>;
-    type LookupError = Infallible;
-
-    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
-        let change_hash = automerge::ChangeHash(*id.as_bytes());
-        let change_meta = self.0.get_change_meta_by_hash(&change_hash);
-        Ok(change_meta.map(SedimentreeChangeMetadata::from))
-    }
-}
-
-/// A newtype wrapper around [`Automerge`] for use as a Sedimentree commit store.
-#[derive(Debug, Clone)]
-pub struct SedimentreeAutoCommit(Rc<RefCell<AutoCommit>>);
-
-impl From<Rc<RefCell<AutoCommit>>> for SedimentreeAutoCommit {
-    fn from(value: Rc<RefCell<AutoCommit>>) -> Self {
-        Self(value)
-    }
-}
-
-impl From<SedimentreeAutoCommit> for Rc<RefCell<AutoCommit>> {
-    fn from(value: SedimentreeAutoCommit) -> Self {
-        value.0
-    }
-}
-
-impl CommitStore<'static> for SedimentreeAutoCommit {
-    type Node = SedimentreeChangeMetadata<'static>;
-    type LookupError = Infallible;
-
-    fn lookup(&self, id: CommitId) -> Result<Option<Self::Node>, Self::LookupError> {
-        let change_hash = ChangeHash(*id.as_bytes());
-        let mut borrowed = self.0.borrow_mut();
-        let change_meta = borrowed.get_change_meta_by_hash(&change_hash);
-        Ok(change_meta.map(|x| SedimentreeChangeMetadata::from(x.into_owned())))
-    }
-}
-
-/// A newtype wrapper around Automerge's [`ChangeMetadata`].
-#[derive(Debug, Clone)]
-pub struct SedimentreeChangeMetadata<'a>(ChangeMetadata<'a>);
-
-impl<'a> From<ChangeMetadata<'a>> for SedimentreeChangeMetadata<'a> {
-    fn from(value: ChangeMetadata<'a>) -> Self {
-        Self(value)
-    }
-}
-
-impl<'a> From<SedimentreeChangeMetadata<'a>> for ChangeMetadata<'a> {
-    fn from(value: SedimentreeChangeMetadata<'a>) -> Self {
-        value.0
-    }
-}
-
-impl Parents for SedimentreeChangeMetadata<'_> {
-    fn parents(&self) -> Set<CommitId> {
-        self.0
-            .deps
-            .iter()
-            .map(|change_hash| CommitId::new(change_hash.0))
-            .collect()
-    }
-}
+pub mod ingest;

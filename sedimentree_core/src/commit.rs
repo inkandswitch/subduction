@@ -221,6 +221,9 @@ pub trait CommitStore<'a> {
         // discovers them later). Now that every fresh fragment is built and
         // the boundary chain is fully populated, strip any member that also
         // appears in an ancestor's members.
+        //
+        // Regression test: `tests/build_fragment_store.rs`'s
+        // `members_disjoint_from_transitive_ancestor_members`.
         for head in &fresh_heads {
             let ancestor_members = collect_ancestor_members(*head, known_fragment_states);
             if ancestor_members.is_empty() {

@@ -515,3 +515,165 @@ fn linear_same_depth_produces_sibling_fragments() {
     assert!(b_members.contains(&graph.node_hash("b")));
     assert!(b_members.contains(&graph.node_hash("a")));
 }
+
+// -----------------------------------------------------------------------
+// Transitive-ancestor dedup (regression for `build_fragment_store`)
+// -----------------------------------------------------------------------
+
+/// Walk a fragment's boundary chain transitively and collect the union of
+/// all reachable ancestor fragments' members.
+fn transitive_ancestor_members(start: &FragmentState<Set<CommitId>>, known: &Known) -> Set<CommitId> {
+    let mut acc: Set<CommitId> = Set::new();
+    let mut seen: Set<CommitId> = Set::new();
+    let mut to_visit: Vec<CommitId> = start.boundary().keys().copied().collect();
+
+    while let Some(b) = to_visit.pop() {
+        if !seen.insert(b) {
+            continue;
+        }
+        if let Some(anc) = known.get(&b) {
+            acc.extend(anc.members().iter().copied());
+            to_visit.extend(anc.boundary().keys().copied());
+        }
+    }
+
+    acc
+}
+
+/// Regression: in a concurrent DAG, a fragment's members must not overlap
+/// with any transitively-reachable ancestor fragment's members.
+///
+/// The fragment-construction BFS in `CommitStore::fragment` walks parents
+/// until it hits boundary-depth commits. In a concurrent DAG it can reach
+/// a commit that's _also_ a member of a deeper-ancestor fragment, via a
+/// path that doesn't go through the deeper-ancestor fragment's head. The
+/// inline strip inside `fragment()` only sees direct boundaries, so the
+/// duplicate slips through unless `build_fragment_store` does a post-pass
+/// over transitive ancestors.
+///
+/// Minimal trigger:
+/// ```text
+///                   c (depth 0)
+///                  / \
+///        f_deep (2)   other_path (depth 0)
+///             \              \
+///         f_mid (depth 1)     \
+///                  \           \
+///                   f_shallow (depth 1)
+/// ```
+///
+/// `fragment(f_shallow)` walks `f_shallow → {f_mid, other_path}`, absorbs
+/// `other_path` (depth 0) and then `c` (depth 0) as members. `c` is
+/// _also_ a member of `f_deep` (reached as `f_deep → c`). `f_deep` is
+/// not in `f_shallow.boundary` — only `f_mid` is — so the direct-boundary
+/// strip cannot reach it. The post-pass over `f_shallow.boundary.f_mid
+/// .boundary.f_deep` is what removes `c` from `f_shallow.members`.
+#[test]
+fn members_disjoint_from_transitive_ancestor_members() {
+    let mut rng = seeded_rng(60);
+    let graph = TestGraph::new(
+        &mut rng,
+        &[
+            ("c",          0),
+            ("f_deep",     2),
+            ("other_path", 0),
+            ("f_mid",      1),
+            ("f_shallow",  1),
+        ],
+        &[
+            ("c",          "f_deep"),
+            ("c",          "other_path"),
+            ("f_deep",     "f_mid"),
+            ("f_mid",      "f_shallow"),
+            ("other_path", "f_shallow"),
+        ],
+    );
+
+    let (_fresh, known) = run_fragment_store(&graph, &["f_shallow"]);
+
+    let mut violations: Vec<(CommitId, Vec<CommitId>)> = Vec::new();
+    for (head, state) in &known {
+        let ancestor_members = transitive_ancestor_members(state, &known);
+        let overlap: Vec<CommitId> = state
+            .members()
+            .iter()
+            .filter(|m| ancestor_members.contains(m))
+            .copied()
+            .collect();
+        if !overlap.is_empty() {
+            violations.push((*head, overlap));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "fragment members overlap with transitively-reachable ancestor fragments: {violations:?}"
+    );
+}
+
+/// Generalisation of the regression test above: assert the invariant
+/// across all fragments produced for an arbitrary mixed-depth DAG with
+/// multiple concurrent paths. Catches regressions whose specific bug
+/// shape doesn't match the minimal trigger above.
+#[test]
+fn members_disjoint_invariant_on_complex_concurrent_dag() {
+    let mut rng = seeded_rng(61);
+
+    // Two parallel "lanes" descending from a common deep root, joined
+    // again at a shallow head. Several concurrent-edit shapes per lane.
+    //
+    // ```text
+    //              root (depth 0)
+    //               /         \
+    //          d_left (2)   d_right (2)
+    //              |             |
+    //          m_left (0)    m_right (0)
+    //              |             |
+    //          mid_left (1)  mid_right (1)
+    //               \           /
+    //                top (depth 1)
+    //                    |
+    //                  head (depth 0)
+    // ```
+    let graph = TestGraph::new(
+        &mut rng,
+        &[
+            ("root",      0),
+            ("d_left",    2),
+            ("d_right",   2),
+            ("m_left",    0),
+            ("m_right",   0),
+            ("mid_left",  1),
+            ("mid_right", 1),
+            ("top",       1),
+            ("head",      0),
+        ],
+        &[
+            ("root",      "d_left"),
+            ("root",      "d_right"),
+            ("d_left",    "m_left"),
+            ("d_right",   "m_right"),
+            ("m_left",    "mid_left"),
+            ("m_right",   "mid_right"),
+            ("mid_left",  "top"),
+            ("mid_right", "top"),
+            ("top",       "head"),
+        ],
+    );
+
+    let (_fresh, known) = run_fragment_store(&graph, &["head"]);
+
+    for (head, state) in &known {
+        let ancestor_members = transitive_ancestor_members(state, &known);
+        let overlap: Vec<CommitId> = state
+            .members()
+            .iter()
+            .filter(|m| ancestor_members.contains(m))
+            .copied()
+            .collect();
+        assert!(
+            overlap.is_empty(),
+            "fragment {head:?} members overlap with transitive ancestors: {overlap:?}",
+        );
+    }
+}

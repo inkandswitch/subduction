@@ -17,24 +17,14 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-automerge = { workspace = true }
 base58 = { workspace = true }
 blake3 = { workspace = true }
-getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
-subduction_wasm = { workspace = true, features = ["std"] }
 subduction_wasm_bootstrap = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
-wasm_refgen = { workspace = true }
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
-# Pulled in by automerge 0.9 (fragments branch); needs explicit wasm_js opt-in.
-getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [features]
 default = []
@@ -43,7 +33,6 @@ std = [
   "js-sys/std",
   "sedimentree_core/std",
   "thiserror/std",
-  "tracing/std",
   "wasm-bindgen/std"
 ]
 
