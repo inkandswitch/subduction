@@ -522,7 +522,10 @@ fn linear_same_depth_produces_sibling_fragments() {
 
 /// Walk a fragment's boundary chain transitively and collect the union of
 /// all reachable ancestor fragments' members.
-fn transitive_ancestor_members(start: &FragmentState<Set<CommitId>>, known: &Known) -> Set<CommitId> {
+fn transitive_ancestor_members(
+    start: &FragmentState<Set<CommitId>>,
+    known: &Known,
+) -> Set<CommitId> {
     let mut acc: Set<CommitId> = Set::new();
     let mut seen: Set<CommitId> = Set::new();
     let mut to_visit: Vec<CommitId> = start.boundary().keys().copied().collect();
@@ -574,17 +577,17 @@ fn members_disjoint_from_transitive_ancestor_members() {
     let graph = TestGraph::new(
         &mut rng,
         &[
-            ("c",          0),
-            ("f_deep",     2),
+            ("c", 0),
+            ("f_deep", 2),
             ("other_path", 0),
-            ("f_mid",      1),
-            ("f_shallow",  1),
+            ("f_mid", 1),
+            ("f_shallow", 1),
         ],
         &[
-            ("c",          "f_deep"),
-            ("c",          "other_path"),
-            ("f_deep",     "f_mid"),
-            ("f_mid",      "f_shallow"),
+            ("c", "f_deep"),
+            ("c", "other_path"),
+            ("f_deep", "f_mid"),
+            ("f_mid", "f_shallow"),
             ("other_path", "f_shallow"),
         ],
     );
@@ -638,26 +641,26 @@ fn members_disjoint_invariant_on_complex_concurrent_dag() {
     let graph = TestGraph::new(
         &mut rng,
         &[
-            ("root",      0),
-            ("d_left",    2),
-            ("d_right",   2),
-            ("m_left",    0),
-            ("m_right",   0),
-            ("mid_left",  1),
+            ("root", 0),
+            ("d_left", 2),
+            ("d_right", 2),
+            ("m_left", 0),
+            ("m_right", 0),
+            ("mid_left", 1),
             ("mid_right", 1),
-            ("top",       1),
-            ("head",      0),
+            ("top", 1),
+            ("head", 0),
         ],
         &[
-            ("root",      "d_left"),
-            ("root",      "d_right"),
-            ("d_left",    "m_left"),
-            ("d_right",   "m_right"),
-            ("m_left",    "mid_left"),
-            ("m_right",   "mid_right"),
-            ("mid_left",  "top"),
+            ("root", "d_left"),
+            ("root", "d_right"),
+            ("d_left", "m_left"),
+            ("d_right", "m_right"),
+            ("m_left", "mid_left"),
+            ("m_right", "mid_right"),
+            ("mid_left", "top"),
             ("mid_right", "top"),
-            ("top",       "head"),
+            ("top", "head"),
         ],
     );
 
