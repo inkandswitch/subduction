@@ -1,8 +1,5 @@
-//! Commit-ID helpers for Automerge documents.
-//!
-//! Automerge identifies documents with a base58-encoded ID string. Subduction
-//! identifies commits via a 32-byte [`CommitId`] hash. This module bridges
-//! the two by hashing the decoded document ID into a `CommitId`.
+//! Bridges Automerge's base58-encoded document IDs to Subduction's
+//! 32-byte [`CommitId`] hashes.
 
 use base58::FromBase58;
 use sedimentree_core::loose_commit::id::CommitId;

@@ -308,25 +308,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "automerge_sedimentree"
-version = "0.10.1"
-dependencies = [
- "automerge",
- "automerge_sedimentree",
- "criterion",
- "pprof",
- "rand 0.8.6",
- "rayon",
- "sedimentree_core",
- "testresult",
-]
-
-[[package]]
 name = "automerge_subduction_ingest"
 version = "0.4.1"
 dependencies = [
  "automerge",
- "automerge_sedimentree",
  "bs58",
  "clap",
  "color-eyre",

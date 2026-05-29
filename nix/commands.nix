@@ -119,7 +119,7 @@
         echo "Usage: bench:flame <package> [filter] [seconds]"
         echo ""
         echo "  package  Crate to bench (sedimentree_core, subduction_core,"
-        echo "           subduction_websocket, automerge_sedimentree)"
+        echo "           subduction_websocket)"
         echo "  filter   Benchmark name filter (default: all)"
         echo "  seconds  Profile duration per benchmark (default: 10)"
         echo ""
@@ -127,7 +127,6 @@
         echo "  bench:flame sedimentree_core minimize"
         echo "  bench:flame subduction_core batch_sync 15"
         echo "  bench:flame subduction_websocket handshake"
-        echo "  bench:flame automerge_sedimentree diff"
       }
 
       if [ -z "''${1:-}" ]; then
@@ -152,10 +151,6 @@
         subduction_websocket)
           BENCH="e2e"
           FEATURES="--features tokio_client,tokio_server"
-          ;;
-        automerge_sedimentree)
-          BENCH="egwalker"
-          FEATURES=""
           ;;
         *)
           echo "Unknown package: $PACKAGE"

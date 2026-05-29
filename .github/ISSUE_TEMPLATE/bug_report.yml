@@ -29,7 +29,6 @@ body:
       label: Affected crate(s)
       description: Check every crate you believe is involved. Leave empty if unsure.
       options:
-        - label: automerge_sedimentree
         - label: automerge_subduction_ingest
         - label: automerge_subduction_wasm
         - label: sedimentree_core

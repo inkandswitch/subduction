@@ -172,10 +172,7 @@ async fn add_sedimentree_survives_minimize() -> TestResult {
 }
 
 /// Loose commits whose parents point to interior fragment members
-/// (checkpoints) survive `minimize` — they are _not_ pruned. The parent
-/// remapping in `ingest_automerge` (which rewrites interior-member parents
-/// to the fragment head) is a correctness optimization for topsort
-/// ordering, not a requirement for `minimize` data retention.
+/// (checkpoints) survive `minimize` — they are _not_ pruned.
 #[test]
 fn minimize_keeps_loose_commits_with_interior_parents() {
     let sed_id = make_sed_id(0x30);

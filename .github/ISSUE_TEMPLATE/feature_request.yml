@@ -24,7 +24,6 @@ body:
       label: Affected crate(s)
       description: Where would this live? Leave empty if unsure.
       options:
-        - label: automerge_sedimentree
         - label: automerge_subduction_ingest
         - label: automerge_subduction_wasm
         - label: sedimentree_core

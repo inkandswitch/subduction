@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
 members = [
-  "automerge_sedimentree",
   "automerge_subduction_ingest",
   "automerge_subduction_wasm",
   "sedimentree_core",
@@ -31,7 +30,6 @@ authors = [
 
 [workspace.dependencies]
 # Internal crates
-automerge_sedimentree = { version = "0.10.1", path = "automerge_sedimentree", default-features = false }
 automerge_subduction_wasm = { version = "0.13.0", path = "automerge_subduction_wasm", default-features = false }
 sedimentree_core = { version = "0.12.1", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.10.1", path = "sedimentree_fs_storage" }
@@ -200,9 +198,6 @@ opt-level = 2
 [profile.test.package.automerge]
 opt-level = 2
 
-[profile.test.package.automerge_sedimentree]
-opt-level = 2
-
 [profile.test.package.sedimentree_core]
 opt-level = 2
 
@@ -284,9 +279,6 @@ strip = "none"
 # DO need to debug inside Automerge itself, temporarily remove these
 # overrides.
 [profile.wasm-debug.package.automerge]
-opt-level = 2
-
-[profile.wasm-debug.package.automerge_sedimentree]
 opt-level = 2
 
 [profile.wasm-debug.package.sedimentree_core]

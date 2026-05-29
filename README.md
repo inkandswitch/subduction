@@ -45,7 +45,6 @@ graph TD
     end
 
     subgraph Integrations
-        automerge_sedimentree
         subduction_keyhive
         subduction_keyhive_policy
     end
@@ -60,8 +59,6 @@ graph TD
 
     sedimentree_core --> subduction_crypto
     subduction_crypto --> subduction_core
-
-    sedimentree_core --> automerge_sedimentree
 
     subduction_core --> sedimentree_fs_storage
     subduction_core --> subduction_http_longpoll
@@ -98,7 +95,6 @@ graph TD
 |-----------------------------|------------------------------------------------------------|
 | `sedimentree_wasm`          | WebAssembly bindings for Sedimentree                       |
 | `subduction_wasm`           | WebAssembly bindings for browser and Node.js environments  |
-| `automerge_sedimentree`     | Sedimentree adapter for Automerge documents                |
 | `automerge_subduction_wasm` | Wasm bindings for Automerge + Subduction (full sync stack) |
 
 ### Integrations
@@ -263,7 +259,7 @@ subduction/
 ├── subduction_cli/             # CLI server and data management
 ├── subduction_keyhive/         # Keyhive integration types
 ├── subduction_keyhive_policy/  # Keyhive authorization policy
-├── automerge_sedimentree/      # Automerge integration
+├── automerge_subduction_ingest/ # CLI to ingest Automerge documents into Subduction
 └── automerge_subduction_wasm/  # Wasm wrapper for the full Automerge + Subduction stack
 ```
 
