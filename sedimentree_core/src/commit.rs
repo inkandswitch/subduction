@@ -225,7 +225,10 @@ pub trait CommitStore<'a> {
         // Regression test: `tests/build_fragment_store.rs`'s
         // `members_disjoint_from_transitive_ancestor_members`.
         for head in &fresh_heads {
-            let ancestor_members = collect_ancestor_members(*head, known_fragment_states);
+            let ancestor_members = known_fragment_states
+                .get(head)
+                .map(|state| state.transitive_ancestor_members(known_fragment_states))
+                .unwrap_or_default();
             if ancestor_members.is_empty() {
                 continue;
             }
@@ -363,7 +366,10 @@ pub trait CommitStore<'a> {
         // See the comment in `build_fragment_store` for rationale — the
         // parallel variant has the same overlap pattern in concurrent DAGs.
         for head in &all_heads {
-            let ancestor_members = collect_ancestor_members(*head, known_fragment_states);
+            let ancestor_members = known_fragment_states
+                .get(head)
+                .map(|state| state.transitive_ancestor_members(known_fragment_states))
+                .unwrap_or_default();
             if ancestor_members.is_empty() {
                 continue;
             }
@@ -475,35 +481,37 @@ impl<T> FragmentState<T> {
         self.members.retain(|c| predicate(c));
         self.checkpoints.retain(|c| predicate(c));
     }
-}
 
-/// Walk the boundary chain transitively from `head` through fragments in
-/// `known` and return the union of all reachable ancestor fragments' members.
-///
-/// "Ancestor" here means: a fragment whose head is reachable from `head` by
-/// following `boundary` keys through fragments present in `known`. Boundary
-/// keys that don't resolve to a fragment in `known` (e.g. depth-0 commits
-/// beyond the deepest level) are ignored.
-fn collect_ancestor_members<T>(
-    head: CommitId,
-    known: &Map<CommitId, FragmentState<T>>,
-) -> Set<CommitId> {
-    let mut acc: Set<CommitId> = Set::new();
-    let mut seen: Set<CommitId> = Set::new();
-    let mut to_visit: Vec<CommitId> = match known.get(&head) {
-        Some(state) => state.boundary().keys().copied().collect(),
-        None => return acc,
-    };
+    /// Walk this fragment's boundary chain transitively through `known`
+    /// and return the union of all reachable ancestor fragments' members.
+    ///
+    /// "Ancestor" here means: a fragment whose head is reachable from this
+    /// fragment by following `boundary` keys through fragments present in
+    /// `known`. Boundary keys that don't resolve to a fragment in `known`
+    /// (e.g. depth-0 commits beyond the deepest level) are ignored.
+    ///
+    /// Used by [`CommitStore::build_fragment_store`]'s post-pass to dedupe
+    /// members against transitive ancestor fragments. Also intended as the
+    /// regression-test reference for the same invariant.
+    #[must_use]
+    pub fn transitive_ancestor_members(
+        &self,
+        known: &Map<CommitId, FragmentState<T>>,
+    ) -> Set<CommitId> {
+        let mut acc: Set<CommitId> = Set::new();
+        let mut seen: Set<CommitId> = Set::new();
+        let mut to_visit: Vec<CommitId> = self.boundary.keys().copied().collect();
 
-    while let Some(b) = to_visit.pop() {
-        if !seen.insert(b) {
-            continue;
+        while let Some(b) = to_visit.pop() {
+            if !seen.insert(b) {
+                continue;
+            }
+            if let Some(anc) = known.get(&b) {
+                acc.extend(anc.members().iter().copied());
+                to_visit.extend(anc.boundary().keys().copied());
+            }
         }
-        if let Some(anc) = known.get(&b) {
-            acc.extend(anc.members().iter().copied());
-            to_visit.extend(anc.boundary().keys().copied());
-        }
+
+        acc
     }
-
-    acc
 }
