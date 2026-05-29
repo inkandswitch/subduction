@@ -7,6 +7,7 @@
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
+use core::convert::Infallible;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -14,7 +15,6 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
-use core::convert::Infallible;
 
 use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
