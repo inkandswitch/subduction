@@ -1743,7 +1743,12 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sync_with_all_peers(id, true, None).await?;
+        // WARN:
+        // FIXME:
+        // XXX:
+        // this breaks the subduction approach: look at https://github.com/inkandswitch/subduction/issues/141
+        //
+        // self.sync_with_all_peers(id, true, None).await?;
         Ok(())
     }
 
