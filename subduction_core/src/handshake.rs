@@ -93,7 +93,7 @@ pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
 
 /// Maximum clock drift tolerated during simultaneous open handshakes.
 #[allow(unknown_lints, clippy::duration_suboptimal_units)]
-const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(10 * 60);
+const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(600);
 
 /// Client-side drift correction.
 ///

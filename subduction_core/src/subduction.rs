@@ -86,6 +86,7 @@ use crate::{
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
+    sync_session::{DynSyncSessionObserver, SyncSession, SyncSessionKind},
     timeout::Timeout,
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
@@ -131,7 +132,7 @@ use subduction_crypto::{
 use pending_blob_requests::PendingBlobRequests;
 
 /// The main synchronization manager for sedimentrees.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::type_complexity)]
 pub struct Subduction<
     'a,
@@ -192,6 +193,7 @@ pub struct Subduction<
     /// draws from the same monotonic sequence regardless of which handler
     /// produced it.
     send_counter: PeerCounter,
+    sync_session_observer: Arc<Mutex<Option<DynSyncSessionObserver>>>,
 
     manager_channel: Sender<Command<Authenticated<Conn, Async>>>,
     msg_queue: async_channel::Receiver<(Authenticated<Conn, Async>, Hdl::Message)>,
@@ -340,6 +342,7 @@ where
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
             pending_blob_requests,
             send_counter,
+            sync_session_observer: Arc::new(Mutex::new(None)),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             response_queue: response_receiver,
@@ -367,6 +370,30 @@ where
     #[must_use]
     pub const fn discovery_id(&self) -> Option<DiscoveryId> {
         self.discovery_id
+    }
+
+    /// A method to set a [`SyncSessionObserver`] implementation.
+    ///
+    /// This should just be another parameter to `new` but that
+    /// would be an invasive change just for a sketch.
+    ///
+    /// [`SyncSessionObserver`]: crate::sync_session::SyncSessionObserver
+    /// [`new`]: Subduction::new
+    ///
+    /// # Panics
+    /// Don't call this in parallel.
+    pub fn set_sync_session_observer(&self, observer: DynSyncSessionObserver) {
+        let Some(mut lock) = self.sync_session_observer.try_lock() else {
+            unreachable!("sync session observer lock uncontended during setup")
+        };
+        *lock = Some(observer);
+    }
+
+    async fn emit_sync_session(&self, session: SyncSession) {
+        let observer = self.sync_session_observer.lock().await.clone();
+        if let Some(observer) = observer {
+            observer.on_sync_session(session);
+        }
     }
 
     /// Get a reference to the signer.
@@ -1716,7 +1743,12 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sync_with_all_peers(id, true, None).await?;
+        // WARN:
+        // FIXME:
+        // XXX:
+        // this breaks the subduction approach: look at https://github.com/inkandswitch/subduction/issues/141
+        //
+        // self.sync_with_all_peers(id, true, None).await?;
         Ok(())
     }
 
@@ -1834,6 +1866,7 @@ where
 
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
+            let mut session = SyncSession::new(id, conn.peer_id(), SyncSessionKind::OutboundBatch);
             let seed = FingerprintSeed::random();
             let resolver = self.sedimentrees.get_cloned(&id).await.map_or_else(
                 || Sedimentree::default().fingerprint_resolver(&seed),
@@ -1882,6 +1915,7 @@ where
                     self.handler
                         .notify_remote_heads(id, conn.peer_id(), responder_heads.clone());
                     stats.remote_heads = responder_heads;
+                    session.remote_heads = Some(stats.remote_heads.clone());
                     let SyncDiff {
                         missing_commits,
                         missing_fragments,
@@ -1899,7 +1933,6 @@ where
                             continue;
                         }
                     };
-
                     // Track counts for stats
                     let commits_to_receive = missing_commits.len();
                     let fragments_to_receive = missing_fragments.len();
@@ -1915,6 +1948,7 @@ where
                                 continue;
                             }
                         };
+                        let commit_id = verified.payload().head();
                         let verified_meta = match VerifiedMeta::new(verified, blob) {
                             Ok(vm) => vm,
                             Err(e) => {
@@ -1941,9 +1975,13 @@ where
                                 }
                             }
                         };
-                        self.insert_commit_locally(putter, verified_meta)
+                        let was_new = self
+                            .insert_commit_locally(putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
+                        if was_new {
+                            session.received_commit_ids.push(commit_id);
+                        }
                     }
 
                     for (signed_fragment, blob) in missing_fragments {
@@ -1954,6 +1992,7 @@ where
                                 continue;
                             }
                         };
+                        let fragment_id = verified.payload().head();
                         let verified_meta = match VerifiedMeta::new(verified, blob) {
                             Ok(vm) => vm,
                             Err(e) => {
@@ -1980,9 +2019,13 @@ where
                                 }
                             }
                         };
-                        self.insert_fragment_locally(putter, verified_meta)
+                        let was_new = self
+                            .insert_fragment_locally(putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
+                        if was_new {
+                            session.received_fragment_ids.push(fragment_id);
+                        }
                     }
 
                     self.minimize_tree(id).await;
@@ -2014,6 +2057,8 @@ where
                                 );
                                 stats.commits_sent += sent.commits;
                                 stats.fragments_sent += sent.fragments;
+                                session.sent_commit_ids = sent.commit_ids;
+                                session.sent_fragment_ids = sent.fragment_ids;
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -2033,6 +2078,8 @@ where
                             "mutual subscription: added peer {to_ask} to our subscriptions for {id:?}"
                         );
                     }
+
+                    self.emit_sync_session(session).await;
 
                     had_success = true;
                     break;
@@ -2110,6 +2157,7 @@ where
 
                     for conn in peer_conns {
                         tracing::debug!("Using connection to peer {}", conn.peer_id());
+                        let mut session = SyncSession::new(id, conn.peer_id(), SyncSessionKind::OutboundBatch);
                         let seed = FingerprintSeed::random();
                         let resolver = self
                             .sedimentrees
@@ -2156,6 +2204,7 @@ where
                                     responder_heads.clone(),
                                 );
                                 stats.remote_heads = responder_heads;
+                                session.remote_heads = Some(stats.remote_heads.clone());
                                 let SyncDiff {
                                     missing_commits,
                                     missing_fragments,
@@ -2202,6 +2251,7 @@ where
                                             continue;
                                         }
                                     };
+                                    let commit_id = verified.payload().head();
                                     let verified_meta = match VerifiedMeta::new(verified, blob) {
                                         Ok(vm) => vm,
                                         Err(e) => {
@@ -2226,9 +2276,13 @@ where
                                             }
                                         }
                                     };
-                                    self.insert_commit_locally(putter, verified_meta)
+                                    let was_new = self
+                                        .insert_commit_locally(putter, verified_meta)
                                         .await
                                         .map_err(IoError::Storage)?;
+                                    if was_new {
+                                        session.received_commit_ids.push(commit_id);
+                                    }
                                 }
 
                                 for (signed_fragment, blob) in missing_fragments {
@@ -2241,6 +2295,7 @@ where
                                             continue;
                                         }
                                     };
+                                    let fragment_id = verified.payload().head();
                                     let verified_meta = match VerifiedMeta::new(verified, blob) {
                                         Ok(vm) => vm,
                                         Err(e) => {
@@ -2265,9 +2320,13 @@ where
                                             }
                                         }
                                     };
-                                    self.insert_fragment_locally(putter, verified_meta)
+                                    let was_new = self
+                                        .insert_fragment_locally(putter, verified_meta)
                                         .await
                                         .map_err(IoError::Storage)?;
+                                    if was_new {
+                                        session.received_fragment_ids.push(fragment_id);
+                                    }
                                 }
 
                                 self.minimize_tree(id).await;
@@ -2282,6 +2341,8 @@ where
                                         Ok(sent) => {
                                             stats.commits_sent += sent.commits;
                                             stats.fragments_sent += sent.fragments;
+                                            session.sent_commit_ids = sent.commit_ids;
+                                            session.sent_fragment_ids = sent.fragment_ids;
                                         }
                                         Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
                                             let msg: Hdl::Message = SyncMessage::from(DataRequestRejected { id }).into();
@@ -2311,6 +2372,8 @@ where
                                         "mutual subscription: added peer {peer_id} to our subscriptions for {id:?}"
                                     );
                                 }
+
+                                self.emit_sync_session(session).await;
 
                                 had_success = true;
                                 break;
@@ -2734,7 +2797,7 @@ where
                         },
                     }
                     .into();
-                    commit_msgs.push((true, msg));
+                    commit_msgs.push((*commit_id, msg));
                 }
             }
 
@@ -2751,34 +2814,37 @@ where
                         },
                     }
                     .into();
-                    fragment_msgs.push((false, msg));
+                    fragment_msgs.push((*frag_id, msg));
                 }
             }
 
             (commit_msgs, fragment_msgs)
         };
 
-        // Send all messages concurrently using FuturesUnordered
-        let mut send_futures: FuturesUnordered<_> = commit_messages
-            .into_iter()
-            .chain(fragment_messages)
-            .map(|(is_commit, msg)| async move {
-                let result = conn.send(&msg).await;
-                (is_commit, result)
-            })
-            .collect();
-
         let mut commits_sent = 0;
         let mut fragments_sent = 0;
+        let mut commit_ids = Vec::new();
+        let mut fragment_ids = Vec::new();
 
-        while let Some((is_commit, result)) = send_futures.next().await {
+        for (item_id, msg) in commit_messages {
+            let result = conn.send(&msg).await;
             match result {
                 Ok(()) => {
-                    if is_commit {
-                        commits_sent += 1;
-                    } else {
-                        fragments_sent += 1;
-                    }
+                    commits_sent += 1;
+                    commit_ids.push(item_id);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to send requested data: {}", e);
+                }
+            }
+        }
+
+        for (item_id, msg) in fragment_messages {
+            let result = conn.send(&msg).await;
+            match result {
+                Ok(()) => {
+                    fragments_sent += 1;
+                    fragment_ids.push(item_id);
                 }
                 Err(e) => {
                     tracing::warn!("failed to send requested data: {}", e);
@@ -2789,6 +2855,8 @@ where
         Ok(SendCount {
             commits: commits_sent,
             fragments: fragments_sent,
+            commit_ids,
+            fragment_ids,
         })
     }
 
