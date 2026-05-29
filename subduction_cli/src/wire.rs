@@ -7,13 +7,17 @@
 
 use std::vec::Vec;
 
-use sedimentree_core::codec::{
-    decode::Decode,
-    encode::Encode,
-    error::{DecodeError, InvalidSchema},
+use sedimentree_core::{
+    codec::{
+        decode::Decode,
+        encode::Encode,
+        error::{DecodeError, InvalidSchema},
+    },
+    id::SedimentreeId,
 };
 use subduction_core::connection::message::{
     BatchSyncResponse, MESSAGE_SCHEMA, SyncMessage, TryAsBatchSyncResponse,
+    TryAsSubscribeRequest,
 };
 use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
@@ -61,6 +65,18 @@ impl TryAsBatchSyncResponse for CliWireMessage {
     fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
         match self {
             CliWireMessage::Sync(sync) => sync.try_as_batch_sync_response(),
+            CliWireMessage::Ephemeral(_) | CliWireMessage::Keyhive(_) => None,
+        }
+    }
+}
+
+/// Borrow the subscription target from the wire envelope. Delegates
+/// to the inner [`SyncMessage`] for sync traffic; ephemeral and
+/// keyhive messages never carry subscription requests.
+impl TryAsSubscribeRequest for CliWireMessage {
+    fn try_as_subscribe_request(&self) -> Option<SedimentreeId> {
+        match self {
+            CliWireMessage::Sync(sync) => sync.try_as_subscribe_request(),
             CliWireMessage::Ephemeral(_) | CliWireMessage::Keyhive(_) => None,
         }
     }

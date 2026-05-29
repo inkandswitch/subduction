@@ -54,7 +54,9 @@ use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use crate::{
-    authenticated::Authenticated, connection::message::TryAsBatchSyncResponse, peer::id::PeerId,
+    authenticated::Authenticated,
+    connection::message::{TryAsBatchSyncResponse, TryAsSubscribeRequest},
+    peer::id::PeerId,
 };
 
 /// A handler for messages received from authenticated peers.
@@ -90,14 +92,18 @@ pub trait Handler<Async: FutureForm, Conn: Clone> {
     /// supertrait lets the
     /// [`Subduction`](crate::subduction::Subduction) listen loop route
     /// `BatchSyncResponse`s to pending roundtrip callers without a
-    /// bespoke trait method.
+    /// bespoke trait method. The
+    /// [`TryAsSubscribeRequest`](crate::connection::message::TryAsSubscribeRequest)
+    /// supertrait lets the listen loop forward inbound subscription
+    /// requests to upstream peers in the same way.
     type Message: Encode
         + Decode
         + Clone
         + Send
         + core::fmt::Debug
         + 'static
-        + TryAsBatchSyncResponse;
+        + TryAsBatchSyncResponse
+        + TryAsSubscribeRequest;
 
     /// Error type returned by the handler.
     type HandlerError: core::error::Error;

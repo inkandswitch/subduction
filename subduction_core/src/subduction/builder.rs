@@ -514,7 +514,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Send + Sync + 'static,
-        Hdl: Handler<Async, Conn>,
+        Hdl: Handler<Async, Conn> + crate::remote_heads::RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         crate::connection::managed::ManagedConnection<Conn, Async, Timer>:
@@ -598,7 +598,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Send + Sync + 'static,
-        Hdl: Handler<Async, Conn>,
+        Hdl: Handler<Async, Conn> + crate::remote_heads::RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         Metric: Clone,

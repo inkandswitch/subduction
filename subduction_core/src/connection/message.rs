@@ -268,6 +268,47 @@ impl TryAsBatchSyncResponse for SyncMessage {
     }
 }
 
+/// Fallible extraction of an inbound subscription request from a wire
+/// message.
+///
+/// Implementors return `Some(id)` when `self` is a
+/// `BatchSyncRequest { subscribe: true, id, .. }`, or `None` otherwise.
+/// The [`Subduction`](crate::subduction::Subduction) listen loop uses
+/// this to decide whether to propagate the subscription to its own
+/// upstream peers after the handler returns successfully (mirroring the
+/// way commits and fragments are forwarded).
+///
+/// Implementing on the message type (rather than on the handler) means
+/// composed wire envelopes — e.g. `WireMessage` — automatically get
+/// the right behavior by delegating to their inner [`SyncMessage`]
+/// variant. Non-sync messages return `None`.
+///
+/// The `Try` prefix mirrors stdlib `TryFrom`/`TryInto` fallibility; the
+/// `As` suffix mirrors `AsRef`-style borrow semantics. Returning
+/// `Option` (rather than `Result<_, ()>`) keeps the call site terse.
+pub trait TryAsSubscribeRequest {
+    /// Borrow the [`SedimentreeId`] of an inbound subscribing
+    /// `BatchSyncRequest` from `self`, if `self` is one.
+    fn try_as_subscribe_request(&self) -> Option<SedimentreeId>;
+}
+
+impl TryAsSubscribeRequest for SyncMessage {
+    fn try_as_subscribe_request(&self) -> Option<SedimentreeId> {
+        match self {
+            SyncMessage::BatchSyncRequest(req) if req.subscribe => Some(req.id),
+            SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::BatchSyncResponse(_)
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::LooseCommit { .. }
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::HeadsUpdate { .. } => None,
+        }
+    }
+}
+
 /// A request to remove subscriptions from specific sedimentrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]

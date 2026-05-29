@@ -39,12 +39,15 @@ pub enum Dispatched {
 /// Implement this on your wire message enum (e.g., `CliWireMessage`,
 /// `WireMessage`) to enable [`ComposedHandler`] dispatch. The
 /// [`TryAsBatchSyncResponse`](subduction_core::connection::message::TryAsBatchSyncResponse)
-/// supertrait is required by [`Handler::Message`].
+/// and
+/// [`TryAsSubscribeRequest`](subduction_core::connection::message::TryAsSubscribeRequest)
+/// supertraits are required by [`Handler::Message`].
 pub trait WireEnvelope:
     sedimentree_core::codec::encode::Encode
     + sedimentree_core::codec::decode::Decode
     + From<SyncMessage>
     + subduction_core::connection::message::TryAsBatchSyncResponse
+    + subduction_core::connection::message::TryAsSubscribeRequest
     + Clone
     + Send
     + Debug

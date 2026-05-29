@@ -18,12 +18,17 @@
 
 use alloc::vec::Vec;
 
-use sedimentree_core::codec::{
-    decode::Decode,
-    encode::Encode,
-    error::{DecodeError, InvalidSchema, SizeMismatch},
+use sedimentree_core::{
+    codec::{
+        decode::Decode,
+        encode::Encode,
+        error::{DecodeError, InvalidSchema, SizeMismatch},
+    },
+    id::SedimentreeId,
 };
-use subduction_core::connection::message::{BatchSyncResponse, TryAsBatchSyncResponse};
+use subduction_core::connection::message::{
+    BatchSyncResponse, TryAsBatchSyncResponse, TryAsSubscribeRequest,
+};
 
 #[cfg(all(feature = "serde", feature = "std"))]
 use crate::signed_message::SignedMessage;
@@ -90,6 +95,14 @@ impl KeyhiveMessage {
 /// returns `None`.
 impl TryAsBatchSyncResponse for KeyhiveMessage {
     fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        None
+    }
+}
+
+/// Keyhive messages are never subscription requests; this always
+/// returns `None`.
+impl TryAsSubscribeRequest for KeyhiveMessage {
+    fn try_as_subscribe_request(&self) -> Option<SedimentreeId> {
         None
     }
 }

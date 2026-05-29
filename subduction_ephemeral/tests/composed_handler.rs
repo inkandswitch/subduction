@@ -19,7 +19,10 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
-        message::{BatchSyncResponse, RequestId, SyncMessage, SyncResult, TryAsBatchSyncResponse},
+        message::{
+            BatchSyncResponse, RequestId, SyncMessage, SyncResult, TryAsBatchSyncResponse,
+            TryAsSubscribeRequest,
+        },
         test_utils::ChannelMockConnection,
     },
     handler::Handler,
@@ -104,10 +107,19 @@ impl Decode for TestWireMessage {
     }
 }
 
-impl subduction_core::connection::message::TryAsBatchSyncResponse for TestWireMessage {
+impl TryAsBatchSyncResponse for TestWireMessage {
     fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
         match self {
             Self::Sync(msg) => msg.try_as_batch_sync_response(),
+            Self::Ephemeral(_) => None,
+        }
+    }
+}
+
+impl TryAsSubscribeRequest for TestWireMessage {
+    fn try_as_subscribe_request(&self) -> Option<SedimentreeId> {
+        match self {
+            Self::Sync(msg) => msg.try_as_subscribe_request(),
             Self::Ephemeral(_) => None,
         }
     }

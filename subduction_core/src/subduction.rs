@@ -73,7 +73,7 @@ use crate::{
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult, TryAsBatchSyncResponse,
+            SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
         },
         stats::{SendCount, SyncStats},
     },
@@ -222,7 +222,7 @@ impl<
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
     Store: Storage<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
+    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
@@ -652,12 +652,25 @@ where
                             continue;
                         }
 
-                        // Normal path: dispatch to handler
+                        // Normal path: dispatch to handler. If this is
+                        // an inbound `BatchSyncRequest { subscribe: true }`,
+                        // propagate the subscription to our own upstream
+                        // peers once the handler has processed it
+                        // (mirroring the outbound broadcast that
+                        // `SyncHandler` already does for commits/fragments).
                         let h = handler.clone();
                         let conn_clone = conn.clone();
+                        let propagate_target = msg
+                            .try_as_subscribe_request()
+                            .map(|sed_id| (sed_id, peer_id, Arc::clone(&self)));
 
                         in_flight.push(async move {
                             let result = h.handle(&conn_clone, msg).await;
+                            if result.is_ok()
+                                && let Some((sed_id, originator, me)) = propagate_target
+                            {
+                                me.propagate_subscription(sed_id, originator).await;
+                            }
                             (conn_clone, result)
                         });
                     } else {
@@ -1775,6 +1788,73 @@ where
         self.add_built_batch_locally(id, commits, fragments).await?;
         self.sync_with_all_peers(id, true, None).await?;
         Ok(())
+    }
+
+    /// Propagate an inbound subscription request to our own upstream peers.
+    ///
+    /// Called from the listen loop when
+    /// [`TryAsSubscribeRequest::try_as_subscribe_request`] surfaces a
+    /// `BatchSyncRequest { subscribe: true, .. }`. For every
+    /// currently-connected peer other than `originator` that we do not
+    /// already have an outgoing subscription to for `id`, we issue
+    /// [`sync_with_peer`](Self::sync_with_peer) with `subscribe = true`.
+    ///
+    /// The result: any updates the upstream peer later pushes for `id`
+    /// reach us, and the outbound broadcast loops in
+    /// [`SyncHandler`](crate::handler::sync::SyncHandler) forward them
+    /// back to the originator (and any other local subscribers).
+    /// Forwarding updates and forwarding requests stay symmetric — see
+    /// `design/protocol.md`.
+    ///
+    /// Idempotency comes from [`outgoing_subscriptions`]: a successful
+    /// `sync_with_peer(subscribe = true)` records `(peer, id)` there,
+    /// and the per-peer check below skips peers already covered. Loops
+    /// between mutually-subscribed servers self-quench after one round.
+    ///
+    /// Errors from individual upstream calls are logged and ignored;
+    /// subscription propagation is best-effort.
+    ///
+    /// [`TryAsSubscribeRequest::try_as_subscribe_request`]: crate::connection::message::TryAsSubscribeRequest::try_as_subscribe_request
+    /// [`outgoing_subscriptions`]: Self::outgoing_subscriptions
+    pub(crate) async fn propagate_subscription(
+        self: &Arc<Self>,
+        id: SedimentreeId,
+        originator: PeerId,
+    ) {
+        let peers: Vec<PeerId> = {
+            let conns = self.connections.lock().await;
+            conns
+                .keys()
+                .copied()
+                .filter(|p| *p != originator)
+                .collect()
+        };
+
+        if peers.is_empty() {
+            return;
+        }
+
+        // Snapshot outgoing subscriptions once so the per-peer checks
+        // don't hold the lock across the awaits below.
+        let already_subscribed: Map<PeerId, Set<SedimentreeId>> =
+            self.outgoing_subscriptions.lock().await.clone();
+
+        for peer in peers {
+            if already_subscribed
+                .get(&peer)
+                .is_some_and(|set| set.contains(&id))
+            {
+                continue;
+            }
+            tracing::debug!(
+                "propagating subscription for {id:?} upstream to peer {peer}"
+            );
+            if let Err(e) = self.sync_with_peer(&peer, id, true, None).await {
+                tracing::debug!(
+                    "subscribe propagation to {peer} for {id:?} failed: {e}"
+                );
+            }
+        }
     }
 
     /// Request a batch sync from a given peer for a given sedimentree ID.
@@ -2974,7 +3054,7 @@ pub trait StartListener<
     Store: Storage<Self>,
     Conn: Connection<Self, WireMsg> + PartialEq + 'a,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-    Hdl: Handler<Self, Conn, Message = WireMsg>,
+    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Auth: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sign: Signer<Self>,
     Metric: DepthMetric,
@@ -3002,7 +3082,7 @@ pub trait StartListener<
         Auth::FetchDisallowed: Send + 'static,
         Sign: Signer<Sendable> + Send + Sync + 'a,
         Metric: DepthMetric + Send + Sync + 'a,
-        Hdl: Handler<Sendable, Conn, Message = WireMsg> + Send + Sync + 'a,
+        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier + Send + Sync + 'a,
         Hdl::HandlerError: Into<ListenError<Sendable, Store, Conn, WireMsg>> + Send + 'static,
         Store::Error: Send + 'static,
         Conn::DisconnectionError: Send + 'static,
@@ -3015,13 +3095,13 @@ pub trait StartListener<
         Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
         Sign: Signer<Local> + 'a,
         Metric: DepthMetric + 'a,
-        Hdl: Handler<Local, Conn, Message = WireMsg> + 'a,
+        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'a,
         Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
 )]
 impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
     StartListener<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
 where
-    Hdl: Handler<Async, Conn, Message = WireMsg>,
+    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
