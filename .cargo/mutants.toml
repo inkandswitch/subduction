@@ -37,7 +37,6 @@ exclude_globs = [
     # from the underlying crates, from `wasm-pack test`, and from Playwright.
     "subduction_wasm/**",
     "sedimentree_wasm/**",
-    "automerge_sedimentree_wasm/**",
     "automerge_subduction_wasm/**",
     "subduction_wasm_bootstrap/**",
 

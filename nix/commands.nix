@@ -32,11 +32,6 @@
         cd "$WORKSPACE_ROOT/subduction_wasm"
         ${pnpm} build
 
-        echo "===> Building automerge_sedimentree_wasm..."
-        ${cargo} build --release -p automerge_sedimentree_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
-        ${pnpm} build
-
         echo "===> Building automerge_subduction_wasm..."
         ${cargo} build --release -p automerge_subduction_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/automerge_subduction_wasm"
@@ -62,11 +57,6 @@
         echo "===> Building subduction_wasm..."
         ${cargo} build -p subduction_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/subduction_wasm"
-        ${pnpm} build
-
-        echo "===> Building automerge_sedimentree_wasm..."
-        ${cargo} build -p automerge_sedimentree_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
         ${pnpm} build
 
         echo "===> Building automerge_subduction_wasm..."
@@ -129,7 +119,7 @@
         echo "Usage: bench:flame <package> [filter] [seconds]"
         echo ""
         echo "  package  Crate to bench (sedimentree_core, subduction_core,"
-        echo "           subduction_websocket, automerge_sedimentree)"
+        echo "           subduction_websocket)"
         echo "  filter   Benchmark name filter (default: all)"
         echo "  seconds  Profile duration per benchmark (default: 10)"
         echo ""
@@ -137,7 +127,6 @@
         echo "  bench:flame sedimentree_core minimize"
         echo "  bench:flame subduction_core batch_sync 15"
         echo "  bench:flame subduction_websocket handshake"
-        echo "  bench:flame automerge_sedimentree diff"
       }
 
       if [ -z "''${1:-}" ]; then
@@ -162,10 +151,6 @@
         subduction_websocket)
           BENCH="e2e"
           FEATURES="--features tokio_client,tokio_server"
-          ;;
-        automerge_sedimentree)
-          BENCH="egwalker"
-          FEATURES=""
           ;;
         *)
           echo "Unknown package: $PACKAGE"
@@ -488,7 +473,7 @@
       }
 
       rows=""
-      for dir in automerge_sedimentree_wasm automerge_subduction_wasm sedimentree_wasm subduction_wasm; do
+      for dir in automerge_subduction_wasm sedimentree_wasm subduction_wasm; do
         wasm_file=$(ls "$WORKSPACE_ROOT/$dir/dist/wasm_bindgen/web/"*_bg.wasm 2>/dev/null | head -1)
         if [ -n "$wasm_file" ] && [ -f "$wasm_file" ]; then
           name=$(basename "$dir")
@@ -571,7 +556,7 @@
     "bodge:all" = cmd "Build all wasm packages with wasm-bodge (release + /debug variants)" ''
       set -e
 
-      for crate in sedimentree_wasm subduction_wasm automerge_sedimentree_wasm automerge_subduction_wasm; do
+      for crate in sedimentree_wasm subduction_wasm automerge_subduction_wasm; do
         echo "===> wasm-bodge build $crate..."
         rm -rf "$WORKSPACE_ROOT/$crate/dist"
         ${wasm-bodge-bin} build \
@@ -596,7 +581,6 @@
         echo "Available crates:"
         echo "  sedimentree_wasm"
         echo "  subduction_wasm"
-        echo "  automerge_sedimentree_wasm"
         echo "  automerge_subduction_wasm"
         exit 1
       fi

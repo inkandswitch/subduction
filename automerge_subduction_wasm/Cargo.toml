@@ -19,11 +19,15 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 automerge = { workspace = true, features = ["wasm"] }
+base58 = { workspace = true }
+blake3 = { workspace = true }
 console_error_panic_hook = { workspace = true }
-automerge_sedimentree_wasm = { workspace = true }
 js-sys = { workspace = true }
+sedimentree_core = { workspace = true }
+sedimentree_wasm = { workspace = true }
 subduction_wasm = { workspace = true, features = ["std"] }
 subduction_wasm_bootstrap = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 wasm-bindgen = { workspace = true }
@@ -40,8 +44,11 @@ default = ["idb", "std", "wasm-tracing"]
 # IndexedDB storage backend (browser-only).
 idb = ["subduction_wasm/idb"]
 std = [
-  "automerge_sedimentree_wasm/std",
+  "blake3/std",
+  "js-sys/std",
+  "sedimentree_core/std",
   "subduction_wasm/std",
+  "thiserror/std",
   "tracing/std",
   "wasm-bindgen/std",
 ]

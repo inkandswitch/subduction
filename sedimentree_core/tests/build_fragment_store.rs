@@ -38,6 +38,28 @@ fn run_fragment_store(
     (fresh_owned, known)
 }
 
+/// Parallel-variant of `run_fragment_store`.
+///
+/// The parallel implementation processes by depth horizon and clones a
+/// per-horizon snapshot of `known_fragment_states`; at depth N the snapshot
+/// can never contain depth > N fragments, so the inline strip inside
+/// `fragment()` is structurally blind to deeper-ancestor overlap. The
+/// post-pass is the only safeguard. Test coverage for the post-pass must
+/// therefore exercise this driver explicitly, not just the sequential one.
+#[cfg(feature = "rayon")]
+fn run_fragment_store_par(
+    graph: &TestGraph,
+    head_names: &[&str],
+) -> (Vec<FragmentState<Set<CommitId>>>, Known) {
+    let heads: Vec<CommitId> = head_names.iter().map(|n| graph.node_hash(n)).collect();
+    let mut known: Known = Map::new();
+    let fresh = graph
+        .build_fragment_store_par(&heads, &mut known, graph.depth_metric())
+        .expect("build_fragment_store_par");
+    let fresh_owned: Vec<_> = fresh.into_iter().cloned().collect();
+    (fresh_owned, known)
+}
+
 /// Collect all member identifiers across all known fragments.
 fn all_covered(known: &Known) -> Set<CommitId> {
     known
@@ -514,4 +536,311 @@ fn linear_same_depth_produces_sibling_fragments() {
     let b_members: Set<_> = frag_b.members().iter().copied().collect();
     assert!(b_members.contains(&graph.node_hash("b")));
     assert!(b_members.contains(&graph.node_hash("a")));
+}
+
+// -----------------------------------------------------------------------
+// Transitive-ancestor dedup (regression for `build_fragment_store`)
+// -----------------------------------------------------------------------
+
+/// Regression: in a concurrent DAG, a fragment's members must not overlap
+/// with any transitively-reachable ancestor fragment's members.
+///
+/// The fragment-construction BFS in `CommitStore::fragment` walks parents
+/// until it hits boundary-depth commits. In a concurrent DAG it can reach
+/// a commit that's _also_ a member of a deeper-ancestor fragment, via a
+/// path that doesn't go through the deeper-ancestor fragment's head. The
+/// inline strip inside `fragment()` only sees direct boundaries, so the
+/// duplicate slips through unless `build_fragment_store` does a post-pass
+/// over transitive ancestors.
+///
+/// Minimal trigger:
+/// ```text
+///                   c (depth 0)
+///                  / \
+///        f_deep (2)   other_path (depth 0)
+///             \              \
+///         f_mid (depth 1)     \
+///                  \           \
+///                   f_shallow (depth 1)
+/// ```
+///
+/// `fragment(f_shallow)` walks `f_shallow → {f_mid, other_path}`, absorbs
+/// `other_path` (depth 0) and then `c` (depth 0) as members. `c` is
+/// _also_ a member of `f_deep` (reached as `f_deep → c`). `f_deep` is
+/// not in `f_shallow.boundary` — only `f_mid` is — so the direct-boundary
+/// strip cannot reach it. The post-pass over `f_shallow.boundary.f_mid
+/// .boundary.f_deep` is what removes `c` from `f_shallow.members`.
+#[test]
+fn members_disjoint_from_transitive_ancestor_members() {
+    let mut rng = seeded_rng(60);
+    let graph = TestGraph::new(
+        &mut rng,
+        &[
+            ("c", 0),
+            ("f_deep", 2),
+            ("other_path", 0),
+            ("f_mid", 1),
+            ("f_shallow", 1),
+        ],
+        &[
+            ("c", "f_deep"),
+            ("c", "other_path"),
+            ("f_deep", "f_mid"),
+            ("f_mid", "f_shallow"),
+            ("other_path", "f_shallow"),
+        ],
+    );
+
+    let (_fresh, known) = run_fragment_store(&graph, &["f_shallow"]);
+
+    let mut violations: Vec<(CommitId, Vec<CommitId>)> = Vec::new();
+    for (head, state) in &known {
+        let ancestor_members = state.transitive_ancestor_members(&known);
+        let overlap: Vec<CommitId> = state
+            .members()
+            .iter()
+            .filter(|m| ancestor_members.contains(m))
+            .copied()
+            .collect();
+        if !overlap.is_empty() {
+            violations.push((*head, overlap));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "fragment members overlap with transitively-reachable ancestor fragments: {violations:?}"
+    );
+}
+
+/// Generalisation of the regression test above: assert the invariant
+/// across all fragments produced for an arbitrary mixed-depth DAG with
+/// multiple concurrent paths. Catches regressions whose specific bug
+/// shape doesn't match the minimal trigger above.
+#[test]
+fn members_disjoint_invariant_on_complex_concurrent_dag() {
+    let mut rng = seeded_rng(61);
+
+    // Two parallel "lanes" descending from a common deep root, joined
+    // again at a shallow head. Several concurrent-edit shapes per lane.
+    //
+    // ```text
+    //              root (depth 0)
+    //               /         \
+    //          d_left (2)   d_right (2)
+    //              |             |
+    //          m_left (0)    m_right (0)
+    //              |             |
+    //          mid_left (1)  mid_right (1)
+    //               \           /
+    //                top (depth 1)
+    //                    |
+    //                  head (depth 0)
+    // ```
+    let graph = TestGraph::new(
+        &mut rng,
+        &[
+            ("root", 0),
+            ("d_left", 2),
+            ("d_right", 2),
+            ("m_left", 0),
+            ("m_right", 0),
+            ("mid_left", 1),
+            ("mid_right", 1),
+            ("top", 1),
+            ("head", 0),
+        ],
+        &[
+            ("root", "d_left"),
+            ("root", "d_right"),
+            ("d_left", "m_left"),
+            ("d_right", "m_right"),
+            ("m_left", "mid_left"),
+            ("m_right", "mid_right"),
+            ("mid_left", "top"),
+            ("mid_right", "top"),
+            ("top", "head"),
+        ],
+    );
+
+    let (_fresh, known) = run_fragment_store(&graph, &["head"]);
+
+    for (head, state) in &known {
+        let ancestor_members = state.transitive_ancestor_members(&known);
+        let overlap: Vec<CommitId> = state
+            .members()
+            .iter()
+            .filter(|m| ancestor_members.contains(m))
+            .copied()
+            .collect();
+        assert!(
+            overlap.is_empty(),
+            "fragment {head:?} members overlap with transitive ancestors: {overlap:?}",
+        );
+    }
+}
+
+// -----------------------------------------------------------------------
+// Parallel-variant coverage (rayon feature)
+// -----------------------------------------------------------------------
+//
+// The parallel implementation processes by depth horizon and clones a
+// per-horizon snapshot of `known_fragment_states`. At depth N the
+// snapshot can never contain depth > N fragments, so the inline strip
+// inside `fragment()` is structurally blind to deeper-ancestor overlap.
+// The post-pass is the only safeguard against re-introducing the bug
+// covered by `members_disjoint_from_transitive_ancestor_members` above.
+
+/// Parallel-variant of `members_disjoint_from_transitive_ancestor_members`.
+#[cfg(feature = "rayon")]
+#[test]
+fn members_disjoint_from_transitive_ancestor_members_par() {
+    let mut rng = seeded_rng(60);
+    let graph = TestGraph::new(
+        &mut rng,
+        &[
+            ("c", 0),
+            ("f_deep", 2),
+            ("other_path", 0),
+            ("f_mid", 1),
+            ("f_shallow", 1),
+        ],
+        &[
+            ("c", "f_deep"),
+            ("c", "other_path"),
+            ("f_deep", "f_mid"),
+            ("f_mid", "f_shallow"),
+            ("other_path", "f_shallow"),
+        ],
+    );
+
+    let (_fresh, known) = run_fragment_store_par(&graph, &["f_shallow"]);
+
+    let mut violations: Vec<(CommitId, Vec<CommitId>)> = Vec::new();
+    for (head, state) in &known {
+        let ancestor_members = state.transitive_ancestor_members(&known);
+        let overlap: Vec<CommitId> = state
+            .members()
+            .iter()
+            .filter(|m| ancestor_members.contains(m))
+            .copied()
+            .collect();
+        if !overlap.is_empty() {
+            violations.push((*head, overlap));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "par: fragment members overlap with transitively-reachable ancestor fragments: \
+         {violations:?}"
+    );
+}
+
+/// Parallel-variant of `members_disjoint_invariant_on_complex_concurrent_dag`.
+#[cfg(feature = "rayon")]
+#[test]
+fn members_disjoint_invariant_on_complex_concurrent_dag_par() {
+    let mut rng = seeded_rng(61);
+    let graph = TestGraph::new(
+        &mut rng,
+        &[
+            ("root", 0),
+            ("d_left", 2),
+            ("d_right", 2),
+            ("m_left", 0),
+            ("m_right", 0),
+            ("mid_left", 1),
+            ("mid_right", 1),
+            ("top", 1),
+            ("head", 0),
+        ],
+        &[
+            ("root", "d_left"),
+            ("root", "d_right"),
+            ("d_left", "m_left"),
+            ("d_right", "m_right"),
+            ("m_left", "mid_left"),
+            ("m_right", "mid_right"),
+            ("mid_left", "top"),
+            ("mid_right", "top"),
+            ("top", "head"),
+        ],
+    );
+
+    let (_fresh, known) = run_fragment_store_par(&graph, &["head"]);
+
+    for (head, state) in &known {
+        let ancestor_members = state.transitive_ancestor_members(&known);
+        let overlap: Vec<CommitId> = state
+            .members()
+            .iter()
+            .filter(|m| ancestor_members.contains(m))
+            .copied()
+            .collect();
+        assert!(
+            overlap.is_empty(),
+            "par: fragment {head:?} members overlap with transitive ancestors: {overlap:?}",
+        );
+    }
+}
+
+/// Sequential and parallel variants must produce the same fragment set
+/// for any input. Catches divergence that depth-horizon batching could
+/// introduce — e.g. a same-depth sibling collision that resolves
+/// differently between the two drivers.
+#[cfg(feature = "rayon")]
+#[test]
+fn sequential_and_parallel_agree_on_complex_concurrent_dag() {
+    let mut rng_seq = seeded_rng(62);
+    let mut rng_par = seeded_rng(62);
+    let nodes: &[(&str, usize)] = &[
+        ("root", 0),
+        ("d_left", 2),
+        ("d_right", 2),
+        ("m_left", 0),
+        ("m_right", 0),
+        ("mid_left", 1),
+        ("mid_right", 1),
+        ("top", 1),
+        ("head", 0),
+    ];
+    let edges = &[
+        ("root", "d_left"),
+        ("root", "d_right"),
+        ("d_left", "m_left"),
+        ("d_right", "m_right"),
+        ("m_left", "mid_left"),
+        ("m_right", "mid_right"),
+        ("mid_left", "top"),
+        ("mid_right", "top"),
+        ("top", "head"),
+    ];
+
+    let graph_seq = TestGraph::new(&mut rng_seq, nodes, edges);
+    let graph_par = TestGraph::new(&mut rng_par, nodes, edges);
+
+    let (_seq_fresh, seq_known) = run_fragment_store(&graph_seq, &["head"]);
+    let (_par_fresh, par_known) = run_fragment_store_par(&graph_par, &["head"]);
+
+    let seq_heads: Set<CommitId> = seq_known.keys().copied().collect();
+    let par_heads: Set<CommitId> = par_known.keys().copied().collect();
+    assert_eq!(
+        seq_heads, par_heads,
+        "sequential and parallel produce different fragment heads"
+    );
+
+    for head in &seq_heads {
+        let s = seq_known.get(head).expect("seq has head");
+        let p = par_known.get(head).expect("par has head");
+        assert_eq!(s.members(), p.members(), "members differ at {head:?}");
+        assert_eq!(
+            s.checkpoints(),
+            p.checkpoints(),
+            "checkpoints differ at {head:?}"
+        );
+        let s_boundary: Set<CommitId> = s.boundary().keys().copied().collect();
+        let p_boundary: Set<CommitId> = p.boundary().keys().copied().collect();
+        assert_eq!(s_boundary, p_boundary, "boundary differs at {head:?}");
+    }
 }

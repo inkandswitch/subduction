@@ -41,7 +41,7 @@ pnpm run test:report
 
 ## Debugging with Chrome DevTools
 
-Subduction's Wasm packages can ship a parallel `./debug` subpath export that preserves DWARF debug info, enabling source-level step-through in Chrome DevTools. This section applies to `@automerge/subduction` but is also valid for `@automerge/sedimentree`, `@automerge/automerge-sedimentree`, and `@automerge/automerge-subduction`.
+Subduction's Wasm packages can ship a parallel `./debug` subpath export that preserves DWARF debug info, enabling source-level step-through in Chrome DevTools. This section applies to `@automerge/subduction` but is also valid for `@automerge/sedimentree` and `@automerge/automerge-subduction`.
 
 ### One-time Chrome setup
 

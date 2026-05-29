@@ -110,7 +110,6 @@ if [[ "$rc" -eq 0 ]]; then
 else
   echo ""
   echo "Fix: use RefCell for interior mutability so wasm_bindgen only"
-  echo "takes shared borrows (&self). See automerge_sedimentree_wasm/"
-  echo "src/fragment.rs for an example."
+  echo "takes shared borrows (&self)."
   exit 1
 fi

@@ -1,6 +1,7 @@
 //! # Wasm Bindings for the Subduction/Automerge integration.
 //!
-//! This crate re-exports all types from `subduction_wasm` and `automerge_sedimentree_wasm`
+//! This crate re-exports all types from `subduction_wasm` and adds the
+//! Automerge-specific helpers (e.g. [`commit_id::commit_id_of_base58_id`])
 //! to provide a single unified entry point for TypeScript/JavaScript consumers.
 //!
 //! ## Log Level Configuration
@@ -44,10 +45,11 @@ extern crate alloc;
 
 use alloc::string::String;
 
+pub mod commit_id;
+pub mod error;
 pub mod js_logger;
 
-// Re-export everything from subduction_wasm and automerge_sedimentree_wasm
-pub use automerge_sedimentree_wasm::*;
+// Re-export everything from subduction_wasm
 pub use subduction_wasm::*;
 
 use wasm_bindgen::prelude::*;

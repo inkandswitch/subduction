@@ -45,7 +45,6 @@ graph TD
     end
 
     subgraph Integrations
-        automerge_sedimentree
         subduction_keyhive
         subduction_keyhive_policy
     end
@@ -53,7 +52,6 @@ graph TD
     subgraph Wasm
         sedimentree_wasm
         subduction_wasm
-        automerge_sedimentree_wasm
         automerge_subduction_wasm
     end
 
@@ -61,8 +59,6 @@ graph TD
 
     sedimentree_core --> subduction_crypto
     subduction_crypto --> subduction_core
-
-    sedimentree_core --> automerge_sedimentree
 
     subduction_core --> sedimentree_fs_storage
     subduction_core --> subduction_http_longpoll
@@ -74,11 +70,8 @@ graph TD
     subduction_core --> subduction_wasm
     sedimentree_wasm --> subduction_wasm
 
-    subduction_wasm --> automerge_sedimentree_wasm
-    sedimentree_wasm --> automerge_sedimentree_wasm
-
-    automerge_sedimentree_wasm --> automerge_subduction_wasm
     subduction_wasm --> automerge_subduction_wasm
+    sedimentree_wasm --> automerge_subduction_wasm
 
     subduction_http_longpoll --> subduction_cli
     subduction_iroh --> subduction_cli
@@ -98,13 +91,11 @@ graph TD
 
 ### Platform Bindings
 
-| Crate                        | Description                                                |
-|------------------------------|------------------------------------------------------------|
-| `sedimentree_wasm`           | WebAssembly bindings for Sedimentree                       |
-| `subduction_wasm`            | WebAssembly bindings for browser and Node.js environments  |
-| `automerge_sedimentree`      | Sedimentree adapter for Automerge documents                |
-| `automerge_sedimentree_wasm` | Wasm bindings for Automerge + Sedimentree                  |
-| `automerge_subduction_wasm`  | Wasm bindings for Automerge + Subduction (full sync stack) |
+| Crate                       | Description                                                |
+|-----------------------------|------------------------------------------------------------|
+| `sedimentree_wasm`          | WebAssembly bindings for Sedimentree                       |
+| `subduction_wasm`           | WebAssembly bindings for browser and Node.js environments  |
+| `automerge_subduction_wasm` | Wasm bindings for Automerge + Subduction (full sync stack) |
 
 ### Integrations
 
@@ -268,9 +259,8 @@ subduction/
 ├── subduction_cli/             # CLI server and data management
 ├── subduction_keyhive/         # Keyhive integration types
 ├── subduction_keyhive_policy/  # Keyhive authorization policy
-├── automerge_sedimentree/      # Automerge integration
-├── automerge_sedimentree_wasm/ # Wasm wrapper for automerge_sedimentree
-└── automerge_subduction_wasm/  # Wasm wrapper for automerge_sedimentree + subduction
+├── automerge_subduction_ingest/ # CLI to ingest Automerge documents into Subduction
+└── automerge_subduction_wasm/  # Wasm wrapper for the full Automerge + Subduction stack
 ```
 
 ### Testing

@@ -13,9 +13,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 # Pure rlib — never built as a cdylib itself. Linked into each of the
-# four cdylib crates (`subduction_wasm`, `sedimentree_wasm`,
-# `automerge_sedimentree_wasm`, `automerge_subduction_wasm`), where its
-# `init_basic()` is invoked from each cdylib's `#[wasm_bindgen(start)]`.
+# three cdylib crates (`subduction_wasm`, `sedimentree_wasm`,
+# `automerge_subduction_wasm`), where its `init_basic()` is invoked from
+# each cdylib's `#[wasm_bindgen(start)]`.
 
 [dependencies]
 console_error_panic_hook = { workspace = true }

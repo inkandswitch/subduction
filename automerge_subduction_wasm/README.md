@@ -7,7 +7,7 @@ Wasm bindings for syncing Automerge documents via Subduction.
 
 ## Overview
 
-This crate combines `automerge_sedimentree_wasm` and `subduction_wasm` to provide a complete solution for syncing Automerge documents in browser and Node.js environments.
+This crate combines the Automerge document ID helpers (e.g. `commitIdOfBase58Id`) with `subduction_wasm` to provide a complete solution for syncing Automerge documents in browser and Node.js environments.
 
 ## License
 
