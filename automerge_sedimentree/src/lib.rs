@@ -6,7 +6,13 @@
 //! fragmentizer), replacing the older `CommitStore`-based path that this
 //! crate previously exposed.
 //!
+//! The [`indexed`] module retains a pre-indexed [`CommitStore`] impl that
+//! drives `build_fragment_store` directly. It is no longer on the
+//! production ingest path; tests and benches use it as a reference
+//! implementation when validating the upstream fragmentizer output.
+//!
 //! [`Sedimentree`]: sedimentree_core::sedimentree::Sedimentree
+//! [`CommitStore`]: sedimentree_core::commit::CommitStore
 //! [`Automerge`]: automerge::Automerge
 //! [`Automerge::fragments`]: automerge::Automerge::fragments
 //! [`Automerge::bundle_fragments`]: automerge::Automerge::bundle_fragments
@@ -19,4 +25,5 @@ extern crate std;
 
 extern crate alloc;
 
+pub mod indexed;
 pub mod ingest;

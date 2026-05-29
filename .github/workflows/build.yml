@@ -125,7 +125,6 @@ jobs:
         run: |
           nix develop --command bash -c "
             cd ./subduction_wasm && pnpm i
-            cd ../automerge_sedimentree_wasm && pnpm i
             cd ../automerge_subduction_wasm && pnpm i
           "
 
@@ -142,17 +141,6 @@ jobs:
             subduction_wasm/pkg-slim/
             subduction_wasm/package.json
             subduction_wasm/README.md
-          retention-days: 90
-
-      - name: Upload automerge_sedimentree_wasm artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: automerge-sedimentree-wasm-${{ env.VERSION }}
-          path: |
-            automerge_sedimentree_wasm/pkg/
-            automerge_sedimentree_wasm/pkg-node/
-            automerge_sedimentree_wasm/pkg-slim/
-            automerge_sedimentree_wasm/package.json
           retention-days: 90
 
       - name: Upload automerge_subduction_wasm artifact
@@ -210,7 +198,7 @@ jobs:
           done
 
           # Wasm tarballs
-          for name in subduction-wasm automerge-sedimentree-wasm automerge-subduction-wasm; do
+          for name in subduction-wasm automerge-subduction-wasm; do
             tar -czf "release/${name}-${VERSION}.tar.gz" -C "artifacts/${name}-${VERSION}" .
           done
 
@@ -259,7 +247,6 @@ jobs:
           | Package | File |
           |---------|------|
           | subduction_wasm | \`subduction-wasm-${VERSION}.tar.gz\` |
-          | automerge_sedimentree_wasm | \`automerge-sedimentree-wasm-${VERSION}.tar.gz\` |
           | automerge_subduction_wasm | \`automerge-subduction-wasm-${VERSION}.tar.gz\` |
           EOF
           )" \

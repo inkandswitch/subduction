@@ -322,20 +322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "automerge_sedimentree_wasm"
-version = "0.12.1"
-dependencies = [
- "base58",
- "blake3",
- "js-sys",
- "sedimentree_core",
- "sedimentree_wasm",
- "subduction_wasm_bootstrap",
- "thiserror 2.0.18",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "automerge_subduction_ingest"
 version = "0.4.1"
 dependencies = [
@@ -362,13 +348,17 @@ name = "automerge_subduction_wasm"
 version = "0.13.0"
 dependencies = [
  "automerge",
- "automerge_sedimentree_wasm",
+ "base58",
+ "blake3",
  "console_error_panic_hook",
  "getrandom 0.3.4",
  "getrandom 0.4.2",
  "js-sys",
+ "sedimentree_core",
+ "sedimentree_wasm",
  "subduction_wasm",
  "subduction_wasm_bootstrap",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",

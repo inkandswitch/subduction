@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
   "automerge_sedimentree",
-  "automerge_sedimentree_wasm",
   "automerge_subduction_ingest",
   "automerge_subduction_wasm",
   "sedimentree_core",
@@ -33,7 +32,6 @@ authors = [
 [workspace.dependencies]
 # Internal crates
 automerge_sedimentree = { version = "0.10.1", path = "automerge_sedimentree", default-features = false }
-automerge_sedimentree_wasm = { version = "0.12.1", path = "automerge_sedimentree_wasm" }
 automerge_subduction_wasm = { version = "0.13.0", path = "automerge_subduction_wasm", default-features = false }
 sedimentree_core = { version = "0.12.1", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.10.1", path = "sedimentree_fs_storage" }
@@ -186,9 +184,6 @@ strip = "debuginfo"
 [profile.release.package.subduction_wasm]
 strip = "debuginfo"
 
-[profile.release.package.automerge_sedimentree_wasm]
-strip = "debuginfo"
-
 [profile.release.package.automerge_subduction_wasm]
 strip = "debuginfo"
 
@@ -262,7 +257,6 @@ codegen-units = 16
 # |                            | release       | wasm-debug    | multiplier   |
 # | sedimentree_wasm           |  1 MiB / 224K | 11 MiB / 2 MiB | 12x raw, 10x gz |
 # | subduction_wasm            |  3 MiB / 723K | 29 MiB / 6 MiB | 10x raw,  8x gz |
-# | automerge_sedimentree_wasm |  3 MiB / 761K | 43 MiB / 8 MiB | 14x raw, 11x gz |
 # | automerge_subduction_wasm  |  3 MiB / 778K | 41 MiB / 8 MiB | 14x raw, 11x gz |
 debug = "limited"
 debug-assertions = true
@@ -278,9 +272,6 @@ strip = "none"
 strip = "none"
 
 [profile.wasm-debug.package.subduction_wasm]
-strip = "none"
-
-[profile.wasm-debug.package.automerge_sedimentree_wasm]
 strip = "none"
 
 [profile.wasm-debug.package.automerge_subduction_wasm]
