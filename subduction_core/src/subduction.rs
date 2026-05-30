@@ -1832,11 +1832,7 @@ where
     ///
     /// [`TryAsSubscribeRequest::try_as_subscribe_request`]: crate::connection::message::TryAsSubscribeRequest::try_as_subscribe_request
     /// [`outgoing_subscriptions`]: Self::outgoing_subscriptions
-    pub(crate) async fn propagate_subscription(
-        self: &Arc<Self>,
-        id: SedimentreeId,
-        originator: PeerId,
-    ) {
+    pub(crate) async fn propagate_subscription(&self, id: SedimentreeId, originator: PeerId) {
         let peers: Vec<PeerId> = {
             let conns = self.connections.lock().await;
             conns.keys().copied().filter(|p| *p != originator).collect()
