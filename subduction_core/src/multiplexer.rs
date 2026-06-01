@@ -129,6 +129,27 @@ impl Multiplexer {
         self.pending.lock().await.remove(req_id);
     }
 
+    /// Cancel every pending call, dropping their response senders.
+    ///
+    /// Called when the connection backing this multiplexer is torn down
+    /// (disconnect / removal). Dropping the [`oneshot::Sender`]s resolves
+    /// any awaiting receiver with [`CallError::ResponseDropped`]
+    /// immediately, rather than letting in-flight calls strand for the
+    /// full per-call timeout. (The multiplexer can outlive its removal
+    /// from the connection map because in-flight calls hold `Arc`
+    /// clones of it.)
+    pub async fn cancel_all_pending(&self) {
+        let mut pending = self.pending.lock().await;
+        let n = pending.len();
+        if n > 0 {
+            pending.clear();
+            tracing::debug!(
+                "cancelled {n} pending call(s) on multiplexer for peer {:?}",
+                self.peer_id
+            );
+        }
+    }
+
     /// Try to resolve a pending call with an inbound `BatchSyncResponse`.
     ///
     /// Returns `true` if the response matched a pending request and was
