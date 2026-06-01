@@ -127,7 +127,7 @@ To preserve that end-to-end reachability, every node that accepts an
 inbound subscribing `BatchSyncRequest` also propagates the subscription
 to every _other_ currently-connected peer. Forwarding _updates_
 (`LooseCommit` / `Fragment`) and forwarding _subscription requests_
-stays symmetric: both flow outward from every accepting node.
+stay symmetric: both flow outward from every accepting node.
 
 ```mermaid
 sequenceDiagram

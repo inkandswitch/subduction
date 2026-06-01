@@ -1822,10 +1822,29 @@ where
     /// Forwarding updates and forwarding requests stay symmetric — see
     /// `design/sync/subscriptions.md#upstream-propagation-relay-topologies`.
     ///
-    /// Idempotency comes from [`outgoing_subscriptions`]: a successful
-    /// `sync_with_peer(subscribe = true)` records `(peer, id)` there,
-    /// and the per-peer check below skips peers already covered. Loops
-    /// between mutually-subscribed servers self-quench after one round.
+    /// # Concurrency
+    ///
+    /// The listen loop dispatches handler futures concurrently via
+    /// `FuturesUnordered`, so two inbound subscribes for the same
+    /// sedimentree can enter this method simultaneously. To prevent
+    /// duplicate upstream `BatchSyncRequest`s for the same
+    /// `(peer, id)` pair, the claim step pre-inserts each pending pair
+    /// into [`outgoing_subscriptions`] under a single short-held lock
+    /// before any `sync_with_peer` await. Concurrent callers that
+    /// observe the pre-insert skip propagation correctly.
+    ///
+    /// `sync_with_peer` calls
+    /// [`track_outgoing_subscription`](Self::track_outgoing_subscription)
+    /// on success, which re-inserts the same `(peer, id)` pair
+    /// idempotently. On failure, the pre-inserted claim is rolled back
+    /// so the next inbound subscribe will retry — this keeps
+    /// `outgoing_subscriptions` honest as "subscriptions we currently
+    /// have established," matching its use by
+    /// [`get_peer_subscriptions`](Self::get_peer_subscriptions) for
+    /// reconnect-restoration.
+    ///
+    /// Loops between mutually-subscribed servers self-quench after one
+    /// round because each side's claim deduplicates the next.
     ///
     /// Errors from individual upstream calls are logged and ignored;
     /// subscription propagation is best-effort.
@@ -1842,21 +1861,33 @@ where
             return;
         }
 
-        // Snapshot outgoing subscriptions once so the per-peer checks
-        // don't hold the lock across the awaits below.
-        let already_subscribed: Map<PeerId, Set<SedimentreeId>> =
-            self.outgoing_subscriptions.lock().await.clone();
+        // Atomically claim `(peer, id)` for every peer that doesn't
+        // already have it. Concurrent invocations that observe the
+        // claim will skip propagation. The lock is held only across
+        // this partition step — never across `sync_with_peer` awaits.
+        let to_propagate: Vec<PeerId> = {
+            let mut subs = self.outgoing_subscriptions.lock().await;
+            peers
+                .into_iter()
+                .filter(|peer| subs.entry(*peer).or_default().insert(id))
+                .collect()
+        };
 
-        for peer in peers {
-            if already_subscribed
-                .get(&peer)
-                .is_some_and(|set| set.contains(&id))
-            {
-                continue;
-            }
+        for peer in to_propagate {
             tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
             if let Err(e) = self.sync_with_peer(&peer, id, true, None).await {
                 tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
+                // Roll back our claim so the next inbound subscribe can
+                // retry. `track_outgoing_subscription` was not called on
+                // this path (the request never succeeded), so removing
+                // the entry returns the map to its pre-claim state.
+                let mut subs = self.outgoing_subscriptions.lock().await;
+                if let Some(set) = subs.get_mut(&peer) {
+                    set.remove(&id);
+                    if set.is_empty() {
+                        subs.remove(&peer);
+                    }
+                }
             }
         }
     }

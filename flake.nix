@@ -2,7 +2,7 @@
   description = "subduction";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-25.11";
+    nixpkgs.url = "nixpkgs/nixos-26.05";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
 
     command-utils.url = "git+https://codeberg.org/expede/nix-command-utils";
@@ -182,7 +182,6 @@
             nativeBuildInputs = [ pkgs.makeWrapper ];
             postBuild = ''
               wrapProgram $out/bin/grafana --set GF_PATHS_PLUGINS ${pluginsDir}
-              wrapProgram $out/bin/grafana-server --set GF_PATHS_PLUGINS ${pluginsDir}
             '';
           };
 
@@ -241,8 +240,8 @@
           name = "subduction_shell";
 
           nativeBuildInputs =
-            [
-              command_menu
+            command_menu
+            ++ [
               rust-toolchain
               nightly-rustfmt
 
@@ -253,8 +252,8 @@
               grafana
               pkgs.grafana-loki
               pkgs.http-server
-              pkgs.nodePackages.pnpm
-              pkgs.nodePackages_latest.webpack-cli
+              pkgs.pnpm
+              pkgs.webpack-cli
               pkgs.nodejs
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
