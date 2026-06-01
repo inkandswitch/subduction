@@ -3,7 +3,10 @@
 //! CLI-specific types: filesystem storage ([`FsKeyhiveStorage`]) and
 //! connection adapter ([`CliConnKeyhiveAdapter`]).
 
-use core::convert::Infallible;
+use core::{
+    convert::Infallible,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use std::{io, path::PathBuf};
 
 use future_form::Sendable;
@@ -22,6 +25,11 @@ use crate::{handler::CliConn, transport::TransportSendError, wire::CliWireMessag
 const ARCHIVES_SUBDIR: &str = "archives";
 const OPS_SUBDIR: &str = "ops";
 const TMP_SUBDIR: &str = "tmp";
+
+/// Monotonic per-process counter for temp filenames. A unique temp path per
+/// save lets concurrent saves of the same hash proceed without sharing a
+/// temp file.
+static NEXT_TMP_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Filesystem-backed [`KeyhiveStorage`].
 ///
@@ -71,10 +79,30 @@ impl FsKeyhiveStorage {
         data: Vec<u8>,
     ) -> io::Result<()> {
         let filename = format!("{}.bin", hash.to_hex());
-        let tmp = self.tmp_dir().join(&filename);
         let dest = parent_dir.join(&filename);
+
+        let tmp_id = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
+        let tmp = self.tmp_dir().join(format!(
+            "{}.{}.{tmp_id}.tmp",
+            hash.to_hex(),
+            std::process::id()
+        ));
+
         tokio::fs::write(&tmp, data).await?;
-        tokio::fs::rename(&tmp, &dest).await
+        match tokio::fs::rename(&tmp, &dest).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Best-effort cleanup of the temp file after a failed rename.
+                let _ = tokio::fs::remove_file(&tmp).await;
+                // Content is hash-addressed. If `dest` already exists, an
+                // equivalent save already stored it, so treat this as success.
+                if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     async fn load_dir(dir: PathBuf) -> io::Result<Vec<(StorageHash, Vec<u8>)>> {
