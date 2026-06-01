@@ -571,23 +571,18 @@ impl crate::timeout::Timeout<Local> for InstantTimeout {
 }
 
 /// A [`ChannelTransport`] wrapper that can be paused mid-test to simulate
-/// a peer that is byte-connected but protocol-unresponsive (the underlying
-/// socket is open, but the remote runtime is wedged and does not process
-/// inbound messages or emit responses).
+/// a peer that is byte-connected but protocol-unresponsive (socket open,
+/// remote runtime wedged).
 ///
-/// Once [`pause`](Self::pause) is called, both in-flight and subsequent
-/// `recv_bytes` / `send_bytes` futures on this side park forever, modeling
-/// a wedge in the remote runtime: the peer's sends still enqueue into the
-/// channel but never get drained, so the wire looks live while no
-/// protocol-level progress is possible.
+/// After [`pause`](Self::pause), in-flight and subsequent `recv_bytes` /
+/// `send_bytes` futures on this side park forever, so the wire looks live
+/// while no protocol progress is possible.
 #[derive(Debug, Clone)]
 pub struct PausableChannelTransport {
     inner: ChannelTransport,
-    /// `pause_signal_rx.recv()` parks until the matching `pause_signal_tx`
-    /// is closed, at which point it returns `Err`. We use this as a
-    /// "paused" notification: calling [`pause`](Self::pause) closes the
-    /// sender, every awaiter wakes up, and the recv error is treated as
-    /// "stay parked forever" by the I/O wrappers.
+    /// Closing `pause_signal_tx` is the pause signal: it wakes every
+    /// `pause_signal_rx.recv()` awaiter with `Err`, which the I/O wrappers
+    /// treat as "stay parked forever".
     pause_signal_tx: async_channel::Sender<()>,
     pause_signal_rx: async_channel::Receiver<()>,
 }

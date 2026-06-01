@@ -195,10 +195,8 @@ mod tests {
         );
     }
 
-    /// P1 — `cancel_all_pending` resolves *every* registered receiver to
-    /// `Err`, for any number of pending requests (including zero).
-    /// Generalizes `cancel_all_pending_drops_registered_senders` and
-    /// subsumes the old "no-op when empty" smoke test (n == 0).
+    /// `cancel_all_pending` resolves every registered receiver to `Err`,
+    /// for any number of pending requests (including zero).
     #[cfg(feature = "bolero")]
     #[test]
     fn cancel_all_pending_resolves_every_receiver() {
@@ -232,10 +230,9 @@ mod tests {
         });
     }
 
-    /// P2 — `cancel_all_pending` is idempotent and does not poison the
-    /// multiplexer: a request registered *after* the cancels stays
-    /// pending (is not pre-cancelled) and is itself cancellable. Replaces
-    /// the assertion-free `cancel_all_pending_is_noop_when_empty`.
+    /// `cancel_all_pending` is idempotent and does not poison the
+    /// multiplexer: a request registered after the cancels stays pending
+    /// and is itself cancellable.
     #[cfg(feature = "bolero")]
     #[test]
     fn cancel_all_pending_is_idempotent_and_does_not_poison() {
@@ -270,7 +267,7 @@ mod tests {
                     "a freshly-registered request must remain pending after prior cancels"
                 );
 
-                // ...and is itself cancellable.
+                // The new request is itself cancellable.
                 mux.cancel_all_pending().await;
                 let resolved = tokio::time::timeout(Duration::from_millis(200), rx)
                     .await
@@ -283,15 +280,13 @@ mod tests {
         });
     }
 
-    /// Concrete N == 0 case kept as a fast, always-on smoke check (the
-    /// bolero properties above are feature-gated).
+    /// Always-on smoke check (the bolero properties above are gated).
     #[tokio::test]
     async fn cancel_all_pending_on_empty_is_a_noop_and_leaves_mux_usable() {
         let mux = test_mux();
         mux.cancel_all_pending().await;
 
-        // The mux is still usable: a freshly-registered request is not
-        // pre-cancelled.
+        // A freshly-registered request is not pre-cancelled.
         let id = mux.next_request_id();
         let mut rx = mux.register_pending(id).await;
         let still_pending = tokio::time::timeout(Duration::from_millis(50), &mut rx).await;

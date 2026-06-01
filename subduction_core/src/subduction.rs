@@ -156,34 +156,27 @@ pub struct Subduction<
 
     /// Active connections, keyed by peer ID.
     ///
-    /// # Lock ordering
+    /// Lock ordering: this is the outer lock relative to
+    /// [`multiplexers`](Self::multiplexers). Code that needs both must
+    /// take `connections` first and hold it while touching `multiplexers`;
+    /// the reverse order risks deadlock. Mutating both maps under one
+    /// `connections` critical section (in [`add_connection`] and the
+    /// teardown paths) keeps the "connected peer has a multiplexer, and
+    /// vice versa" invariant from being observed half-applied.
     ///
-    /// This is the **OUTER** lock relative to
-    /// [`multiplexers`](Self::multiplexers): any code path that needs both
-    /// locks must acquire `connections` *first* and hold it while touching
-    /// `multiplexers`. This ordering enforces the
-    /// `connections` ⟺ `multiplexers` invariant (every connected peer has
-    /// a multiplexer, and vice versa) against concurrent
-    /// connect/disconnect: both maps are mutated within one `connections`
-    /// critical section in [`add_connection`](Self::add_connection) and in
-    /// the teardown paths. Violating the order (taking `multiplexers`
-    /// before `connections`) risks deadlock.
+    /// [`add_connection`]: Self::add_connection
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
 
     /// Per-connection multiplexers for request-response correlation.
     ///
-    /// Keyed by peer ID, with one [`Multiplexer`] per connection (matching
-    /// the order in [`connections`](Self::connections)). Used by
+    /// Keyed by peer ID, with one [`Multiplexer`] per connection. Used by
     /// [`sync_with_peer`](Self::sync_with_peer) to make roundtrip calls
     /// and by the listen loop to route [`BatchSyncResponse`] messages.
     ///
-    /// # Lock ordering
-    ///
-    /// This is the **INNER** lock relative to
-    /// [`connections`](Self::connections); see that field's docs. Read
-    /// paths that need *only* this lock (response routing,
-    /// `sync_with_*` mux lookup) may take it alone, but any path that also
-    /// needs `connections` must take `connections` first.
+    /// Lock ordering: inner lock relative to
+    /// [`connections`](Self::connections). Read paths that need only this
+    /// lock (response routing, mux lookup) may take it alone; paths that
+    /// also need `connections` must take `connections` first.
     multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
 
     /// Default timeout for roundtrip calls (`BatchSyncRequest` → `BatchSyncResponse`).
@@ -571,8 +564,6 @@ where
                         );
                         // Connection is broken — remove from conns map.
                         if self.remove_connection(&conn).await == Some(true) {
-                            // `remove_connection` already cancelled muxes and
-                            // cleared the send counter for the now-gone peer.
                             handler.on_peer_disconnect(peer_id).await;
                         }
                         tracing::warn!("removed failed connection from peer {}", peer_id);
@@ -716,8 +707,6 @@ where
                             "Connection {conn_id} from peer {peer_id} closed, removing"
                         );
                         if self.remove_connection(&conn).await == Some(true) {
-                            // `remove_connection` already cancelled muxes and
-                            // cleared the send counter for the now-gone peer.
                             handler.on_peer_disconnect(peer_id).await;
                         }
                     }
@@ -752,12 +741,9 @@ where
         let peer_id = conn.peer_id();
         tracing::info!("Disconnecting connection from peer {}", peer_id);
 
-        // Determine the outcome under the `connections` lock. If this was
-        // the peer's last connection, detach its multiplexers within the
-        // SAME critical section (lock ordering: connections OUTER,
-        // multiplexers INNER) so a concurrent `add_connection` reconnect
-        // cannot have its fresh mux clobbered. The detached muxes are
-        // cancelled afterwards, off the lock.
+        // Detach the muxes inside the same critical section that removes
+        // the connection, so a concurrent `add_connection` can't have its
+        // fresh mux clobbered. Cancel them afterwards, off the lock.
         let detached = {
             let mut connections = self.connections.lock().await;
             match connections.remove(&peer_id) {
@@ -779,13 +765,8 @@ where
         };
 
         match detached {
-            Some(muxes) => {
-                // Peer's last connection: full teardown (muxes,
-                // subscriptions, send counter, metrics) in canonical order.
-                self.teardown_peer(&peer_id, muxes, 1).await;
-            }
+            Some(muxes) => self.teardown_peer(&peer_id, muxes, 1).await,
             None => {
-                // Peer still has other connections; only the metric fires.
                 #[cfg(feature = "metrics")]
                 crate::metrics::connection_closed();
             }
@@ -800,11 +781,9 @@ where
     ///
     /// * Returns [`Conn::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), Conn::DisconnectionError> {
-        // Drain connections and multiplexers within one `connections`
-        // critical section (lock ordering: connections OUTER, multiplexers
-        // INNER) so the `connections` ⟺ `multiplexers` invariant holds
-        // against any concurrent `add_connection`. The muxes are cancelled
-        // afterwards, off the lock (cancelling can't be held across it).
+        // Drain connections and muxes in one `connections` critical
+        // section (outer before inner), then cancel off the lock. This is
+        // the bulk equivalent of `teardown_peer` for every peer at once.
         let (all_conns, removed_muxes): (
             Vec<Authenticated<Conn, Async>>,
             Vec<Arc<Multiplexer>>,
@@ -821,24 +800,10 @@ where
             (conns, muxes)
         };
 
-        // Bulk sibling of `teardown_peer`: same canonical order
-        // (muxes → subscriptions → send counter → metrics), but applied
-        // to every peer at once rather than one at a time.
-
-        // 1. Cancel in-flight calls so awaiting callers see
-        //    `ResponseDropped` now, rather than stranding until their
-        //    per-call timeout. The muxes can outlive the map removal
-        //    (in-flight calls hold `Arc` clones), so dropping the map
-        //    alone wouldn't release the senders.
         Self::cancel_detached_muxes(removed_muxes).await;
-
-        // 2. Drop all inbound subscriptions.
         self.subscriptions.lock().await.clear();
-
-        // 3. Clear all outbound send counters.
         self.send_counter.clear_all().await;
 
-        // 4. One `connection_closed` metric per removed connection.
         #[cfg(feature = "metrics")]
         for _ in &all_conns {
             crate::metrics::connection_closed();
@@ -868,10 +833,9 @@ where
         &self,
         peer_id: &PeerId,
     ) -> Result<bool, Conn::DisconnectionError> {
-        // Remove the peer's connections and detach its multiplexers within
-        // one `connections` critical section (lock ordering: connections
-        // OUTER, multiplexers INNER) so a concurrent reconnect can't be
-        // clobbered.
+        // Remove the peer's connections and detach its muxes in one
+        // `connections` critical section (outer before inner) so a
+        // concurrent reconnect can't be clobbered.
         let removed = {
             let mut connections = self.connections.lock().await;
             match connections.remove(peer_id) {
@@ -884,10 +848,7 @@ where
         };
 
         if let Some((conns, muxes)) = removed {
-            // Removing all of a peer's connections is, by definition,
-            // removing its last connection: run the full teardown once,
-            // emitting one `connection_closed` metric per removed
-            // connection.
+            // Removing every connection is by definition removing the last.
             self.teardown_peer(peer_id, muxes, conns.len()).await;
 
             for conn in conns {
@@ -898,8 +859,6 @@ where
             }
             Ok(true)
         } else {
-            // Peer wasn't connected; by the connections/multiplexers
-            // lockstep invariant it has no muxes to cancel either.
             Ok(false)
         }
     }
@@ -931,17 +890,11 @@ where
             .map_err(AddConnectionError::ConnectionDisallowed)?;
 
         {
-            // Lock ordering: `connections` is the OUTER lock and
-            // `multiplexers` the INNER lock (see the field docs). We
-            // insert the connection and create its multiplexer inside the
-            // SAME `connections` critical section so the
-            // `connections` ⟺ `multiplexers` invariant
-            // ("every connected peer has a multiplexer, and vice versa")
-            // can never be observed torn — a concurrent teardown removes
-            // from both maps under this same outer lock.
+            // Insert the connection and create its mux under one
+            // `connections` critical section (outer before inner) so the
+            // connection/mux invariant is never observed half-applied.
             let mut connections = self.connections.lock().await;
 
-            // Check if this exact connection is already registered
             if connections
                 .get(&peer_id)
                 .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
@@ -949,7 +902,6 @@ where
                 return Ok(false);
             }
 
-            // Add connection to the peer's connection list
             match connections.get_mut(&peer_id) {
                 Some(peer_conns) => {
                     peer_conns.push(conn.clone());
@@ -959,8 +911,6 @@ where
                 }
             }
 
-            // Create a multiplexer for request-response correlation,
-            // still holding the `connections` lock.
             let mux = Arc::new(Multiplexer::new(peer_id, self.default_call_timeout));
             let mut multiplexers = self.multiplexers.lock().await;
             match multiplexers.get_mut(&peer_id) {
@@ -996,31 +946,22 @@ where
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
     pub async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
-        // `peers::remove_connection` owns the connection-map bookkeeping
-        // and — because it is shared with `SyncHandler::remove_connection`
-        // — also the inbound-subscription cleanup and the `connection_closed`
-        // metric. The remainder of the last-connection teardown (cancel
-        // in-flight muxed calls, clear the send counter) is owned here,
-        // since `SyncHandler` has access to neither the multiplexer map
-        // nor the send counter. Together these cover the same state as
-        // [`teardown_peer`](Self::teardown_peer); the split exists only
-        // because this path is shared with `SyncHandler`.
+        // `peers::remove_connection` is shared with
+        // `SyncHandler::remove_connection`, so it handles only the
+        // connection map, subscriptions, and the metric. Mux cancellation
+        // and the send counter live here, where the mux map is reachable.
         let result = peers::remove_connection(&self.connections, &self.subscriptions, conn).await;
 
-        // Only when the peer's last connection drops: cancel its in-flight
-        // calls and clear its send counter. While the peer still has other
-        // connections, leave them — those connections may yet service the
-        // pending responses.
+        // Cancel pending calls only when the peer's last connection drops.
+        // While it still has other connections, those may yet service the
+        // responses.
         if result == Some(true) {
             let peer_id = conn.peer_id();
 
-            // Detach muxes under the `connections` lock, but only if the
-            // peer is still absent. `peers::remove_connection` released the
-            // `connections` lock before returning, so a concurrent
-            // `add_connection` reconnect may already have re-inserted the
-            // peer (and created a fresh mux) in the gap. Re-checking
-            // membership under the lock ensures we never clobber that fresh
-            // mux: if the peer is back, we leave its muxes alone.
+            // `peers::remove_connection` already released the `connections`
+            // lock, so a concurrent reconnect may have re-added the peer
+            // (with a fresh mux). Re-check under the lock and skip mux
+            // detachment if the peer is back, to avoid clobbering it.
             let detached = {
                 let mut connections = self.connections.lock().await;
                 if connections.contains_key(&peer_id) {
@@ -1037,27 +978,15 @@ where
         result
     }
 
-    /// Detach a peer's multiplexers from the map, returning them so the
-    /// caller can cancel their pending calls *after* releasing locks.
+    /// Remove a peer's multiplexers from the map and return them for the
+    /// caller to cancel after releasing the lock.
     ///
-    /// # Lock ordering
-    ///
-    /// Takes the already-held `connections` guard by mutable reference.
-    /// The mux map (`multiplexers`) is the INNER lock and is acquired and
-    /// released here while the OUTER `connections` lock is still held by
-    /// the caller. Removing the peer from `connections` and from
-    /// `multiplexers` within one `connections` critical section is what
-    /// preserves the `connections` ⟺ `multiplexers` invariant against a
-    /// concurrent [`add_connection`](Self::add_connection): a reconnect
-    /// either fully precedes this (and is then cleaned) or fully follows
-    /// it (and re-creates the entry afterwards), but can never have its
-    /// freshly-created mux clobbered.
-    ///
-    /// `cancel_all_pending` is intentionally *not* called here — that
-    /// `.await` must not be held across the `connections` lock. The
-    /// returned muxes are already removed from the map (so no reader can
-    /// find them), and the caller cancels them post-release via
-    /// [`cancel_detached_muxes`](Self::cancel_detached_muxes).
+    /// Takes the held `connections` guard by `&mut` so the mux removal
+    /// happens inside the caller's `connections` critical section; this is
+    /// what keeps a concurrent [`add_connection`](Self::add_connection)
+    /// from having its fresh mux clobbered. Cancellation is left to the
+    /// caller via [`cancel_detached_muxes`](Self::cancel_detached_muxes)
+    /// because its `.await` must not be held across the `connections` lock.
     async fn detach_peer_muxes_locked(
         &self,
         _connections_guard: &mut Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>,
@@ -1083,23 +1012,14 @@ where
         }
     }
 
-    /// Finish per-peer teardown after a peer's last connection is gone and
-    /// its multiplexers have already been detached under the `connections`
-    /// lock (see [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
+    /// Finish per-peer teardown after the peer's last connection is gone
+    /// and its muxes have been detached via
+    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked).
     ///
-    /// This is the single canonical post-lock cleanup path shared by the
-    /// teardown entry points ([`disconnect`](Self::disconnect),
-    /// [`disconnect_from_peer`](Self::disconnect_from_peer)). Centralising
-    /// it keeps the order and the set of cleaned-up state identical across
-    /// paths rather than each reimplementing a slightly different subset.
-    ///
-    /// Canonical order (all *after* the `connections` lock is released):
-    ///
-    /// 1. Cancel the detached in-flight multiplexed calls.
-    /// 2. Drop the peer from the inbound subscription sets.
-    /// 3. Clear its outbound send counter.
-    /// 4. Emit one `connection_closed` metric per connection that went
-    ///    away (`conn_count`).
+    /// Shared post-lock cleanup for [`disconnect`](Self::disconnect) and
+    /// [`disconnect_from_peer`](Self::disconnect_from_peer) so they clean
+    /// up the same state in the same order. Emits `conn_count`
+    /// `connection_closed` metrics.
     async fn teardown_peer(
         &self,
         peer_id: &PeerId,
@@ -1247,11 +1167,8 @@ where
                     let seed = FingerprintSeed::random();
                     let resolver = tree.fingerprint_resolver(&seed);
 
-                    // The connection snapshot and this mux lookup take their
-                    // locks separately, so a concurrent teardown may have
-                    // removed the peer's multiplexer in between. Treat a
-                    // missing mux as "the peer went away" and skip it rather
-                    // than panicking.
+                    // Mux missing means the peer was torn down between the
+                    // connection snapshot and here; skip rather than panic.
                     let Some(mux) = ({
                         let muxes = self.multiplexers.lock().await;
                         muxes.get(&peer_id).and_then(|v| v.first()).cloned()
@@ -1463,8 +1380,7 @@ where
                         peer_id,
                         IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
                     );
-                    // `remove_connection` handles all last-connection
-                    // teardown (muxes, send counter, subscriptions, metrics).
+                    // `remove_connection` runs the full teardown on the last connection.
                     self.remove_connection(&conn).await;
                 }
             }
@@ -1572,8 +1488,7 @@ where
                     peer_id,
                     IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
                 );
-                // `remove_connection` handles all last-connection
-                // teardown (muxes, send counter, subscriptions, metrics).
+                // `remove_connection` runs the full teardown on the last connection.
                 self.remove_connection(&conn).await;
             }
         }
@@ -1844,8 +1759,7 @@ where
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
                 tracing::warn!("peer {peer_id} disconnected: {e}");
-                // `remove_connection` handles all last-connection
-                // teardown (muxes, send counter, subscriptions, metrics).
+                // `remove_connection` runs the full teardown on the last connection.
                 self.remove_connection(&conn).await;
             }
         }
@@ -1855,12 +1769,8 @@ where
 // ---------------------------------------------------------------------------
 // Test-only observability surface.
 //
-// Consolidated behind a single `#[cfg(any(feature = "test_utils", test))]`
-// gate (rather than sprinkling the attribute over individual production
-// methods) so the test-introspection API lives in one place and the
-// production `impl` blocks stay free of test-only noise. These methods
-// read internal state for asserting invariants; they are never compiled
-// into a normal build.
+// Gated as one block so the test-introspection API stays in one place and
+// out of the production `impl`s. Reads internal state to assert invariants.
 // ---------------------------------------------------------------------------
 
 #[cfg(any(feature = "test_utils", test))]
@@ -1885,10 +1795,8 @@ impl<
 
     /// Number of multiplexers currently registered for `peer_id`.
     ///
-    /// Test-only observability for the `connections` ⟺ `multiplexers`
-    /// invariant. One multiplexer is created per connection, so this is
-    /// expected to equal [`connection_count`](Self::connection_count) at
-    /// every quiescent point.
+    /// One multiplexer is created per connection, so at a quiescent point
+    /// this equals [`connection_count`](Self::connection_count).
     pub async fn mux_count(&self, peer_id: &PeerId) -> usize {
         self.multiplexers
             .lock()
@@ -1898,8 +1806,6 @@ impl<
     }
 
     /// Number of connections currently registered for `peer_id`.
-    ///
-    /// Test-only observability counterpart to [`mux_count`](Self::mux_count).
     pub async fn connection_count(&self, peer_id: &PeerId) -> usize {
         self.connections
             .lock()
@@ -1908,29 +1814,15 @@ impl<
             .map_or(0, NonEmpty::len)
     }
 
-    /// Whether the load-bearing `connections` ⟹ `multiplexers` invariant
-    /// holds for `peer_id`:
+    /// Whether the connection/multiplexer invariant holds for `peer_id`:
+    /// a connected peer has at least one multiplexer, and a disconnected
+    /// peer has none.
     ///
-    /// - a peer with **any** connection must have **at least one**
-    ///   multiplexer (this is exactly what the three
-    ///   `.expect("multiplexer exists for every connected peer")` sites
-    ///   rely on to not panic), and
-    /// - a peer with **no** connection must have **no** multiplexer (no
-    ///   orphaned mux leak).
-    ///
-    /// Note this is deliberately the *weaker* "connected ⟹ ≥1 mux" form,
-    /// not strict per-connection equality: a multiplexer is created per
-    /// connection by [`add_connection`](Self::add_connection) but the
-    /// non-last [`remove_connection`](Self::remove_connection) path
-    /// removes a connection without removing its (positionally-tracked)
-    /// mux, so `mux_count` can transiently exceed `connection_count`
-    /// while the peer is still connected. That positional correspondence
-    /// is known modeling debt; what the panic sites actually require is
-    /// only the presence/absence captured here.
-    ///
-    /// Tests assert this directly rather than reconstructing it from the
-    /// two counts. Both maps are read under their locks in the canonical
-    /// order (connections first, then multiplexers).
+    /// This is the presence/absence form the `expect("multiplexer
+    /// exists...")` sites depend on, not strict per-connection equality:
+    /// the non-last [`remove_connection`](Self::remove_connection) path
+    /// drops a connection without dropping its mux, so `mux_count` can
+    /// exceed `connection_count` while the peer is still connected.
     pub async fn conn_mux_invariant_holds(&self, peer_id: &PeerId) -> bool {
         let conns = self.connection_count(peer_id).await;
         let muxes = self.mux_count(peer_id).await;
@@ -2224,11 +2116,8 @@ where
                 resolver.summary().fragment_fingerprints().len()
             );
 
-            // The connection snapshot and this mux lookup take their locks
-            // separately, so a concurrent teardown may have removed the
-            // peer's multiplexer between the two. Treat a missing mux as
-            // "the peer went away": record a dropped-response error for
-            // this connection and move on, rather than panicking.
+            // Mux missing means the peer was torn down between the
+            // connection snapshot and here; report it dropped, don't panic.
             let Some(mux) = ({
                 let muxes = self.multiplexers.lock().await;
                 muxes.get(to_ask).and_then(|v| v.first()).cloned()
@@ -2505,12 +2394,9 @@ where
                                 |t| t.fingerprint_resolver(&seed),
                             );
 
-                        // The connection snapshot and this mux lookup take
-                        // their locks separately, so a concurrent teardown
-                        // may have removed the peer's multiplexer in between.
-                        // Treat a missing mux as "the peer went away":
-                        // record a dropped-response error and move on rather
-                        // than panicking.
+                        // Mux missing means the peer was torn down between
+                        // the connection snapshot and here; report it
+                        // dropped, don't panic.
                         let Some(mux) = ({
                             let muxes = self.multiplexers.lock().await;
                             muxes.get(peer_id).and_then(|v| v.first()).cloned()

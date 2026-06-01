@@ -1,26 +1,12 @@
-//! Disconnect cancels in-flight sync calls:
-//! an in-flight `sync_with_all_peers` against a wedged peer must abort
-//! as soon as the peer is removed/disconnected — it must not continue
-//! waiting for the per-call timeout to expire.
+//! Disconnect cancels in-flight sync calls: an in-flight
+//! `sync_with_all_peers` against a wedged peer must resolve as soon as
+//! the peer is disconnected, not wait out the per-call timeout.
 //!
-//! ## Reproduction shape
-//!
-//! 1. Connect A↔B over [`PausableChannelTransport`].
-//! 2. After the connection is registered, pause B's `recv_bytes`. B's
-//!    listener loop never picks up A's `BatchSyncRequest`, so no response
-//!    is produced.
-//! 3. Spawn `a.sync_with_all_peers(sed_id, true, Some(60s))` — a long
-//!    per-call timeout so a passing run can only be explained by the
-//!    disconnect plumbing.
-//! 4. After a short sleep (long enough for A's request to be queued),
-//!    tear down the connection. This drops the peer's `Multiplexer`
-//!    pending senders, resolving the in-flight call immediately.
-//! 5. Assert the spawned future resolves in well under the 60s timeout.
-//!
-//! Without `Multiplexer::cancel_all_pending`, this hangs for the full
-//! timeout: the in-flight `call()` sits on a oneshot receiver that
-//! nobody resolves, and the mux outlives its removal from the map
-//! because the call holds an `Arc` clone of it.
+//! The tests connect A to a wedged B over [`PausableChannelTransport`],
+//! spawn a sync with a deliberately long (60s) per-call timeout, then
+//! tear down the connection and assert the sync resolves well under that
+//! timeout. The long timeout means a pass can only come from teardown
+//! dropping the mux's pending senders, not from the timeout firing.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -152,13 +138,10 @@ async fn disconnect_from_peer_cancels_in_flight_sync_with_all_peers() -> TestRes
     );
     let result = result.expect("join error").expect("task panicked")?;
 
-    // `sync_with_all_peers` snapshots the connection set at the start of
-    // the call, before `disconnect_from_peer` ran (the test sleeps 50 ms
-    // after spawning the sync), so the wedged peer IS present in the
-    // result map. Pin the outcome precisely: the peer did not succeed and
-    // the call failed specifically with `ResponseDropped` — i.e. the mux
-    // sender was dropped by teardown, NOT a `Timeout` (which would mean
-    // the cancellation never happened and we merely got lucky on timing).
+    // The peer is in the result map because `sync_with_all_peers`
+    // snapshots connections before `disconnect_from_peer` runs. Require
+    // `ResponseDropped` (cancelled via the dropped mux sender), not
+    // `Timeout`, so a slow timeout can't masquerade as a pass.
     let (success, _stats, conn_errs) = result
         .get(&b_peer)
         .expect("wedged peer must be present in the result map");
@@ -326,7 +309,7 @@ async fn connected_peer_always_has_a_multiplexer() -> TestResult {
 }
 
 // ---------------------------------------------------------------------------
-// Reconnect-during-teardown races (Option-3 lock-nesting fix)
+// Reconnect-during-teardown races
 // ---------------------------------------------------------------------------
 
 /// Repeatedly race `add_connection` (a fresh connection for the same
