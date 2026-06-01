@@ -93,7 +93,7 @@ impl FsKeyhiveStorage {
             Ok(()) => Ok(()),
             Err(e) => {
                 // Best-effort cleanup of the temp file after a failed rename.
-                let _ = tokio::fs::remove_file(&tmp).await;
+                drop(tokio::fs::remove_file(&tmp).await);
                 // Content is hash-addressed. If `dest` already exists, an
                 // equivalent save already stored it, so treat this as success.
                 if tokio::fs::try_exists(&dest).await.unwrap_or(false) {

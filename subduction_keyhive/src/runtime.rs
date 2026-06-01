@@ -57,6 +57,12 @@ pub type SendableRuntimeKeyhive = Keyhive<
 pub struct RuntimeConfig {
     /// Interval between periodic cache refreshes.
     pub cache_refresh_interval: Duration,
+
+    /// Whether to reload and re-ingest the store when events remain pending
+    /// after ingestion.
+    ///
+    /// False by default.
+    pub attempt_storage_recovery: bool,
     // /// Minimum interval between outbound sync requests to the same peer.
     // ///
     // TODO: Implement
@@ -88,10 +94,10 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             cache_refresh_interval: Duration::from_secs(2),
+            attempt_storage_recovery: false,
             // min_sync_request_interval: Duration::from_secs(1),
             // min_sync_response_interval: Duration::from_secs(1),
             // batch_interval: None,
-            // attempt_storage_recovery: true,
             // suppress_writes_during_ingest: false,
         }
     }
@@ -225,17 +231,17 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
 
     let shared = Arc::new(AsyncMutex::new(keyhive));
     let policy_keyhive = Arc::clone(&shared);
-    let protocol = Arc::new(KeyhiveProtocol::<
-        _,
-        Vec<u8>,
-        Vec<u8>,
-        _,
-        _,
-        _,
-        Conn,
-        Store,
-        future_form::Local,
-    >::new(shared, storage, peer_id, contact_card));
+    let mut protocol =
+        KeyhiveProtocol::<_, Vec<u8>, Vec<u8>, _, _, _, Conn, Store, future_form::Local>::new(
+            shared,
+            storage,
+            peer_id,
+            contact_card,
+        );
+    if config.attempt_storage_recovery {
+        protocol = protocol.with_storage_recovery();
+    }
+    let protocol = Arc::new(protocol);
 
     if let Err(e) = protocol.ingest_from_storage().await {
         tracing::warn!("keyhive ingest_from_storage failed: {e}");

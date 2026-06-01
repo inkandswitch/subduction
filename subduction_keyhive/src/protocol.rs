@@ -97,6 +97,11 @@ where
     peers: Mutex<Map<KeyhivePeerId, Conn>>,
     contact_card: ContactCard,
     archive_config: Option<(usize, StorageHash)>,
+    /// Whether to reload and re-ingest the store when events remain pending
+    /// after ingestion.
+    ///
+    /// False by default. Enable it with [`Self::with_storage_recovery`].
+    attempt_storage_recovery: bool,
     syncpoints: Mutex<SyncpointMap>,
     cache: Mutex<PeriodicEventCache>,
     _marker: core::marker::PhantomData<Async>,
@@ -155,6 +160,7 @@ where
             peers: Mutex::new(Map::new()),
             contact_card,
             archive_config: None,
+            attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             _marker: core::marker::PhantomData,
@@ -170,6 +176,13 @@ where
         storage_id: StorageHash,
     ) -> Self {
         self.archive_config = Some((threshold, storage_id));
+        self
+    }
+
+    /// Enable storage recovery when events remain pending after ingestion.
+    #[must_use]
+    pub const fn with_storage_recovery(mut self) -> Self {
+        self.attempt_storage_recovery = true;
         self
     }
 
@@ -1061,15 +1074,22 @@ where
         };
 
         if !pending.is_empty() {
-            tracing::warn!(
-                count = pending.len(),
-                "some events pending after ingestion, attempting storage recovery"
-            );
-
-            if let Err(e) = self.try_storage_recovery(event_bytes_list).await {
+            if self.attempt_storage_recovery {
                 tracing::warn!(
-                    error = %e,
-                    "storage recovery failed"
+                    count = pending.len(),
+                    "events pending after ingestion, attempting storage recovery"
+                );
+
+                if let Err(e) = self.try_storage_recovery(event_bytes_list).await {
+                    tracing::warn!(
+                        error = %e,
+                        "storage recovery failed"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    count = pending.len(),
+                    "events pending after ingestion; storage recovery disabled"
                 );
             }
         }
