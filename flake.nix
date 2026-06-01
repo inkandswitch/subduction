@@ -131,6 +131,12 @@
           wasm-tools
         ];
 
+        # Pinned to pnpm 10: pnpm 11 stopped reading `pnpm.overrides` from
+        # package.json (the wasm wrapper packages keep their esbuild
+        # override there) and treats ignored build scripts as a hard
+        # error, both of which break `pnpm i` in CI.
+        pnpm = pkgs.pnpm_10;
+
         # Built-in command modules from nix-command-utils
         rust = command-utils.rust.${system};
         pnpm' = command-utils.pnpm.${system};
@@ -160,9 +166,9 @@
           (wasm.doc { cargo = pkgs.cargo; xdg-open = pkgs.xdg-utils; })
 
           # pnpm commands for wasm wrapper builds
-          (pnpm'.build { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
-          (pnpm'.install { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
-          (pnpm'.test { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
+          (pnpm'.build { pnpm = "${pnpm}/bin/pnpm"; })
+          (pnpm'.install { pnpm = "${pnpm}/bin/pnpm"; })
+          (pnpm'.test { pnpm = "${pnpm}/bin/pnpm"; })
 
           # Project-specific commands
           { commands = projectCommands; packages = []; }
@@ -252,7 +258,7 @@
               grafana
               pkgs.grafana-loki
               pkgs.http-server
-              pkgs.pnpm
+              pnpm
               pkgs.webpack-cli
               pkgs.nodejs
               pkgs.playwright-driver
