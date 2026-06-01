@@ -832,7 +832,8 @@ async fn relay_topology_unestablished_upstream_subscribe_rolls_back_claim() -> T
     // propagation, claims `(B, sed_id)`, and asks B — which answers
     // `Unauthorized`, so the upstream subscription is never
     // established.
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
