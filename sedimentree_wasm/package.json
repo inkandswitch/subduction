@@ -107,10 +107,5 @@
   "devDependencies": {
     "@types/node": "^22.17.2",
     "typescript": "^5.9.2"
-  },
-  "pnpm": {
-    "overrides": {
-      "esbuild@<=0.24.2": ">=0.25.0"
-    }
   }
 }

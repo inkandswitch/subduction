@@ -114,6 +114,88 @@ When a peer's access is revoked:
 2. The server simply stops forwarding — the peer fails the `filter_authorized_fetch` check
 3. No explicit "revocation notification" is needed from Subduction
 
+## Upstream Propagation (Relay Topologies)
+
+The forward path above handles the case where the publisher is directly
+connected to the server. In relay topologies — where peer A is connected
+to relay R, and R is connected to peer B who holds the data — A's
+subscribe to R is not enough on its own. R has to also be subscribed to
+B so that B's future commits reach R, and from there reach A via the
+forward path.
+
+To preserve that end-to-end reachability, every node that accepts an
+inbound subscribing `BatchSyncRequest` also propagates the subscription
+to every _other_ currently-connected peer. Forwarding _updates_
+(`LooseCommit` / `Fragment`) and forwarding _subscription requests_
+stay symmetric: both flow outward from every accepting node.
+
+```mermaid
+sequenceDiagram
+    participant A as Peer A
+    participant R as Relay R
+    participant B as Peer B
+
+    A->>R: BatchSyncRequest { id: doc-123, subscribe: true }
+    R->>A: BatchSyncResponse { diff }
+    Note over R: A is now subscribed to doc-123
+    Note over R: propagate upstream
+    R->>B: BatchSyncRequest { id: doc-123, subscribe: true }
+    B->>R: BatchSyncResponse { diff }
+    Note over R: R is now subscribed to doc-123 on B
+
+    Note over B: B makes a change
+    B->>R: LooseCommit { id: doc-123, commit, blob }
+    Note over R: forward to subscribers
+    R->>A: LooseCommit { id: doc-123, commit, blob }
+```
+
+### Authorization Gate
+
+Propagation only runs when the originator is _authorized_ to fetch the
+sedimentree. Handler success alone is too permissive: the handler returns
+`Ok` even after sending a `SyncResult::Unauthorized` response. Without
+this gate, an unauthorized peer could cause the relay to enroll in
+upstream subscriptions whose traffic the egress filter would drop on the
+return path — wasted bandwidth and dangling upstream state.
+
+```rust
+if handler_returned_ok
+    && let Some(sed_id) = message.try_as_subscribe_request()
+    && policy.authorize_fetch(originator, sed_id).await.is_ok()
+{
+    propagate_subscription(sed_id, originator).await;
+}
+```
+
+### Idempotency
+
+Each node tracks its _outgoing_ subscriptions per peer:
+
+```rust
+outgoing_subscriptions: Map<PeerId, Set<SedimentreeId>>
+```
+
+`sync_with_peer(.., subscribe = true, ..)` records `(peer, sedimentree)`
+in this map on success. The propagation step skips any peer already
+recorded for the requested sedimentree, so a second subscribe from A
+for the same sedimentree does not cause R to re-issue its upstream
+subscribe to B. Loops between mutually subscribed servers self-quench
+after one round.
+
+### Originator Exclusion
+
+The propagation step iterates connected peers other than the originator.
+A's subscribe does not cause R to send a `BatchSyncRequest` back to A.
+This matters in topologies where A and B are mutual relays for each
+other.
+
+### Best Effort
+
+Per-peer propagation failures are logged at `debug` and ignored. A
+single peer being unreachable does not prevent the subscription from
+reaching the remaining peers. The local handler-side `BatchSyncResponse`
+to the originator has already been sent before propagation runs.
+
 ## Message Flow
 
 ### Subscribing

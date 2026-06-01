@@ -43,14 +43,17 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use nonempty::NonEmpty;
-use sedimentree_core::codec::{
-    decode::{Decode, DecodeFields},
-    encode::{self, Encode, EncodeFields},
-    error::{DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
-    schema::{self, Schema},
+use sedimentree_core::{
+    codec::{
+        decode::{Decode, DecodeFields},
+        encode::{self, Encode, EncodeFields},
+        error::{DecodeError, InvalidEnumTag, InvalidSchema, SizeMismatch},
+        schema::{self, Schema},
+    },
+    id::SedimentreeId,
 };
 use subduction_core::{
-    connection::message::{BatchSyncResponse, TryAsBatchSyncResponse},
+    connection::message::{BatchSyncResponse, TryAsBatchSyncResponse, TryAsSubscribeRequest},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signed::Signed;
@@ -214,6 +217,14 @@ pub enum EphemeralMessage {
 /// [`Subduction`]: subduction_core::subduction::Subduction
 impl TryAsBatchSyncResponse for EphemeralMessage {
     fn try_as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        None
+    }
+}
+
+/// Ephemeral messages are never subscription requests; this always
+/// returns `None`.
+impl TryAsSubscribeRequest for EphemeralMessage {
+    fn try_as_subscribe_request(&self) -> Option<SedimentreeId> {
         None
     }
 }

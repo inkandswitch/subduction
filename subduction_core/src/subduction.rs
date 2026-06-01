@@ -73,7 +73,7 @@ use crate::{
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult, TryAsBatchSyncResponse,
+            SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
         },
         stats::{SendCount, SyncStats},
     },
@@ -222,7 +222,7 @@ impl<
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
     Store: Storage<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
+    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
@@ -652,12 +652,31 @@ where
                             continue;
                         }
 
-                        // Normal path: dispatch to handler
+                        // For an inbound subscribing `BatchSyncRequest`,
+                        // propagate it upstream once the handler has run.
+                        // Gate on `authorize_fetch`, not handler success:
+                        // `recv_batch_sync_request` returns `Ok(())` even
+                        // after answering `Unauthorized`, so an
+                        // unauthorized peer would otherwise make us enrol
+                        // in upstream subscriptions we'd only filter-drop.
                         let h = handler.clone();
                         let conn_clone = conn.clone();
+                        let propagate_target = msg
+                            .try_as_subscribe_request()
+                            .map(|sed_id| (sed_id, peer_id, Arc::clone(&self)));
 
                         in_flight.push(async move {
                             let result = h.handle(&conn_clone, msg).await;
+                            if result.is_ok()
+                                && let Some((sed_id, originator, me)) = propagate_target
+                                && me.storage
+                                    .policy()
+                                    .authorize_fetch(originator, sed_id)
+                                    .await
+                                    .is_ok()
+                            {
+                                me.propagate_subscription(sed_id, originator).await;
+                            }
                             (conn_clone, result)
                         });
                     } else {
@@ -1775,6 +1794,77 @@ where
         self.add_built_batch_locally(id, commits, fragments).await?;
         self.sync_with_all_peers(id, true, None).await?;
         Ok(())
+    }
+
+    /// Forward an inbound subscription for `id` to every connected peer
+    /// other than `originator` not already subscribed for `id`, via
+    /// [`sync_with_peer`](Self::sync_with_peer) with `subscribe = true`.
+    /// This keeps relay topologies reachable: updates an upstream peer
+    /// later pushes flow back through us to the originator. Best-effort;
+    /// per-peer errors are logged and ignored. See
+    /// `design/sync/subscriptions.md#upstream-propagation-relay-topologies`.
+    ///
+    /// # Concurrency
+    ///
+    /// Handler futures run concurrently, so two subscribes for the same
+    /// `id` can race here. The claim step pre-inserts `(peer, id)` into
+    /// [`outgoing_subscriptions`] under one short-held lock before any
+    /// await, so a concurrent caller skips a pair already claimed.
+    ///
+    /// The claim is kept only if `sync_with_peer` actually establishes
+    /// the subscription (`Ok((true, ..))`, which also calls
+    /// [`track_outgoing_subscription`](Self::track_outgoing_subscription)).
+    /// Any other outcome — `Err`, timeout, or `NotFound`/`Unauthorized`
+    /// (both `Ok((false, ..))`) — rolls the claim back so a later
+    /// subscribe retries, keeping [`outgoing_subscriptions`] limited to
+    /// established subscriptions (as [`get_peer_subscriptions`] assumes
+    /// when replaying them on reconnect).
+    ///
+    /// [`outgoing_subscriptions`]: Self::outgoing_subscriptions
+    /// [`get_peer_subscriptions`]: Self::get_peer_subscriptions
+    pub(crate) async fn propagate_subscription(&self, id: SedimentreeId, originator: PeerId) {
+        let peers: Vec<PeerId> = {
+            let conns = self.connections.lock().await;
+            conns.keys().copied().filter(|p| *p != originator).collect()
+        };
+
+        if peers.is_empty() {
+            return;
+        }
+
+        // Claim each pair under one lock (see `# Concurrency`); the lock
+        // is never held across the `sync_with_peer` awaits below.
+        let to_propagate: Vec<PeerId> = {
+            let mut subs = self.outgoing_subscriptions.lock().await;
+            peers
+                .into_iter()
+                .filter(|peer| subs.entry(*peer).or_default().insert(id))
+                .collect()
+        };
+
+        for peer in to_propagate {
+            tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
+
+            // Only `Ok((true, ..))` established (and tracked) the
+            // subscription; roll the claim back on any other outcome.
+            let established = match self.sync_with_peer(&peer, id, true, None).await {
+                Ok((had_success, _, _)) => had_success,
+                Err(e) => {
+                    tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
+                    false
+                }
+            };
+
+            if !established {
+                let mut subs = self.outgoing_subscriptions.lock().await;
+                if let Some(set) = subs.get_mut(&peer) {
+                    set.remove(&id);
+                    if set.is_empty() {
+                        subs.remove(&peer);
+                    }
+                }
+            }
+        }
     }
 
     /// Request a batch sync from a given peer for a given sedimentree ID.
@@ -2974,7 +3064,7 @@ pub trait StartListener<
     Store: Storage<Self>,
     Conn: Connection<Self, WireMsg> + PartialEq + 'a,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-    Hdl: Handler<Self, Conn, Message = WireMsg>,
+    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Auth: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sign: Signer<Self>,
     Metric: DepthMetric,
@@ -3002,7 +3092,7 @@ pub trait StartListener<
         Auth::FetchDisallowed: Send + 'static,
         Sign: Signer<Sendable> + Send + Sync + 'a,
         Metric: DepthMetric + Send + Sync + 'a,
-        Hdl: Handler<Sendable, Conn, Message = WireMsg> + Send + Sync + 'a,
+        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier + Send + Sync + 'a,
         Hdl::HandlerError: Into<ListenError<Sendable, Store, Conn, WireMsg>> + Send + 'static,
         Store::Error: Send + 'static,
         Conn::DisconnectionError: Send + 'static,
@@ -3015,13 +3105,13 @@ pub trait StartListener<
         Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
         Sign: Signer<Local> + 'a,
         Metric: DepthMetric + 'a,
-        Hdl: Handler<Local, Conn, Message = WireMsg> + 'a,
+        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'a,
         Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
 )]
 impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
     StartListener<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
 where
-    Hdl: Handler<Async, Conn, Message = WireMsg>,
+    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {

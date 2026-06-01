@@ -13,7 +13,10 @@ use sedimentree_core::{
 };
 use subduction_core::{
     authenticated::Authenticated,
-    connection::{Connection, message::SyncMessage},
+    connection::{
+        Connection,
+        message::{SyncMessage, TryAsBatchSyncResponse, TryAsSubscribeRequest},
+    },
     handler::Handler,
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
@@ -38,13 +41,14 @@ pub enum Dispatched {
 ///
 /// Implement this on your wire message enum (e.g., `CliWireMessage`,
 /// `WireMessage`) to enable [`ComposedHandler`] dispatch. The
-/// [`TryAsBatchSyncResponse`](subduction_core::connection::message::TryAsBatchSyncResponse)
-/// supertrait is required by [`Handler::Message`].
+/// [`TryAsBatchSyncResponse`] and [`TryAsSubscribeRequest`] supertraits
+/// are required by [`Handler::Message`].
 pub trait WireEnvelope:
-    sedimentree_core::codec::encode::Encode
-    + sedimentree_core::codec::decode::Decode
+    Encode
+    + Decode
     + From<SyncMessage>
-    + subduction_core::connection::message::TryAsBatchSyncResponse
+    + TryAsBatchSyncResponse
+    + TryAsSubscribeRequest
     + Clone
     + Send
     + Debug

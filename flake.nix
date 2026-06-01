@@ -2,7 +2,7 @@
   description = "subduction";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-25.11";
+    nixpkgs.url = "nixpkgs/nixos-26.05";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
 
     command-utils.url = "git+https://codeberg.org/expede/nix-command-utils";
@@ -131,6 +131,12 @@
           wasm-tools
         ];
 
+        # Pinned to pnpm 10: pnpm 11 stopped reading `pnpm.overrides` from
+        # package.json (the wasm wrapper packages keep their esbuild
+        # override there) and treats ignored build scripts as a hard
+        # error, both of which break `pnpm i` in CI.
+        pnpm = pkgs.pnpm_10;
+
         # Built-in command modules from nix-command-utils
         rust = command-utils.rust.${system};
         pnpm' = command-utils.pnpm.${system};
@@ -160,9 +166,9 @@
           (wasm.doc { cargo = pkgs.cargo; xdg-open = pkgs.xdg-utils; })
 
           # pnpm commands for wasm wrapper builds
-          (pnpm'.build { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
-          (pnpm'.install { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
-          (pnpm'.test { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
+          (pnpm'.build { pnpm = "${pnpm}/bin/pnpm"; })
+          (pnpm'.install { pnpm = "${pnpm}/bin/pnpm"; })
+          (pnpm'.test { pnpm = "${pnpm}/bin/pnpm"; })
 
           # Project-specific commands
           { commands = projectCommands; packages = []; }
@@ -182,7 +188,6 @@
             nativeBuildInputs = [ pkgs.makeWrapper ];
             postBuild = ''
               wrapProgram $out/bin/grafana --set GF_PATHS_PLUGINS ${pluginsDir}
-              wrapProgram $out/bin/grafana-server --set GF_PATHS_PLUGINS ${pluginsDir}
             '';
           };
 
@@ -241,8 +246,8 @@
           name = "subduction_shell";
 
           nativeBuildInputs =
-            [
-              command_menu
+            command_menu
+            ++ [
               rust-toolchain
               nightly-rustfmt
 
@@ -253,8 +258,8 @@
               grafana
               pkgs.grafana-loki
               pkgs.http-server
-              pkgs.nodePackages.pnpm
-              pkgs.nodePackages_latest.webpack-cli
+              pnpm
+              pkgs.webpack-cli
               pkgs.nodejs
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers

@@ -7,24 +7,39 @@
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
+use core::convert::Infallible;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
+    crypto::fingerprint::FingerprintSeed,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
+    sedimentree::FingerprintSummary,
 };
+
+use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     authenticated::Authenticated,
-    connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    connection::{
+        message::{
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
+            SyncResult,
+        },
+        test_utils::{
+            ChannelMockConnection, ChannelMockConnectionHandle, ChannelTransport, InstantTimeout,
+            TokioSpawn,
+        },
+    },
     handler::sync::SyncHandler,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
+    policy::{connection::ConnectionPolicy, open::OpenPolicy, storage::StoragePolicy},
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
 };
-use subduction_crypto::signer::memory::MemorySigner;
+use subduction_crypto::{signer::memory::MemorySigner, verified_author::VerifiedAuthor};
 use testresult::TestResult;
 
 type Conn = MessageTransport<ChannelTransport>;
@@ -47,6 +62,28 @@ type TestSubduction = Arc<
 
 const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_millis(500));
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(50);
+
+/// Fail-fast cap for [`wait_until`] polling; tests converge well within it.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Poll `cond` until it holds (returns `true`) or [`WAIT_TIMEOUT`]
+/// elapses (returns `false`), avoiding fixed `sleep`-then-assert delays.
+async fn wait_until<F, Fut>(mut cond: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: core::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
+    loop {
+        if cond().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
 
 fn make_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
@@ -240,7 +277,63 @@ async fn relay_topology_rapid_fire_then_idle_sync_is_empty() -> TestResult {
     assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(20));
 
     let (_, stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
-    assert!(stats.is_empty(), "idle sync after rapid-fire: {stats:?}");
+    assert!(stats.is_empty(), "{stats:?}");
+
+    Ok(())
+}
+
+/// When A subscribes to R for a sedimentree that R doesn't yet know
+/// about, R must propagate that subscription upstream to B so any
+/// future commits B pushes can be forwarded back through R to A.
+///
+/// This is the symmetric counterpart of the existing outbound
+/// broadcast in `SyncHandler::recv_commit` / `recv_fragment`:
+/// forwarding updates and forwarding subscription requests are now
+/// both done by every node.
+#[tokio::test]
+async fn relay_topology_propagates_subscriptions_upstream() -> TestResult {
+    let (a, r, b, _a_s, r_signer, b_signer) = setup_relay_topology().await?;
+
+    let sed_id = SedimentreeId::new([42u8; 32]);
+
+    // A subscribes to R for `sed_id` (R has no data yet).
+    let r_peer = PeerId::from(r_signer.verifying_key());
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
+
+    // R propagates to B; poll until the subscription is recorded.
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let r_subscribed = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(
+        r_subscribed,
+        "R failed to propagate A's subscription upstream to B: {:?}",
+        r.get_peer_subscriptions(b_peer).await
+    );
+
+    // End-to-end: a commit pushed at B must reach A through R, even
+    // though A never subscribed directly to B and B never knew about
+    // A. This exercises the full update path:
+    //   B --LooseCommit--> R (because R subscribed to B above)
+    //   R --LooseCommit--> A (because A subscribed to R first)
+    b.add_commit(sed_id, make_head(99), BTreeSet::new(), make_blob(99))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(1));
+    assert_eq!(
+        r.get_commits(sed_id).await.map(|c| c.len()),
+        Some(1),
+        "R did not receive commit from B"
+    );
+    assert_eq!(
+        a.get_commits(sed_id).await.map(|c| c.len()),
+        Some(1),
+        "A did not receive commit relayed from B via R"
+    );
 
     Ok(())
 }
@@ -446,6 +539,459 @@ async fn relay_topology_concurrent_add_built_batch_calls_converge() -> TestResul
 
     let (_, stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     assert!(stats.is_empty(), "{stats:?}");
+
+    Ok(())
+}
+
+/// Storage policy that rejects fetch unless the requesting peer matches
+/// `allowed_fetcher` (put is always allowed), to exercise the listen
+/// loop's `authorize_fetch` gate on upstream propagation.
+#[derive(Clone, Copy)]
+struct RestrictiveFetchPolicy {
+    allowed_fetcher: PeerId,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FetchRejected;
+
+impl core::fmt::Display for FetchRejected {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "fetch rejected by policy")
+    }
+}
+
+impl core::error::Error for FetchRejected {}
+
+impl ConnectionPolicy<Sendable> for RestrictiveFetchPolicy {
+    type ConnectionDisallowed = Infallible;
+
+    fn authorize_connect(
+        &self,
+        _peer: PeerId,
+    ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+        async { Ok(()) }.boxed()
+    }
+}
+
+impl StoragePolicy<Sendable> for RestrictiveFetchPolicy {
+    type FetchDisallowed = FetchRejected;
+    type PutDisallowed = Infallible;
+
+    fn authorize_fetch(
+        &self,
+        peer: PeerId,
+        _sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+        let allowed = self.allowed_fetcher;
+        async move {
+            if peer == allowed {
+                Ok(())
+            } else {
+                Err(FetchRejected)
+            }
+        }
+        .boxed()
+    }
+
+    fn authorize_put(
+        &self,
+        _requestor: PeerId,
+        _author: VerifiedAuthor,
+        _sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        let allowed = self.allowed_fetcher;
+        async move { if peer == allowed { ids } else { Vec::new() } }.boxed()
+    }
+}
+
+// Wire-counting harness: R runs on a `ChannelMockConnection` toward "B"
+// so tests count the upstream messages R actually emits, rather than
+// inferring from recorded subscription state (which a re-propagating or
+// never-propagating bug leaves unchanged). The responder replies so R's
+// `sync_with_peer` completes and the claim/rollback path runs.
+
+type MockConn = ChannelMockConnection<SyncMessage>;
+
+#[allow(clippy::type_complexity)]
+type OpenMockSubduction = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        MemoryStorage,
+        MockConn,
+        SyncHandler<Sendable, MemoryStorage, MockConn, OpenPolicy, CountLeadingZeroBytes>,
+        OpenPolicy,
+        MemorySigner,
+        InstantTimeout,
+    >,
+>;
+
+#[allow(clippy::type_complexity)]
+type RestrictiveMockSubduction = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        MemoryStorage,
+        MockConn,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            MockConn,
+            RestrictiveFetchPolicy,
+            CountLeadingZeroBytes,
+        >,
+        RestrictiveFetchPolicy,
+        MemorySigner,
+        InstantTimeout,
+    >,
+>;
+
+fn make_open_mock_node(signer: MemorySigner) -> OpenMockSubduction {
+    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(signer)
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConn>();
+
+    tokio::spawn(listener);
+    tokio::spawn(manager);
+    sd
+}
+
+fn make_restrictive_mock_node(
+    signer: MemorySigner,
+    allowed_fetcher: PeerId,
+) -> RestrictiveMockSubduction {
+    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(signer)
+        .storage(
+            MemoryStorage::new(),
+            Arc::new(RestrictiveFetchPolicy { allowed_fetcher }),
+        )
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConn>();
+
+    tokio::spawn(listener);
+    tokio::spawn(manager);
+    sd
+}
+
+/// Register a [`ChannelMockConnection`] as `peer`, returning the
+/// test-side handle for injecting inbound and observing outbound
+/// messages. The closure adapts over each relay node's policy type.
+async fn attach_mock_peer<S>(
+    add_connection: impl FnOnce(
+        Authenticated<MockConn, Sendable>,
+    ) -> BoxFuture<'static, Result<bool, S>>,
+    peer: PeerId,
+) -> Result<ChannelMockConnectionHandle<SyncMessage>, S> {
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer);
+    let auth: Authenticated<MockConn, Sendable> = Authenticated::new_for_test(conn, peer);
+    add_connection(auth).await?;
+    Ok(handle)
+}
+
+/// An empty [`SyncDiff`] for an `Ok` upstream response that carries no
+/// data (the responder simply accepts the subscription).
+fn empty_sync_diff() -> SyncDiff {
+    SyncDiff {
+        missing_commits: Vec::new(),
+        missing_fragments: Vec::new(),
+        requesting: RequestedData::default(),
+    }
+}
+
+/// Build a subscribing `BatchSyncRequest` as it would arrive from a
+/// downstream peer `from` for sedimentree `id`.
+const fn subscribing_request(from: PeerId, id: SedimentreeId) -> SyncMessage {
+    SyncMessage::BatchSyncRequest(BatchSyncRequest {
+        id,
+        req_id: RequestId {
+            requestor: from,
+            nonce: 1,
+        },
+        fingerprint_summary: FingerprintSummary::new(
+            FingerprintSeed::new(0, 0),
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+        ),
+        subscribe: true,
+    })
+}
+
+/// Spawn a task that counts every subscribing `BatchSyncRequest` R sends
+/// and replies with a `BatchSyncResponse` (carrying `result`) so R's
+/// `sync_with_peer` completes. The count is shared via the returned `Arc`.
+fn spawn_upstream_responder(
+    handle: ChannelMockConnectionHandle<SyncMessage>,
+    result_factory: impl Fn() -> SyncResult + Send + 'static,
+) -> Arc<std::sync::atomic::AtomicUsize> {
+    use std::sync::atomic::Ordering;
+
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count_for_task = Arc::clone(&count);
+
+    tokio::spawn(async move {
+        while let Ok(msg) = handle.outbound_rx.recv().await {
+            if let SyncMessage::BatchSyncRequest(req) = &msg {
+                if req.subscribe {
+                    count_for_task.fetch_add(1, Ordering::SeqCst);
+                }
+
+                // Reply so the upstream `sync_with_peer` resolves.
+                let response = SyncMessage::BatchSyncResponse(BatchSyncResponse {
+                    req_id: req.req_id,
+                    id: req.id,
+                    result: result_factory(),
+                    responder_heads: RemoteHeads::default(),
+                });
+
+                if handle.inbound_tx.send(response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    count
+}
+
+/// Two inbound subscribes from A for the same sedimentree must cause R
+/// to send **exactly one** upstream `BatchSyncRequest { subscribe: true }`
+/// to B (a re-propagating bug pushes the count to 2).
+#[tokio::test]
+async fn relay_topology_repeated_subscribe_sends_exactly_one_upstream_request() -> TestResult {
+    let a_signer = make_signer(13);
+    let r_signer = make_signer(23);
+    let b_signer = make_signer(33);
+
+    let a_peer = PeerId::from(a_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    let r = make_open_mock_node(r_signer.clone());
+
+    let r_for_a = Arc::clone(&r);
+    let a_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_a.add_connection(auth).await }),
+        a_peer,
+    )
+    .await?;
+    let r_for_b = Arc::clone(&r);
+    let b_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
+        b_peer,
+    )
+    .await?;
+
+    let sed_id = SedimentreeId::new([43u8; 32]);
+
+    // B accepts the upstream subscribe, so the first propagation sticks.
+    let upstream_count = spawn_upstream_responder(b_handle, || SyncResult::Ok(empty_sync_diff()));
+
+    a_handle
+        .inbound_tx
+        .send(subscribing_request(a_peer, sed_id))
+        .await?;
+    let saw_first = wait_until(|| {
+        let c = Arc::clone(&upstream_count);
+        async move { c.load(std::sync::atomic::Ordering::SeqCst) >= 1 }
+    })
+    .await;
+    assert!(
+        saw_first,
+        "R never sent the first upstream BatchSyncRequest to B"
+    );
+
+    a_handle
+        .inbound_tx
+        .send(subscribing_request(a_peer, sed_id))
+        .await?;
+
+    // Wait until R has processed the second subscribe (its recorded
+    // subscription is present), then confirm no second send landed.
+    let stable = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(stable, "R lost its recorded subscription to B");
+
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    let final_count = upstream_count.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        final_count, 1,
+        "R must send exactly one upstream BatchSyncRequest across two \
+         inbound subscribes; sent {final_count} (a value > 1 means the \
+         idempotency guard re-propagated)"
+    );
+
+    Ok(())
+}
+
+/// An unauthorized subscriber U must cause **zero** upstream
+/// `BatchSyncRequest`s to B. Counted on the wire, not via the recorded
+/// subscription set, so a propagating-but-unrecorded leak is still
+/// caught. (The counter reaching a non-zero value under an authorized
+/// subscribe is covered by
+/// `relay_topology_repeated_subscribe_sends_exactly_one_upstream_request`.)
+#[tokio::test]
+async fn relay_topology_unauthorized_subscribe_sends_zero_upstream_requests() -> TestResult {
+    let u_signer = make_signer(14);
+    let r_signer = make_signer(24);
+    let b_signer = make_signer(34);
+    let allowed_signer = make_signer(44);
+
+    let u_peer = PeerId::from(u_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let allowed_peer = PeerId::from(allowed_signer.verifying_key());
+
+    // U is the unauthorized subscriber; only `allowed_peer` (never
+    // connected) may fetch, guaranteeing U's subscribe is rejected at
+    // R's listen-loop gate.
+    assert_ne!(u_peer, allowed_peer);
+    assert_ne!(u_peer, b_peer);
+
+    let r = make_restrictive_mock_node(r_signer.clone(), allowed_peer);
+
+    let r_for_u = Arc::clone(&r);
+    let u_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_u.add_connection(auth).await }),
+        u_peer,
+    )
+    .await?;
+    let r_for_b = Arc::clone(&r);
+    let b_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
+        b_peer,
+    )
+    .await?;
+
+    let sed_id = SedimentreeId::new([88u8; 32]);
+
+    let upstream_count = spawn_upstream_responder(b_handle, || SyncResult::Ok(empty_sync_diff()));
+
+    u_handle
+        .inbound_tx
+        .send(subscribing_request(u_peer, sed_id))
+        .await?;
+
+    // Wait until R answers U, so a zero count means "suppressed", not
+    // "not yet processed".
+    let u_answered = wait_until(|| {
+        let rx = u_handle.outbound_rx.clone();
+        async move {
+            while let Ok(msg) = rx.try_recv() {
+                if matches!(
+                    &msg,
+                    SyncMessage::BatchSyncResponse(BatchSyncResponse { id, .. }) if *id == sed_id
+                ) {
+                    return true;
+                }
+            }
+            false
+        }
+    })
+    .await;
+    assert!(
+        u_answered,
+        "R never answered U's unauthorized subscribe; a zero upstream \
+         count cannot distinguish 'suppressed' from 'not yet processed'"
+    );
+
+    // Allow any erroneous upstream propagation to land before counting.
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    let upstream = upstream_count.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        upstream, 0,
+        "R propagated an unauthorized subscribe upstream to B \
+         ({upstream} upstream BatchSyncRequest(s) sent; expected 0)"
+    );
+
+    Ok(())
+}
+
+/// Regression for the claim rollback when the *upstream* sync does not
+/// actually establish a subscription.
+///
+/// `propagate_subscription` pre-claims `(peer, id)` in
+/// `outgoing_subscriptions` before awaiting `sync_with_peer`. An upstream
+/// `Unauthorized` (here) returns `Ok((false, ..))` with nothing tracked;
+/// the original rollback fired only on `Err`, leaving a phantom claim
+/// that blocks future re-propagation and is replayed on reconnect.
+///
+/// The test confirms R *attempted* the send (so the rollback path ran,
+/// not skipped) before asserting the claim was rolled back.
+#[tokio::test]
+async fn relay_topology_unauthorized_upstream_response_rolls_back_claim() -> TestResult {
+    let a_signer = make_signer(15);
+    let r_signer = make_signer(25);
+    let b_signer = make_signer(35);
+
+    let a_peer = PeerId::from(a_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    // R is open (so it authorizes A and starts propagation), but B
+    // answers every upstream subscribe `Unauthorized`.
+    let r = make_open_mock_node(r_signer.clone());
+
+    let r_for_a = Arc::clone(&r);
+    let a_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_a.add_connection(auth).await }),
+        a_peer,
+    )
+    .await?;
+    let r_for_b = Arc::clone(&r);
+    let b_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
+        b_peer,
+    )
+    .await?;
+
+    let sed_id = SedimentreeId::new([77u8; 32]);
+
+    let upstream_count = spawn_upstream_responder(b_handle, || SyncResult::Unauthorized);
+
+    a_handle
+        .inbound_tx
+        .send(subscribing_request(a_peer, sed_id))
+        .await?;
+
+    // Precondition: R attempted the send, so the rollback path ran.
+    let attempted = wait_until(|| {
+        let c = Arc::clone(&upstream_count);
+        async move { c.load(std::sync::atomic::Ordering::SeqCst) >= 1 }
+    })
+    .await;
+    assert!(
+        attempted,
+        "R never sent an upstream BatchSyncRequest, so the rollback path \
+         was never exercised — the absence check below would be vacuous"
+    );
+
+    // Poll until the claim is gone (it may briefly exist before rollback).
+    let rolled_back = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { !r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(
+        rolled_back,
+        "claim rollback failed: R kept an outgoing subscription to B \
+         even though B answered Unauthorized (R→B subscriptions: {:?})",
+        r.get_peer_subscriptions(b_peer).await
+    );
 
     Ok(())
 }

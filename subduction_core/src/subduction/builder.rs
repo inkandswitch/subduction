@@ -68,12 +68,18 @@ use sedimentree_core::{
 
 use crate::{
     authenticated::Authenticated,
-    connection::{Connection, manager::Spawn, message::SyncMessage},
+    connection::{
+        Connection,
+        managed::{ManagedCall, ManagedConnection},
+        manager::Spawn,
+        message::SyncMessage,
+    },
     handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+    remote_heads::RemoteHeadsNotifier,
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, traits::Storage},
     timeout::Timeout,
@@ -415,12 +421,11 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
         <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
             Into<ListenError<Async, Store, Conn, SyncMessage>>,
-        crate::connection::managed::ManagedConnection<Conn, Async, Timer>:
-            crate::connection::managed::ManagedCall<
-                    Async,
-                    SyncMessage,
-                    SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
-                >,
+        ManagedConnection<Conn, Async, Timer>: ManagedCall<
+                Async,
+                SyncMessage,
+                SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
+            >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -514,15 +519,14 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Send + Sync + 'static,
-        Hdl: Handler<Async, Conn>,
+        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
-        crate::connection::managed::ManagedConnection<Conn, Async, Timer>:
-            crate::connection::managed::ManagedCall<
-                    Async,
-                    Hdl::Message,
-                    SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
-                >,
+        ManagedConnection<Conn, Async, Timer>: ManagedCall<
+                Async,
+                Hdl::Message,
+                SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
+            >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -598,19 +602,18 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Send + Sync + 'static,
-        Hdl: Handler<Async, Conn>,
+        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         Metric: Clone,
         SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
         <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
             Into<ListenError<Async, Store, Conn, SyncMessage>>,
-        crate::connection::managed::ManagedConnection<Conn, Async, Timer>:
-            crate::connection::managed::ManagedCall<
-                    Async,
-                    Hdl::Message,
-                    SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
-                >,
+        ManagedConnection<Conn, Async, Timer>: ManagedCall<
+                Async,
+                Hdl::Message,
+                SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
+            >,
     {
         let sedimentrees = self
             .sedimentrees
