@@ -750,3 +750,100 @@ async fn relay_topology_unauthorized_subscribe_does_not_propagate() -> TestResul
 
     Ok(())
 }
+
+/// Connects an `OpenPolicy` relay `r` to a `RestrictiveFetchPolicy`
+/// peer `b` (the mirror of [`connect_restrictive_pair_r_b`], where the
+/// roles are flipped so the *upstream* peer is the restrictive one).
+async fn connect_open_relay_to_restrictive_b(
+    r: &TestSubduction,
+    r_signer: &MemorySigner,
+    b: &RestrictiveSubduction,
+    b_signer: &MemorySigner,
+) -> TestResult {
+    let (transport_r, transport_b) = ChannelTransport::pair();
+
+    let conn_r = MessageTransport::new(transport_r);
+    let conn_b = MessageTransport::new(transport_b);
+
+    let peer_r = PeerId::from(r_signer.verifying_key());
+    let peer_b = PeerId::from(b_signer.verifying_key());
+
+    let auth_r: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_r, peer_b);
+    let auth_b: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_b, peer_r);
+
+    r.add_connection(auth_r).await?;
+    b.add_connection(auth_b).await?;
+
+    Ok(())
+}
+
+/// Regression for the claim rollback when the *upstream* sync does not
+/// actually establish a subscription.
+///
+/// `propagate_subscription` pre-inserts a `(peer, id)` claim into
+/// `outgoing_subscriptions` before awaiting `sync_with_peer`, to
+/// deduplicate concurrent propagations. `sync_with_peer` only records
+/// the subscription (via `track_outgoing_subscription`) and returns
+/// `Ok((true, ..))` when the upstream peer answers `SyncResult::Ok`.
+/// An upstream `Unauthorized` / `NotFound` / timeout instead surfaces
+/// as `Ok((false, ..))` with nothing tracked.
+///
+/// The bug: the original rollback fired only on the `Err(..)` arm, so
+/// an `Ok((false, ..))` left the speculative claim in place. That
+/// phantom entry (a) permanently suppresses re-propagation for that
+/// `(peer, id)` pair (the next inbound subscribe sees the claim and
+/// skips), and (b) is replayed on reconnect by `get_peer_subscriptions`
+/// even though no subscription was ever established.
+///
+/// Topology: A —(`OpenPolicy`)→ R —(restrictive)→ B, where B's policy
+/// rejects R as a fetcher. A is authorized at R, so propagation *does*
+/// start (the listen-loop authorize gate passes) and R claims `(B,
+/// sed_id)`. R's upstream request to B then comes back `Unauthorized`,
+/// so the claim must be rolled back.
+#[tokio::test]
+async fn relay_topology_unestablished_upstream_subscribe_rolls_back_claim() -> TestResult {
+    let a_signer = make_signer(12);
+    let r_signer = make_signer(22);
+    let b_signer = make_signer(32);
+
+    let a_peer = PeerId::from(a_signer.verifying_key());
+    let r_peer = PeerId::from(r_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    // B only allows some unrelated peer to fetch, so R (the relay) is
+    // rejected. A different-from-R allowed fetcher guarantees R's
+    // upstream fetch is denied.
+    let allowed_fetcher = PeerId::from(make_signer(99).verifying_key());
+    assert_ne!(allowed_fetcher, r_peer);
+    assert_ne!(a_peer, b_peer);
+
+    // A and R are open; B is restrictive and rejects R.
+    let a = make_node(a_signer.clone());
+    let r = make_node(r_signer.clone());
+    let b = make_restrictive_node(b_signer.clone(), allowed_fetcher);
+
+    connect_pair(&a, &a_signer, &r, &r_signer).await?;
+    connect_open_relay_to_restrictive_b(&r, &r_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let sed_id = SedimentreeId::new([77u8; 32]);
+
+    // A subscribes to R. R authorizes A (OpenPolicy), starts
+    // propagation, claims `(B, sed_id)`, and asks B — which answers
+    // `Unauthorized`, so the upstream subscription is never
+    // established.
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    // The speculative claim must have been rolled back: R has no
+    // outgoing subscription to B for `sed_id`.
+    let r_to_b_subs = r.get_peer_subscriptions(b_peer).await;
+    assert!(
+        !r_to_b_subs.contains(&sed_id),
+        "claim rollback failed: R recorded an outgoing subscription to B \
+         even though B answered Unauthorized (R→B subscriptions: {r_to_b_subs:?})"
+    );
+
+    Ok(())
+}

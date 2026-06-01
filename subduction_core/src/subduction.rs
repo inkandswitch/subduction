@@ -1835,9 +1835,14 @@ where
     ///
     /// `sync_with_peer` calls
     /// [`track_outgoing_subscription`](Self::track_outgoing_subscription)
-    /// on success, which re-inserts the same `(peer, id)` pair
-    /// idempotently. On failure, the pre-inserted claim is rolled back
-    /// so the next inbound subscribe will retry — this keeps
+    /// only when it actually establishes the subscription (a
+    /// `SyncResult::Ok` response with `subscribe = true`), in which case
+    /// it re-inserts the same `(peer, id)` pair idempotently and returns
+    /// `Ok((true, ..))`. Any other outcome — a transport error
+    /// (`Err(..)`), an upstream timeout, or a `NotFound` / `Unauthorized`
+    /// response (all surfaced as `Ok((false, ..))`) — means no
+    /// subscription was established, so the pre-inserted claim is rolled
+    /// back and the next inbound subscribe will retry. This keeps
     /// `outgoing_subscriptions` honest as "subscriptions we currently
     /// have established," matching its use by
     /// [`get_peer_subscriptions`](Self::get_peer_subscriptions) for
@@ -1875,12 +1880,23 @@ where
 
         for peer in to_propagate {
             tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
-            if let Err(e) = self.sync_with_peer(&peer, id, true, None).await {
-                tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
-                // Roll back our claim so the next inbound subscribe can
-                // retry. `track_outgoing_subscription` was not called on
-                // this path (the request never succeeded), so removing
-                // the entry returns the map to its pre-claim state.
+
+            // The subscription is only established when `sync_with_peer`
+            // returns `Ok((true, ..))`; that path also calls
+            // `track_outgoing_subscription`, which re-records the claim
+            // idempotently. A transport error or an `Ok((false, ..))`
+            // outcome (upstream timeout / `NotFound` / `Unauthorized`)
+            // leaves nothing tracked, so we roll the claim back to let a
+            // later inbound subscribe retry.
+            let established = match self.sync_with_peer(&peer, id, true, None).await {
+                Ok((had_success, _, _)) => had_success,
+                Err(e) => {
+                    tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
+                    false
+                }
+            };
+
+            if !established {
                 let mut subs = self.outgoing_subscriptions.lock().await;
                 if let Some(set) = subs.get_mut(&peer) {
                     set.remove(&id);
