@@ -1518,6 +1518,148 @@ mod tests {
         }
     }
 
+    mod try_as_subscribe_request_impl {
+        use super::*;
+        use future_form::Sendable;
+        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+
+        fn batch_sync_request(id: SedimentreeId, subscribe: bool) -> BatchSyncRequest {
+            BatchSyncRequest {
+                id,
+                req_id: RequestId {
+                    requestor: PeerId::new([8u8; 32]),
+                    nonce: 1,
+                },
+                fingerprint_summary: FingerprintSummary::new(
+                    FingerprintSeed::new(0, 0),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+                subscribe,
+            }
+        }
+
+        #[test]
+        fn subscribing_batch_sync_request_returns_its_id() {
+            let id = SedimentreeId::new([0xAB; 32]);
+            let msg = SyncMessage::BatchSyncRequest(batch_sync_request(id, true));
+            assert_eq!(msg.try_as_subscribe_request(), Some(id));
+        }
+
+        #[test]
+        fn non_subscribing_batch_sync_request_returns_none() {
+            let msg = SyncMessage::BatchSyncRequest(batch_sync_request(
+                SedimentreeId::new([0xAC; 32]),
+                false,
+            ));
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[test]
+        fn batch_sync_response_returns_none() {
+            let msg = SyncMessage::BatchSyncResponse(BatchSyncResponse {
+                req_id: RequestId {
+                    requestor: PeerId::new([7u8; 32]),
+                    nonce: 99,
+                },
+                id: SedimentreeId::new([1u8; 32]),
+                result: SyncResult::NotFound,
+                responder_heads: RemoteHeads::default(),
+            });
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[test]
+        fn blobs_request_returns_none() {
+            let msg = SyncMessage::BlobsRequest {
+                id: SedimentreeId::new([3u8; 32]),
+                digests: vec![Digest::force_from_bytes([4u8; 32])],
+            };
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[test]
+        fn blobs_response_returns_none() {
+            let msg = SyncMessage::BlobsResponse {
+                id: SedimentreeId::new([5u8; 32]),
+                blobs: vec![Blob::new(Vec::from([1u8; 16]))],
+            };
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[test]
+        fn data_request_rejected_returns_none() {
+            let msg = SyncMessage::DataRequestRejected(DataRequestRejected {
+                id: SedimentreeId::new([6u8; 32]),
+            });
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[tokio::test]
+        async fn loose_commit_returns_none() {
+            let signer = MemorySigner::from_bytes(&[42u8; 32]);
+            let id = SedimentreeId::new([7u8; 32]);
+            let blob = Blob::new(Vec::new());
+            let commit = LooseCommit::new(
+                id,
+                CommitId::new([0x42; 32]),
+                BTreeSet::new(),
+                sedimentree_core::blob::BlobMeta::new(&blob),
+            );
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
+            let msg = SyncMessage::LooseCommit {
+                id,
+                commit: signed_commit,
+                blob: Blob::new(Vec::from([3u8; 16])),
+                sender_heads: RemoteHeads::default(),
+            };
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[tokio::test]
+        async fn fragment_returns_none() {
+            let signer = MemorySigner::from_bytes(&[42u8; 32]);
+            let id = SedimentreeId::new([8u8; 32]);
+            let blob = Blob::new(Vec::new());
+            let fragment = Fragment::new(
+                id,
+                CommitId::new([2u8; 32]),
+                BTreeSet::new(),
+                &[],
+                sedimentree_core::blob::BlobMeta::new(&blob),
+            );
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+                .await
+                .into_signed();
+            let msg = SyncMessage::Fragment {
+                id,
+                fragment: signed_fragment,
+                blob: Blob::new(Vec::from([3u8; 16])),
+                sender_heads: RemoteHeads::default(),
+            };
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[test]
+        fn remove_subscriptions_returns_none() {
+            let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
+                ids: vec![SedimentreeId::new([9u8; 32])],
+            });
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+
+        #[test]
+        fn heads_update_returns_none() {
+            let msg = SyncMessage::HeadsUpdate {
+                id: SedimentreeId::new([10u8; 32]),
+                heads: RemoteHeads::default(),
+            };
+            assert_eq!(msg.try_as_subscribe_request(), None);
+        }
+    }
+
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
         use super::*;
@@ -1554,6 +1696,30 @@ mod tests {
                     let result = msg.try_as_batch_sync_response();
                     if let SyncMessage::BatchSyncResponse(expected) = msg {
                         assert_eq!(result, Some(expected));
+                    } else {
+                        assert_eq!(result, None);
+                    }
+                });
+        }
+
+        /// `try_as_subscribe_request()` returns `Some(id)` iff the
+        /// variant is `BatchSyncRequest { subscribe: true, id, .. }`,
+        /// and the returned id is exactly that request's id. Guards the
+        /// listen-loop propagation gate (`subduction.rs`) against future
+        /// variants quietly slipping through the match, and against the
+        /// `subscribe` flag being ignored.
+        #[test]
+        fn prop_try_as_subscribe_request_iff_subscribing_batch_request() {
+            bolero::check!()
+                .with_arbitrary::<SyncMessage>()
+                .for_each(|msg| {
+                    let result = msg.try_as_subscribe_request();
+                    if let SyncMessage::BatchSyncRequest(req) = msg {
+                        if req.subscribe {
+                            assert_eq!(result, Some(req.id));
+                        } else {
+                            assert_eq!(result, None);
+                        }
                     } else {
                         assert_eq!(result, None);
                     }

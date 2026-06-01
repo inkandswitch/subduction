@@ -12,17 +12,29 @@ use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
+    crypto::fingerprint::FingerprintSeed,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
+    sedimentree::FingerprintSummary,
 };
 
 use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     authenticated::Authenticated,
-    connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    connection::{
+        message::{
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
+            SyncResult,
+        },
+        test_utils::{
+            ChannelMockConnection, ChannelMockConnectionHandle, ChannelTransport, InstantTimeout,
+            TokioSpawn,
+        },
+    },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, open::OpenPolicy, storage::StoragePolicy},
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
@@ -50,6 +62,34 @@ type TestSubduction = Arc<
 
 const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_millis(500));
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(50);
+
+/// Upper bound for [`wait_until`] polling. Tests should converge well
+/// within this; it exists only to fail fast instead of hanging.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Poll `cond` until it returns `true` or [`WAIT_TIMEOUT`] elapses.
+///
+/// Replaces fixed `sleep`-then-assert patterns: instead of guessing how
+/// long an async hop takes, we re-check the observable state on a short
+/// interval and proceed as soon as it holds. Returns `true` if the
+/// condition held in time, `false` on timeout (so callers can assert a
+/// precise failure message).
+async fn wait_until<F, Fut>(mut cond: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: core::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
+    loop {
+        if cond().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
 
 fn make_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
@@ -267,19 +307,21 @@ async fn relay_topology_propagates_subscriptions_upstream() -> TestResult {
     let r_peer = PeerId::from(r_signer.verifying_key());
     a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
         .await?;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
 
-    // The propagation runs after the handler returns, so give the
-    // listen loop a chance to dispatch it.
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
-
-    // R should now be subscribed to B for `sed_id` as a result of the
-    // propagation.
+    // Propagation runs after the handler returns, then R's own
+    // `sync_with_peer` to B must complete before the subscription is
+    // recorded. Poll for that recorded state rather than guessing a
+    // fixed delay.
     let b_peer = PeerId::from(b_signer.verifying_key());
-    let r_subscribed_to_b = r.get_peer_subscriptions(b_peer).await;
+    let r_subscribed = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
     assert!(
-        r_subscribed_to_b.contains(&sed_id),
-        "R failed to propagate A's subscription upstream to B: {r_subscribed_to_b:?}"
+        r_subscribed,
+        "R failed to propagate A's subscription upstream to B: {:?}",
+        r.get_peer_subscriptions(b_peer).await
     );
 
     // End-to-end: a commit pushed at B must reach A through R, even
@@ -302,39 +344,6 @@ async fn relay_topology_propagates_subscriptions_upstream() -> TestResult {
         Some(1),
         "A did not receive commit relayed from B via R"
     );
-
-    Ok(())
-}
-
-/// Idempotency: a second subscribe from A for the same sedimentree
-/// must NOT cause R to re-issue its upstream subscribe to B (which
-/// would be wasted wire traffic). We rely on
-/// `outgoing_subscriptions` having recorded the first propagation.
-#[tokio::test]
-async fn relay_topology_repeated_subscribe_does_not_re_propagate() -> TestResult {
-    let (a, r, _b, _a_s, r_signer, b_signer) = setup_relay_topology().await?;
-    let sed_id = SedimentreeId::new([43u8; 32]);
-    let r_peer = PeerId::from(r_signer.verifying_key());
-    let b_peer = PeerId::from(b_signer.verifying_key());
-
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
-        .await?;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
-    assert!(r.get_peer_subscriptions(b_peer).await.contains(&sed_id));
-
-    // Second subscribe from A. Propagation should short-circuit because
-    // R already has `(B, sed_id)` in `outgoing_subscriptions`. We can't
-    // easily count wire messages here, but verifying the subscription
-    // set hasn't grown (still exactly the same sedimentree) is a
-    // proxy.
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
-        .await?;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
-
-    let r_subs = r.get_peer_subscriptions(b_peer).await;
-    assert_eq!(r_subs.len(), 1);
-    assert!(r_subs.contains(&sed_id));
 
     Ok(())
 }
@@ -616,21 +625,76 @@ impl StoragePolicy<Sendable> for RestrictiveFetchPolicy {
     }
 }
 
+// ===========================================================================
+// Wire-counting harness
+//
+// The `get_peer_subscriptions`-based tests above can only observe R's
+// *recorded* subscription state, which is a proxy: a re-propagating bug
+// (a duplicate upstream `BatchSyncRequest`) leaves the recorded set
+// unchanged, and a "did-not-propagate" assertion can pass vacuously if
+// propagation never started for an unrelated reason.
+//
+// These harness-backed tests instead put R on a `ChannelMockConnection`
+// toward "B" so the test can *count the actual wire messages* R emits
+// upstream. A configurable responder feeds R's `sync_with_peer` the
+// `BatchSyncResponse` it needs to complete (so the claim/track/rollback
+// logic actually runs), while every inbound `BatchSyncRequest` is
+// recorded for assertions.
+// ===========================================================================
+
+type MockConn = ChannelMockConnection<SyncMessage>;
+
 #[allow(clippy::type_complexity)]
-type RestrictiveSubduction = Arc<
+type OpenMockSubduction = Arc<
     Subduction<
         'static,
         Sendable,
         MemoryStorage,
-        Conn,
-        SyncHandler<Sendable, MemoryStorage, Conn, RestrictiveFetchPolicy, CountLeadingZeroBytes>,
+        MockConn,
+        SyncHandler<Sendable, MemoryStorage, MockConn, OpenPolicy, CountLeadingZeroBytes>,
+        OpenPolicy,
+        MemorySigner,
+        InstantTimeout,
+    >,
+>;
+
+#[allow(clippy::type_complexity)]
+type RestrictiveMockSubduction = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        MemoryStorage,
+        MockConn,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            MockConn,
+            RestrictiveFetchPolicy,
+            CountLeadingZeroBytes,
+        >,
         RestrictiveFetchPolicy,
         MemorySigner,
         InstantTimeout,
     >,
 >;
 
-fn make_restrictive_node(signer: MemorySigner, allowed_fetcher: PeerId) -> RestrictiveSubduction {
+fn make_open_mock_node(signer: MemorySigner) -> OpenMockSubduction {
+    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(signer)
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConn>();
+
+    tokio::spawn(listener);
+    tokio::spawn(manager);
+    sd
+}
+
+fn make_restrictive_mock_node(
+    signer: MemorySigner,
+    allowed_fetcher: PeerId,
+) -> RestrictiveMockSubduction {
     let (sd, _handler, listener, manager) = SubductionBuilder::new()
         .signer(signer)
         .storage(
@@ -639,140 +703,284 @@ fn make_restrictive_node(signer: MemorySigner, allowed_fetcher: PeerId) -> Restr
         )
         .spawner(TokioSpawn)
         .timer(InstantTimeout)
-        .build::<Sendable, Conn>();
+        .build::<Sendable, MockConn>();
 
     tokio::spawn(listener);
     tokio::spawn(manager);
     sd
 }
 
-async fn connect_restrictive_pair_a_r(
-    a: &TestSubduction,
-    a_signer: &MemorySigner,
-    r: &RestrictiveSubduction,
-    r_signer: &MemorySigner,
-) -> TestResult {
-    let (transport_a, transport_r) = ChannelTransport::pair();
-
-    let conn_a = MessageTransport::new(transport_a);
-    let conn_r = MessageTransport::new(transport_r);
-
-    let peer_a = PeerId::from(a_signer.verifying_key());
-    let peer_r = PeerId::from(r_signer.verifying_key());
-
-    let auth_a: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_a, peer_r);
-    let auth_r: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_r, peer_a);
-
-    a.add_connection(auth_a).await?;
-    r.add_connection(auth_r).await?;
-
-    Ok(())
+/// Register a [`ChannelMockConnection`] identified as `peer` via the
+/// supplied `add_connection` closure, returning the test-side handle for
+/// injecting inbound messages and observing outbound ones.
+///
+/// The closure adapts over the relay node's concrete policy type (whose
+/// `ConnectionDisallowed` error differs between `OpenPolicy` and
+/// `RestrictiveFetchPolicy`); the returned `bool` (fresh-vs-duplicate)
+/// is discarded.
+async fn attach_mock_peer<S>(
+    add_connection: impl FnOnce(
+        Authenticated<MockConn, Sendable>,
+    ) -> BoxFuture<'static, Result<bool, S>>,
+    peer: PeerId,
+) -> Result<ChannelMockConnectionHandle<SyncMessage>, S> {
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer);
+    let auth: Authenticated<MockConn, Sendable> = Authenticated::new_for_test(conn, peer);
+    add_connection(auth).await?;
+    Ok(handle)
 }
 
-async fn connect_restrictive_pair_r_b(
-    r: &RestrictiveSubduction,
-    r_signer: &MemorySigner,
-    b: &TestSubduction,
-    b_signer: &MemorySigner,
-) -> TestResult {
-    let (transport_r, transport_b) = ChannelTransport::pair();
-
-    let conn_r = MessageTransport::new(transport_r);
-    let conn_b = MessageTransport::new(transport_b);
-
-    let peer_r = PeerId::from(r_signer.verifying_key());
-    let peer_b = PeerId::from(b_signer.verifying_key());
-
-    let auth_r: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_r, peer_b);
-    let auth_b: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_b, peer_r);
-
-    r.add_connection(auth_r).await?;
-    b.add_connection(auth_b).await?;
-
-    Ok(())
+/// An empty [`SyncDiff`] for an `Ok` upstream response that carries no
+/// data (the responder simply accepts the subscription).
+fn empty_sync_diff() -> SyncDiff {
+    SyncDiff {
+        missing_commits: Vec::new(),
+        missing_fragments: Vec::new(),
+        requesting: RequestedData::default(),
+    }
 }
 
-/// Regression for the policy gate on upstream-subscription propagation.
+/// Build a subscribing `BatchSyncRequest` as it would arrive from a
+/// downstream peer `from` for sedimentree `id`.
+const fn subscribing_request(from: PeerId, id: SedimentreeId) -> SyncMessage {
+    SyncMessage::BatchSyncRequest(BatchSyncRequest {
+        id,
+        req_id: RequestId {
+            requestor: from,
+            nonce: 1,
+        },
+        fingerprint_summary: FingerprintSummary::new(
+            FingerprintSeed::new(0, 0),
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+        ),
+        subscribe: true,
+    })
+}
+
+/// Drain `outbound_rx`, counting every inbound `BatchSyncRequest {
+/// subscribe: true }` (regardless of sedimentree), and reply to each
+/// with a `BatchSyncResponse` carrying `result` so the sender's
+/// `sync_with_peer` completes. The running count is shared via the
+/// returned `Arc`.
 ///
-/// When A subscribes to R for a sedimentree that R's policy rejects A
-/// from fetching, R must NOT propagate the subscription upstream to B.
-/// Without the gate, an unauthorized peer could cause R to enrol in
-/// upstream subscriptions whose traffic the egress filter would only
-/// drop on the return path — wasted bandwidth and dangling upstream
-/// subscription state.
+/// Counting all subscribing requests (not just one id) lets a single
+/// responder serve a positive-control subscribe and a separate
+/// unauthorized subscribe in the same test: any increment beyond the
+/// control baseline signals an unexpected propagation.
 ///
-/// Pairs with `relay_topology_propagates_subscriptions_upstream` (which
-/// proves propagation does happen under `OpenPolicy`).
+/// Spawned as a background task; it lives until the channel closes.
+fn spawn_upstream_responder(
+    handle: ChannelMockConnectionHandle<SyncMessage>,
+    result_factory: impl Fn() -> SyncResult + Send + 'static,
+) -> Arc<std::sync::atomic::AtomicUsize> {
+    use std::sync::atomic::Ordering;
+
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count_for_task = Arc::clone(&count);
+
+    tokio::spawn(async move {
+        while let Ok(msg) = handle.outbound_rx.recv().await {
+            if let SyncMessage::BatchSyncRequest(req) = &msg {
+                if req.subscribe {
+                    count_for_task.fetch_add(1, Ordering::SeqCst);
+                }
+
+                // Reply so the upstream `sync_with_peer` resolves.
+                let response = SyncMessage::BatchSyncResponse(BatchSyncResponse {
+                    req_id: req.req_id,
+                    id: req.id,
+                    result: result_factory(),
+                    responder_heads: RemoteHeads::default(),
+                });
+
+                if handle.inbound_tx.send(response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    count
+}
+
+/// Idempotency, proven on the wire: two inbound subscribes from A for the
+/// same sedimentree cause R to send **exactly one** upstream
+/// `BatchSyncRequest { subscribe: true }` to B.
+///
+/// Unlike the `get_peer_subscriptions`-based version, this counts the
+/// actual messages R emits, so a re-propagating implementation (which
+/// would leave the recorded subscription set unchanged) is detected: it
+/// would push the count to 2.
 #[tokio::test]
-async fn relay_topology_unauthorized_subscribe_does_not_propagate() -> TestResult {
-    let a_signer = make_signer(11);
-    let r_signer = make_signer(21);
-    let b_signer = make_signer(31);
+async fn relay_topology_repeated_subscribe_sends_exactly_one_upstream_request() -> TestResult {
+    let a_signer = make_signer(13);
+    let r_signer = make_signer(23);
+    let b_signer = make_signer(33);
 
     let a_peer = PeerId::from(a_signer.verifying_key());
-    let r_peer = PeerId::from(r_signer.verifying_key());
     let b_peer = PeerId::from(b_signer.verifying_key());
 
-    // Sanity: A is not the allowed fetcher, so this test is exercising
-    // the rejection path. (If A == b_peer accidentally, the propagation
-    // assertion below would still pass for the wrong reason.)
-    assert_ne!(a_peer, b_peer);
+    let r = make_open_mock_node(r_signer.clone());
 
-    // R only allows B to fetch. A is unauthorized.
-    let a = make_node(a_signer.clone());
-    let r = make_restrictive_node(r_signer.clone(), b_peer);
-    let b = make_node(b_signer.clone());
+    // A and B are mock peers attached directly to R.
+    let r_for_a = Arc::clone(&r);
+    let a_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_a.add_connection(auth).await }),
+        a_peer,
+    )
+    .await?;
+    let r_for_b = Arc::clone(&r);
+    let b_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
+        b_peer,
+    )
+    .await?;
 
-    connect_restrictive_pair_a_r(&a, &a_signer, &r, &r_signer).await?;
-    connect_restrictive_pair_r_b(&r, &r_signer, &b, &b_signer).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let sed_id = SedimentreeId::new([43u8; 32]);
 
-    let sed_id = SedimentreeId::new([99u8; 32]);
+    // B authorizes R's upstream subscribe (responds Ok with an empty
+    // diff), so the first propagation establishes and is recorded.
+    let upstream_count = spawn_upstream_responder(b_handle, || SyncResult::Ok(empty_sync_diff()));
 
-    // A's subscribe reaches R. `recv_batch_sync_request` will get a
-    // policy rejection from `get_fetcher` and send back
-    // `SyncResult::Unauthorized`. The handler returns `Ok` and
-    // `propagate_subscription` would run if the policy gate weren't
-    // there. We deliberately don't propagate `?` because the request
-    // surfaces an `Unauthorized` response, not a transport-level error.
-    let _outcome = a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT).await;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    // First inbound subscribe from A.
+    a_handle
+        .inbound_tx
+        .send(subscribing_request(a_peer, sed_id))
+        .await?;
 
-    // The gate must have suppressed propagation: R has no outgoing
-    // subscription to B for `sed_id`.
-    let r_to_b_subs = r.get_peer_subscriptions(b_peer).await;
+    // Wait until the first upstream request has actually been sent.
+    let saw_first = wait_until(|| {
+        let c = Arc::clone(&upstream_count);
+        async move { c.load(std::sync::atomic::Ordering::SeqCst) >= 1 }
+    })
+    .await;
     assert!(
-        !r_to_b_subs.contains(&sed_id),
-        "policy gate failed: R propagated A's unauthorized subscribe to B \
-         (R→B subscriptions: {r_to_b_subs:?})"
+        saw_first,
+        "R never sent the first upstream BatchSyncRequest to B"
+    );
+
+    // Second inbound subscribe from A for the same sedimentree.
+    a_handle
+        .inbound_tx
+        .send(subscribing_request(a_peer, sed_id))
+        .await?;
+
+    // Give R ample opportunity to (wrongly) re-propagate. Because we are
+    // asserting the *absence* of a second send, poll until R has
+    // processed the second subscribe: wait until its recorded
+    // subscription to B is stable, then confirm the count is still 1.
+    let stable = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(stable, "R lost its recorded subscription to B");
+
+    // Allow any erroneous re-propagation to land before the final count.
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    let final_count = upstream_count.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        final_count, 1,
+        "R must send exactly one upstream BatchSyncRequest across two \
+         inbound subscribes; sent {final_count} (a value > 1 means the \
+         idempotency guard re-propagated)"
     );
 
     Ok(())
 }
 
-/// Connects an `OpenPolicy` relay `r` to a `RestrictiveFetchPolicy`
-/// peer `b` (the mirror of [`connect_restrictive_pair_r_b`], where the
-/// roles are flipped so the *upstream* peer is the restrictive one).
-async fn connect_open_relay_to_restrictive_b(
-    r: &TestSubduction,
-    r_signer: &MemorySigner,
-    b: &RestrictiveSubduction,
-    b_signer: &MemorySigner,
-) -> TestResult {
-    let (transport_r, transport_b) = ChannelTransport::pair();
+/// When the subscriber U is unauthorized to fetch at R, R must send
+/// **zero** upstream `BatchSyncRequest`s to B. Asserted on the wire
+/// (count == 0), not via the recorded subscription set — so it cannot
+/// pass vacuously: a re-propagating-but-unrecorded leak would still be
+/// caught.
+///
+/// The "harness can observe a real propagation" precondition is
+/// established by the sibling tests
+/// (`relay_topology_repeated_subscribe_sends_exactly_one_upstream_request`
+/// drives the same `spawn_upstream_responder` counter to 1 under an
+/// authorized subscribe), so this test focuses purely on the negative.
+///
+/// `U` and `B` are the only peers attached, so the only place R *could*
+/// emit an upstream request is B's counted channel.
+#[tokio::test]
+async fn relay_topology_unauthorized_subscribe_sends_zero_upstream_requests() -> TestResult {
+    let u_signer = make_signer(14);
+    let r_signer = make_signer(24);
+    let b_signer = make_signer(34);
+    let allowed_signer = make_signer(44);
 
-    let conn_r = MessageTransport::new(transport_r);
-    let conn_b = MessageTransport::new(transport_b);
+    let u_peer = PeerId::from(u_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let allowed_peer = PeerId::from(allowed_signer.verifying_key());
 
-    let peer_r = PeerId::from(r_signer.verifying_key());
-    let peer_b = PeerId::from(b_signer.verifying_key());
+    // U is the unauthorized subscriber; only `allowed_peer` (never
+    // connected) may fetch, guaranteeing U's subscribe is rejected at
+    // R's listen-loop gate.
+    assert_ne!(u_peer, allowed_peer);
+    assert_ne!(u_peer, b_peer);
 
-    let auth_r: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_r, peer_b);
-    let auth_b: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_b, peer_r);
+    let r = make_restrictive_mock_node(r_signer.clone(), allowed_peer);
 
-    r.add_connection(auth_r).await?;
-    b.add_connection(auth_b).await?;
+    let r_for_u = Arc::clone(&r);
+    let u_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_u.add_connection(auth).await }),
+        u_peer,
+    )
+    .await?;
+    let r_for_b = Arc::clone(&r);
+    let b_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
+        b_peer,
+    )
+    .await?;
+
+    let sed_id = SedimentreeId::new([88u8; 32]);
+
+    let upstream_count = spawn_upstream_responder(b_handle, || SyncResult::Ok(empty_sync_diff()));
+
+    // U subscribes but is unauthorized: R's handler answers
+    // `Unauthorized` and the listen-loop gate suppresses propagation.
+    u_handle
+        .inbound_tx
+        .send(subscribing_request(u_peer, sed_id))
+        .await?;
+
+    // Wait until R has answered U (a `BatchSyncResponse` on U's outbound
+    // channel) so we know the subscribe was *processed*, not merely
+    // in-flight — otherwise a zero count could mean "not yet handled".
+    let u_answered = wait_until(|| {
+        let rx = u_handle.outbound_rx.clone();
+        async move {
+            while let Ok(msg) = rx.try_recv() {
+                if matches!(
+                    &msg,
+                    SyncMessage::BatchSyncResponse(BatchSyncResponse { id, .. }) if *id == sed_id
+                ) {
+                    return true;
+                }
+            }
+            false
+        }
+    })
+    .await;
+    assert!(
+        u_answered,
+        "R never answered U's unauthorized subscribe; a zero upstream \
+         count cannot distinguish 'suppressed' from 'not yet processed'"
+    );
+
+    // Allow any erroneous upstream propagation to land before counting.
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+
+    let upstream = upstream_count.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        upstream, 0,
+        "R propagated an unauthorized subscribe upstream to B \
+         ({upstream} upstream BatchSyncRequest(s) sent; expected 0)"
+    );
 
     Ok(())
 }
@@ -784,66 +992,89 @@ async fn connect_open_relay_to_restrictive_b(
 /// `outgoing_subscriptions` before awaiting `sync_with_peer`, to
 /// deduplicate concurrent propagations. `sync_with_peer` only records
 /// the subscription (via `track_outgoing_subscription`) and returns
-/// `Ok((true, ..))` when the upstream peer answers `SyncResult::Ok`.
-/// An upstream `Unauthorized` / `NotFound` / timeout instead surfaces
-/// as `Ok((false, ..))` with nothing tracked.
+/// `Ok((true, ..))` when the upstream peer answers `SyncResult::Ok`. An
+/// upstream `Unauthorized` / `NotFound` / timeout instead surfaces as
+/// `Ok((false, ..))` with nothing tracked.
 ///
-/// The bug: the original rollback fired only on the `Err(..)` arm, so
-/// an `Ok((false, ..))` left the speculative claim in place. That
-/// phantom entry (a) permanently suppresses re-propagation for that
-/// `(peer, id)` pair (the next inbound subscribe sees the claim and
-/// skips), and (b) is replayed on reconnect by `get_peer_subscriptions`
-/// even though no subscription was ever established.
+/// The bug: the original rollback fired only on the `Err(..)` arm, so an
+/// `Ok((false, ..))` left the speculative claim in place. That phantom
+/// entry (a) permanently suppresses re-propagation for that `(peer, id)`
+/// pair (the next inbound subscribe sees the claim and skips), and (b)
+/// is replayed on reconnect by `get_peer_subscriptions` even though no
+/// subscription was ever established.
 ///
-/// Topology: A —(`OpenPolicy`)→ R —(restrictive)→ B, where B's policy
-/// rejects R as a fetcher. A is authorized at R, so propagation *does*
-/// start (the listen-loop authorize gate passes) and R claims `(B,
-/// sed_id)`. R's upstream request to B then comes back `Unauthorized`,
-/// so the claim must be rolled back.
+/// Here B answers every upstream subscribe with `SyncResult::Unauthorized`
+/// — i.e. `Ok((false, ..))` from R's `sync_with_peer`. The test:
+///
+///   1. confirms R *did* attempt the upstream send (count >= 1), so the
+///      claim-then-rollback path actually ran (not vacuously skipped),
+///      then
+///   2. asserts the claim was rolled back: R has no recorded outgoing
+///      subscription to B. The recorded set is the *direct* observable
+///      for this bug, since the phantom entry is precisely what would
+///      linger.
 #[tokio::test]
-async fn relay_topology_unestablished_upstream_subscribe_rolls_back_claim() -> TestResult {
-    let a_signer = make_signer(12);
-    let r_signer = make_signer(22);
-    let b_signer = make_signer(32);
+async fn relay_topology_unauthorized_upstream_response_rolls_back_claim() -> TestResult {
+    let a_signer = make_signer(15);
+    let r_signer = make_signer(25);
+    let b_signer = make_signer(35);
 
     let a_peer = PeerId::from(a_signer.verifying_key());
-    let r_peer = PeerId::from(r_signer.verifying_key());
     let b_peer = PeerId::from(b_signer.verifying_key());
 
-    // B only allows some unrelated peer to fetch, so R (the relay) is
-    // rejected. A different-from-R allowed fetcher guarantees R's
-    // upstream fetch is denied.
-    let allowed_fetcher = PeerId::from(make_signer(99).verifying_key());
-    assert_ne!(allowed_fetcher, r_peer);
-    assert_ne!(a_peer, b_peer);
+    // R is open (so it authorizes A and starts propagation), but B
+    // answers every upstream subscribe `Unauthorized`.
+    let r = make_open_mock_node(r_signer.clone());
 
-    // A and R are open; B is restrictive and rejects R.
-    let a = make_node(a_signer.clone());
-    let r = make_node(r_signer.clone());
-    let b = make_restrictive_node(b_signer.clone(), allowed_fetcher);
-
-    connect_pair(&a, &a_signer, &r, &r_signer).await?;
-    connect_open_relay_to_restrictive_b(&r, &r_signer, &b, &b_signer).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let r_for_a = Arc::clone(&r);
+    let a_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_a.add_connection(auth).await }),
+        a_peer,
+    )
+    .await?;
+    let r_for_b = Arc::clone(&r);
+    let b_handle = attach_mock_peer(
+        move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
+        b_peer,
+    )
+    .await?;
 
     let sed_id = SedimentreeId::new([77u8; 32]);
 
-    // A subscribes to R. R authorizes A (OpenPolicy), starts
-    // propagation, claims `(B, sed_id)`, and asks B — which answers
-    // `Unauthorized`, so the upstream subscription is never
-    // established.
-    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
-        .await?;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    let upstream_count = spawn_upstream_responder(b_handle, || SyncResult::Unauthorized);
 
-    // The speculative claim must have been rolled back: R has no
-    // outgoing subscription to B for `sed_id`.
-    let r_to_b_subs = r.get_peer_subscriptions(b_peer).await;
+    a_handle
+        .inbound_tx
+        .send(subscribing_request(a_peer, sed_id))
+        .await?;
+
+    // Precondition: R actually attempted the upstream send, so the
+    // claim-then-rollback path ran. Without this, a vacuous "never
+    // claimed" implementation would also satisfy the absence assertion.
+    let attempted = wait_until(|| {
+        let c = Arc::clone(&upstream_count);
+        async move { c.load(std::sync::atomic::Ordering::SeqCst) >= 1 }
+    })
+    .await;
     assert!(
-        !r_to_b_subs.contains(&sed_id),
-        "claim rollback failed: R recorded an outgoing subscription to B \
-         even though B answered Unauthorized (R→B subscriptions: {r_to_b_subs:?})"
+        attempted,
+        "R never sent an upstream BatchSyncRequest, so the rollback path \
+         was never exercised — the absence check below would be vacuous"
+    );
+
+    // The claim must have been rolled back after B's `Unauthorized`:
+    // poll until R's recorded subscription to B is absent (it may be
+    // briefly present as the speculative claim before rollback).
+    let rolled_back = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { !r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(
+        rolled_back,
+        "claim rollback failed: R kept an outgoing subscription to B \
+         even though B answered Unauthorized (R→B subscriptions: {:?})",
+        r.get_peer_subscriptions(b_peer).await
     );
 
     Ok(())
