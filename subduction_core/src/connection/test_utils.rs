@@ -11,7 +11,10 @@ use core::{
 };
 
 use future_form::{FutureForm, Local, Sendable};
-use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
+use futures::{
+    FutureExt,
+    future::{AbortHandle, BoxFuture, LocalBoxFuture},
+};
 use sedimentree_core::{
     codec::{decode::Decode, encode::Encode},
     commit::CountLeadingZeroBytes,
@@ -564,6 +567,129 @@ impl crate::timeout::Timeout<Local> for InstantTimeout {
         fut: LocalBoxFuture<'a, T>,
     ) -> LocalBoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
         Box::pin(async move { Ok(fut.await) })
+    }
+}
+
+/// A [`ChannelTransport`] wrapper that can be paused mid-test to simulate
+/// a peer that is byte-connected but protocol-unresponsive (the underlying
+/// socket is open, but the remote runtime is wedged and does not process
+/// inbound messages or emit responses).
+///
+/// Once [`pause`](Self::pause) is called, both in-flight and subsequent
+/// `recv_bytes` / `send_bytes` futures on this side park forever, modeling
+/// a wedge in the remote runtime: the peer's sends still enqueue into the
+/// channel but never get drained, so the wire looks live while no
+/// protocol-level progress is possible.
+#[derive(Debug, Clone)]
+pub struct PausableChannelTransport {
+    inner: ChannelTransport,
+    /// `pause_signal_rx.recv()` parks until the matching `pause_signal_tx`
+    /// is closed, at which point it returns `Err`. We use this as a
+    /// "paused" notification: calling [`pause`](Self::pause) closes the
+    /// sender, every awaiter wakes up, and the recv error is treated as
+    /// "stay parked forever" by the I/O wrappers.
+    pause_signal_tx: async_channel::Sender<()>,
+    pause_signal_rx: async_channel::Receiver<()>,
+}
+
+impl PausableChannelTransport {
+    /// Create a bidirectional pair of transports, each independently pausable.
+    #[must_use]
+    pub fn pair() -> (Self, Self) {
+        let (a, b) = ChannelTransport::pair();
+        let (tx_a, rx_a) = async_channel::bounded(1);
+        let (tx_b, rx_b) = async_channel::bounded(1);
+        (
+            Self {
+                inner: a,
+                pause_signal_tx: tx_a,
+                pause_signal_rx: rx_a,
+            },
+            Self {
+                inner: b,
+                pause_signal_tx: tx_b,
+                pause_signal_rx: rx_b,
+            },
+        )
+    }
+
+    /// Mark this side as paused. Currently-pending and subsequent
+    /// `recv_bytes` and `send_bytes` calls on this side will park forever.
+    pub fn pause(&self) {
+        self.pause_signal_tx.close();
+    }
+
+    fn is_paused(&self) -> bool {
+        self.pause_signal_tx.is_closed()
+    }
+}
+
+impl PartialEq for PausableChannelTransport {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner && self.pause_signal_tx.same_channel(&other.pause_signal_tx)
+    }
+}
+
+impl Transport<Sendable> for PausableChannelTransport {
+    type SendError = ChannelClosed;
+    type RecvError = ChannelClosed;
+    type DisconnectionError = Infallible;
+
+    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        if self.is_paused() {
+            return Box::pin(futures::future::pending());
+        }
+        let inner = self.inner.send_bytes(bytes);
+        let signal = self.pause_signal_rx.clone();
+        Box::pin(async move {
+            let signal_fut = async move { signal.recv().await }.boxed();
+            match futures::future::select(inner, signal_fut).await {
+                futures::future::Either::Left((result, _)) => result,
+                futures::future::Either::Right((_, _inner)) => futures::future::pending().await,
+            }
+        })
+    }
+
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        if self.is_paused() {
+            return Box::pin(futures::future::pending());
+        }
+        let inner = self.inner.recv_bytes();
+        let signal = self.pause_signal_rx.clone();
+        Box::pin(async move {
+            let signal_fut = async move { signal.recv().await }.boxed();
+            match futures::future::select(inner, signal_fut).await {
+                futures::future::Either::Left((result, _)) => result,
+                futures::future::Either::Right((_, _inner)) => futures::future::pending().await,
+            }
+        })
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// A [`Timeout`](crate::timeout::Timeout) backed by `tokio::time::timeout`.
+///
+/// Use in integration tests that need real elapsed-time semantics
+/// (e.g. asserting that an operation completes well under its configured
+/// per-call timeout). Contrast with [`InstantTimeout`], which never fires.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokioTimeout;
+
+impl crate::timeout::Timeout<Sendable> for TokioTimeout {
+    fn timeout<'a, T: 'a>(
+        &'a self,
+        dur: Duration,
+        fut: BoxFuture<'a, T>,
+    ) -> BoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+        Box::pin(async move {
+            match tokio::time::timeout(dur, fut).await {
+                Ok(v) => Ok(v),
+                Err(_) => Err(crate::timeout::TimedOut),
+            }
+        })
     }
 }
 

@@ -752,6 +752,7 @@ where
                 RemoveResult::WasLast(_) => {
                     // Don't put anything back, peer entry stays removed
                     self.send_counter.clear_peer(&peer_id).await;
+                    self.cancel_peer_pending_calls(&peer_id).await;
 
                     #[cfg(feature = "metrics")]
                     crate::metrics::connection_closed();
@@ -782,7 +783,17 @@ where
                 .flat_map(NonEmpty::into_iter)
                 .collect()
         };
-        self.multiplexers.lock().await.clear();
+
+        // Cancel in-flight calls so awaiting callers see `ResponseDropped`
+        // now, rather than stranding until their per-call timeout. The
+        // muxes can outlive this `clear` (in-flight calls hold `Arc`
+        // clones), so dropping the map alone wouldn't release the senders.
+        let removed_muxes = core::mem::take(&mut *self.multiplexers.lock().await);
+        for muxes in removed_muxes.into_values() {
+            for mux in muxes {
+                mux.cancel_all_pending().await;
+            }
+        }
 
         self.send_counter.clear_all().await;
 
@@ -816,7 +827,7 @@ where
         peer_id: &PeerId,
     ) -> Result<bool, Conn::DisconnectionError> {
         let peer_conns = { self.connections.lock().await.remove(peer_id) };
-        self.multiplexers.lock().await.remove(peer_id);
+        self.cancel_peer_pending_calls(peer_id).await;
 
         if let Some(conns) = peer_conns {
             self.send_counter.clear_peer(peer_id).await;
@@ -923,7 +934,30 @@ where
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
     pub async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
-        peers::remove_connection(&self.connections, &self.subscriptions, conn).await
+        let result = peers::remove_connection(&self.connections, &self.subscriptions, conn).await;
+
+        // Only when the peer's last connection drops: cancel its in-flight
+        // calls. While the peer still has other connections, leave them —
+        // those connections may yet service the pending responses.
+        if result == Some(true) {
+            self.cancel_peer_pending_calls(&conn.peer_id()).await;
+        }
+
+        result
+    }
+
+    /// Remove `peer_id`'s multiplexers and cancel their in-flight calls.
+    ///
+    /// Called from every connection-teardown path once a peer's last
+    /// connection is gone, so awaiting `sync_with_*` callers resolve with
+    /// [`CallError::ResponseDropped`](crate::connection::managed::CallError::ResponseDropped)
+    /// immediately rather than waiting out the per-call timeout.
+    async fn cancel_peer_pending_calls(&self, peer_id: &PeerId) {
+        if let Some(muxes) = self.multiplexers.lock().await.remove(peer_id) {
+            for mux in muxes {
+                mux.cancel_all_pending().await;
+            }
+        }
     }
 
     /// Get all connections as a flat list.
