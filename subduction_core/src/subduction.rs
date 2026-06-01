@@ -422,15 +422,6 @@ where
         self.depth_metric.to_depth(commit_id)
     }
 
-    /// Returns a reference to the sedimentrees map.
-    ///
-    /// This is only available with the `test_utils` feature or in tests.
-    #[cfg(any(feature = "test_utils", test))]
-    #[must_use]
-    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>> {
-        &self.sedimentrees
-    }
-
     /// Get a connection to a peer, if one exists.
     ///
     /// Returns the first available connection to the peer. Use this to get a
@@ -1853,6 +1844,96 @@ where
                 // teardown (muxes, send counter, subscriptions, metrics).
                 self.remove_connection(&conn).await;
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test-only observability surface.
+//
+// Consolidated behind a single `#[cfg(any(feature = "test_utils", test))]`
+// gate (rather than sprinkling the attribute over individual production
+// methods) so the test-introspection API lives in one place and the
+// production `impl` blocks stay free of test-only noise. These methods
+// read internal state for asserting invariants; they are never compiled
+// into a normal build.
+// ---------------------------------------------------------------------------
+
+#[cfg(any(feature = "test_utils", test))]
+impl<
+    'a,
+    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
+    Store: Storage<Async>,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
+    Hdl: Handler<Async, Conn>,
+    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+    Sign: Signer<Async>,
+    Timer: Timeout<Async> + Clone,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+{
+    /// Returns a reference to the sedimentrees map.
+    #[must_use]
+    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>> {
+        &self.sedimentrees
+    }
+
+    /// Number of multiplexers currently registered for `peer_id`.
+    ///
+    /// Test-only observability for the `connections` ⟺ `multiplexers`
+    /// invariant. One multiplexer is created per connection, so this is
+    /// expected to equal [`connection_count`](Self::connection_count) at
+    /// every quiescent point.
+    pub async fn mux_count(&self, peer_id: &PeerId) -> usize {
+        self.multiplexers
+            .lock()
+            .await
+            .get(peer_id)
+            .map_or(0, Vec::len)
+    }
+
+    /// Number of connections currently registered for `peer_id`.
+    ///
+    /// Test-only observability counterpart to [`mux_count`](Self::mux_count).
+    pub async fn connection_count(&self, peer_id: &PeerId) -> usize {
+        self.connections
+            .lock()
+            .await
+            .get(peer_id)
+            .map_or(0, NonEmpty::len)
+    }
+
+    /// Whether the load-bearing `connections` ⟹ `multiplexers` invariant
+    /// holds for `peer_id`:
+    ///
+    /// - a peer with **any** connection must have **at least one**
+    ///   multiplexer (this is exactly what the three
+    ///   `.expect("multiplexer exists for every connected peer")` sites
+    ///   rely on to not panic), and
+    /// - a peer with **no** connection must have **no** multiplexer (no
+    ///   orphaned mux leak).
+    ///
+    /// Note this is deliberately the *weaker* "connected ⟹ ≥1 mux" form,
+    /// not strict per-connection equality: a multiplexer is created per
+    /// connection by [`add_connection`](Self::add_connection) but the
+    /// non-last [`remove_connection`](Self::remove_connection) path
+    /// removes a connection without removing its (positionally-tracked)
+    /// mux, so `mux_count` can transiently exceed `connection_count`
+    /// while the peer is still connected. That positional correspondence
+    /// is known modeling debt; what the panic sites actually require is
+    /// only the presence/absence captured here.
+    ///
+    /// Tests assert this directly rather than reconstructing it from the
+    /// two counts. Both maps are read under their locks in the canonical
+    /// order (connections first, then multiplexers).
+    pub async fn conn_mux_invariant_holds(&self, peer_id: &PeerId) -> bool {
+        let conns = self.connection_count(peer_id).await;
+        let muxes = self.mux_count(peer_id).await;
+        if conns > 0 {
+            muxes > 0
+        } else {
+            muxes == 0
         }
     }
 }
