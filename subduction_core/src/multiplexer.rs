@@ -141,13 +141,11 @@ impl Multiplexer {
     pub async fn cancel_all_pending(&self) {
         let mut pending = self.pending.lock().await;
         let n = pending.len();
-        if n > 0 {
-            pending.clear();
-            tracing::debug!(
-                "cancelled {n} pending call(s) on multiplexer for peer {:?}",
-                self.peer_id
-            );
-        }
+        pending.clear();
+        tracing::debug!(
+            "cancelled {n} pending call(s) on multiplexer for peer {:?}",
+            self.peer_id
+        );
     }
 
     /// Try to resolve a pending call with an inbound `BatchSyncResponse`.
