@@ -1247,15 +1247,19 @@ where
                     let seed = FingerprintSeed::random();
                     let resolver = tree.fingerprint_resolver(&seed);
 
-                    #[allow(clippy::expect_used)]
-                    // Invariant: add_connection creates a Multiplexer for every peer
-                    let mux = {
+                    // The connection snapshot and this mux lookup take their
+                    // locks separately, so a concurrent teardown may have
+                    // removed the peer's multiplexer in between. Treat a
+                    // missing mux as "the peer went away" and skip it rather
+                    // than panicking.
+                    let Some(mux) = ({
                         let muxes = self.multiplexers.lock().await;
-                        muxes
-                            .get(&peer_id)
-                            .and_then(|v| v.first())
-                            .cloned()
-                            .expect("multiplexer exists for every connected peer")
+                        muxes.get(&peer_id).and_then(|v| v.first()).cloned()
+                    }) else {
+                        tracing::debug!(
+                            "multiplexer for peer {peer_id:?} gone (concurrent teardown); skipping"
+                        );
+                        continue;
                     };
                     let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                     let req_id = managed.next_request_id();
@@ -2220,15 +2224,23 @@ where
                 resolver.summary().fragment_fingerprints().len()
             );
 
-            #[allow(clippy::expect_used)]
-            // Invariant: add_connection creates a Multiplexer for every peer
-            let mux = {
+            // The connection snapshot and this mux lookup take their locks
+            // separately, so a concurrent teardown may have removed the
+            // peer's multiplexer between the two. Treat a missing mux as
+            // "the peer went away": record a dropped-response error for
+            // this connection and move on, rather than panicking.
+            let Some(mux) = ({
                 let muxes = self.multiplexers.lock().await;
-                muxes
-                    .get(to_ask)
-                    .and_then(|v| v.first())
-                    .cloned()
-                    .expect("multiplexer exists for every connected peer")
+                muxes.get(to_ask).and_then(|v| v.first()).cloned()
+            }) else {
+                tracing::debug!(
+                    "multiplexer for peer {to_ask:?} gone (concurrent teardown); skipping"
+                );
+                conn_errs.push((
+                    conn.clone(),
+                    crate::connection::managed::CallError::ResponseDropped,
+                ));
+                continue;
             };
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
             let req_id = managed.next_request_id();
@@ -2493,13 +2505,24 @@ where
                                 |t| t.fingerprint_resolver(&seed),
                             );
 
-                        #[allow(clippy::expect_used)] // Invariant: add_connection creates a Multiplexer for every peer
-                        let mux = {
+                        // The connection snapshot and this mux lookup take
+                        // their locks separately, so a concurrent teardown
+                        // may have removed the peer's multiplexer in between.
+                        // Treat a missing mux as "the peer went away":
+                        // record a dropped-response error and move on rather
+                        // than panicking.
+                        let Some(mux) = ({
                             let muxes = self.multiplexers.lock().await;
-                            muxes.get(peer_id)
-                                .and_then(|v| v.first())
-                                .cloned()
-                                .expect("multiplexer exists for every connected peer")
+                            muxes.get(peer_id).and_then(|v| v.first()).cloned()
+                        }) else {
+                            tracing::debug!(
+                                "multiplexer for peer {peer_id:?} gone (concurrent teardown); skipping"
+                            );
+                            conn_errs.push((
+                                conn.clone(),
+                                crate::connection::managed::CallError::ResponseDropped,
+                            ));
+                            continue;
                         };
                         let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                         let req_id = managed.next_request_id();
