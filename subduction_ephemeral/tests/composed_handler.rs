@@ -342,16 +342,9 @@ fn try_as_batch_sync_response_returns_none_for_ephemeral() {
     assert_eq!(wire.try_as_batch_sync_response(), None);
 }
 
-/// Regression: the composed wire envelope delegates
-/// [`TryAsSubscribeRequest`] to its inner [`SyncMessage`] variant, so a
-/// subscribing [`BatchSyncRequest`] reaches the listen-loop's
-/// upstream-propagation path even when the handler is a
-/// [`ComposedHandler`].
-///
-/// This closes the original "KNOWN ISSUE" from the propagation feature:
-/// composed handlers no longer need to override anything for subscription
-/// requests to be forwarded — the message-type trait carries the
-/// behavior across the envelope.
+/// The composed wire envelope delegates [`TryAsSubscribeRequest`] to its
+/// inner [`SyncMessage`], so a subscribing [`BatchSyncRequest`] still
+/// reaches upstream propagation under a [`ComposedHandler`].
 #[test]
 fn try_as_subscribe_request_extracts_from_sync_when_subscribe_true() {
     let sed_id = SedimentreeId::new([0xEE; 32]);

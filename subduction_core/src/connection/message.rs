@@ -268,27 +268,15 @@ impl TryAsBatchSyncResponse for SyncMessage {
     }
 }
 
-/// Fallible extraction of an inbound subscription request from a wire
-/// message.
+/// Extracts the [`SedimentreeId`] of an inbound
+/// `BatchSyncRequest { subscribe: true, .. }`, used by the listen loop
+/// to decide whether to propagate the subscription upstream.
 ///
-/// Implementors return `Some(id)` when `self` is a
-/// `BatchSyncRequest { subscribe: true, id, .. }`, or `None` otherwise.
-/// The [`Subduction`](crate::subduction::Subduction) listen loop uses
-/// this to decide whether to propagate the subscription to its own
-/// upstream peers after the handler returns successfully (mirroring the
-/// way commits and fragments are forwarded).
-///
-/// Implementing on the message type (rather than on the handler) means
-/// composed wire envelopes — e.g. `WireMessage` — automatically get
-/// the right behavior by delegating to their inner [`SyncMessage`]
-/// variant. Non-sync messages return `None`.
-///
-/// The `Try` prefix mirrors stdlib `TryFrom`/`TryInto` fallibility; the
-/// `As` suffix mirrors `AsRef`-style borrow semantics. Returning
-/// `Option` (rather than `Result<_, ()>`) keeps the call site terse.
+/// Implemented on the message type rather than the handler so composed
+/// wire envelopes delegate to their inner [`SyncMessage`]; non-sync
+/// messages return `None`.
 pub trait TryAsSubscribeRequest {
-    /// Borrow the [`SedimentreeId`] of an inbound subscribing
-    /// `BatchSyncRequest` from `self`, if `self` is one.
+    /// Returns `Some(id)` if `self` is a subscribing `BatchSyncRequest`.
     fn try_as_subscribe_request(&self) -> Option<SedimentreeId>;
 }
 
@@ -1702,12 +1690,8 @@ mod tests {
                 });
         }
 
-        /// `try_as_subscribe_request()` returns `Some(id)` iff the
-        /// variant is `BatchSyncRequest { subscribe: true, id, .. }`,
-        /// and the returned id is exactly that request's id. Guards the
-        /// listen-loop propagation gate (`subduction.rs`) against future
-        /// variants quietly slipping through the match, and against the
-        /// `subscribe` flag being ignored.
+        /// `try_as_subscribe_request()` returns `Some(id)` iff the variant
+        /// is `BatchSyncRequest { subscribe: true, id, .. }`.
         #[test]
         fn prop_try_as_subscribe_request_iff_subscribing_batch_request() {
             bolero::check!()

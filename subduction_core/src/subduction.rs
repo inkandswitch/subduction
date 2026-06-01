@@ -652,23 +652,13 @@ where
                             continue;
                         }
 
-                        // Normal path: dispatch to handler. If this is
-                        // an inbound `BatchSyncRequest { subscribe: true }`,
-                        // propagate the subscription to our own upstream
-                        // peers once the handler has processed it
-                        // (mirroring the outbound broadcast that
-                        // `SyncHandler` already does for commits/fragments).
-                        //
-                        // Propagation is gated on the originator being
-                        // *authorized* to fetch the sedimentree — handler
-                        // success alone is too permissive because
-                        // `recv_batch_sync_request` returns `Ok(())` after
-                        // sending a `SyncResult::Unauthorized` response.
-                        // Without this check, an unauthorized peer could
-                        // cause us to enrol in upstream subscriptions
-                        // whose traffic we would only filter-drop on the
-                        // return path — wasted bandwidth and dangling
-                        // upstream state.
+                        // For an inbound subscribing `BatchSyncRequest`,
+                        // propagate it upstream once the handler has run.
+                        // Gate on `authorize_fetch`, not handler success:
+                        // `recv_batch_sync_request` returns `Ok(())` even
+                        // after answering `Unauthorized`, so an
+                        // unauthorized peer would otherwise make us enrol
+                        // in upstream subscriptions we'd only filter-drop.
                         let h = handler.clone();
                         let conn_clone = conn.clone();
                         let propagate_target = msg
@@ -1806,56 +1796,32 @@ where
         Ok(())
     }
 
-    /// Propagate an inbound subscription request to our own upstream peers.
-    ///
-    /// Called from the listen loop when
-    /// [`TryAsSubscribeRequest::try_as_subscribe_request`] surfaces a
-    /// `BatchSyncRequest { subscribe: true, .. }`. For every
-    /// currently-connected peer other than `originator` that we do not
-    /// already have an outgoing subscription to for `id`, we issue
+    /// Forward an inbound subscription for `id` to every connected peer
+    /// other than `originator` not already subscribed for `id`, via
     /// [`sync_with_peer`](Self::sync_with_peer) with `subscribe = true`.
-    ///
-    /// The result: any updates the upstream peer later pushes for `id`
-    /// reach us, and the outbound broadcast loops in
-    /// [`SyncHandler`](crate::handler::sync::SyncHandler) forward them
-    /// back to the originator (and any other local subscribers).
-    /// Forwarding updates and forwarding requests stay symmetric — see
+    /// This keeps relay topologies reachable: updates an upstream peer
+    /// later pushes flow back through us to the originator. Best-effort;
+    /// per-peer errors are logged and ignored. See
     /// `design/sync/subscriptions.md#upstream-propagation-relay-topologies`.
     ///
     /// # Concurrency
     ///
-    /// The listen loop dispatches handler futures concurrently via
-    /// `FuturesUnordered`, so two inbound subscribes for the same
-    /// sedimentree can enter this method simultaneously. To prevent
-    /// duplicate upstream `BatchSyncRequest`s for the same
-    /// `(peer, id)` pair, the claim step pre-inserts each pending pair
-    /// into [`outgoing_subscriptions`] under a single short-held lock
-    /// before any `sync_with_peer` await. Concurrent callers that
-    /// observe the pre-insert skip propagation correctly.
+    /// Handler futures run concurrently, so two subscribes for the same
+    /// `id` can race here. The claim step pre-inserts `(peer, id)` into
+    /// [`outgoing_subscriptions`] under one short-held lock before any
+    /// await, so a concurrent caller skips a pair already claimed.
     ///
-    /// `sync_with_peer` calls
-    /// [`track_outgoing_subscription`](Self::track_outgoing_subscription)
-    /// only when it actually establishes the subscription (a
-    /// `SyncResult::Ok` response with `subscribe = true`), in which case
-    /// it re-inserts the same `(peer, id)` pair idempotently and returns
-    /// `Ok((true, ..))`. Any other outcome — a transport error
-    /// (`Err(..)`), an upstream timeout, or a `NotFound` / `Unauthorized`
-    /// response (all surfaced as `Ok((false, ..))`) — means no
-    /// subscription was established, so the pre-inserted claim is rolled
-    /// back and the next inbound subscribe will retry. This keeps
-    /// `outgoing_subscriptions` honest as "subscriptions we currently
-    /// have established," matching its use by
-    /// [`get_peer_subscriptions`](Self::get_peer_subscriptions) for
-    /// reconnect-restoration.
+    /// The claim is kept only if `sync_with_peer` actually establishes
+    /// the subscription (`Ok((true, ..))`, which also calls
+    /// [`track_outgoing_subscription`](Self::track_outgoing_subscription)).
+    /// Any other outcome — `Err`, timeout, or `NotFound`/`Unauthorized`
+    /// (both `Ok((false, ..))`) — rolls the claim back so a later
+    /// subscribe retries, keeping [`outgoing_subscriptions`] limited to
+    /// established subscriptions (as [`get_peer_subscriptions`] assumes
+    /// when replaying them on reconnect).
     ///
-    /// Loops between mutually-subscribed servers self-quench after one
-    /// round because each side's claim deduplicates the next.
-    ///
-    /// Errors from individual upstream calls are logged and ignored;
-    /// subscription propagation is best-effort.
-    ///
-    /// [`TryAsSubscribeRequest::try_as_subscribe_request`]: crate::connection::message::TryAsSubscribeRequest::try_as_subscribe_request
     /// [`outgoing_subscriptions`]: Self::outgoing_subscriptions
+    /// [`get_peer_subscriptions`]: Self::get_peer_subscriptions
     pub(crate) async fn propagate_subscription(&self, id: SedimentreeId, originator: PeerId) {
         let peers: Vec<PeerId> = {
             let conns = self.connections.lock().await;
@@ -1866,10 +1832,8 @@ where
             return;
         }
 
-        // Atomically claim `(peer, id)` for every peer that doesn't
-        // already have it. Concurrent invocations that observe the
-        // claim will skip propagation. The lock is held only across
-        // this partition step — never across `sync_with_peer` awaits.
+        // Claim each pair under one lock (see `# Concurrency`); the lock
+        // is never held across the `sync_with_peer` awaits below.
         let to_propagate: Vec<PeerId> = {
             let mut subs = self.outgoing_subscriptions.lock().await;
             peers
@@ -1881,13 +1845,8 @@ where
         for peer in to_propagate {
             tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
 
-            // The subscription is only established when `sync_with_peer`
-            // returns `Ok((true, ..))`; that path also calls
-            // `track_outgoing_subscription`, which re-records the claim
-            // idempotently. A transport error or an `Ok((false, ..))`
-            // outcome (upstream timeout / `NotFound` / `Unauthorized`)
-            // leaves nothing tracked, so we roll the claim back to let a
-            // later inbound subscribe retry.
+            // Only `Ok((true, ..))` established (and tracked) the
+            // subscription; roll the claim back on any other outcome.
             let established = match self.sync_with_peer(&peer, id, true, None).await {
                 Ok((had_success, _, _)) => had_success,
                 Err(e) => {
