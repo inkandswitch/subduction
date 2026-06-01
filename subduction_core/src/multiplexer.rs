@@ -167,3 +167,38 @@ impl Multiplexer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::time::Duration;
+
+    fn test_mux() -> Multiplexer {
+        Multiplexer::new(PeerId::new([1u8; 32]), Duration::from_secs(5))
+    }
+
+    #[tokio::test]
+    async fn cancel_all_pending_drops_registered_senders() {
+        let mux = test_mux();
+        let req_id = mux.next_request_id();
+        let rx = mux.register_pending(req_id).await;
+
+        mux.cancel_all_pending().await;
+
+        // Short timeout so a regression that leaves the sender alive fails
+        // fast here instead of hanging the receiver for the full call limit.
+        let resolved = tokio::time::timeout(Duration::from_millis(200), rx)
+            .await
+            .expect("receiver must resolve promptly; cancel_all_pending did not drop the sender");
+        assert!(
+            resolved.is_err(),
+            "receiver must resolve as Canceled after cancel_all_pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_all_pending_is_noop_when_empty() {
+        let mux = test_mux();
+        mux.cancel_all_pending().await;
+    }
+}
