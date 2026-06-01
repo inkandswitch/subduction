@@ -154,6 +154,20 @@ pub struct Subduction<
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
     storage: StoragePowerbox<Store, Auth>,
 
+    /// Active connections, keyed by peer ID.
+    ///
+    /// # Lock ordering
+    ///
+    /// This is the **OUTER** lock relative to
+    /// [`multiplexers`](Self::multiplexers): any code path that needs both
+    /// locks must acquire `connections` *first* and hold it while touching
+    /// `multiplexers`. This ordering enforces the
+    /// `connections` ⟺ `multiplexers` invariant (every connected peer has
+    /// a multiplexer, and vice versa) against concurrent
+    /// connect/disconnect: both maps are mutated within one `connections`
+    /// critical section in [`add_connection`](Self::add_connection) and in
+    /// the teardown paths. Violating the order (taking `multiplexers`
+    /// before `connections`) risks deadlock.
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
 
     /// Per-connection multiplexers for request-response correlation.
@@ -162,6 +176,14 @@ pub struct Subduction<
     /// the order in [`connections`](Self::connections)). Used by
     /// [`sync_with_peer`](Self::sync_with_peer) to make roundtrip calls
     /// and by the listen loop to route [`BatchSyncResponse`] messages.
+    ///
+    /// # Lock ordering
+    ///
+    /// This is the **INNER** lock relative to
+    /// [`connections`](Self::connections); see that field's docs. Read
+    /// paths that need *only* this lock (response routing,
+    /// `sync_with_*` mux lookup) may take it alone, but any path that also
+    /// needs `connections` must take `connections` first.
     multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
 
     /// Default timeout for roundtrip calls (`BatchSyncRequest` → `BatchSyncResponse`).
@@ -558,8 +580,9 @@ where
                         );
                         // Connection is broken — remove from conns map.
                         if self.remove_connection(&conn).await == Some(true) {
+                            // `remove_connection` already cancelled muxes and
+                            // cleared the send counter for the now-gone peer.
                             handler.on_peer_disconnect(peer_id).await;
-                            self.send_counter.clear_peer(&peer_id).await;
                         }
                         tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
@@ -702,8 +725,9 @@ where
                             "Connection {conn_id} from peer {peer_id} closed, removing"
                         );
                         if self.remove_connection(&conn).await == Some(true) {
+                            // `remove_connection` already cancelled muxes and
+                            // cleared the send counter for the now-gone peer.
                             handler.on_peer_disconnect(peer_id).await;
-                            self.send_counter.clear_peer(&peer_id).await;
                         }
                     }
                 }
@@ -737,37 +761,46 @@ where
         let peer_id = conn.peer_id();
         tracing::info!("Disconnecting connection from peer {}", peer_id);
 
-        let mut connections = self.connections.lock().await;
-        if let Some(peer_conns) = connections.remove(&peer_id) {
-            match peer_conns.remove_item(conn) {
-                RemoveResult::Removed(remaining) => {
-                    // Put the remaining connections back
-                    connections.insert(peer_id, remaining);
-
-                    #[cfg(feature = "metrics")]
-                    crate::metrics::connection_closed();
-
-                    conn.disconnect().await.map(|()| true)
-                }
-                RemoveResult::WasLast(_) => {
-                    // Don't put anything back, peer entry stays removed
-                    self.send_counter.clear_peer(&peer_id).await;
-                    self.cancel_peer_pending_calls(&peer_id).await;
-
-                    #[cfg(feature = "metrics")]
-                    crate::metrics::connection_closed();
-
-                    conn.disconnect().await.map(|()| true)
-                }
-                RemoveResult::NotFound(original) => {
-                    // Connection wasn't in the list, put original back
-                    connections.insert(peer_id, original);
-                    Ok(false)
-                }
+        // Determine the outcome under the `connections` lock. If this was
+        // the peer's last connection, detach its multiplexers within the
+        // SAME critical section (lock ordering: connections OUTER,
+        // multiplexers INNER) so a concurrent `add_connection` reconnect
+        // cannot have its fresh mux clobbered. The detached muxes are
+        // cancelled afterwards, off the lock.
+        let detached = {
+            let mut connections = self.connections.lock().await;
+            match connections.remove(&peer_id) {
+                None => return Ok(false),
+                Some(peer_conns) => match peer_conns.remove_item(conn) {
+                    RemoveResult::Removed(remaining) => {
+                        connections.insert(peer_id, remaining);
+                        None
+                    }
+                    RemoveResult::WasLast(_) => {
+                        Some(self.detach_peer_muxes_locked(&mut connections, &peer_id).await)
+                    }
+                    RemoveResult::NotFound(original) => {
+                        connections.insert(peer_id, original);
+                        return Ok(false);
+                    }
+                },
             }
-        } else {
-            Ok(false)
+        };
+
+        match detached {
+            Some(muxes) => {
+                // Peer's last connection: full teardown (muxes,
+                // subscriptions, send counter, metrics) in canonical order.
+                self.teardown_peer(&peer_id, muxes, 1).await;
+            }
+            None => {
+                // Peer still has other connections; only the metric fires.
+                #[cfg(feature = "metrics")]
+                crate::metrics::connection_closed();
+            }
         }
+
+        conn.disconnect().await.map(|()| true)
     }
 
     /// Gracefully disconnect from all connections.
@@ -776,27 +809,45 @@ where
     ///
     /// * Returns [`Conn::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), Conn::DisconnectionError> {
-        let all_conns: Vec<Authenticated<Conn, Async>> = {
+        // Drain connections and multiplexers within one `connections`
+        // critical section (lock ordering: connections OUTER, multiplexers
+        // INNER) so the `connections` ⟺ `multiplexers` invariant holds
+        // against any concurrent `add_connection`. The muxes are cancelled
+        // afterwards, off the lock (cancelling can't be held across it).
+        let (all_conns, removed_muxes): (
+            Vec<Authenticated<Conn, Async>>,
+            Vec<Arc<Multiplexer>>,
+        ) = {
             let mut guard = self.connections.lock().await;
-            core::mem::take(&mut *guard)
+            let conns = core::mem::take(&mut *guard)
                 .into_values()
                 .flat_map(NonEmpty::into_iter)
-                .collect()
+                .collect();
+            let muxes = core::mem::take(&mut *self.multiplexers.lock().await)
+                .into_values()
+                .flatten()
+                .collect();
+            (conns, muxes)
         };
 
-        // Cancel in-flight calls so awaiting callers see `ResponseDropped`
-        // now, rather than stranding until their per-call timeout. The
-        // muxes can outlive this `clear` (in-flight calls hold `Arc`
-        // clones), so dropping the map alone wouldn't release the senders.
-        let removed_muxes = core::mem::take(&mut *self.multiplexers.lock().await);
-        for muxes in removed_muxes.into_values() {
-            for mux in muxes {
-                mux.cancel_all_pending().await;
-            }
-        }
+        // Bulk sibling of `teardown_peer`: same canonical order
+        // (muxes → subscriptions → send counter → metrics), but applied
+        // to every peer at once rather than one at a time.
 
+        // 1. Cancel in-flight calls so awaiting callers see
+        //    `ResponseDropped` now, rather than stranding until their
+        //    per-call timeout. The muxes can outlive the map removal
+        //    (in-flight calls hold `Arc` clones), so dropping the map
+        //    alone wouldn't release the senders.
+        Self::cancel_detached_muxes(removed_muxes).await;
+
+        // 2. Drop all inbound subscriptions.
+        self.subscriptions.lock().await.clear();
+
+        // 3. Clear all outbound send counters.
         self.send_counter.clear_all().await;
 
+        // 4. One `connection_closed` metric per removed connection.
         #[cfg(feature = "metrics")]
         for _ in &all_conns {
             crate::metrics::connection_closed();
@@ -826,16 +877,27 @@ where
         &self,
         peer_id: &PeerId,
     ) -> Result<bool, Conn::DisconnectionError> {
-        let peer_conns = { self.connections.lock().await.remove(peer_id) };
-        self.cancel_peer_pending_calls(peer_id).await;
-
-        if let Some(conns) = peer_conns {
-            self.send_counter.clear_peer(peer_id).await;
-
-            #[cfg(feature = "metrics")]
-            for _ in &conns {
-                crate::metrics::connection_closed();
+        // Remove the peer's connections and detach its multiplexers within
+        // one `connections` critical section (lock ordering: connections
+        // OUTER, multiplexers INNER) so a concurrent reconnect can't be
+        // clobbered.
+        let removed = {
+            let mut connections = self.connections.lock().await;
+            match connections.remove(peer_id) {
+                Some(conns) => {
+                    let muxes = self.detach_peer_muxes_locked(&mut connections, peer_id).await;
+                    Some((conns, muxes))
+                }
+                None => None,
             }
+        };
+
+        if let Some((conns, muxes)) = removed {
+            // Removing all of a peer's connections is, by definition,
+            // removing its last connection: run the full teardown once,
+            // emitting one `connection_closed` metric per removed
+            // connection.
+            self.teardown_peer(peer_id, muxes, conns.len()).await;
 
             for conn in conns {
                 if let Err(e) = conn.disconnect().await {
@@ -845,6 +907,8 @@ where
             }
             Ok(true)
         } else {
+            // Peer wasn't connected; by the connections/multiplexers
+            // lockstep invariant it has no muxes to cancel either.
             Ok(false)
         }
     }
@@ -876,6 +940,14 @@ where
             .map_err(AddConnectionError::ConnectionDisallowed)?;
 
         {
+            // Lock ordering: `connections` is the OUTER lock and
+            // `multiplexers` the INNER lock (see the field docs). We
+            // insert the connection and create its multiplexer inside the
+            // SAME `connections` critical section so the
+            // `connections` ⟺ `multiplexers` invariant
+            // ("every connected peer has a multiplexer, and vice versa")
+            // can never be observed torn — a concurrent teardown removes
+            // from both maps under this same outer lock.
             let mut connections = self.connections.lock().await;
 
             // Check if this exact connection is already registered
@@ -895,10 +967,9 @@ where
                     connections.insert(peer_id, NonEmpty::new(conn.clone()));
                 }
             }
-        }
 
-        // Create a multiplexer for request-response correlation
-        {
+            // Create a multiplexer for request-response correlation,
+            // still holding the `connections` lock.
             let mux = Arc::new(Multiplexer::new(peer_id, self.default_call_timeout));
             let mut multiplexers = self.multiplexers.lock().await;
             match multiplexers.get_mut(&peer_id) {
@@ -934,30 +1005,127 @@ where
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
     pub async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
+        // `peers::remove_connection` owns the connection-map bookkeeping
+        // and — because it is shared with `SyncHandler::remove_connection`
+        // — also the inbound-subscription cleanup and the `connection_closed`
+        // metric. The remainder of the last-connection teardown (cancel
+        // in-flight muxed calls, clear the send counter) is owned here,
+        // since `SyncHandler` has access to neither the multiplexer map
+        // nor the send counter. Together these cover the same state as
+        // [`teardown_peer`](Self::teardown_peer); the split exists only
+        // because this path is shared with `SyncHandler`.
         let result = peers::remove_connection(&self.connections, &self.subscriptions, conn).await;
 
         // Only when the peer's last connection drops: cancel its in-flight
-        // calls. While the peer still has other connections, leave them —
-        // those connections may yet service the pending responses.
+        // calls and clear its send counter. While the peer still has other
+        // connections, leave them — those connections may yet service the
+        // pending responses.
         if result == Some(true) {
-            self.cancel_peer_pending_calls(&conn.peer_id()).await;
+            let peer_id = conn.peer_id();
+
+            // Detach muxes under the `connections` lock, but only if the
+            // peer is still absent. `peers::remove_connection` released the
+            // `connections` lock before returning, so a concurrent
+            // `add_connection` reconnect may already have re-inserted the
+            // peer (and created a fresh mux) in the gap. Re-checking
+            // membership under the lock ensures we never clobber that fresh
+            // mux: if the peer is back, we leave its muxes alone.
+            let detached = {
+                let mut connections = self.connections.lock().await;
+                if connections.contains_key(&peer_id) {
+                    Vec::new()
+                } else {
+                    self.detach_peer_muxes_locked(&mut connections, &peer_id).await
+                }
+            };
+
+            Self::cancel_detached_muxes(detached).await;
+            self.send_counter.clear_peer(&peer_id).await;
         }
 
         result
     }
 
-    /// Remove `peer_id`'s multiplexers and cancel their in-flight calls.
+    /// Detach a peer's multiplexers from the map, returning them so the
+    /// caller can cancel their pending calls *after* releasing locks.
     ///
-    /// Called from every connection-teardown path once a peer's last
-    /// connection is gone, so awaiting `sync_with_*` callers resolve with
+    /// # Lock ordering
+    ///
+    /// Takes the already-held `connections` guard by mutable reference.
+    /// The mux map (`multiplexers`) is the INNER lock and is acquired and
+    /// released here while the OUTER `connections` lock is still held by
+    /// the caller. Removing the peer from `connections` and from
+    /// `multiplexers` within one `connections` critical section is what
+    /// preserves the `connections` ⟺ `multiplexers` invariant against a
+    /// concurrent [`add_connection`](Self::add_connection): a reconnect
+    /// either fully precedes this (and is then cleaned) or fully follows
+    /// it (and re-creates the entry afterwards), but can never have its
+    /// freshly-created mux clobbered.
+    ///
+    /// `cancel_all_pending` is intentionally *not* called here — that
+    /// `.await` must not be held across the `connections` lock. The
+    /// returned muxes are already removed from the map (so no reader can
+    /// find them), and the caller cancels them post-release via
+    /// [`cancel_detached_muxes`](Self::cancel_detached_muxes).
+    async fn detach_peer_muxes_locked(
+        &self,
+        _connections_guard: &mut Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>,
+        peer_id: &PeerId,
+    ) -> Vec<Arc<Multiplexer>> {
+        self.multiplexers
+            .lock()
+            .await
+            .remove(peer_id)
+            .unwrap_or_default()
+    }
+
+    /// Cancel the pending calls on a set of detached multiplexers.
+    ///
+    /// Resolves any awaiting `sync_with_*` callers with
     /// [`CallError::ResponseDropped`](crate::connection::managed::CallError::ResponseDropped)
-    /// immediately rather than waiting out the per-call timeout.
-    async fn cancel_peer_pending_calls(&self, peer_id: &PeerId) {
-        if let Some(muxes) = self.multiplexers.lock().await.remove(peer_id) {
-            for mux in muxes {
-                mux.cancel_all_pending().await;
-            }
+    /// immediately rather than letting them wait out the per-call timeout.
+    /// Call this *after* the `connections` lock has been released (see
+    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
+    async fn cancel_detached_muxes(muxes: Vec<Arc<Multiplexer>>) {
+        for mux in muxes {
+            mux.cancel_all_pending().await;
         }
+    }
+
+    /// Finish per-peer teardown after a peer's last connection is gone and
+    /// its multiplexers have already been detached under the `connections`
+    /// lock (see [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
+    ///
+    /// This is the single canonical post-lock cleanup path shared by the
+    /// teardown entry points ([`disconnect`](Self::disconnect),
+    /// [`disconnect_from_peer`](Self::disconnect_from_peer)). Centralising
+    /// it keeps the order and the set of cleaned-up state identical across
+    /// paths rather than each reimplementing a slightly different subset.
+    ///
+    /// Canonical order (all *after* the `connections` lock is released):
+    ///
+    /// 1. Cancel the detached in-flight multiplexed calls.
+    /// 2. Drop the peer from the inbound subscription sets.
+    /// 3. Clear its outbound send counter.
+    /// 4. Emit one `connection_closed` metric per connection that went
+    ///    away (`conn_count`).
+    async fn teardown_peer(
+        &self,
+        peer_id: &PeerId,
+        muxes: Vec<Arc<Multiplexer>>,
+        conn_count: usize,
+    ) {
+        Self::cancel_detached_muxes(muxes).await;
+        peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+        self.send_counter.clear_peer(peer_id).await;
+
+        #[cfg(feature = "metrics")]
+        for _ in 0..conn_count {
+            crate::metrics::connection_closed();
+        }
+
+        #[cfg(not(feature = "metrics"))]
+        let _ = conn_count;
     }
 
     /// Get all connections as a flat list.
@@ -1300,9 +1468,9 @@ where
                         peer_id,
                         IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
                     );
-                    if self.remove_connection(&conn).await == Some(true) {
-                        self.send_counter.clear_peer(&peer_id).await;
-                    }
+                    // `remove_connection` handles all last-connection
+                    // teardown (muxes, send counter, subscriptions, metrics).
+                    self.remove_connection(&conn).await;
                 }
             }
         }
@@ -1409,9 +1577,9 @@ where
                     peer_id,
                     IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
                 );
-                if self.remove_connection(&conn).await == Some(true) {
-                    self.send_counter.clear_peer(&peer_id).await;
-                }
+                // `remove_connection` handles all last-connection
+                // teardown (muxes, send counter, subscriptions, metrics).
+                self.remove_connection(&conn).await;
             }
         }
 
@@ -1681,9 +1849,9 @@ where
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
                 tracing::warn!("peer {peer_id} disconnected: {e}");
-                if self.remove_connection(&conn).await == Some(true) {
-                    self.send_counter.clear_peer(&peer_id).await;
-                }
+                // `remove_connection` handles all last-connection
+                // teardown (muxes, send counter, subscriptions, metrics).
+                self.remove_connection(&conn).await;
             }
         }
     }
