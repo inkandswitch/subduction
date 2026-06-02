@@ -753,9 +753,10 @@ where
                         connections.insert(peer_id, remaining);
                         None
                     }
-                    RemoveResult::WasLast(_) => {
-                        Some(self.detach_peer_muxes_locked(&mut connections, &peer_id).await)
-                    }
+                    RemoveResult::WasLast(_) => Some(
+                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
+                            .await,
+                    ),
                     RemoveResult::NotFound(original) => {
                         connections.insert(peer_id, original);
                         return Ok(false);
@@ -784,10 +785,7 @@ where
         // Drain connections and muxes in one `connections` critical
         // section (outer before inner), then cancel off the lock. This is
         // the bulk equivalent of `teardown_peer` for every peer at once.
-        let (all_conns, removed_muxes): (
-            Vec<Authenticated<Conn, Async>>,
-            Vec<Arc<Multiplexer>>,
-        ) = {
+        let (all_conns, removed_muxes): (Vec<Authenticated<Conn, Async>>, Vec<Arc<Multiplexer>>) = {
             let mut guard = self.connections.lock().await;
             let conns = core::mem::take(&mut *guard)
                 .into_values()
@@ -840,7 +838,9 @@ where
             let mut connections = self.connections.lock().await;
             match connections.remove(peer_id) {
                 Some(conns) => {
-                    let muxes = self.detach_peer_muxes_locked(&mut connections, peer_id).await;
+                    let muxes = self
+                        .detach_peer_muxes_locked(&mut connections, peer_id)
+                        .await;
                     Some((conns, muxes))
                 }
                 None => None,
@@ -967,7 +967,8 @@ where
                 if connections.contains_key(&peer_id) {
                     Vec::new()
                 } else {
-                    self.detach_peer_muxes_locked(&mut connections, &peer_id).await
+                    self.detach_peer_muxes_locked(&mut connections, &peer_id)
+                        .await
                 }
             };
 
@@ -1826,11 +1827,7 @@ impl<
     pub async fn conn_mux_invariant_holds(&self, peer_id: &PeerId) -> bool {
         let conns = self.connection_count(peer_id).await;
         let muxes = self.mux_count(peer_id).await;
-        if conns > 0 {
-            muxes > 0
-        } else {
-            muxes == 0
-        }
+        if conns > 0 { muxes > 0 } else { muxes == 0 }
     }
 }
 

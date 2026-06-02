@@ -205,7 +205,10 @@ async fn disconnect_single_conn_when_last_cancels_in_flight_sync() -> TestResult
         .expect("wedged peer must be present in the result map");
     assert!(!success, "peer should not have succeeded");
     assert!(
-        matches!(conn_errs.first().map(|e| &e.1), Some(CallError::ResponseDropped)),
+        matches!(
+            conn_errs.first().map(|e| &e.1),
+            Some(CallError::ResponseDropped)
+        ),
         "expected ResponseDropped from the dropped mux sender, got {:?}",
         conn_errs.first().map(|e| &e.1)
     );
