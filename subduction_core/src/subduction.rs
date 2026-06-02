@@ -220,6 +220,17 @@ pub struct Subduction<
     _phantom: core::marker::PhantomData<&'a Async>,
 }
 
+/// The per-peer value in a [`PerPeerSync`]: `(succeeded, stats, per-connection
+/// call errors)`.
+pub type PeerSyncEntry<Conn, Async, SendErr> = (
+    bool,
+    SyncStats,
+    Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>,
+);
+
+/// The underlying map of a [`PerPeerSync`], keyed by [`PeerId`].
+pub type PerPeerSyncMap<Conn, Async, SendErr> = Map<PeerId, PeerSyncEntry<Conn, Async, SendErr>>;
+
 /// Per-peer outcome of a broadcast / sync round, keyed by [`PeerId`].
 ///
 /// Returned by [`sync_with_all_peers`](Subduction::sync_with_all_peers) and
@@ -228,28 +239,25 @@ pub struct Subduction<
 /// [`add_sedimentree`](Subduction::add_sedimentree)) so callers can observe
 /// which peers acked and which failed.
 ///
-/// Each entry's value is `(succeeded, stats, per-connection call errors)`.
-/// The newtype [`Deref`]s to the underlying [`Map`], so `.get(&peer)`,
-/// `.iter()`, `.is_empty()`, etc. work directly; it also implements
-/// [`IntoIterator`] and [`FromIterator`].
+/// Each entry's value is a [`PeerSyncEntry`]. The newtype [`Deref`]s to the
+/// underlying [`Map`], so `.get(&peer)`, `.iter()`, `.is_empty()`, etc. work
+/// directly; it also implements [`IntoIterator`] and [`FromIterator`].
 pub struct PerPeerSync<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>(
-    Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)>,
+    PerPeerSyncMap<Conn, Async, SendErr>,
 );
 
-impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> PerPeerSync<Conn, Async, SendErr> {
+impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>
+    PerPeerSync<Conn, Async, SendErr>
+{
     /// The inner per-peer map.
     #[must_use]
-    pub const fn as_map(
-        &self,
-    ) -> &Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)> {
+    pub const fn as_map(&self) -> &PerPeerSyncMap<Conn, Async, SendErr> {
         &self.0
     }
 
     /// Consume into the inner per-peer map.
     #[must_use]
-    pub fn into_map(
-        self,
-    ) -> Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)> {
+    pub fn into_map(self) -> PerPeerSyncMap<Conn, Async, SendErr> {
         self.0
     }
 }
@@ -275,8 +283,7 @@ impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> Default
 impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> core::ops::Deref
     for PerPeerSync<Conn, Async, SendErr>
 {
-    type Target =
-        Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)>;
+    type Target = PerPeerSyncMap<Conn, Async, SendErr>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -286,14 +293,8 @@ impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> core::ops::Der
 impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> IntoIterator
     for PerPeerSync<Conn, Async, SendErr>
 {
-    type Item = (
-        PeerId,
-        (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
-    );
-    type IntoIter = <Map<
-        PeerId,
-        (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
-    > as IntoIterator>::IntoIter;
+    type Item = (PeerId, PeerSyncEntry<Conn, Async, SendErr>);
+    type IntoIter = <PerPeerSyncMap<Conn, Async, SendErr> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -301,19 +302,10 @@ impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> IntoIterator
 }
 
 impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>
-    FromIterator<(
-        PeerId,
-        (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
-    )> for PerPeerSync<Conn, Async, SendErr>
+    FromIterator<(PeerId, PeerSyncEntry<Conn, Async, SendErr>)>
+    for PerPeerSync<Conn, Async, SendErr>
 {
-    fn from_iter<
-        T: IntoIterator<
-                Item = (
-                    PeerId,
-                    (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
-                ),
-            >,
-    >(
+    fn from_iter<T: IntoIterator<Item = (PeerId, PeerSyncEntry<Conn, Async, SendErr>)>>(
         iter: T,
     ) -> Self {
         Self(iter.into_iter().collect())
