@@ -129,6 +129,25 @@ impl Multiplexer {
         self.pending.lock().await.remove(req_id);
     }
 
+    /// Cancel every pending call, dropping their response senders.
+    ///
+    /// Called when the connection backing this multiplexer is torn down
+    /// (disconnect / removal). Dropping the [`oneshot::Sender`]s resolves
+    /// any awaiting receiver with [`CallError::ResponseDropped`]
+    /// immediately, rather than letting in-flight calls strand for the
+    /// full per-call timeout. (The multiplexer can outlive its removal
+    /// from the connection map because in-flight calls hold `Arc`
+    /// clones of it.)
+    pub async fn cancel_all_pending(&self) {
+        let mut pending = self.pending.lock().await;
+        let n = pending.len();
+        pending.clear();
+        tracing::debug!(
+            "cancelled {n} pending call(s) on multiplexer for peer {:?}",
+            self.peer_id
+        );
+    }
+
     /// Try to resolve a pending call with an inbound `BatchSyncResponse`.
     ///
     /// Returns `true` if the response matched a pending request and was
@@ -144,5 +163,137 @@ impl Multiplexer {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use core::time::Duration;
+
+    fn test_mux() -> Multiplexer {
+        Multiplexer::new(PeerId::new([1u8; 32]), Duration::from_secs(5))
+    }
+
+    #[tokio::test]
+    async fn cancel_all_pending_drops_registered_senders() {
+        let mux = test_mux();
+        let req_id = mux.next_request_id();
+        let rx = mux.register_pending(req_id).await;
+
+        mux.cancel_all_pending().await;
+
+        // Short timeout so a regression that leaves the sender alive fails
+        // fast here instead of hanging the receiver for the full call limit.
+        let resolved = tokio::time::timeout(Duration::from_millis(200), rx)
+            .await
+            .expect("receiver must resolve promptly; cancel_all_pending did not drop the sender");
+        assert!(
+            resolved.is_err(),
+            "receiver must resolve as Canceled after cancel_all_pending"
+        );
+    }
+
+    /// `cancel_all_pending` resolves every registered receiver to `Err`,
+    /// for any number of pending requests (including zero).
+    #[cfg(feature = "bolero")]
+    #[test]
+    fn cancel_all_pending_resolves_every_receiver() {
+        bolero::check!().with_type::<u8>().for_each(|n| {
+            // Keep per-iteration runtimes cheap; n in 0..=15.
+            let n = usize::from(n % 16);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("runtime");
+            rt.block_on(async {
+                let mux = test_mux();
+                let mut rxs = alloc::vec::Vec::with_capacity(n);
+                for _ in 0..n {
+                    let id = mux.next_request_id();
+                    rxs.push(mux.register_pending(id).await);
+                }
+
+                mux.cancel_all_pending().await;
+
+                for rx in rxs {
+                    let resolved = tokio::time::timeout(Duration::from_millis(200), rx)
+                        .await
+                        .expect("every receiver must resolve promptly after cancel");
+                    assert!(
+                        resolved.is_err(),
+                        "every receiver must resolve as Canceled after cancel_all_pending"
+                    );
+                }
+            });
+        });
+    }
+
+    /// `cancel_all_pending` is idempotent and does not poison the
+    /// multiplexer: a request registered after the cancels stays pending
+    /// and is itself cancellable.
+    #[cfg(feature = "bolero")]
+    #[test]
+    fn cancel_all_pending_is_idempotent_and_does_not_poison() {
+        bolero::check!().with_type::<u8>().for_each(|n| {
+            let n = usize::from(n % 16);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("runtime");
+            rt.block_on(async {
+                let mux = test_mux();
+                // Hold the receivers alive so the N senders stay registered
+                // in the pending map until we cancel.
+                let mut rxs = alloc::vec::Vec::with_capacity(n);
+                for _ in 0..n {
+                    let id = mux.next_request_id();
+                    rxs.push(mux.register_pending(id).await);
+                }
+
+                // Double cancel must neither panic nor hang.
+                mux.cancel_all_pending().await;
+                mux.cancel_all_pending().await;
+                drop(rxs);
+
+                // A request registered AFTER the cancels must stay pending
+                // (the cancels must not have poisoned the mux).
+                let id = mux.next_request_id();
+                let mut rx = mux.register_pending(id).await;
+                let still_pending = tokio::time::timeout(Duration::from_millis(50), &mut rx).await;
+                assert!(
+                    still_pending.is_err(),
+                    "a freshly-registered request must remain pending after prior cancels"
+                );
+
+                // The new request is itself cancellable.
+                mux.cancel_all_pending().await;
+                let resolved = tokio::time::timeout(Duration::from_millis(200), rx)
+                    .await
+                    .expect("post-cancel receiver must resolve promptly");
+                assert!(
+                    resolved.is_err(),
+                    "the freshly-registered request must be cancellable in turn"
+                );
+            });
+        });
+    }
+
+    /// Always-on smoke check (the bolero properties above are gated).
+    #[tokio::test]
+    async fn cancel_all_pending_on_empty_is_a_noop_and_leaves_mux_usable() {
+        let mux = test_mux();
+        mux.cancel_all_pending().await;
+
+        // A freshly-registered request is not pre-cancelled.
+        let id = mux.next_request_id();
+        let mut rx = mux.register_pending(id).await;
+        let still_pending = tokio::time::timeout(Duration::from_millis(50), &mut rx).await;
+        assert!(
+            still_pending.is_err(),
+            "empty cancel must not poison the mux for future registrations"
+        );
+        drop(rx);
     }
 }

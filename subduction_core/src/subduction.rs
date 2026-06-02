@@ -7,7 +7,6 @@
 //! | Method | Description |
 //! |--------|-------------|
 //! | [`add_connection`] | Add a connection (no automatic sync) |
-//! | [`remove_connection`] | Remove a connection from tracking |
 //! | [`disconnect`] | Graceful connection shutdown |
 //! | [`disconnect_all`] | Disconnect all connections |
 //! | [`disconnect_from_peer`] | Disconnect all connections from a peer |
@@ -41,7 +40,6 @@
 //! [`disconnect_all`]: Subduction::disconnect_all
 //! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
 //! [`add_connection`]: Subduction::add_connection
-//! [`remove_connection`]: Subduction::remove_connection
 //! [`get_blob`]: Subduction::get_blob
 //! [`get_blobs`]: Subduction::get_blobs
 //! [`get_commits`]: Subduction::get_commits
@@ -154,14 +152,32 @@ pub struct Subduction<
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
     storage: StoragePowerbox<Store, Auth>,
 
+    /// Active connections, keyed by peer ID.
+    ///
+    /// Lock ordering: this is the outer lock relative to
+    /// [`multiplexers`](Self::multiplexers) and to the per-peer send
+    /// counter. Code that needs `connections` plus either of those must
+    /// take `connections` first and hold it while touching them; the
+    /// reverse order risks deadlock. Mutating connections + multiplexers
+    /// under one `connections` critical section (in [`add_connection`] and
+    /// the teardown paths) keeps the "connected peer has a multiplexer,
+    /// and vice versa" invariant from being observed half-applied, and
+    /// clearing the send counter under the same lock keeps a concurrent
+    /// reconnect from having its fresh counter reset.
+    ///
+    /// [`add_connection`]: Self::add_connection
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
 
     /// Per-connection multiplexers for request-response correlation.
     ///
-    /// Keyed by peer ID, with one [`Multiplexer`] per connection (matching
-    /// the order in [`connections`](Self::connections)). Used by
+    /// Keyed by peer ID, with one [`Multiplexer`] per connection. Used by
     /// [`sync_with_peer`](Self::sync_with_peer) to make roundtrip calls
     /// and by the listen loop to route [`BatchSyncResponse`] messages.
+    ///
+    /// Lock ordering: inner lock relative to
+    /// [`connections`](Self::connections). Read paths that need only this
+    /// lock (response routing, mux lookup) may take it alone; paths that
+    /// also need `connections` must take `connections` first.
     multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
 
     /// Default timeout for roundtrip calls (`BatchSyncRequest` → `BatchSyncResponse`).
@@ -400,15 +416,6 @@ where
         self.depth_metric.to_depth(commit_id)
     }
 
-    /// Returns a reference to the sedimentrees map.
-    ///
-    /// This is only available with the `test_utils` feature or in tests.
-    #[cfg(any(feature = "test_utils", test))]
-    #[must_use]
-    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>> {
-        &self.sedimentrees
-    }
-
     /// Get a connection to a peer, if one exists.
     ///
     /// Returns the first available connection to the peer. Use this to get a
@@ -559,7 +566,6 @@ where
                         // Connection is broken — remove from conns map.
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
-                            self.send_counter.clear_peer(&peer_id).await;
                         }
                         tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
@@ -703,7 +709,6 @@ where
                         );
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
-                            self.send_counter.clear_peer(&peer_id).await;
                         }
                     }
                 }
@@ -737,36 +742,39 @@ where
         let peer_id = conn.peer_id();
         tracing::info!("Disconnecting connection from peer {}", peer_id);
 
-        let mut connections = self.connections.lock().await;
-        if let Some(peer_conns) = connections.remove(&peer_id) {
-            match peer_conns.remove_item(conn) {
-                RemoveResult::Removed(remaining) => {
-                    // Put the remaining connections back
-                    connections.insert(peer_id, remaining);
-
-                    #[cfg(feature = "metrics")]
-                    crate::metrics::connection_closed();
-
-                    conn.disconnect().await.map(|()| true)
-                }
-                RemoveResult::WasLast(_) => {
-                    // Don't put anything back, peer entry stays removed
-                    self.send_counter.clear_peer(&peer_id).await;
-
-                    #[cfg(feature = "metrics")]
-                    crate::metrics::connection_closed();
-
-                    conn.disconnect().await.map(|()| true)
-                }
-                RemoveResult::NotFound(original) => {
-                    // Connection wasn't in the list, put original back
-                    connections.insert(peer_id, original);
-                    Ok(false)
-                }
+        // Detach the muxes inside the same critical section that removes
+        // the connection, so a concurrent `add_connection` can't have its
+        // fresh mux clobbered. Cancel them afterwards, off the lock.
+        let detached = {
+            let mut connections = self.connections.lock().await;
+            match connections.remove(&peer_id) {
+                None => return Ok(false),
+                Some(peer_conns) => match peer_conns.remove_item(conn) {
+                    RemoveResult::Removed(remaining) => {
+                        connections.insert(peer_id, remaining);
+                        None
+                    }
+                    RemoveResult::WasLast(_) => Some(
+                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
+                            .await,
+                    ),
+                    RemoveResult::NotFound(original) => {
+                        connections.insert(peer_id, original);
+                        return Ok(false);
+                    }
+                },
             }
-        } else {
-            Ok(false)
+        };
+
+        match detached {
+            Some(muxes) => self.teardown_peer(&peer_id, muxes, 1).await,
+            None => {
+                #[cfg(feature = "metrics")]
+                crate::metrics::connection_closed();
+            }
         }
+
+        conn.disconnect().await.map(|()| true)
     }
 
     /// Gracefully disconnect from all connections.
@@ -775,15 +783,24 @@ where
     ///
     /// * Returns [`Conn::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), Conn::DisconnectionError> {
-        let all_conns: Vec<Authenticated<Conn, Async>> = {
+        // Drain connections and muxes in one `connections` critical
+        // section (outer before inner), then cancel off the lock. This is
+        // the bulk equivalent of `teardown_peer` for every peer at once.
+        let (all_conns, removed_muxes): (Vec<Authenticated<Conn, Async>>, Vec<Arc<Multiplexer>>) = {
             let mut guard = self.connections.lock().await;
-            core::mem::take(&mut *guard)
+            let conns = core::mem::take(&mut *guard)
                 .into_values()
                 .flat_map(NonEmpty::into_iter)
-                .collect()
+                .collect();
+            let muxes = core::mem::take(&mut *self.multiplexers.lock().await)
+                .into_values()
+                .flatten()
+                .collect();
+            (conns, muxes)
         };
-        self.multiplexers.lock().await.clear();
 
+        Self::cancel_detached_muxes(removed_muxes).await;
+        self.subscriptions.lock().await.clear();
         self.send_counter.clear_all().await;
 
         #[cfg(feature = "metrics")]
@@ -815,16 +832,25 @@ where
         &self,
         peer_id: &PeerId,
     ) -> Result<bool, Conn::DisconnectionError> {
-        let peer_conns = { self.connections.lock().await.remove(peer_id) };
-        self.multiplexers.lock().await.remove(peer_id);
-
-        if let Some(conns) = peer_conns {
-            self.send_counter.clear_peer(peer_id).await;
-
-            #[cfg(feature = "metrics")]
-            for _ in &conns {
-                crate::metrics::connection_closed();
+        // Remove the peer's connections and detach its muxes in one
+        // `connections` critical section (outer before inner) so a
+        // concurrent reconnect can't be clobbered.
+        let removed = {
+            let mut connections = self.connections.lock().await;
+            match connections.remove(peer_id) {
+                Some(conns) => {
+                    let muxes = self
+                        .detach_peer_muxes_locked(&mut connections, peer_id)
+                        .await;
+                    Some((conns, muxes))
+                }
+                None => None,
             }
+        };
+
+        if let Some((conns, muxes)) = removed {
+            // Removing every connection is by definition removing the last.
+            self.teardown_peer(peer_id, muxes, conns.len()).await;
 
             for conn in conns {
                 if let Err(e) = conn.disconnect().await {
@@ -865,9 +891,11 @@ where
             .map_err(AddConnectionError::ConnectionDisallowed)?;
 
         {
+            // Insert the connection and create its mux under one
+            // `connections` critical section (outer before inner) so the
+            // connection/mux invariant is never observed half-applied.
             let mut connections = self.connections.lock().await;
 
-            // Check if this exact connection is already registered
             if connections
                 .get(&peer_id)
                 .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
@@ -875,7 +903,6 @@ where
                 return Ok(false);
             }
 
-            // Add connection to the peer's connection list
             match connections.get_mut(&peer_id) {
                 Some(peer_conns) => {
                     peer_conns.push(conn.clone());
@@ -884,10 +911,7 @@ where
                     connections.insert(peer_id, NonEmpty::new(conn.clone()));
                 }
             }
-        }
 
-        // Create a multiplexer for request-response correlation
-        {
             let mux = Arc::new(Multiplexer::new(peer_id, self.default_call_timeout));
             let mut multiplexers = self.multiplexers.lock().await;
             match multiplexers.get_mut(&peer_id) {
@@ -909,21 +933,144 @@ where
         Ok(true)
     }
 
-    /// Remove a connection from tracking (low-level).
+    /// Reconcile tracking for a connection whose transport has **already
+    /// failed** — e.g. a send returned `Err`, or the per-connection
+    /// receive loop exited and reported the closure via the
+    /// `connection_closed` channel. There is no live transport to close,
+    /// so this only updates in-memory state (connection map, multiplexers,
+    /// send counter, subscriptions, metrics).
     ///
-    /// Does _not_ close the transport. Use [`disconnect`](Self::disconnect)
-    /// to gracefully shut down a live connection.
-    ///
-    /// Uses `NonEmptyExt::remove_item` to handle the three cases:
-    /// - Connection not found
-    /// - Connection removed, peer still has other connections
-    /// - Connection removed, was the last connection for this peer
+    /// To proactively shut down a connection you believe is still live,
+    /// use [`disconnect`](Self::disconnect), which also closes the
+    /// transport via `Connection::disconnect`.
     ///
     /// Returns `Some(true)` if this was the last connection for the peer,
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
-    pub async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
-        peers::remove_connection(&self.connections, &self.subscriptions, conn).await
+    ///
+    /// Crate-internal: driven by the listen loop and broadcast-failure
+    /// paths. Tests reach it via
+    /// [`remove_connection_for_test`](Self::remove_connection_for_test).
+    pub(crate) async fn remove_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<bool> {
+        let peer_id = conn.peer_id();
+
+        let detached = {
+            let mut connections = self.connections.lock().await;
+            match connections.remove(&peer_id) {
+                None => return None,
+                Some(peer_conns) => match peer_conns.remove_item(conn) {
+                    RemoveResult::Removed(remaining) => {
+                        connections.insert(peer_id, remaining);
+                        None
+                    }
+                    RemoveResult::WasLast(_) => Some(
+                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
+                            .await,
+                    ),
+                    RemoveResult::NotFound(original) => {
+                        connections.insert(peer_id, original);
+                        return None;
+                    }
+                },
+            }
+        };
+
+        if let Some(muxes) = detached {
+            self.teardown_peer(&peer_id, muxes, 1).await;
+            Some(true)
+        } else {
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_closed();
+            Some(false)
+        }
+    }
+
+    /// Test-only public access to the crate-internal
+    /// [`remove_connection`](Self::remove_connection) teardown path, so
+    /// integration tests can exercise it directly.
+    #[cfg(any(feature = "test_utils", test))]
+    pub async fn remove_connection_for_test(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<bool> {
+        self.remove_connection(conn).await
+    }
+
+    /// Remove a peer's multiplexers from the map and return them for the
+    /// caller to cancel after releasing the lock.
+    ///
+    /// Takes the held `connections` guard by `&mut` so the mux removal
+    /// happens inside the caller's `connections` critical section; this is
+    /// what keeps a concurrent [`add_connection`](Self::add_connection)
+    /// from having its fresh mux clobbered. Cancellation is left to the
+    /// caller via [`cancel_detached_muxes`](Self::cancel_detached_muxes)
+    /// because its `.await` must not be held across the `connections` lock.
+    async fn detach_peer_muxes_locked(
+        &self,
+        _connections_guard: &mut Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>,
+        peer_id: &PeerId,
+    ) -> Vec<Arc<Multiplexer>> {
+        self.multiplexers
+            .lock()
+            .await
+            .remove(peer_id)
+            .unwrap_or_default()
+    }
+
+    /// Cancel the pending calls on a set of detached multiplexers.
+    ///
+    /// Resolves any awaiting `sync_with_*` callers with
+    /// [`CallError::ResponseDropped`](crate::connection::managed::CallError::ResponseDropped)
+    /// immediately rather than letting them wait out the per-call timeout.
+    /// Call this *after* the `connections` lock has been released (see
+    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
+    async fn cancel_detached_muxes(muxes: Vec<Arc<Multiplexer>>) {
+        for mux in muxes {
+            mux.cancel_all_pending().await;
+        }
+    }
+
+    /// Finish per-peer teardown after the peer's last connection is gone
+    /// and its muxes have been detached via
+    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked).
+    ///
+    /// Shared post-lock cleanup for [`disconnect`](Self::disconnect) and
+    /// [`disconnect_from_peer`](Self::disconnect_from_peer) so they clean
+    /// up the same state in the same order. Emits `conn_count`
+    /// `connection_closed` metrics.
+    async fn teardown_peer(
+        &self,
+        peer_id: &PeerId,
+        muxes: Vec<Arc<Multiplexer>>,
+        conn_count: usize,
+    ) {
+        Self::cancel_detached_muxes(muxes).await;
+        peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+
+        // Clear the send counter while holding the `connections` lock and
+        // only if the peer is still gone. The caller removed the peer
+        // under the lock, but released it before calling us, so a
+        // concurrent `add_connection` could have re-added the peer (and
+        // started stamping messages with a fresh counter). `clear_peer`
+        // is contracted for fully-gone peers only; resetting it
+        // mid-session would break the strictly-increasing guarantee.
+        {
+            let connections = self.connections.lock().await;
+            if !connections.contains_key(peer_id) {
+                self.send_counter.clear_peer(peer_id).await;
+            }
+        }
+
+        #[cfg(feature = "metrics")]
+        for _ in 0..conn_count {
+            crate::metrics::connection_closed();
+        }
+
+        #[cfg(not(feature = "metrics"))]
+        let _ = conn_count;
     }
 
     /// Get all connections as a flat list.
@@ -1054,15 +1201,16 @@ where
                     let seed = FingerprintSeed::random();
                     let resolver = tree.fingerprint_resolver(&seed);
 
-                    #[allow(clippy::expect_used)]
-                    // Invariant: add_connection creates a Multiplexer for every peer
-                    let mux = {
+                    // Mux missing means the peer was torn down between the
+                    // connection snapshot and here; skip rather than panic.
+                    let Some(mux) = ({
                         let muxes = self.multiplexers.lock().await;
-                        muxes
-                            .get(&peer_id)
-                            .and_then(|v| v.first())
-                            .cloned()
-                            .expect("multiplexer exists for every connected peer")
+                        muxes.get(&peer_id).and_then(|v| v.first()).cloned()
+                    }) else {
+                        tracing::debug!(
+                            "multiplexer for peer {peer_id:?} gone (concurrent teardown); skipping"
+                        );
+                        continue;
                     };
                     let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                     let req_id = managed.next_request_id();
@@ -1266,9 +1414,8 @@ where
                         peer_id,
                         IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
                     );
-                    if self.remove_connection(&conn).await == Some(true) {
-                        self.send_counter.clear_peer(&peer_id).await;
-                    }
+                    // `remove_connection` runs the full teardown on the last connection.
+                    self.remove_connection(&conn).await;
                 }
             }
         }
@@ -1375,9 +1522,8 @@ where
                     peer_id,
                     IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
                 );
-                if self.remove_connection(&conn).await == Some(true) {
-                    self.send_counter.clear_peer(&peer_id).await;
-                }
+                // `remove_connection` runs the full teardown on the last connection.
+                self.remove_connection(&conn).await;
             }
         }
 
@@ -1647,11 +1793,91 @@ where
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
                 tracing::warn!("peer {peer_id} disconnected: {e}");
-                if self.remove_connection(&conn).await == Some(true) {
-                    self.send_counter.clear_peer(&peer_id).await;
-                }
+                // `remove_connection` runs the full teardown on the last connection.
+                self.remove_connection(&conn).await;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test-only observability surface.
+//
+// Gated as one block so the test-introspection API stays in one place and
+// out of the production `impl`s. Reads internal state to assert invariants.
+// ---------------------------------------------------------------------------
+
+#[cfg(any(feature = "test_utils", test))]
+impl<
+    'a,
+    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
+    Store: Storage<Async>,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
+    Hdl: Handler<Async, Conn>,
+    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+    Sign: Signer<Async>,
+    Timer: Timeout<Async> + Clone,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+{
+    /// Returns a reference to the sedimentrees map.
+    #[must_use]
+    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>> {
+        &self.sedimentrees
+    }
+
+    /// Number of multiplexers currently registered for `peer_id`.
+    ///
+    /// One multiplexer is created per connection, so at a quiescent point
+    /// this equals [`connection_count`](Self::connection_count).
+    pub async fn mux_count(&self, peer_id: &PeerId) -> usize {
+        self.multiplexers
+            .lock()
+            .await
+            .get(peer_id)
+            .map_or(0, Vec::len)
+    }
+
+    /// Number of connections currently registered for `peer_id`.
+    pub async fn connection_count(&self, peer_id: &PeerId) -> usize {
+        self.connections
+            .lock()
+            .await
+            .get(peer_id)
+            .map_or(0, NonEmpty::len)
+    }
+
+    /// Whether the connection/multiplexer invariant holds for `peer_id`:
+    /// a connected peer has at least one multiplexer, and a disconnected
+    /// peer has none.
+    ///
+    /// This is the presence/absence form the `expect("multiplexer
+    /// exists...")` sites depend on, not strict per-connection equality:
+    /// the non-last [`remove_connection`](Self::remove_connection) path
+    /// drops a connection without dropping its mux, so `mux_count` can
+    /// exceed `connection_count` while the peer is still connected.
+    pub async fn conn_mux_invariant_holds(&self, peer_id: &PeerId) -> bool {
+        let conns = self.connection_count(peer_id).await;
+        let muxes = self.mux_count(peer_id).await;
+        if conns > 0 { muxes > 0 } else { muxes == 0 }
+    }
+
+    /// Current per-peer send-counter value without incrementing it, or
+    /// `None` if the peer has no counter (never stamped, or cleared).
+    ///
+    /// Test-only observability for asserting that teardown does not reset
+    /// a still-connected peer's monotonic counter.
+    pub async fn send_counter_value(&self, peer_id: &PeerId) -> Option<u64> {
+        self.send_counter.peek(peer_id).await
+    }
+
+    /// Advance the per-peer send counter once, returning the new value.
+    ///
+    /// Test-only: lets a test put a peer's counter into a known non-zero
+    /// state so a later reset is observable.
+    pub async fn stamp_send_counter(&self, peer_id: PeerId) -> u64 {
+        self.send_counter.next(peer_id).await
     }
 }
 
@@ -1937,15 +2163,20 @@ where
                 resolver.summary().fragment_fingerprints().len()
             );
 
-            #[allow(clippy::expect_used)]
-            // Invariant: add_connection creates a Multiplexer for every peer
-            let mux = {
+            // Mux missing means the peer was torn down between the
+            // connection snapshot and here; report it dropped, don't panic.
+            let Some(mux) = ({
                 let muxes = self.multiplexers.lock().await;
-                muxes
-                    .get(to_ask)
-                    .and_then(|v| v.first())
-                    .cloned()
-                    .expect("multiplexer exists for every connected peer")
+                muxes.get(to_ask).and_then(|v| v.first()).cloned()
+            }) else {
+                tracing::debug!(
+                    "multiplexer for peer {to_ask:?} gone (concurrent teardown); skipping"
+                );
+                conn_errs.push((
+                    conn.clone(),
+                    crate::connection::managed::CallError::ResponseDropped,
+                ));
+                continue;
             };
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
             let req_id = managed.next_request_id();
@@ -2210,13 +2441,21 @@ where
                                 |t| t.fingerprint_resolver(&seed),
                             );
 
-                        #[allow(clippy::expect_used)] // Invariant: add_connection creates a Multiplexer for every peer
-                        let mux = {
+                        // Mux missing means the peer was torn down between
+                        // the connection snapshot and here; report it
+                        // dropped, don't panic.
+                        let Some(mux) = ({
                             let muxes = self.multiplexers.lock().await;
-                            muxes.get(peer_id)
-                                .and_then(|v| v.first())
-                                .cloned()
-                                .expect("multiplexer exists for every connected peer")
+                            muxes.get(peer_id).and_then(|v| v.first()).cloned()
+                        }) else {
+                            tracing::debug!(
+                                "multiplexer for peer {peer_id:?} gone (concurrent teardown); skipping"
+                            );
+                            conn_errs.push((
+                                conn.clone(),
+                                crate::connection::managed::CallError::ResponseDropped,
+                            ));
+                            continue;
                         };
                         let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                         let req_id = managed.next_request_id();
