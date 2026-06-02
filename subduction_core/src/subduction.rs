@@ -858,12 +858,11 @@ where
             }
         };
 
-        match detached {
-            Some(muxes) => self.teardown_peer(&peer_id, muxes, 1).await,
-            None => {
-                #[cfg(feature = "metrics")]
-                crate::metrics::connection_closed();
-            }
+        if let Some(muxes) = detached {
+            self.teardown_peer(&peer_id, muxes, 1).await;
+        } else {
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_closed();
         }
 
         conn.disconnect().await.map(|()| true)
@@ -2263,6 +2262,104 @@ where
         // Storage write first (cancel-safety: storage is the source of truth;
         // a cancel between this and the broadcast self-heals on rehydrate).
         self.store_built_batch(id, commits, fragments).await?;
+        let per_peer = self
+            .sync_with_all_peers(id, true, timeout)
+            .await
+            .map_err(WriteError::Io)?;
+        Ok(per_peer)
+    }
+
+    /// Bulk-insert commits **and** propagate them to peers — the convenience
+    /// combinator of [`store_commits_batch`](Self::store_commits_batch) +
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers).
+    ///
+    /// Prefer this over looping [`add_commit`](Self::add_commit): the batch
+    /// path runs a single `save_batch` and one `minimize`, then a single
+    /// broadcast, instead of re-minimizing and pushing per commit.
+    ///
+    /// This **awaits the broadcast** and returns its per-peer outcome
+    /// ([`PerPeerSync`]); a byte-connected but protocol-unresponsive peer can
+    /// stall the call for up to `timeout` (or the configured
+    /// `default_call_timeout` when `timeout` is `None`). Callers that want the
+    /// durable write to return *without* waiting on peers should call
+    /// [`store_commits_batch`](Self::store_commits_batch) and drive
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately. An empty
+    /// list is a no-op (no minimize, no broadcast) and yields an empty map.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a local storage error
+    ///   occurs while persisting the batch, or if ingestion during the
+    ///   trailing broadcast hits a storage error.
+    ///
+    /// Per-peer transport failures during the broadcast are *not* surfaced as
+    /// `Err`; they appear in the returned [`PerPeerSync`] map.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    pub async fn add_commits_batch(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
+        timeout: Option<Duration>,
+    ) -> Result<
+        PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
+        if commits.is_empty() {
+            return Ok(PerPeerSync::default());
+        }
+
+        self.store_commits_batch(id, commits).await?;
+        let per_peer = self
+            .sync_with_all_peers(id, true, timeout)
+            .await
+            .map_err(WriteError::Io)?;
+        Ok(per_peer)
+    }
+
+    /// Bulk-insert fragments **and** propagate them to peers — the convenience
+    /// combinator of [`store_fragments_batch`](Self::store_fragments_batch) +
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers).
+    ///
+    /// Prefer this over looping [`add_fragment`](Self::add_fragment): the
+    /// batch path runs a single `save_batch` and one `minimize`, then a single
+    /// broadcast, instead of re-minimizing and pushing per fragment.
+    ///
+    /// This **awaits the broadcast** and returns its per-peer outcome
+    /// ([`PerPeerSync`]); a byte-connected but protocol-unresponsive peer can
+    /// stall the call for up to `timeout` (or the configured
+    /// `default_call_timeout` when `timeout` is `None`). Callers that want the
+    /// durable write to return *without* waiting on peers should call
+    /// [`store_fragments_batch`](Self::store_fragments_batch) and drive
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately. An empty
+    /// list is a no-op (no minimize, no broadcast) and yields an empty map.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a local storage error
+    ///   occurs while persisting the batch, or if ingestion during the
+    ///   trailing broadcast hits a storage error.
+    ///
+    /// Per-peer transport failures during the broadcast are *not* surfaced as
+    /// `Err`; they appear in the returned [`PerPeerSync`] map.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes
+    /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    pub async fn add_fragments_batch(
+        &self,
+        id: SedimentreeId,
+        fragments: Vec<FragmentBatchItem>,
+        timeout: Option<Duration>,
+    ) -> Result<
+        PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
+        if fragments.is_empty() {
+            return Ok(PerPeerSync::default());
+        }
+
+        self.store_fragments_batch(id, fragments).await?;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
