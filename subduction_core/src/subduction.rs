@@ -949,25 +949,11 @@ where
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
     pub async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
-        // `peers::remove_connection` is shared with
-        // `SyncHandler::remove_connection`, so it handles only the
-        // connection map, subscriptions, and the metric. Mux cancellation
-        // and the send counter live here, where the mux map is reachable.
         let result = peers::remove_connection(&self.connections, &self.subscriptions, conn).await;
 
-        // Cancel pending calls only when the peer's last connection drops.
-        // While it still has other connections, those may yet service the
-        // responses.
         if result == Some(true) {
             let peer_id = conn.peer_id();
 
-            // `peers::remove_connection` already released the `connections`
-            // lock, so a concurrent reconnect may have re-added the peer
-            // (with a fresh mux + a freshly-counting send counter). Hold
-            // the `connections` lock while re-checking membership and
-            // clearing per-peer state, so a reconnect can't slip in
-            // between the check and the clear: if the peer is back, leave
-            // both its muxes and its send counter alone.
             let detached = {
                 let mut connections = self.connections.lock().await;
                 if connections.contains_key(&peer_id) {
@@ -976,10 +962,7 @@ where
                     let muxes = self
                         .detach_peer_muxes_locked(&mut connections, &peer_id)
                         .await;
-                    // Cleared under the `connections` lock (see
-                    // `PeerCounter::clear_peer`: only for a fully-gone
-                    // peer) so a racing `add_connection` can't have its
-                    // fresh counter reset mid-session.
+
                     self.send_counter.clear_peer(&peer_id).await;
                     muxes
                 }
