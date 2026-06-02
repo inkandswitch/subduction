@@ -42,7 +42,7 @@ async fn test_remove_connection() -> TestResult {
     let _fresh = subduction.add_connection(conn.clone()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
-    let removed = subduction.remove_connection(&conn).await;
+    let removed = subduction.remove_connection_for_test(&conn).await;
     assert_eq!(removed, Some(true));
     assert_eq!(subduction.connected_peer_ids().await.len(), 0);
 
@@ -55,7 +55,7 @@ async fn test_remove_nonexistent_connection_returns_none() {
 
     // Remove a connection that was never added
     let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32])).authenticated();
-    let removed = subduction.remove_connection(&conn).await;
+    let removed = subduction.remove_connection_for_test(&conn).await;
     assert_eq!(removed, None);
 }
 

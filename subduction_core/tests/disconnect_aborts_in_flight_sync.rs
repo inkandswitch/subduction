@@ -250,7 +250,7 @@ async fn remove_connection_cancels_in_flight_then_second_removal_is_noop() -> Te
     let b_conn = single_conn(&a, b_peer).await;
 
     // First removal: peer's last connection → Some(true), cancels muxes.
-    let res1 = a.remove_connection(&b_conn).await;
+    let res1 = a.remove_connection_for_test(&b_conn).await;
     assert_eq!(res1, Some(true));
 
     // The cancellation must resolve the in-flight sync promptly.
@@ -269,7 +269,7 @@ async fn remove_connection_cancels_in_flight_then_second_removal_is_noop() -> Te
     );
 
     // Second removal of the already-gone connection: clean None no-op.
-    let res2 = a.remove_connection(&b_conn).await;
+    let res2 = a.remove_connection_for_test(&b_conn).await;
     assert_eq!(res2, None);
     assert_eq!(a.mux_count(&b_peer).await, 0, "no mux must be resurrected");
 
@@ -347,7 +347,7 @@ async fn reconnect_during_remove_connection_never_clobbers_mux() -> TestResult {
         let a2 = a.clone();
         let new_conn_for_task = new_conn.clone();
         let add = tokio::spawn(async move { a1.add_connection(new_conn_for_task).await });
-        let remove = tokio::spawn(async move { a2.remove_connection(&old_conn).await });
+        let remove = tokio::spawn(async move { a2.remove_connection_for_test(&old_conn).await });
         let _ = add.await.expect("add task panicked");
         let _ = remove.await.expect("remove task panicked");
 
@@ -445,7 +445,7 @@ async fn remove_non_last_connection_keeps_send_counter() -> TestResult {
 
     // Removing a non-last connection returns `Some(false)` and must NOT
     // clear the counter — the peer is still connected.
-    assert_eq!(a.remove_connection(&conn1).await, Some(false));
+    assert_eq!(a.remove_connection_for_test(&conn1).await, Some(false));
     assert_eq!(
         a.send_counter_value(&b_peer).await,
         Some(stamped),
@@ -453,7 +453,7 @@ async fn remove_non_last_connection_keeps_send_counter() -> TestResult {
     );
 
     // Removing the last connection returns `Some(true)` and clears it.
-    assert_eq!(a.remove_connection(&conn2).await, Some(true));
+    assert_eq!(a.remove_connection_for_test(&conn2).await, Some(true));
     assert_eq!(
         a.send_counter_value(&b_peer).await,
         None,
@@ -463,8 +463,6 @@ async fn remove_non_last_connection_keeps_send_counter() -> TestResult {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// disconnect_all
 // ---------------------------------------------------------------------------
 // disconnect_all
 // ---------------------------------------------------------------------------
@@ -576,7 +574,7 @@ async fn remove_non_last_connection_does_not_cancel_pending_calls() -> TestResul
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Remove ONE of the two connections (the second one we added).
-    let res = a.remove_connection(&conn_a2).await;
+    let res = a.remove_connection_for_test(&conn_a2).await;
     assert_eq!(res, Some(false), "peer still has another connection");
 
     // The peer is still connected (one connection remains), so the

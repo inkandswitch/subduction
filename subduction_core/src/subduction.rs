@@ -7,7 +7,6 @@
 //! | Method | Description |
 //! |--------|-------------|
 //! | [`add_connection`] | Add a connection (no automatic sync) |
-//! | [`remove_connection`] | Remove a connection from tracking |
 //! | [`disconnect`] | Graceful connection shutdown |
 //! | [`disconnect_all`] | Disconnect all connections |
 //! | [`disconnect_from_peer`] | Disconnect all connections from a peer |
@@ -41,7 +40,6 @@
 //! [`disconnect_all`]: Subduction::disconnect_all
 //! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
 //! [`add_connection`]: Subduction::add_connection
-//! [`remove_connection`]: Subduction::remove_connection
 //! [`get_blob`]: Subduction::get_blob
 //! [`get_blobs`]: Subduction::get_blobs
 //! [`get_commits`]: Subduction::get_commits
@@ -935,43 +933,70 @@ where
         Ok(true)
     }
 
-    /// Remove a connection from tracking (low-level).
+    /// Reconcile tracking for a connection whose transport has **already
+    /// failed** — e.g. a send returned `Err`, or the per-connection
+    /// receive loop exited and reported the closure via the
+    /// `connection_closed` channel. There is no live transport to close,
+    /// so this only updates in-memory state (connection map, multiplexers,
+    /// send counter, subscriptions, metrics).
     ///
-    /// Does _not_ close the transport. Use [`disconnect`](Self::disconnect)
-    /// to gracefully shut down a live connection.
-    ///
-    /// Uses `NonEmptyExt::remove_item` to handle the three cases:
-    /// - Connection not found
-    /// - Connection removed, peer still has other connections
-    /// - Connection removed, was the last connection for this peer
+    /// To proactively shut down a connection you believe is still live,
+    /// use [`disconnect`](Self::disconnect), which also closes the
+    /// transport via `Connection::disconnect`.
     ///
     /// Returns `Some(true)` if this was the last connection for the peer,
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
-    pub async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
-        let result = peers::remove_connection(&self.connections, &self.subscriptions, conn).await;
+    ///
+    /// Crate-internal: driven by the listen loop and broadcast-failure
+    /// paths. Tests reach it via
+    /// [`remove_connection_for_test`](Self::remove_connection_for_test).
+    pub(crate) async fn remove_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<bool> {
+        let peer_id = conn.peer_id();
 
-        if result == Some(true) {
-            let peer_id = conn.peer_id();
+        let detached = {
+            let mut connections = self.connections.lock().await;
+            match connections.remove(&peer_id) {
+                None => return None,
+                Some(peer_conns) => match peer_conns.remove_item(conn) {
+                    RemoveResult::Removed(remaining) => {
+                        connections.insert(peer_id, remaining);
+                        None
+                    }
+                    RemoveResult::WasLast(_) => Some(
+                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
+                            .await,
+                    ),
+                    RemoveResult::NotFound(original) => {
+                        connections.insert(peer_id, original);
+                        return None;
+                    }
+                },
+            }
+        };
 
-            let detached = {
-                let mut connections = self.connections.lock().await;
-                if connections.contains_key(&peer_id) {
-                    Vec::new()
-                } else {
-                    let muxes = self
-                        .detach_peer_muxes_locked(&mut connections, &peer_id)
-                        .await;
-
-                    self.send_counter.clear_peer(&peer_id).await;
-                    muxes
-                }
-            };
-
-            Self::cancel_detached_muxes(detached).await;
+        if let Some(muxes) = detached {
+            self.teardown_peer(&peer_id, muxes, 1).await;
+            Some(true)
+        } else {
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_closed();
+            Some(false)
         }
+    }
 
-        result
+    /// Test-only public access to the crate-internal
+    /// [`remove_connection`](Self::remove_connection) teardown path, so
+    /// integration tests can exercise it directly.
+    #[cfg(any(feature = "test_utils", test))]
+    pub async fn remove_connection_for_test(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<bool> {
+        self.remove_connection(conn).await
     }
 
     /// Remove a peer's multiplexers from the map and return them for the
