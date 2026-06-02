@@ -62,4 +62,18 @@ impl PeerCounter {
     pub async fn clear_all(&self) {
         self.0.lock().await.clear();
     }
+
+    /// The current counter value for a peer without incrementing it, or
+    /// `None` if the peer has no counter entry (never stamped, or cleared).
+    ///
+    /// Test-only observability for asserting that teardown does not reset
+    /// a still-connected peer's counter.
+    #[cfg(any(feature = "test_utils", test))]
+    pub async fn peek(&self, peer: &PeerId) -> Option<u64> {
+        self.0
+            .lock()
+            .await
+            .get(peer)
+            .map(|c| c.load(Ordering::Relaxed))
+    }
 }

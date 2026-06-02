@@ -413,6 +413,58 @@ async fn reconnect_during_disconnect_from_peer_never_clobbers_mux() -> TestResul
     Ok(())
 }
 
+/// `remove_connection` must clear the send counter only when it removes
+/// the peer's *last* connection. `PeerCounter::clear_peer` is contracted
+/// for a fully-gone peer; clearing it while the peer is still connected
+/// would restart its counter at 1 mid-session and break the
+/// strictly-increasing guarantee `RemoteHeads.counter` relies on.
+///
+/// This exercises the non-last (`Some(false)`) path deterministically: a
+/// peer with two connections keeps its counter when one is removed, and
+/// only loses it once the last connection goes.
+#[tokio::test(flavor = "current_thread")]
+async fn remove_non_last_connection_keeps_send_counter() -> TestResult {
+    let a_signer = make_signer(52);
+    let b_signer = make_signer(62);
+    let a = make_node(a_signer.clone());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    // Two distinct connections to the same peer.
+    let (t_a1, _t_b1) = PausableChannelTransport::pair();
+    let conn1: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(MessageTransport::new(t_a1), b_peer);
+    let (t_a2, _t_b2) = PausableChannelTransport::pair();
+    let conn2: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer);
+    a.add_connection(conn1.clone()).await?;
+    a.add_connection(conn2.clone()).await?;
+
+    // Put the counter into a known non-zero state.
+    let stamped = a.stamp_send_counter(b_peer).await;
+    assert!(stamped >= 1);
+
+    // Removing a non-last connection returns `Some(false)` and must NOT
+    // clear the counter — the peer is still connected.
+    assert_eq!(a.remove_connection(&conn1).await, Some(false));
+    assert_eq!(
+        a.send_counter_value(&b_peer).await,
+        Some(stamped),
+        "removing a non-last connection must not reset the send counter",
+    );
+
+    // Removing the last connection returns `Some(true)` and clears it.
+    assert_eq!(a.remove_connection(&conn2).await, Some(true));
+    assert_eq!(
+        a.send_counter_value(&b_peer).await,
+        None,
+        "send counter must be cleared once the peer's last connection is gone",
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// disconnect_all
 // ---------------------------------------------------------------------------
 // disconnect_all
 // ---------------------------------------------------------------------------

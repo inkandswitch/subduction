@@ -157,12 +157,15 @@ pub struct Subduction<
     /// Active connections, keyed by peer ID.
     ///
     /// Lock ordering: this is the outer lock relative to
-    /// [`multiplexers`](Self::multiplexers). Code that needs both must
-    /// take `connections` first and hold it while touching `multiplexers`;
-    /// the reverse order risks deadlock. Mutating both maps under one
-    /// `connections` critical section (in [`add_connection`] and the
-    /// teardown paths) keeps the "connected peer has a multiplexer, and
-    /// vice versa" invariant from being observed half-applied.
+    /// [`multiplexers`](Self::multiplexers) and to the per-peer send
+    /// counter. Code that needs `connections` plus either of those must
+    /// take `connections` first and hold it while touching them; the
+    /// reverse order risks deadlock. Mutating connections + multiplexers
+    /// under one `connections` critical section (in [`add_connection`] and
+    /// the teardown paths) keeps the "connected peer has a multiplexer,
+    /// and vice versa" invariant from being observed half-applied, and
+    /// clearing the send counter under the same lock keeps a concurrent
+    /// reconnect from having its fresh counter reset.
     ///
     /// [`add_connection`]: Self::add_connection
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
@@ -960,20 +963,29 @@ where
 
             // `peers::remove_connection` already released the `connections`
             // lock, so a concurrent reconnect may have re-added the peer
-            // (with a fresh mux). Re-check under the lock and skip mux
-            // detachment if the peer is back, to avoid clobbering it.
+            // (with a fresh mux + a freshly-counting send counter). Hold
+            // the `connections` lock while re-checking membership and
+            // clearing per-peer state, so a reconnect can't slip in
+            // between the check and the clear: if the peer is back, leave
+            // both its muxes and its send counter alone.
             let detached = {
                 let mut connections = self.connections.lock().await;
                 if connections.contains_key(&peer_id) {
                     Vec::new()
                 } else {
-                    self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                        .await
+                    let muxes = self
+                        .detach_peer_muxes_locked(&mut connections, &peer_id)
+                        .await;
+                    // Cleared under the `connections` lock (see
+                    // `PeerCounter::clear_peer`: only for a fully-gone
+                    // peer) so a racing `add_connection` can't have its
+                    // fresh counter reset mid-session.
+                    self.send_counter.clear_peer(&peer_id).await;
+                    muxes
                 }
             };
 
             Self::cancel_detached_muxes(detached).await;
-            self.send_counter.clear_peer(&peer_id).await;
         }
 
         result
@@ -1029,7 +1041,20 @@ where
     ) {
         Self::cancel_detached_muxes(muxes).await;
         peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
-        self.send_counter.clear_peer(peer_id).await;
+
+        // Clear the send counter while holding the `connections` lock and
+        // only if the peer is still gone. The caller removed the peer
+        // under the lock, but released it before calling us, so a
+        // concurrent `add_connection` could have re-added the peer (and
+        // started stamping messages with a fresh counter). `clear_peer`
+        // is contracted for fully-gone peers only; resetting it
+        // mid-session would break the strictly-increasing guarantee.
+        {
+            let connections = self.connections.lock().await;
+            if !connections.contains_key(peer_id) {
+                self.send_counter.clear_peer(peer_id).await;
+            }
+        }
 
         #[cfg(feature = "metrics")]
         for _ in 0..conn_count {
@@ -1828,6 +1853,23 @@ impl<
         let conns = self.connection_count(peer_id).await;
         let muxes = self.mux_count(peer_id).await;
         if conns > 0 { muxes > 0 } else { muxes == 0 }
+    }
+
+    /// Current per-peer send-counter value without incrementing it, or
+    /// `None` if the peer has no counter (never stamped, or cleared).
+    ///
+    /// Test-only observability for asserting that teardown does not reset
+    /// a still-connected peer's monotonic counter.
+    pub async fn send_counter_value(&self, peer_id: &PeerId) -> Option<u64> {
+        self.send_counter.peek(peer_id).await
+    }
+
+    /// Advance the per-peer send counter once, returning the new value.
+    ///
+    /// Test-only: lets a test put a peer's counter into a known non-zero
+    /// state so a later reset is observable.
+    pub async fn stamp_send_counter(&self, peer_id: PeerId) -> u64 {
+        self.send_counter.next(peer_id).await
     }
 }
 
