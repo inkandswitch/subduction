@@ -36,7 +36,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{FragmentBatchItem, Subduction, builder::SubductionBuilder},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -60,9 +60,12 @@ type TestSubduction = Arc<
     >,
 >;
 
-/// Long enough that the per-call default timeout cannot mask a missing
-/// decoupling: a `store_built_batch` that (wrongly) waited on the peer
-/// would block for the full [`LONG_PER_CALL_TIMEOUT`], far past [`BOUND`].
+/// Wired into the node via [`SubductionBuilder::roundtrip_timeout`] in
+/// [`make_node`], so it *is* the node's configured per-call timeout (not just
+/// a constant referenced in messages). Long enough that a `store_built_batch`
+/// which (wrongly) waited on the peer would block for the full
+/// [`LONG_PER_CALL_TIMEOUT`], far past [`BOUND`] — making a regression into a
+/// network roundtrip impossible to miss.
 const LONG_PER_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Upper bound for the durable-write path: `store_built_batch` must return
@@ -84,6 +87,10 @@ fn make_node(signer: MemorySigner) -> TestSubduction {
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
         .timer(TokioTimeout)
+        // Make the documented margin real: any (regressed) network roundtrip
+        // from store_built_batch would inherit this 60s default and blow past
+        // BOUND. The add_* combinator tests override it per-call.
+        .roundtrip_timeout(LONG_PER_CALL_TIMEOUT)
         .build::<Sendable, Conn>();
     tokio::spawn(listener);
     tokio::spawn(manager);
@@ -217,6 +224,115 @@ async fn add_built_batch_bounds_at_timeout_and_reports_wedged_peer() -> TestResu
 
     // The wedged peer must be reported as not-succeeded in the per-peer map,
     // rather than silently dropped or causing an Err.
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let (success, _stats, _conn_errs) = per_peer
+        .get(&b_peer)
+        .expect("wedged peer must be present in the per-peer result map");
+    assert!(
+        !success,
+        "wedged peer must be reported as failed in the returned PerPeerSync"
+    );
+
+    Ok(())
+}
+
+/// `add_commits_batch` is the parts-based store-then-broadcast combinator.
+/// Against a wedged peer it must bound at the per-call timeout, persist the
+/// commits, and report the peer as failed in the returned `PerPeerSync`.
+#[tokio::test(flavor = "current_thread")]
+async fn add_commits_batch_bounds_at_timeout_and_reports_wedged_peer() -> TestResult {
+    let a_signer = make_signer(42);
+    let b_signer = make_signer(52);
+    let a = make_node(a_signer.clone());
+    let b = make_node(b_signer.clone());
+
+    let (_t_a, t_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    t_b.pause();
+
+    let sed_id = SedimentreeId::new([3u8; 32]);
+    let commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)> = (0..5u8)
+        .map(|i| (CommitId::new([i + 100; 32]), BTreeSet::new(), make_blob(i)))
+        .collect();
+
+    let a_clone = a.clone();
+    let add_handle = tokio::spawn(async move {
+        a_clone
+            .add_commits_batch(sed_id, commits, Some(SHORT_PER_CALL_TIMEOUT))
+            .await
+    });
+
+    let result = tokio::time::timeout(BOUND, add_handle).await;
+    assert!(
+        result.is_ok(),
+        "add_commits_batch did not return within {BOUND:?}; the bounded \
+         broadcast should resolve by ~{SHORT_PER_CALL_TIMEOUT:?}"
+    );
+    let per_peer = result.expect("join error").expect("task panicked")?;
+
+    assert_eq!(
+        a.get_commits(sed_id).await.as_ref().map(Vec::len),
+        Some(5),
+        "add_commits_batch must persist the batch even when the peer is wedged"
+    );
+
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let (success, _stats, _conn_errs) = per_peer
+        .get(&b_peer)
+        .expect("wedged peer must be present in the per-peer result map");
+    assert!(
+        !success,
+        "wedged peer must be reported as failed in the returned PerPeerSync"
+    );
+
+    Ok(())
+}
+
+/// `add_fragments_batch` mirror of the commits combinator test above.
+#[tokio::test(flavor = "current_thread")]
+async fn add_fragments_batch_bounds_at_timeout_and_reports_wedged_peer() -> TestResult {
+    let a_signer = make_signer(43);
+    let b_signer = make_signer(53);
+    let a = make_node(a_signer.clone());
+    let b = make_node(b_signer.clone());
+
+    let (_t_a, t_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    t_b.pause();
+
+    let sed_id = SedimentreeId::new([4u8; 32]);
+    let fragments: Vec<FragmentBatchItem> = (0..3u8)
+        .map(|i| FragmentBatchItem {
+            head: CommitId::new([i + 50; 32]),
+            boundary: BTreeSet::from([CommitId::new([i + 150; 32])]),
+            checkpoints: Vec::new(),
+            blob: make_blob(i),
+        })
+        .collect();
+
+    let a_clone = a.clone();
+    let add_handle = tokio::spawn(async move {
+        a_clone
+            .add_fragments_batch(sed_id, fragments, Some(SHORT_PER_CALL_TIMEOUT))
+            .await
+    });
+
+    let result = tokio::time::timeout(BOUND, add_handle).await;
+    assert!(
+        result.is_ok(),
+        "add_fragments_batch did not return within {BOUND:?}; the bounded \
+         broadcast should resolve by ~{SHORT_PER_CALL_TIMEOUT:?}"
+    );
+    let per_peer = result.expect("join error").expect("task panicked")?;
+
+    assert_eq!(
+        a.get_fragments(sed_id).await.as_ref().map(Vec::len),
+        Some(3),
+        "add_fragments_batch must persist the batch even when the peer is wedged"
+    );
+
     let b_peer = PeerId::from(b_signer.verifying_key());
     let (success, _stats, _conn_errs) = per_peer
         .get(&b_peer)
