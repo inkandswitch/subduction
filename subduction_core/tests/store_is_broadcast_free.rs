@@ -165,12 +165,12 @@ async fn store_built_batch_does_not_broadcast() -> TestResult {
     // Positive control: an explicit sync from B pulls the data, confirming
     // the link works and the negative assertion above wasn't vacuous.
     let a_peer = PeerId::from(a_signer.verifying_key());
-    b.sync_with_peer(&a_peer, sed_id, true, SYNC_TIMEOUT).await?;
+    b.sync_with_peer(&a_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
 
-    let converged = wait_until(|| async {
-        b.get_commits(sed_id).await.as_ref().map(Vec::len) == Some(5)
-    })
-    .await;
+    let converged =
+        wait_until(|| async { b.get_commits(sed_id).await.as_ref().map(Vec::len) == Some(5) })
+            .await;
     assert!(
         converged,
         "after an explicit sync_with_peer, B must receive all 5 commits \
@@ -194,8 +194,13 @@ async fn store_commit_does_not_broadcast() -> TestResult {
     let sed_id = SedimentreeId::new([2u8; 32]);
 
     // Non-boundary head so this is a plain loose commit.
-    a.store_commit(sed_id, CommitId::new([0xAB; 32]), BTreeSet::new(), make_blob(1))
-        .await?;
+    a.store_commit(
+        sed_id,
+        CommitId::new([0xAB; 32]),
+        BTreeSet::new(),
+        make_blob(1),
+    )
+    .await?;
 
     assert_eq!(
         a.get_commits(sed_id).await.as_ref().map(Vec::len),

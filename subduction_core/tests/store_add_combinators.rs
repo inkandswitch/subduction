@@ -63,8 +63,14 @@ async fn add_commits_batch_persists_all_commits() -> TestResult {
         "no connected peers → empty per-peer map"
     );
 
-    let stored = sd.get_commits(sed_id).await.expect("sedimentree must exist");
-    let stored_ids: BTreeSet<CommitId> = stored.iter().map(|c| c.head()).collect();
+    let stored = sd
+        .get_commits(sed_id)
+        .await
+        .expect("sedimentree must exist");
+    let stored_ids: BTreeSet<CommitId> = stored
+        .iter()
+        .map(sedimentree_core::loose_commit::LooseCommit::head)
+        .collect();
     assert_eq!(
         stored_ids, expected_ids,
         "exactly the input commits must be stored (by identity, not just count)"
@@ -121,7 +127,10 @@ async fn add_fragments_batch_persists_all_fragments() -> TestResult {
         .get_fragments(sed_id)
         .await
         .expect("sedimentree must exist");
-    let stored_heads: BTreeSet<CommitId> = stored.iter().map(|f| f.head()).collect();
+    let stored_heads: BTreeSet<CommitId> = stored
+        .iter()
+        .map(sedimentree_core::fragment::Fragment::head)
+        .collect();
     assert_eq!(
         stored_heads, expected_heads,
         "exactly the input fragments must be stored (by head identity)"
@@ -142,14 +151,16 @@ async fn store_commit_signals_fragment_requested_on_boundary() -> TestResult {
     let sed_id = SedimentreeId::new([5u8; 32]);
 
     // Leading 0x00 byte → depth >= 1 → boundary.
-    let head = CommitId::new([0u8, 0xAB, 0xCD, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    let head = CommitId::new([
+        0u8, 0xAB, 0xCD, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+        22, 23, 24, 25, 26, 27, 28, 29,
+    ]);
 
     let requested = sd
         .store_commit(sed_id, head, BTreeSet::new(), make_blob(1))
         .await?;
 
-    let fragment_requested =
-        requested.expect("a boundary commit must request a fragment (Some)");
+    let fragment_requested = requested.expect("a boundary commit must request a fragment (Some)");
     assert_eq!(
         fragment_requested.head(),
         head,
