@@ -72,6 +72,14 @@ exclude_re = [
     # input can exercise, so the `+ -> -` / `+ -> *` mutants there
     # cannot be killed by any test.
     "subduction_crypto/src/signed.rs:255:.*Signed<T>::try_decode",
+
+    # subduction_keyhive/src/runtime.rs::run_local_keyhive is !Send runtime
+    # orchestration: it generates a keyhive, spawns the actor + cache-refresh
+    # tasks, calls policy_setup, and blocks on cancellation. Like the excluded
+    # subduction_cli server.rs above, it is wiring with no return value or
+    # branch logic to assert; replacing the body with () cannot be killed
+    # without a full threaded integration harness.
+    "subduction_keyhive/src/runtime\.rs:.*run_local_keyhive",
 ]
 
 # Be a little patient with builds. The workspace is large, and the

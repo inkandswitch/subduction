@@ -2034,6 +2034,118 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn ingest_events_triggers_recovery_only_when_enabled() {
+        // `other` creates a group, then adds a member. The add-member
+        // delegation depends on the group-creation delegation, so feeding
+        // only the former to a fresh keyhive leaves it pending.
+        //
+        // Storage holds `other`'s full archive. A pending event should
+        // trigger a reload from storage only when recovery is enabled, so
+        // the destination keyhive's op count grows only in that case. This
+        // pins both the `with_storage_recovery` wiring and the pending
+        // guard in `ingest_events`.
+        let other = make_keyhive().await;
+        let member = make_keyhive().await;
+        let member_id = keyhive_peer_id(&member);
+        let member_cc = member.contact_card().await.unwrap();
+        other.receive_contact_card(&member_cc).await.unwrap();
+
+        let other_id = keyhive_peer_id(&other);
+        let other_cc = other.contact_card().await.unwrap();
+        let other_proto = TestProtocol::new(
+            Arc::new(Mutex::new(other.clone())),
+            MemoryKeyhiveStorage::new(),
+            other_id.clone(),
+            other_cc,
+        );
+
+        // Group-creation delegation.
+        let group = other.generate_group(vec![]).await.unwrap();
+        let group_id = group.lock().await.group_id();
+        let before_add: Vec<EventHash> = other_proto
+            .get_events_for_agent(&other_id)
+            .await
+            .unwrap()
+            .expect("other resolves to an agent")
+            .into_keys()
+            .collect();
+        assert!(
+            !before_add.is_empty(),
+            "group creation should produce a delegation"
+        );
+
+        // Add-member delegation, which depends on the group-creation one.
+        let agent = other
+            .get_agent(member_id.to_identifier().unwrap())
+            .await
+            .unwrap();
+        other
+            .add_member(
+                agent,
+                &Membered::Group(group_id, group.clone()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        let dependent: Vec<EventBytes> = other_proto
+            .get_events_for_agent(&other_id)
+            .await
+            .unwrap()
+            .expect("other resolves to an agent")
+            .into_iter()
+            .filter(|(hash, _)| !before_add.contains(hash))
+            .map(|(_, (bytes, _))| bytes)
+            .collect();
+        assert!(
+            !dependent.is_empty(),
+            "add_member should introduce a dependent delegation"
+        );
+
+        // Store `other`'s full archive so recovery has deps to reload.
+        let storage = MemoryKeyhiveStorage::new();
+        let storage_id = crate::storage::StorageHash::new([9u8; 32]);
+        let archive = other.into_archive().await;
+        crate::storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+            .await
+            .unwrap();
+
+        // Recovery disabled: the pending event ingests nothing and no
+        // reload happens, so the op count is unchanged.
+        let dst_off = make_keyhive().await;
+        let proto_off = TestProtocol::new(
+            Arc::new(Mutex::new(dst_off.clone())),
+            storage.clone(),
+            keyhive_peer_id(&dst_off),
+            dst_off.contact_card().await.unwrap(),
+        );
+        let before_off = proto_off.total_ops().await;
+        proto_off.ingest_events(&dependent).await.unwrap();
+        assert_eq!(
+            proto_off.total_ops().await,
+            before_off,
+            "with recovery off, a pending event must not change the op count"
+        );
+
+        // Recovery enabled: the pending event triggers a reload of the
+        // archive, raising the op count.
+        let dst_on = make_keyhive().await;
+        let proto_on = TestProtocol::new(
+            Arc::new(Mutex::new(dst_on.clone())),
+            storage.clone(),
+            keyhive_peer_id(&dst_on),
+            dst_on.contact_card().await.unwrap(),
+        )
+        .with_storage_recovery();
+        let before_on = proto_on.total_ops().await;
+        proto_on.ingest_events(&dependent).await.unwrap();
+        assert!(
+            proto_on.total_ops().await > before_on,
+            "with recovery on, a pending event must reload the archive and raise the op count"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn handle_sync_response_serves_requested_from_cached_pair() {
         // Regression test for the byte-fetch divergence between ARK and
         // Subduction (see
