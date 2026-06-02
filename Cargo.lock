@@ -4683,7 +4683,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -4712,7 +4712,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_fs_storage"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "async-lock",
  "future_form",
@@ -5105,7 +5105,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "ahash",
  "async-channel",
@@ -5156,7 +5156,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5204,7 +5204,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_ephemeral"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5229,7 +5229,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5259,7 +5259,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_iroh"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5282,7 +5282,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5357,7 +5357,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "arbitrary",
  "async-channel",
