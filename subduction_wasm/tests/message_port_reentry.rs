@@ -2,6 +2,9 @@
 
 #![cfg(target_arch = "wasm32")]
 #![allow(missing_docs)]
+// Test setup deliberately panics on a broken environment (missing
+// `MessageChannel`, etc.) — that *is* the failure signal for a test.
+#![allow(clippy::expect_used, clippy::panic)]
 
 use js_sys::{Function, Reflect};
 use subduction_wasm::transport::message_port::WasmMessagePortTransport;

@@ -504,7 +504,9 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns [`WasmWriteError`] if there is a problem with storage or policy.
+    /// Returns [`WasmWriteError`] if a referenced blob is missing or storage
+    /// I/O fails. This local-only path uses the trusting local putter, so no
+    /// network policy is consulted.
     #[wasm_bindgen(js_name = storeSedimentree)]
     pub async fn store_sedimentree(
         &self,
@@ -539,9 +541,11 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns [`WasmWriteError`] if there is a problem with storage or policy.
-    /// Per-peer transport failures are reported inside the returned map, not as
-    /// an error.
+    /// Returns [`WasmWriteError`] if a referenced blob is missing, or on
+    /// storage I/O — including storage errors hit while ingesting inbound data
+    /// during the trailing sync. The local store uses the trusting local
+    /// putter (no network policy check). Per-peer transport failures during
+    /// the broadcast are reported inside the returned map, not as an error.
     #[wasm_bindgen(js_name = addSedimentree)]
     pub async fn add_sedimentree(
         &self,
@@ -989,7 +993,8 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmWriteError`] if storage or policy fail.
+    /// Returns a [`WasmWriteError`] on storage I/O failure. This local-only
+    /// path uses the trusting local putter, so no network policy is consulted.
     #[wasm_bindgen(js_name = storeCommit)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub async fn store_commit(
@@ -1066,7 +1071,8 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmWriteError`] if storage or policy fail.
+    /// Returns a [`WasmWriteError`] on storage I/O failure. This local-only
+    /// path uses the trusting local putter, so no network policy is consulted.
     #[wasm_bindgen(js_name = storeFragment)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub async fn store_fragment(

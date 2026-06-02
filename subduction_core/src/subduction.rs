@@ -1114,7 +1114,7 @@ where
     /// Cancel the pending calls on a set of detached multiplexers.
     ///
     /// Resolves any awaiting `sync_with_*` callers with
-    /// [`CallError::ResponseDropped`](crate::connection::managed::CallError::ResponseDropped)
+    /// [`CallError::ResponseDropped`]
     /// immediately rather than letting them wait out the per-call timeout.
     /// Call this *after* the `connections` lock has been released (see
     /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
@@ -2241,7 +2241,7 @@ where
     /// Per-peer transport failures during the broadcast are *not* surfaced as
     /// `Err`; they appear in the returned [`PerPeerSync`] map (per-peer
     /// success flag + per-connection
-    /// [`CallError`](crate::connection::managed::CallError)s).
+    /// [`CallError`]s).
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -2442,8 +2442,12 @@ where
     ///
     /// # Returns
     ///
-    /// * `Ok(true)` if at least one sync was successful.
-    /// * `Ok(false)` if no syncs were performed (e.g., no connections, or they all timed out).
+    /// A tuple `(succeeded, stats, per-connection call errors)`: `succeeded`
+    /// is `true` if at least one connection to the peer synced successfully;
+    /// `stats` aggregates the sync; and the [`Vec`] carries per-connection
+    /// [`CallError`]s for connections
+    /// that failed. `succeeded = false` with an empty error list means no
+    /// connections to the peer were available.
     ///
     /// # Errors
     ///
@@ -2466,9 +2470,7 @@ where
             SyncStats,
             Vec<(
                 Authenticated<Conn, Async>,
-                crate::connection::managed::CallError<
-                    <Conn as Connection<Async, Hdl::Message>>::SendError,
-                >,
+                CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
             )>,
         ),
         IoError<Async, Store, Conn, Hdl::Message>,
@@ -2517,10 +2519,7 @@ where
                 tracing::debug!(
                     "multiplexer for peer {to_ask:?} gone (concurrent teardown); skipping"
                 );
-                conn_errs.push((
-                    conn.clone(),
-                    crate::connection::managed::CallError::ResponseDropped,
-                ));
+                conn_errs.push((conn.clone(), CallError::ResponseDropped));
                 continue;
             };
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
@@ -2713,8 +2712,12 @@ where
     ///
     /// # Returns
     ///
-    /// * `Ok(true)` if at least one sync was successful.
-    /// * `Ok(false)` if no syncs were performed (e.g., no peers connected or they all timed out).
+    /// A [`PerPeerSync`] map keyed by [`PeerId`]; each entry is
+    /// `(succeeded, stats, per-connection call errors)`, so callers can see
+    /// which peers acked and which failed. Peers that could not be reached
+    /// appear with `succeeded = false` and/or per-connection
+    /// [`CallError`]s. An empty map
+    /// means no peers were connected.
     ///
     /// # Errors
     ///
@@ -2786,7 +2789,7 @@ where
                             );
                             conn_errs.push((
                                 conn.clone(),
-                                crate::connection::managed::CallError::ResponseDropped,
+                                CallError::ResponseDropped,
                             ));
                             continue;
                         };
@@ -3024,9 +3027,7 @@ where
         SyncStats,
         Vec<(
             Authenticated<Conn, Async>,
-            crate::connection::managed::CallError<
-                <Conn as Connection<Async, Hdl::Message>>::SendError,
-            >,
+            CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
         )>,
         Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
     ) {
@@ -3085,9 +3086,7 @@ where
         SyncStats,
         Vec<(
             Authenticated<Conn, Async>,
-            crate::connection::managed::CallError<
-                <Conn as Connection<Async, Hdl::Message>>::SendError,
-            >,
+            CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
         )>,
         Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
     ) {

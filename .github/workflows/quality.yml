@@ -47,5 +47,18 @@ jobs:
     - name: Clippy
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+    - name: Install wasm32 target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Clippy (wasm32 target)
+      # The host clippy above never sees `#![cfg(target_arch = "wasm32")]`
+      # code, so lint the wasm cdylib crates against wasm32 too. A per-crate
+      # loop (not `--workspace --target wasm32`) because the non-wasm members
+      # (tokio transports, CLI, …) do not build for wasm32.
+      run: |
+        for crate in subduction_wasm sedimentree_wasm automerge_subduction_wasm subduction_wasm_bootstrap; do
+          cargo clippy -p "$crate" --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+        done
+
     - name: Lint wasm_bindgen &mut boundaries
       run: ./scripts/lint-wasm-mut.sh --github-annotations
