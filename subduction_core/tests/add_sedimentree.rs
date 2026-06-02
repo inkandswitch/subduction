@@ -116,7 +116,7 @@ async fn add_sedimentree_stores_all_items() -> TestResult {
     ];
 
     let sedimentree = Sedimentree::new(fragments.clone(), commits.clone());
-    sd.add_sedimentree(sed_id, sedimentree, blobs).await?;
+    sd.add_sedimentree(sed_id, sedimentree, blobs, None).await?;
 
     // Check in-memory state
     let stored_commits = sd.get_commits(sed_id).await;
@@ -159,7 +159,7 @@ async fn add_sedimentree_survives_minimize() -> TestResult {
     let sedimentree = Sedimentree::new(vec![frag1.clone()], vec![c1, c2, c3]);
     let blobs = vec![frag1_blob, c1_blob, c2_blob, c3_blob];
 
-    sd.add_sedimentree(sed_id, sedimentree, blobs).await?;
+    sd.add_sedimentree(sed_id, sedimentree, blobs, None).await?;
 
     // Verify all items survive in the in-memory tree.
     let commits = sd.get_commits(sed_id).await.unwrap_or_default();

@@ -9,6 +9,9 @@
 
 #![cfg(target_arch = "wasm32")]
 #![allow(missing_docs)]
+// `test_seed` is a test helper; whether it can be `const` depends on the
+// active feature set, so don't force it.
+#![allow(clippy::missing_const_for_fn)]
 
 use sedimentree_core::{
     crypto::fingerprint::{Fingerprint, FingerprintSeed},

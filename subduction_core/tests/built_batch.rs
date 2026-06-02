@@ -1,4 +1,4 @@
-//! Tests for `add_built_batch` and `add_built_batch_locally`.
+//! Tests for `add_built_batch` and `store_built_batch`.
 //!
 //! Coverage:
 //! - empty input is a true no-op (no sedimentree row, no panics)
@@ -48,12 +48,11 @@ fn make_fragment(
 }
 
 #[tokio::test]
-async fn add_built_batch_locally_empty_is_noop() -> TestResult {
+async fn store_built_batch_empty_is_noop() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
     let sed_id = SedimentreeId::new([1u8; 32]);
 
-    sd.add_built_batch_locally(sed_id, Vec::new(), Vec::new())
-        .await?;
+    sd.store_built_batch(sed_id, Vec::new(), Vec::new()).await?;
 
     assert!(
         sd.get_commits(sed_id).await.is_none(),
@@ -69,7 +68,8 @@ async fn add_built_batch_empty_is_noop_no_broadcast() -> TestResult {
     let sed_id = SedimentreeId::new([2u8; 32]);
 
     // No connected peers, no work to do — should be a clean no-op.
-    sd.add_built_batch(sed_id, Vec::new(), Vec::new()).await?;
+    sd.add_built_batch(sed_id, Vec::new(), Vec::new(), None)
+        .await?;
 
     assert!(
         sd.get_commits(sed_id).await.is_none(),
@@ -80,7 +80,7 @@ async fn add_built_batch_empty_is_noop_no_broadcast() -> TestResult {
 }
 
 #[tokio::test]
-async fn add_built_batch_locally_stores_commits_and_fragments() -> TestResult {
+async fn store_built_batch_stores_commits_and_fragments() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
     let sed_id = SedimentreeId::new([3u8; 32]);
 
@@ -90,8 +90,7 @@ async fn add_built_batch_locally_stores_commits_and_fragments() -> TestResult {
         .map(|i| make_fragment(sed_id, i + 200, i + 220, i + 240))
         .collect();
 
-    sd.add_built_batch_locally(sed_id, commits, fragments)
-        .await?;
+    sd.store_built_batch(sed_id, commits, fragments).await?;
 
     let stored_commits = sd.get_commits(sed_id).await;
     assert_eq!(
@@ -111,7 +110,7 @@ async fn add_built_batch_locally_stores_commits_and_fragments() -> TestResult {
 }
 
 #[tokio::test]
-async fn add_built_batch_locally_rejects_mismatched_commit_blob() -> TestResult {
+async fn store_built_batch_rejects_mismatched_commit_blob() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
     let sed_id = SedimentreeId::new([4u8; 32]);
 
@@ -127,7 +126,7 @@ async fn add_built_batch_locally_rejects_mismatched_commit_blob() -> TestResult 
     let actual = make_blob(0xBB); // different bytes -> different digest
 
     let result = sd
-        .add_built_batch_locally(sed_id, vec![(commit, actual)], Vec::new())
+        .store_built_batch(sed_id, vec![(commit, actual)], Vec::new())
         .await;
 
     assert!(
@@ -145,7 +144,7 @@ async fn add_built_batch_locally_rejects_mismatched_commit_blob() -> TestResult 
 }
 
 #[tokio::test]
-async fn add_built_batch_locally_rejects_mismatched_fragment_blob() -> TestResult {
+async fn store_built_batch_rejects_mismatched_fragment_blob() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
     let sed_id = SedimentreeId::new([5u8; 32]);
 
@@ -157,7 +156,7 @@ async fn add_built_batch_locally_rejects_mismatched_fragment_blob() -> TestResul
     let actual = make_blob(0xDD);
 
     let result = sd
-        .add_built_batch_locally(sed_id, Vec::new(), vec![(fragment, actual)])
+        .store_built_batch(sed_id, Vec::new(), vec![(fragment, actual)])
         .await;
 
     assert!(

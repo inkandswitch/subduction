@@ -24,9 +24,11 @@ use wasm_bindgen::prelude::*;
 /// One unsigned commit + its blob, ready for bulk insertion.
 ///
 /// Construct with `new CommitInput(looseCommit, blob)` from JavaScript;
-/// pass arrays of these to
-/// [`addBatch`](crate::subduction::WasmSubduction::add_batch) or
-/// [`addCommitsBatch`](crate::subduction::WasmSubduction::add_commits_batch).
+/// pass arrays of these to the batch write methods
+/// ([`addBatch`](crate::subduction::WasmSubduction::add_batch) /
+/// [`storeBuiltBatch`](crate::subduction::WasmSubduction::store_built_batch),
+/// [`addCommitsBatch`](crate::subduction::WasmSubduction::add_commits_batch) /
+/// [`storeCommitsBatch`](crate::subduction::WasmSubduction::store_commits_batch)).
 #[wasm_bindgen(js_name = CommitInput)]
 #[derive(Debug, Clone)]
 pub struct WasmCommitInput {
@@ -86,9 +88,11 @@ impl WasmCommitInput {
 /// One unsigned fragment + its blob, ready for bulk insertion.
 ///
 /// Construct with `new FragmentInput(fragment, blob)` from JavaScript;
-/// pass arrays of these to
-/// [`addBatch`](crate::subduction::WasmSubduction::add_batch) or
-/// [`addFragmentsBatch`](crate::subduction::WasmSubduction::add_fragments_batch).
+/// pass arrays of these to the batch write methods
+/// ([`addBatch`](crate::subduction::WasmSubduction::add_batch) /
+/// [`storeBuiltBatch`](crate::subduction::WasmSubduction::store_built_batch),
+/// [`addFragmentsBatch`](crate::subduction::WasmSubduction::add_fragments_batch) /
+/// [`storeFragmentsBatch`](crate::subduction::WasmSubduction::store_fragments_batch)).
 #[wasm_bindgen(js_name = FragmentInput)]
 #[derive(Debug, Clone)]
 pub struct WasmFragmentInput {

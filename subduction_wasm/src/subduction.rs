@@ -494,20 +494,28 @@ impl WasmSubduction {
         })
     }
 
-    /// Add a Sedimentree.
+    /// Persist a whole [`Sedimentree`](sedimentree_wasm::WasmSedimentree)
+    /// locally **without** broadcasting (the `store_*` tier).
+    ///
+    /// Durability only: never waits on a peer. Drive
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers) yourself to propagate.
+    /// Use [`addSedimentree`](Self::add_sedimentree) for the
+    /// store-and-broadcast combinator.
     ///
     /// # Errors
     ///
-    /// Returns [`WasmWriteError`] if there is a problem with storage, networking, or policy.
-    #[wasm_bindgen(js_name = addSedimentree)]
-    pub async fn add_sedimentree(
+    /// Returns [`WasmWriteError`] if a referenced blob is missing or storage
+    /// I/O fails. This local-only path uses the trusting local putter, so no
+    /// network policy is consulted.
+    #[wasm_bindgen(js_name = storeSedimentree)]
+    pub async fn store_sedimentree(
         &self,
         id: &WasmSedimentreeId,
         sedimentree: &WasmSedimentree,
         blobs: Vec<Uint8Array>,
     ) -> Result<(), WasmWriteError> {
         self.core
-            .add_sedimentree(
+            .store_sedimentree(
                 id.clone().into(),
                 sedimentree.clone().into(),
                 blobs
@@ -517,6 +525,49 @@ impl WasmSubduction {
             )
             .await?;
         Ok(())
+    }
+
+    /// Persist a whole [`Sedimentree`](sedimentree_wasm::WasmSedimentree)
+    /// **and** broadcast it to all connected peers (the `add_*` combinator =
+    /// [`storeSedimentree`](Self::store_sedimentree) +
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers)).
+    ///
+    /// Returns the per-peer broadcast outcome as a
+    /// [`PeerResultMap`](WasmPeerResultMap). This **awaits the broadcast**, so
+    /// an unresponsive peer can stall the call for up to `timeout_milliseconds`
+    /// (or the configured default when omitted); callers wanting a
+    /// non-blocking durable write should use
+    /// [`storeSedimentree`](Self::store_sedimentree) instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmWriteError`] if a referenced blob is missing, or on
+    /// storage I/O — including storage errors hit while ingesting inbound data
+    /// during the trailing sync. The local store uses the trusting local
+    /// putter (no network policy check). Per-peer transport failures during
+    /// the broadcast are reported inside the returned map, not as an error.
+    #[wasm_bindgen(js_name = addSedimentree)]
+    pub async fn add_sedimentree(
+        &self,
+        id: &WasmSedimentreeId,
+        sedimentree: &WasmSedimentree,
+        blobs: Vec<Uint8Array>,
+        timeout_milliseconds: Option<u64>,
+    ) -> Result<WasmPeerResultMap, WasmWriteError> {
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let per_peer = self
+            .core
+            .add_sedimentree(
+                id.clone().into(),
+                sedimentree.clone().into(),
+                blobs
+                    .into_iter()
+                    .map(|bytes| bytes.to_vec().into())
+                    .collect(),
+                timeout,
+            )
+            .await?;
+        Ok(per_peer.into())
     }
 
     /// Remove a Sedimentree and all associated data.
@@ -928,10 +979,58 @@ impl WasmSubduction {
         }
     }
 
-    /// Add a commit with its associated blob to the storage.
+    /// Persist a single commit with its blob locally **without** broadcasting
+    /// (the `store_*` tier).
     ///
     /// The commit metadata (including `BlobMeta`) is computed internally from
     /// the provided blob, ensuring consistency by construction.
+    ///
+    /// Durability only: never waits on a peer. Use
+    /// [`addCommit`](Self::add_commit) for the store-and-push combinator.
+    ///
+    /// Returns the [`WasmFragmentRequested`] signal when the commit lands on a
+    /// fragment boundary, exactly as [`addCommit`](Self::add_commit) does.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] on storage I/O failure. This local-only
+    /// path uses the trusting local putter, so no network policy is consulted.
+    #[wasm_bindgen(js_name = storeCommit)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
+    pub async fn store_commit(
+        &self,
+        id: &WasmSedimentreeId,
+        head: &WasmCommitId,
+        parents: Vec<JsCommitId>,
+        blob: &Uint8Array,
+    ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_head = CommitId::from(head);
+        let core_parents: BTreeSet<CommitId> = parents
+            .iter()
+            .map(|p| CommitId::from(WasmCommitId::from(p)))
+            .collect();
+        let blob: Blob = blob.clone().to_vec().into();
+
+        let maybe_fragment_requested = self
+            .core
+            .store_commit(core_id, core_head, core_parents, blob)
+            .await?;
+
+        Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
+    }
+
+    /// Add a commit with its associated blob to the storage, then push it to
+    /// authorized subscribers (the `add_*` combinator =
+    /// [`storeCommit`](Self::store_commit) + best-effort push).
+    ///
+    /// The commit metadata (including `BlobMeta`) is computed internally from
+    /// the provided blob, ensuring consistency by construction.
+    ///
+    /// Propagation is a best-effort `send` to subscribers; it does not block
+    /// on peer acks (no per-peer result is produced for single-item pushes).
+    /// For a durable write with no propagation, use
+    /// [`storeCommit`](Self::store_commit).
     ///
     /// # Errors
     ///
@@ -961,10 +1060,58 @@ impl WasmSubduction {
         Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
     }
 
-    /// Add a fragment with its associated blob to the storage.
+    /// Persist a single fragment with its blob locally **without**
+    /// broadcasting (the `store_*` tier).
     ///
     /// The fragment metadata (including `BlobMeta`) is computed internally from
     /// the provided blob, ensuring consistency by construction.
+    ///
+    /// Durability only: never waits on a peer. Use
+    /// [`addFragment`](Self::add_fragment) for the store-and-push combinator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] on storage I/O failure. This local-only
+    /// path uses the trusting local putter, so no network policy is consulted.
+    #[wasm_bindgen(js_name = storeFragment)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
+    pub async fn store_fragment(
+        &self,
+        id: &WasmSedimentreeId,
+        head: &WasmCommitId,
+        boundary: Vec<JsCommitId>,
+        checkpoints: Vec<JsCommitId>,
+        blob: &Uint8Array,
+    ) -> Result<(), WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_head = CommitId::from(head);
+        let core_boundary: BTreeSet<CommitId> = boundary
+            .iter()
+            .map(|p| CommitId::from(WasmCommitId::from(p)))
+            .collect();
+        let core_checkpoints: Vec<CommitId> = checkpoints
+            .iter()
+            .map(|p| CommitId::from(WasmCommitId::from(p)))
+            .collect();
+        let blob: Blob = blob.clone().to_vec().into();
+
+        self.core
+            .store_fragment(core_id, core_head, core_boundary, &core_checkpoints, blob)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Add a fragment with its associated blob to the storage, then push it to
+    /// authorized subscribers (the `add_*` combinator =
+    /// [`storeFragment`](Self::store_fragment) + best-effort push).
+    ///
+    /// The fragment metadata (including `BlobMeta`) is computed internally from
+    /// the provided blob, ensuring consistency by construction.
+    ///
+    /// Propagation is a best-effort `send` to subscribers; it does not block
+    /// on peer acks. For a durable write with no propagation, use
+    /// [`storeFragment`](Self::store_fragment).
     ///
     /// # Errors
     ///
@@ -998,22 +1145,73 @@ impl WasmSubduction {
         Ok(())
     }
 
-    /// Bulk-insert commits and fragments into a sedimentree, then broadcast.
+    /// Bulk-insert commits and fragments into a sedimentree **without**
+    /// broadcasting (the `store_*` tier).
     ///
-    /// Unlike [`add_commit`](Self::add_commit) and
-    /// [`add_fragment`](Self::add_fragment) — which each re-minimize the tree
-    /// and broadcast to peers per call — this method inserts everything first,
-    /// runs `minimize_tree` once at the end, and then performs a single
-    /// `sync_with_all_peers` to propagate the new state. For workloads that
-    /// add many commits or fragments at once this avoids `O(N²)` minimize work
-    /// and `N` redundant broadcasts.
+    /// Inserts everything first and runs `minimize_tree` once at the end —
+    /// avoiding the `O(N²)` minimize work of looping
+    /// [`storeCommit`](Self::store_commit) — but performs **no** network
+    /// propagation. Useful for ingestion paths (local replay, hydration from
+    /// another store) where the caller drives sync separately or not at all.
     ///
     /// Each [`WasmCommitInput`] bundles an unsigned
     /// [`LooseCommit`](sedimentree_core::loose_commit::LooseCommit) with its
     /// blob; each [`WasmFragmentInput`] bundles an unsigned
     /// [`Fragment`](sedimentree_core::fragment::Fragment) with its blob.
+    /// Either list may be empty; two empty lists is a no-op.
+    ///
+    /// Use [`addBatch`](Self::add_batch) for the store-and-broadcast
+    /// combinator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    #[wasm_bindgen(js_name = storeBuiltBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn store_built_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        commits: Vec<WasmCommitInput>,
+        fragments: Vec<WasmFragmentInput>,
+    ) -> Result<(), WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_commits = commits
+            .into_iter()
+            .map(WasmCommitInput::into_core)
+            .collect();
+        let core_fragments = fragments
+            .into_iter()
+            .map(WasmFragmentInput::into_core)
+            .collect();
+
+        self.core
+            .store_built_batch(core_id, core_commits, core_fragments)
+            .await?;
+        Ok(())
+    }
+
+    /// Bulk-insert commits and fragments into a sedimentree, then broadcast
+    /// (the `add_*` combinator = [`storeBuiltBatch`](Self::store_built_batch) +
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers)).
+    ///
+    /// Unlike [`addCommit`](Self::add_commit) and
+    /// [`addFragment`](Self::add_fragment) — which each re-minimize the tree
+    /// and push to peers per call — this method inserts everything first,
+    /// runs `minimize_tree` once at the end, and then performs a single
+    /// `sync_with_all_peers` to propagate the new state. For workloads that
+    /// add many commits or fragments at once this avoids `O(N²)` minimize work
+    /// and `N` redundant broadcasts.
+    ///
+    /// Returns the per-peer broadcast outcome as a
+    /// [`PeerResultMap`](WasmPeerResultMap). This **awaits the broadcast**, so
+    /// an unresponsive peer can stall the call for up to `timeout_milliseconds`
+    /// (or the configured default when omitted); callers wanting a
+    /// non-blocking durable write should use
+    /// [`storeBuiltBatch`](Self::store_built_batch) instead.
+    ///
     /// Either list may be empty; passing two empty lists is a no-op (no
-    /// minimize, no broadcast).
+    /// minimize, no broadcast) and yields an empty map.
     ///
     /// # Errors
     ///
@@ -1021,16 +1219,8 @@ impl WasmSubduction {
     /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if a local
     /// [`Storage`](sedimentree_wasm::storage::JsStorage) error is hit while
     /// persisting the batch or while ingesting inbound data during the
-    /// trailing broadcast.
-    ///
-    /// Per-peer transport failures during the trailing broadcast are *not*
-    /// surfaced as `Err`: peers that can't be reached (closed connections,
-    /// timeouts) are reported by `sync_with_all_peers` as data inside its
-    /// per-peer result map, which this method discards. If you need to
-    /// observe peer-level sync outcomes, drive the local insert via
-    /// [`addCommitsBatch`](Self::add_commits_batch) /
-    /// [`addFragmentsBatch`](Self::add_fragments_batch) and call
-    /// [`syncWithAllPeers`](Self::sync_with_all_peers) directly.
+    /// trailing broadcast. Per-peer transport failures are reported inside the
+    /// returned map, not as an error.
     #[wasm_bindgen(js_name = addBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
     pub async fn add_batch(
@@ -1038,7 +1228,8 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
         fragments: Vec<WasmFragmentInput>,
-    ) -> Result<(), WasmWriteError> {
+        timeout_milliseconds: Option<u64>,
+    ) -> Result<WasmPeerResultMap, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
         let core_commits = commits
             .into_iter()
@@ -1048,30 +1239,32 @@ impl WasmSubduction {
             .into_iter()
             .map(WasmFragmentInput::into_core)
             .collect();
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
 
-        self.core
-            .add_built_batch(core_id, core_commits, core_fragments)
+        let per_peer = self
+            .core
+            .add_built_batch(core_id, core_commits, core_fragments, timeout)
             .await?;
-        Ok(())
+        Ok(per_peer.into())
     }
 
-    /// Bulk-insert commits into a sedimentree without broadcasting.
+    /// Bulk-insert commits into a sedimentree **without** broadcasting (the
+    /// `store_*` tier).
     ///
-    /// Like [`addBatch`](Self::add_batch) for the commits half only, but
-    /// skips the trailing `sync_with_all_peers` step. Useful for ingestion
-    /// paths (e.g. local replay, hydration from another store) where the
-    /// caller will trigger sync separately or not at all.
+    /// Like [`storeBuiltBatch`](Self::store_built_batch) for the commits half
+    /// only. Each [`WasmCommitInput`] bundles an unsigned commit with its
+    /// blob; an empty list is a no-op.
     ///
-    /// Each [`WasmCommitInput`] bundles an unsigned commit with its blob;
-    /// an empty list is a no-op.
+    /// Use [`addCommitsBatch`](Self::add_commits_batch) for the
+    /// store-and-broadcast combinator.
     ///
     /// # Errors
     ///
     /// Returns a [`WasmWriteError`] if any blob does not match its claimed
     /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
-    #[wasm_bindgen(js_name = addCommitsBatch)]
+    #[wasm_bindgen(js_name = storeCommitsBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
-    pub async fn add_commits_batch(
+    pub async fn store_commits_batch(
         &self,
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
@@ -1083,26 +1276,65 @@ impl WasmSubduction {
             .collect();
 
         self.core
-            .add_built_batch_locally(core_id, core_commits, Vec::new())
+            .store_built_batch(core_id, core_commits, Vec::new())
             .await?;
         Ok(())
     }
 
-    /// Bulk-insert fragments into a sedimentree without broadcasting.
+    /// Bulk-insert commits into a sedimentree, then broadcast (the `add_*`
+    /// combinator = [`storeCommitsBatch`](Self::store_commits_batch) +
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers)).
     ///
-    /// Like [`addBatch`](Self::add_batch) for the fragments half only, but
-    /// skips the trailing `sync_with_all_peers` step.
-    ///
-    /// Each [`WasmFragmentInput`] bundles an unsigned fragment with its
-    /// blob; an empty list is a no-op.
+    /// Like [`addBatch`](Self::add_batch) for the commits half only. Returns
+    /// the per-peer broadcast outcome as a
+    /// [`PeerResultMap`](WasmPeerResultMap) and **awaits the broadcast** (an
+    /// unresponsive peer can stall the call for up to `timeout_milliseconds`).
+    /// An empty list is a no-op and yields an empty map.
     ///
     /// # Errors
     ///
     /// Returns a [`WasmWriteError`] if any blob does not match its claimed
     /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
-    #[wasm_bindgen(js_name = addFragmentsBatch)]
+    /// Per-peer transport failures are reported inside the returned map.
+    #[wasm_bindgen(js_name = addCommitsBatch)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
-    pub async fn add_fragments_batch(
+    pub async fn add_commits_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        commits: Vec<WasmCommitInput>,
+        timeout_milliseconds: Option<u64>,
+    ) -> Result<WasmPeerResultMap, WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_commits = commits
+            .into_iter()
+            .map(WasmCommitInput::into_core)
+            .collect();
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+
+        let per_peer = self
+            .core
+            .add_built_batch(core_id, core_commits, Vec::new(), timeout)
+            .await?;
+        Ok(per_peer.into())
+    }
+
+    /// Bulk-insert fragments into a sedimentree **without** broadcasting (the
+    /// `store_*` tier).
+    ///
+    /// Like [`storeBuiltBatch`](Self::store_built_batch) for the fragments
+    /// half only. Each [`WasmFragmentInput`] bundles an unsigned fragment with
+    /// its blob; an empty list is a no-op.
+    ///
+    /// Use [`addFragmentsBatch`](Self::add_fragments_batch) for the
+    /// store-and-broadcast combinator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    #[wasm_bindgen(js_name = storeFragmentsBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn store_fragments_batch(
         &self,
         id: &WasmSedimentreeId,
         fragments: Vec<WasmFragmentInput>,
@@ -1114,9 +1346,46 @@ impl WasmSubduction {
             .collect();
 
         self.core
-            .add_built_batch_locally(core_id, Vec::new(), core_fragments)
+            .store_built_batch(core_id, Vec::new(), core_fragments)
             .await?;
         Ok(())
+    }
+
+    /// Bulk-insert fragments into a sedimentree, then broadcast (the `add_*`
+    /// combinator = [`storeFragmentsBatch`](Self::store_fragments_batch) +
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers)).
+    ///
+    /// Like [`addBatch`](Self::add_batch) for the fragments half only. Returns
+    /// the per-peer broadcast outcome as a
+    /// [`PeerResultMap`](WasmPeerResultMap) and **awaits the broadcast** (an
+    /// unresponsive peer can stall the call for up to `timeout_milliseconds`).
+    /// An empty list is a no-op and yields an empty map.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmWriteError`] if any blob does not match its claimed
+    /// [`BlobMeta`](sedimentree_core::blob::BlobMeta), or if storage fails.
+    /// Per-peer transport failures are reported inside the returned map.
+    #[wasm_bindgen(js_name = addFragmentsBatch)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn add_fragments_batch(
+        &self,
+        id: &WasmSedimentreeId,
+        fragments: Vec<WasmFragmentInput>,
+        timeout_milliseconds: Option<u64>,
+    ) -> Result<WasmPeerResultMap, WasmWriteError> {
+        let core_id: SedimentreeId = id.clone().into();
+        let core_fragments = fragments
+            .into_iter()
+            .map(WasmFragmentInput::into_core)
+            .collect();
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+
+        let per_peer = self
+            .core
+            .add_built_batch(core_id, Vec::new(), core_fragments, timeout)
+            .await?;
+        Ok(per_peer.into())
     }
 
     /// Compute the [`WasmDepth`] of a commit identifier under this node's
@@ -1209,24 +1478,7 @@ impl WasmSubduction {
             .sync_with_all_peers(id.clone().into(), subscribe, timeout)
             .await?;
         tracing::debug!("WasmSubduction::sync_with_all_peers - done");
-        Ok(WasmPeerResultMap(
-            peer_map
-                .into_iter()
-                .map(|(peer_id, (success, stats, conn_errs))| {
-                    (
-                        peer_id,
-                        (
-                            success,
-                            stats.into(),
-                            conn_errs
-                                .into_iter()
-                                .map(|(conn, err)| (conn.into_inner(), WasmCallError::from(err)))
-                                .collect::<Vec<_>>(),
-                        ),
-                    )
-                })
-                .collect(),
-        ))
+        Ok(peer_map.into())
     }
 
     /// Sync all known Sedimentree IDs with a single peer.
@@ -1550,6 +1802,43 @@ pub struct WasmPeerResultMap(
         ),
     >,
 );
+
+impl
+    From<
+        subduction_core::subduction::PerPeerSync<
+            WasmConn,
+            Local,
+            crate::transport::JsTransportError,
+        >,
+    > for WasmPeerResultMap
+{
+    fn from(
+        per_peer: subduction_core::subduction::PerPeerSync<
+            WasmConn,
+            Local,
+            crate::transport::JsTransportError,
+        >,
+    ) -> Self {
+        Self(
+            per_peer
+                .into_iter()
+                .map(|(peer_id, (success, stats, conn_errs))| {
+                    (
+                        peer_id,
+                        (
+                            success,
+                            stats.into(),
+                            conn_errs
+                                .into_iter()
+                                .map(|(conn, err)| (conn.into_inner(), WasmCallError::from(err)))
+                                .collect::<Vec<_>>(),
+                        ),
+                    )
+                })
+                .collect(),
+        )
+    }
+}
 
 #[wasm_bindgen(js_class = PeerResultMap)]
 impl WasmPeerResultMap {

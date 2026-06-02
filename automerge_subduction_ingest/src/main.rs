@@ -370,8 +370,9 @@ async fn main() -> Result<()> {
     let timeout_dur = std::time::Duration::from_secs(args.timeout);
     tokio::time::timeout(timeout_dur, async {
         subduction
-            .add_sedimentree(sed_id, result.sedimentree, result.blobs)
+            .add_sedimentree(sed_id, result.sedimentree, result.blobs, None)
             .await
+            .map(|_per_peer| ())
             .map_err(|e| eyre!("upload failed: {e}"))
     })
     .await
