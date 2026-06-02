@@ -67,7 +67,7 @@ use crate::{
         Connection,
         backoff::Backoff,
         id::ConnectionId,
-        managed::{ManagedCall, ManagedConnection},
+        managed::{CallError, ManagedCall, ManagedConnection},
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
@@ -220,7 +220,107 @@ pub struct Subduction<
     _phantom: core::marker::PhantomData<&'a Async>,
 }
 
-/// A single fragment for [`Subduction::add_fragments_batch`].
+/// Per-peer outcome of a broadcast / sync round, keyed by [`PeerId`].
+///
+/// Returned by [`sync_with_all_peers`](Subduction::sync_with_all_peers) and
+/// the round-trip `add_*` combinators
+/// ([`add_built_batch`](Subduction::add_built_batch),
+/// [`add_sedimentree`](Subduction::add_sedimentree)) so callers can observe
+/// which peers acked and which failed.
+///
+/// Each entry's value is `(succeeded, stats, per-connection call errors)`.
+/// The newtype [`Deref`]s to the underlying [`Map`], so `.get(&peer)`,
+/// `.iter()`, `.is_empty()`, etc. work directly; it also implements
+/// [`IntoIterator`] and [`FromIterator`].
+pub struct PerPeerSync<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>(
+    Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)>,
+);
+
+impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> PerPeerSync<Conn, Async, SendErr> {
+    /// The inner per-peer map.
+    #[must_use]
+    pub const fn as_map(
+        &self,
+    ) -> &Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)> {
+        &self.0
+    }
+
+    /// Consume into the inner per-peer map.
+    #[must_use]
+    pub fn into_map(
+        self,
+    ) -> Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)> {
+        self.0
+    }
+}
+
+impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> core::fmt::Debug
+    for PerPeerSync<Conn, Async, SendErr>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PerPeerSync")
+            .field("peers", &self.0.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> Default
+    for PerPeerSync<Conn, Async, SendErr>
+{
+    fn default() -> Self {
+        Self(Map::new())
+    }
+}
+
+impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> core::ops::Deref
+    for PerPeerSync<Conn, Async, SendErr>
+{
+    type Target =
+        Map<PeerId, (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> IntoIterator
+    for PerPeerSync<Conn, Async, SendErr>
+{
+    type Item = (
+        PeerId,
+        (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
+    );
+    type IntoIter = <Map<
+        PeerId,
+        (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
+    > as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>
+    FromIterator<(
+        PeerId,
+        (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
+    )> for PerPeerSync<Conn, Async, SendErr>
+{
+    fn from_iter<
+        T: IntoIterator<
+                Item = (
+                    PeerId,
+                    (bool, SyncStats, Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>),
+                ),
+            >,
+    >(
+        iter: T,
+    ) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+/// A single fragment for [`Subduction::store_fragments_batch`].
 #[derive(Debug, Clone)]
 pub struct FragmentBatchItem {
     /// The head commit of the fragment.
@@ -1326,10 +1426,64 @@ where
      * INCREMENTAL CHANGES *
      ***********************/
 
+    /// Persist a new (incremental) commit locally — **no network**.
+    ///
+    /// The persistence half of [`add_commit`](Self::add_commit): constructs
+    /// and signs the commit, inserts it into local storage and the
+    /// in-memory tree, and re-minimizes. It never contacts peers, so it
+    /// returns as soon as the write is durable. Propagate later via
+    /// [`add_commit`](Self::add_commit) (which pushes the delta) or a sync.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(None)` if the commit is not on a fragment boundary.
+    /// * `Ok(Some(FragmentRequested))` if the commit is on a [`Fragment`]
+    ///   boundary — create the requested fragment and call
+    ///   [`store_fragment`](Self::store_fragment) / [`add_fragment`](Self::add_fragment).
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes.
+    pub async fn store_commit(
+        &self,
+        id: SedimentreeId,
+        head: CommitId,
+        parents: BTreeSet<CommitId>,
+        blob: Blob,
+    ) -> Result<
+        Option<FragmentRequested>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
+        let putter = self.storage.local_putter::<Async>(id);
+
+        let verified_blob = VerifiedBlobMeta::new(blob);
+        let verified_meta: VerifiedMeta<LooseCommit> =
+            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob).await;
+        let commit_head = verified_meta.payload().head();
+
+        self.insert_commit_locally(&putter, verified_meta)
+            .await
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
+        self.minimize_tree(id).await;
+
+        let depth = self.depth_metric.to_depth(commit_head);
+        Ok(depth
+            .is_boundary()
+            .then(|| FragmentRequested::new(commit_head, depth)))
+    }
+
     /// Add a new (incremental) commit locally and propagate it to all connected peers.
     ///
     /// The commit is constructed internally from the provided parts, ensuring
     /// that the blob metadata is computed correctly from the blob.
+    ///
+    /// This is the store+propagate combinator for a single commit;
+    /// propagation is a best-effort push (`Connection::send`) to authorized
+    /// subscribers, so it does not block on peer acks. For a durable write
+    /// with no propagation, use [`store_commit`](Self::store_commit).
     ///
     /// # Returns
     ///
@@ -1429,10 +1583,56 @@ where
         Ok(maybe_requested_fragment)
     }
 
+    /// Persist a new (incremental) fragment locally — **no network**.
+    ///
+    /// The persistence half of [`add_fragment`](Self::add_fragment):
+    /// constructs and signs the fragment, inserts it into local storage and
+    /// the in-memory tree, and re-minimizes. It never contacts peers, so it
+    /// returns as soon as the write is durable. Propagate later via
+    /// [`add_fragment`](Self::add_fragment) or a sync.
+    ///
+    /// NOTE this performs no integrity checks; we assume this is a good
+    /// fragment at the right depth.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    pub async fn store_fragment(
+        &self,
+        id: SedimentreeId,
+        head: CommitId,
+        boundary: BTreeSet<CommitId>,
+        checkpoints: &[CommitId],
+        blob: Blob,
+    ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+        let verified_blob = VerifiedBlobMeta::new(blob);
+        let putter = self.storage.local_putter::<Async>(id);
+
+        let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Async, _>(
+            &self.signer,
+            (id, head, boundary, checkpoints.to_vec()),
+            verified_blob,
+        )
+        .await;
+
+        self.insert_fragment_locally(&putter, verified_meta)
+            .await
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
+        self.minimize_tree(id).await;
+
+        Ok(())
+    }
+
     /// Add a new (incremental) fragment locally and propagate it to all connected peers.
     ///
     /// The fragment is constructed internally from the provided parts, ensuring
     /// that the blob metadata is computed correctly from the blob.
+    ///
+    /// This is the store+propagate combinator for a single fragment;
+    /// propagation is a best-effort push (`Connection::send`) to authorized
+    /// subscribers, so it does not block on peer acks. For a durable write
+    /// with no propagation, use [`store_fragment`](Self::store_fragment).
     ///
     /// NOTE this performs no integrity checks;
     /// we assume this is a good fragment at the right depth
@@ -1552,7 +1752,7 @@ where
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
-    pub async fn add_commits_batch(
+    pub async fn store_commits_batch(
         &self,
         id: SedimentreeId,
         commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
@@ -1615,7 +1815,7 @@ where
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
-    pub async fn add_fragments_batch(
+    pub async fn store_fragments_batch(
         &self,
         id: SedimentreeId,
         fragments: Vec<FragmentBatchItem>,
@@ -1667,16 +1867,17 @@ where
         Ok(())
     }
 
-    /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads
-    /// alongside their blobs into local storage and the in-memory tree only.
+    /// Persist already-built [`LooseCommit`] and [`Fragment`] payloads
+    /// alongside their blobs to local storage and the in-memory tree —
+    /// **no network**.
     ///
-    /// This is the local-only counterpart to
-    /// [`add_built_batch`](Self::add_built_batch): it signs each payload,
-    /// flushes to storage in a single `save_batch` call, applies the in-memory
-    /// updates under one shard lock, and minimizes once — but does *not*
-    /// follow up with [`sync_with_all_peers`](Self::sync_with_all_peers). Use
-    /// when the caller will trigger sync explicitly (or never), e.g. from a
-    /// background ingestion path.
+    /// The persistence half of [`add_built_batch`](Self::add_built_batch):
+    /// it signs each payload, flushes to storage in a single `save_batch`
+    /// call, applies the in-memory updates under one shard lock, and
+    /// minimizes once. It never contacts peers, so it returns the instant
+    /// the write is durable — a wedged peer cannot stall it. Pair with
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) (or let the host
+    /// drive it in the background) to propagate.
     ///
     /// Commits are inserted before fragments. Passing two empty vectors is a
     /// no-op (no minimize).
@@ -1694,7 +1895,7 @@ where
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
-    pub async fn add_built_batch_locally(
+    pub async fn store_built_batch(
         &self,
         id: SedimentreeId,
         commits: Vec<(LooseCommit, Blob)>,
@@ -1907,15 +2108,24 @@ where
             SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
         >,
 {
-    /// Add a new sedimentree locally and propagate it to all connected peers.
+    /// Persist a whole sedimentree (its commits and fragments, paired with
+    /// `blobs`) to local storage and the in-memory tree — **no network**.
+    ///
+    /// The persistence half of [`add_sedimentree`](Self::add_sedimentree):
+    /// it signs each item, pairs it with its blob, and flushes locally. It
+    /// never contacts peers, so it returns as soon as the write is durable.
+    /// Pair with [`sync_with_all_peers`](Self::sync_with_all_peers) to
+    /// propagate.
     ///
     /// # Errors
     ///
-    /// * [`WriteError::Io`] if a storage or network error occurs.
+    /// * [`WriteError::MissingBlob`] if a commit/fragment references a blob
+    ///   not present in `blobs`.
+    /// * [`WriteError::Io`] if a storage error occurs.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
-    pub async fn add_sedimentree(
+    pub async fn store_sedimentree(
         &self,
         id: SedimentreeId,
         sedimentree: Sedimentree,
@@ -1961,24 +2171,67 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sync_with_all_peers(id, true, None).await?;
         Ok(())
     }
 
-    /// Bulk-insert already-built [`LooseCommit`] and [`Fragment`] payloads
-    /// alongside their blobs, signing each, then minimize once and broadcast.
+    /// Persist a whole sedimentree **and** propagate it to peers — the
+    /// convenience combinator of
+    /// [`store_sedimentree`](Self::store_sedimentree) +
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers).
     ///
-    /// This is the underlying "do everything in one round-trip" entrypoint used
-    /// by callers that already have payloads in their canonical, post-truncation
-    /// form (notably the Wasm bindings, which carry [`Fragment`] values whose
-    /// checkpoints are already truncated). Unlike
-    /// [`add_commits_batch`](Self::add_commits_batch) and
-    /// [`add_fragments_batch`](Self::add_fragments_batch), this method also
-    /// performs a single [`sync_with_all_peers`](Self::sync_with_all_peers) at
-    /// the end so callers don't need to follow up with a separate broadcast.
+    /// Awaits the broadcast and returns its per-peer outcome
+    /// ([`PerPeerSync`]); a wedged peer can stall this for up to `timeout`
+    /// (`None` = configured `default_call_timeout`). For a durable write
+    /// that does not wait on peers, use
+    /// [`store_sedimentree`](Self::store_sedimentree) and drive sync
+    /// separately.
+    ///
+    /// # Errors
+    ///
+    /// * [`WriteError::MissingBlob`] / [`WriteError::Io`] as for
+    ///   [`store_sedimentree`](Self::store_sedimentree). Per-peer transport
+    ///   failures are reported in the returned map, not as `Err`.
+    ///
+    /// Note: `WriteError::PutDisallowed` is unreachable for local writes.
+    pub async fn add_sedimentree(
+        &self,
+        id: SedimentreeId,
+        sedimentree: Sedimentree,
+        blobs: Vec<Blob>,
+        timeout: Option<Duration>,
+    ) -> Result<
+        PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
+        self.store_sedimentree(id, sedimentree, blobs).await?;
+        let per_peer = self
+            .sync_with_all_peers(id, true, timeout)
+            .await
+            .map_err(WriteError::Io)?;
+        Ok(per_peer)
+    }
+
+    /// Persist already-built [`LooseCommit`] and [`Fragment`] payloads
+    /// **and** propagate them to peers — the convenience combinator of
+    /// [`store_built_batch`](Self::store_built_batch) +
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers).
+    ///
+    /// Used by callers that already have payloads in their canonical,
+    /// post-truncation form (notably the Wasm bindings, which carry
+    /// [`Fragment`] values whose checkpoints are already truncated) and
+    /// want both phases in one call.
+    ///
+    /// This **awaits the broadcast** and returns its per-peer outcome
+    /// ([`PerPeerSync`]). A byte-connected but protocol-unresponsive peer
+    /// can therefore stall this call for up to `timeout` (or the configured
+    /// `default_call_timeout` when `timeout` is `None`). Callers that need
+    /// the durable write to return *without* waiting on peers should call
+    /// [`store_built_batch`](Self::store_built_batch) and drive
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately (or let
+    /// the host run it in the background).
     ///
     /// Commits are inserted before fragments. Passing two empty vectors is a
-    /// no-op (no minimize, no broadcast).
+    /// no-op (no minimize, no broadcast) and yields an empty map.
     ///
     /// # Errors
     ///
@@ -1994,14 +2247,10 @@ where
     ///   digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
     ///
-    /// Per-peer transport failures during the trailing broadcast are *not*
-    /// surfaced as `Err`. [`sync_with_all_peers`](Self::sync_with_all_peers)
-    /// reports those out-of-band in its `Ok` value (a per-peer map of
-    /// successes and per-connection [`CallError`](crate::connection::managed::CallError)s);
-    /// this method discards that map. If a caller needs to observe peer-level
-    /// sync outcomes, prefer driving the local insert via
-    /// [`add_built_batch_locally`](Self::add_built_batch_locally) and calling
-    /// [`sync_with_all_peers`](Self::sync_with_all_peers) directly.
+    /// Per-peer transport failures during the broadcast are *not* surfaced as
+    /// `Err`; they appear in the returned [`PerPeerSync`] map (per-peer
+    /// success flag + per-connection
+    /// [`CallError`](crate::connection::managed::CallError)s).
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -2010,16 +2259,23 @@ where
         id: SedimentreeId,
         commits: Vec<(LooseCommit, Blob)>,
         fragments: Vec<(Fragment, Blob)>,
-    ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+        timeout: Option<Duration>,
+    ) -> Result<
+        PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
         if commits.is_empty() && fragments.is_empty() {
-            return Ok(());
+            return Ok(PerPeerSync::default());
         }
 
         // Storage write first (cancel-safety: storage is the source of truth;
         // a cancel between this and the broadcast self-heals on rehydrate).
-        self.add_built_batch_locally(id, commits, fragments).await?;
-        self.sync_with_all_peers(id, true, None).await?;
-        Ok(())
+        self.store_built_batch(id, commits, fragments).await?;
+        let per_peer = self
+            .sync_with_all_peers(id, true, timeout)
+            .await
+            .map_err(WriteError::Io)?;
+        Ok(per_peer)
     }
 
     /// Forward an inbound subscription for `id` to every connected peer
@@ -2386,19 +2642,7 @@ where
         subscribe: bool,
         timeout: Option<Duration>,
     ) -> Result<
-        Map<
-            PeerId,
-            (
-                bool,
-                SyncStats,
-                Vec<(
-                    Authenticated<Conn, Async>,
-                    crate::connection::managed::CallError<
-                        <Conn as Connection<Async, Hdl::Message>>::SendError,
-                    >,
-                )>,
-            ),
-        >,
+        PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
         IoError<Async, Store, Conn, Hdl::Message>,
     > {
         tracing::info!(
@@ -2668,7 +2912,7 @@ where
                 }
             }
         }
-        Ok(out)
+        Ok(PerPeerSync(out))
     }
 
     /// Sync all known [`Sedimentree`]s with a single peer.

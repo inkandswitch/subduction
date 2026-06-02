@@ -1,4 +1,4 @@
-//! Tests for `add_commits_batch` and `add_fragments_batch`.
+//! Tests for `store_commits_batch` and `store_fragments_batch`.
 
 use std::collections::BTreeSet;
 
@@ -12,7 +12,7 @@ fn make_blob(seed: u8) -> Blob {
 }
 
 #[tokio::test]
-async fn add_commits_batch_stores_all_commits() -> TestResult {
+async fn store_commits_batch_stores_all_commits() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
@@ -22,7 +22,7 @@ async fn add_commits_batch_stores_all_commits() -> TestResult {
         .map(|i| (CommitId::new([i + 100; 32]), BTreeSet::new(), make_blob(i)))
         .collect();
 
-    sd.add_commits_batch(sed_id, commits).await?;
+    sd.store_commits_batch(sed_id, commits).await?;
 
     let stored = sd.get_commits(sed_id).await;
     assert!(
@@ -41,12 +41,12 @@ async fn add_commits_batch_stores_all_commits() -> TestResult {
 }
 
 #[tokio::test]
-async fn add_commits_batch_empty_is_noop() -> TestResult {
+async fn store_commits_batch_empty_is_noop() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
 
     let sed_id = SedimentreeId::new([2u8; 32]);
 
-    sd.add_commits_batch(sed_id, Vec::new()).await?;
+    sd.store_commits_batch(sed_id, Vec::new()).await?;
 
     let stored = sd.get_commits(sed_id).await;
     assert!(
@@ -58,7 +58,7 @@ async fn add_commits_batch_empty_is_noop() -> TestResult {
 }
 
 #[tokio::test]
-async fn add_fragments_batch_stores_all_fragments() -> TestResult {
+async fn store_fragments_batch_stores_all_fragments() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
 
     let sed_id = SedimentreeId::new([3u8; 32]);
@@ -73,7 +73,7 @@ async fn add_fragments_batch_stores_all_fragments() -> TestResult {
         })
         .collect();
 
-    sd.add_fragments_batch(sed_id, fragments).await?;
+    sd.store_fragments_batch(sed_id, fragments).await?;
 
     let stored = sd.get_fragments(sed_id).await;
     assert!(
@@ -92,12 +92,12 @@ async fn add_fragments_batch_stores_all_fragments() -> TestResult {
 }
 
 #[tokio::test]
-async fn add_fragments_batch_empty_is_noop() -> TestResult {
+async fn store_fragments_batch_empty_is_noop() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
 
     let sed_id = SedimentreeId::new([4u8; 32]);
 
-    sd.add_fragments_batch(sed_id, Vec::new()).await?;
+    sd.store_fragments_batch(sed_id, Vec::new()).await?;
 
     let stored = sd.get_fragments(sed_id).await;
     assert!(

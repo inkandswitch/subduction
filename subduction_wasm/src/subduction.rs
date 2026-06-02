@@ -514,6 +514,7 @@ impl WasmSubduction {
                     .into_iter()
                     .map(|bytes| bytes.to_vec().into())
                     .collect(),
+                None,
             )
             .await?;
         Ok(())
@@ -1050,7 +1051,7 @@ impl WasmSubduction {
             .collect();
 
         self.core
-            .add_built_batch(core_id, core_commits, core_fragments)
+            .add_built_batch(core_id, core_commits, core_fragments, None)
             .await?;
         Ok(())
     }
@@ -1083,7 +1084,7 @@ impl WasmSubduction {
             .collect();
 
         self.core
-            .add_built_batch_locally(core_id, core_commits, Vec::new())
+            .store_built_batch(core_id, core_commits, Vec::new())
             .await?;
         Ok(())
     }
@@ -1114,7 +1115,7 @@ impl WasmSubduction {
             .collect();
 
         self.core
-            .add_built_batch_locally(core_id, Vec::new(), core_fragments)
+            .store_built_batch(core_id, Vec::new(), core_fragments)
             .await?;
         Ok(())
     }

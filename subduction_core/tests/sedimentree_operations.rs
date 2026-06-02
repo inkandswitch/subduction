@@ -12,7 +12,7 @@ async fn test_add_sedimentree_increases_count() -> TestResult {
     let tree = Sedimentree::default();
     let blobs = Vec::new();
 
-    subduction.add_sedimentree(id, tree, blobs).await?;
+    subduction.add_sedimentree(id, tree, blobs, None).await?;
 
     let ids = subduction.sedimentree_ids().await;
     assert_eq!(ids.len(), 1);
@@ -38,7 +38,7 @@ async fn test_get_commits_returns_empty_for_empty_tree() -> TestResult {
     let tree = Sedimentree::default();
     let blobs = Vec::new();
 
-    subduction.add_sedimentree(id, tree, blobs).await?;
+    subduction.add_sedimentree(id, tree, blobs, None).await?;
 
     let commits = subduction.get_commits(id).await;
     assert_eq!(commits, Some(Vec::new()));
@@ -63,7 +63,7 @@ async fn test_get_fragments_returns_empty_for_empty_tree() -> TestResult {
     let tree = Sedimentree::default();
     let blobs = Vec::new();
 
-    subduction.add_sedimentree(id, tree, blobs).await?;
+    subduction.add_sedimentree(id, tree, blobs, None).await?;
 
     let fragments = subduction.get_fragments(id).await;
     assert_eq!(fragments, Some(Vec::new()));
@@ -79,7 +79,7 @@ async fn test_remove_sedimentree_removes_from_ids() -> TestResult {
     let tree = Sedimentree::default();
     let blobs = Vec::new();
 
-    subduction.add_sedimentree(id, tree, blobs).await?;
+    subduction.add_sedimentree(id, tree, blobs, None).await?;
     assert_eq!(subduction.sedimentree_ids().await.len(), 1);
 
     subduction.remove_sedimentree(id).await?;
