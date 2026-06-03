@@ -325,12 +325,13 @@ const FAN_IN_DOCS_PER_CLIENT: usize = 20;
 /// One server fan-in iteration: build one server B and `clients` client nodes,
 /// each holding `docs_per_client` distinct documents, then time all clients
 /// `full_sync_with_peer(B)` concurrently. This stresses **B's `listen()`
-/// dispatch** — N inbound request/data streams funnel through B's single
-/// listener task, where each pushed commit is verified + ingested.
+/// dispatch** — N inbound request/data streams funnel through B's `listen()`
+/// loop, and the server's ability to process CPU-heavy per-message handler work
+/// in parallel depends on the dispatch strategy.
 ///
-/// If `listen()` is the bottleneck, wall-clock should be ~flat across worker
-/// threads (the dispatch is single-task); if the per-message handle work
-/// already spreads, it should fall with more cores.
+/// If `listen()` dispatch is the bottleneck, wall-clock should be ~flat across
+/// worker threads; if handler CPU work parallelizes effectively, it should fall
+/// with more cores.
 fn one_server_fan_in(
     rt: &tokio::runtime::Runtime,
     clients: usize,
