@@ -219,6 +219,7 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
+                "automerge-0.9.0" = "sha256-CTskjyAMoUvNUdVhvx1E62Ay69e/WTdPCm/NqNbVzi0=";
                 "wasm-tracing-3.0.0-alpha.0" = "sha256-b5XSxRM601ID/uT2aLMb0WrP3lSGALrh0bPB+7Va/6s=";
               };
             };
