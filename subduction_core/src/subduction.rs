@@ -1824,12 +1824,12 @@ where
     }
 }
 
-/// The listener loop lives in its own `impl` block because spawning each
-/// inbound handler (`Async::dispatch_task`) requires `'static` / `Send` bounds
-/// (`'a: 'static`, `Timer: Send + Sync`, `Sp: Send + Sync + 'static`,
-/// `SpawnDocSync`) that the rest of the sync surface does not. Every real
-/// deployment uses a `'static` `Subduction`, so this is not a practical
-/// restriction.
+// The listener loop lives in its own `impl` block because spawning each
+// inbound handler (`Async::dispatch_task`) requires `'static` / `Send` bounds
+// (`'a: 'static`, `Timer: Send + Sync`, `Sp: Send + Sync + 'static`,
+// `SpawnDocSync`) that the rest of the sync surface does not. Every real
+// deployment uses a `'static` `Subduction`, so this is not a practical
+// restriction.
 impl<
     'a,
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
@@ -3593,10 +3593,13 @@ where
     }
 }
 
-/// Multi-document cold-start fan-out. Separated into its own `impl` block so
-/// the extra spawn-related bounds (`SpawnDocSync`, `Timer: Send + Sync`,
-/// `Async: 'static`) constrain only `full_sync_with_peer` and not the rest of
-/// the sync surface.
+// Multi-document cold-start fan-out. Separated into its own `impl` block so the
+// extra spawn-related bounds — `SpawnDocSync`, `Timer: Send + Sync`,
+// `Sp: Send + Sync + 'static`, `Hdl: RemoteHeadsNotifier`, and `'a: 'static` —
+// constrain only `full_sync_with_peer` and not the rest of the sync surface.
+// They are required to `Spawn` the per-document tasks as `'static` futures, and
+// narrow this method to `'static` `Subduction` instances (which every real
+// deployment is).
 impl<
     'a,
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
