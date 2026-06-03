@@ -142,6 +142,29 @@ in {
         description = "Interval in seconds for refreshing storage metrics from disk.";
       };
 
+      maxResidentTrees = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.unsigned;
+        default = null;
+        description = ''
+          Maximum number of sedimentrees kept resident in memory.
+
+          The in-memory sedimentree map is an LRU cache over disk storage:
+          when the resident set exceeds this many trees, the
+          least-recently-used ones are evicted and re-hydrated from disk on
+          next access. This bounds memory by the active working set rather
+          than the total number of documents ever synced.
+
+          When null (the default), the in-memory map is unbounded. Set this
+          on servers that sync large numbers of documents to cap memory and
+          avoid out-of-memory restarts.
+
+          Approximate, not a strict cap: the limit is enforced per shard, so
+          the effective ceiling is rounded up to a multiple of the shard
+          count (and is at least the shard count, 256). Values below 256
+          still permit up to ~256 resident trees.
+        '';
+      };
+
       keyhive = lib.mkOption {
         type = lib.types.bool;
         default = true;
@@ -281,6 +304,10 @@ in {
                   (toString cfg.server.metricsPort)
                   "--metrics-refresh-interval"
                   (toString cfg.server.metricsRefreshInterval)
+                ]
+                ++ lib.optionals (cfg.server.maxResidentTrees != null) [
+                  "--max-resident-trees"
+                  (toString cfg.server.maxResidentTrees)
                 ]
                 ++ lib.optionals (cfg.server.keySeed != null) ["--key-seed" cfg.server.keySeed]
                 ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]

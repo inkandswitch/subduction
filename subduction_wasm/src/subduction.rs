@@ -29,12 +29,12 @@ use sedimentree_core::{
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_core::{
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
-    sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
         Subduction,
@@ -90,6 +90,16 @@ use futures::{
 
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 pub(crate) const WASM_SHARD_COUNT: usize = 4;
+
+/// Default cap on the number of sedimentrees kept resident in memory in the
+/// browser.
+///
+/// The in-memory sedimentree map is an LRU cache over `IndexedDB`: cold trees
+/// are evicted and re-hydrated on demand. A browser tab has a far tighter
+/// memory budget (and a hard wasm32 address-space ceiling) than a server,
+/// so the default resident set is small. At a few tens of KiB of metadata
+/// per tree this is on the order of ~90 MiB resident.
+pub(crate) const WASM_DEFAULT_MAX_RESIDENT_TREES: usize = 1_024;
 
 /// A spawner that uses wasm-bindgen-futures to spawn local tasks.
 #[derive(Debug, Clone, Copy, Default)]
@@ -164,6 +174,11 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `max_resident_trees` - Optional cap on the number of sedimentrees kept
+    ///   resident in memory (default: 1024). The in-memory map is an LRU cache
+    ///   over `IndexedDB`; cold trees are evicted and re-hydrated on demand. The
+    ///   cap is per-shard-approximate, with an effective floor of
+    ///   `WASM_SHARD_COUNT` (4). `0` or omitted uses the default.
     /// * `policy` - Optional connection/storage authorization policy.
     ///   Defaults to allow-all.
     /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
@@ -182,6 +197,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        max_resident_trees: Option<usize>,
         policy: Option<JsPolicy>,
         ephemeral_policy: Option<JsEphemeralPolicy>,
         on_remote_heads: Option<js_sys::Function>,
@@ -198,12 +214,17 @@ impl WasmSubduction {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
+        // `None` or an explicit `0` falls back to the default cap.
+        let max_resident = match max_resident_trees {
+            Some(n) if n > 0 => n,
+            _ => WASM_DEFAULT_MAX_RESIDENT_TREES,
+        };
 
         let policy = policy.unwrap_or_else(make_open_policy);
 
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let sedimentrees = Arc::new(ShardedMap::new());
+        let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
         let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
         let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
 
@@ -305,6 +326,11 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `max_resident_trees` - Optional cap on the number of sedimentrees kept
+    ///   resident in memory (default: 1024). The in-memory map is an LRU cache
+    ///   over `IndexedDB`; cold trees are evicted and re-hydrated on demand. The
+    ///   cap is per-shard-approximate, with an effective floor of
+    ///   `WASM_SHARD_COUNT` (4). `0` or omitted uses the default.
     /// * `policy` - Optional connection/storage authorization policy.
     ///   Defaults to allow-all.
     /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
@@ -326,6 +352,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        max_resident_trees: Option<usize>,
         policy: Option<JsPolicy>,
         ephemeral_policy: Option<JsEphemeralPolicy>,
         on_remote_heads: Option<js_sys::Function>,
@@ -344,6 +371,11 @@ impl WasmSubduction {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
+        // `None` or an explicit `0` falls back to the default cap.
+        let max_resident = match max_resident_trees {
+            Some(n) if n > 0 => n,
+            _ => WASM_DEFAULT_MAX_RESIDENT_TREES,
+        };
 
         // Load sedimentree IDs from raw storage before wrapping in powerbox
         let ids: Set<SedimentreeId> = storage
@@ -357,7 +389,7 @@ impl WasmSubduction {
         // for each ID are independent and can overlap their IndexedDB reads.
         // Within each sedimentree, commits and fragments are loaded in
         // parallel via `try_join`.
-        let sedimentrees = Arc::new(ShardedMap::new());
+        let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
         let loaded: Vec<_> = futures::future::try_join_all(ids.iter().map(|&id| {
             let storage = &storage;
             async move {
@@ -390,7 +422,7 @@ impl WasmSubduction {
         }))
         .await?;
 
-        // Merge + minimize sequentially (ShardedMap access is &mut per entry).
+        // Merge + minimize sequentially (BoundedShardedMap access is per entry).
         for (id, sedimentree) in loaded {
             sedimentrees
                 .with_entry_or_default(id, |tree: &mut MinimizedSedimentree| {

@@ -127,6 +127,21 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
     pub(crate) metrics_refresh_interval: u64,
 
+    /// Approximate maximum number of sedimentrees kept resident in memory.
+    ///
+    /// The in-memory sedimentree map is an LRU cache over disk storage:
+    /// when the resident set exceeds this many trees, the least-recently-
+    /// used ones are evicted and re-hydrated from disk on next access. This
+    /// bounds memory by the active working set rather than the total number
+    /// of documents ever synced. When unset, the map is unbounded.
+    ///
+    /// This is approximate, not a strict cap: the limit is enforced per
+    /// shard, so the effective ceiling is rounded up to a multiple of the
+    /// shard count and is at least the shard count itself (256). Setting a
+    /// value below 256 still permits up to ~256 resident trees.
+    #[arg(long, value_name = "MAX_RESIDENT_TREES")]
+    pub(crate) max_resident_trees: Option<usize>,
+
     /// Enable the WebSocket transport
     #[arg(long, default_value_t = true)]
     pub(crate) websocket: bool,
@@ -306,6 +321,13 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .storage(storage, storage_policy)
         .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout);
+
+    let builder = if let Some(max) = args.max_resident_trees {
+        tracing::info!("bounding in-memory sedimentree cache to {max} resident trees");
+        builder.max_resident_trees(max)
+    } else {
+        builder
+    };
 
     let builder = if let Some(id) = discovery_id {
         builder.discovery_id(id)

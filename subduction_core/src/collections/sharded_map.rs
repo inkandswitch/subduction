@@ -358,60 +358,78 @@ mod tests {
     mod proptests {
         use super::*;
 
+        const N: usize = 16;
+
+        /// `shard_index` is a deterministic, in-range function of the key:
+        /// the same key always maps to the same shard `< N`, and equal keys
+        /// are never split across shards (the invariant `get_shard_containing`
+        /// relies on for correctness — a key must always find its own entry).
+        ///
+        /// The `< N` bound is a real regression guard, not a tautology: a
+        /// bug that masked with the wrong width, used `as usize` truncation,
+        /// or forgot the modulo would produce an out-of-range index and panic
+        /// the indexing in `get_shard_containing`.
         #[test]
-        fn prop_shard_distribution_uses_multiple_shards() {
+        fn prop_shard_index_is_deterministic_and_in_range() {
             bolero::check!()
-                .with_arbitrary::<(u64, u64, [u8; 32], [u8; 32], [u8; 32], [u8; 32])>()
-                .for_each(|(key0, key1, id0, id1, id2, id3)| {
-                    let map: ShardedMap<SedimentreeId, (), 16> = ShardedMap::with_key(*key0, *key1);
+                .with_arbitrary::<(u64, u64, [u8; 32])>()
+                .for_each(|(key0, key1, id_bytes)| {
+                    let map: ShardedMap<SedimentreeId, (), N> = ShardedMap::with_key(*key0, *key1);
+                    let id = SedimentreeId::new(*id_bytes);
 
-                    // With 4 random IDs into 16 shards, we should usually see multiple shards used
-                    let ids = [
-                        SedimentreeId::new(*id0),
-                        SedimentreeId::new(*id1),
-                        SedimentreeId::new(*id2),
-                        SedimentreeId::new(*id3),
-                    ];
+                    let first = map.shard_index(&id);
+                    assert!(first < N, "shard index {first} out of range for N={N}");
 
-                    let mut shards_used = BTreeSet::new();
-                    for id in &ids {
-                        shards_used.insert(map.shard_index(id));
-                    }
+                    // Deterministic: repeated lookups of the same key agree,
+                    // and a freshly constructed map with the same keys agrees.
+                    assert_eq!(first, map.shard_index(&id), "shard_index not deterministic");
+                    let map2: ShardedMap<SedimentreeId, (), N> = ShardedMap::with_key(*key0, *key1);
+                    assert_eq!(
+                        first,
+                        map2.shard_index(&id),
+                        "shard_index differs across maps built with identical keys"
+                    );
 
-                    // At minimum, not all IDs should hash to the same shard (except in rare cases)
-                    // This is a probabilistic test - with 4 items and 16 shards, probability of
-                    // all same shard is (1/16)^3 ≈ 0.02%, so this should almost always pass
-                    // We're just checking basic sanity that hashing works
-                    assert!(!shards_used.is_empty(), "at least one shard should be used");
+                    // Equal keys are never split across shards.
+                    let id_eq = SedimentreeId::new(*id_bytes);
+                    assert_eq!(
+                        first,
+                        map.shard_index(&id_eq),
+                        "equal keys must map to the same shard"
+                    );
                 });
         }
 
+        /// Over a large batch of distinct keys the hasher must spread them
+        /// across more than one shard. This is the *real* property the
+        /// original "uses multiple shards" test was reaching for: a
+        /// degenerate `shard_index` that returned a constant (defeating the
+        /// whole point of sharding) would collapse every key into one shard
+        /// and fail here, whereas the old `!is_empty()` assertion could not
+        /// detect that.
+        ///
+        /// With 64 distinct keys over 16 shards, all-collisions has
+        /// probability `(1/16)^63`, so a single shard means a real bug, not
+        /// bad luck.
         #[test]
-        fn prop_different_keys_give_different_shard_indices() {
+        fn prop_distinct_keys_spread_across_shards() {
             bolero::check!()
-                .with_arbitrary::<(u64, u64, u64, u64, [u8; 32])>()
-                .for_each(|(key0a, key1a, key0b, key1b, id_bytes)| {
-                    // Skip if keys are the same
-                    if *key0a == *key0b && *key1a == *key1b {
-                        return;
+                .with_arbitrary::<(u64, u64)>()
+                .for_each(|(key0, key1)| {
+                    let map: ShardedMap<SedimentreeId, (), N> = ShardedMap::with_key(*key0, *key1);
+
+                    let mut shards_used = BTreeSet::new();
+                    for n in 0..64u32 {
+                        let mut bytes = [0u8; 32];
+                        bytes[..4].copy_from_slice(&n.to_le_bytes());
+                        shards_used.insert(map.shard_index(&SedimentreeId::new(bytes)));
                     }
 
-                    let map_a: ShardedMap<SedimentreeId, (), 256> =
-                        ShardedMap::with_key(*key0a, *key1a);
-                    let map_b: ShardedMap<SedimentreeId, (), 256> =
-                        ShardedMap::with_key(*key0b, *key1b);
-
-                    let id = SedimentreeId::new(*id_bytes);
-
-                    let idx_a = map_a.shard_index(&id);
-                    let idx_b = map_b.shard_index(&id);
-
-                    // Both should be valid shard indices
-                    assert!(idx_a < 256);
-                    assert!(idx_b < 256);
-
-                    // Note: we don't assert they're different because with 256 shards
-                    // there's a 1/256 chance of collision even with different keys
+                    assert!(
+                        shards_used.len() > 1,
+                        "64 distinct keys collapsed into a single shard ({shards_used:?}); \
+                         shard_index is degenerate"
+                    );
                 });
         }
     }

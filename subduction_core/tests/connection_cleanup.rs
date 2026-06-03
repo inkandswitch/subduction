@@ -10,12 +10,14 @@ use sedimentree_core::{
     id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
-    connection::test_utils::{FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer},
+    collections::bounded_sharded_map::BoundedShardedMap,
+    connection::test_utils::{
+        FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
+    },
     handler::sync::SyncHandler,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
     subduction::{
         Subduction,
@@ -42,7 +44,7 @@ fn make_fragment_parts() -> (CommitId, BTreeSet<CommitId>, Vec<CommitId>, Blob) 
 
 #[tokio::test]
 async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
@@ -101,7 +103,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
 
 #[tokio::test]
 async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResult {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
@@ -166,7 +168,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
 
 #[tokio::test]
 async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResult {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
@@ -225,7 +227,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
 
 #[tokio::test]
 async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));

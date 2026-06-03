@@ -19,15 +19,15 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    sedimentree::minimized::MinimizedSedimentree,
+    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
 use crate::{
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{Connection, message::SyncDiff},
     peer::id::PeerId,
     policy::storage::StoragePolicy,
-    sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
 };
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
@@ -47,7 +47,7 @@ pub(crate) async fn recv_batch_sync_response<
     Auth: StoragePolicy<Async>,
     const SHARDS: usize,
 >(
-    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     storage: &StoragePowerbox<Store, Auth>,
     from: &PeerId,
     id: SedimentreeId,
@@ -187,15 +187,26 @@ pub(crate) async fn recv_batch_sync_response<
             .await
             .map_err(IoError::Storage)?;
 
+        let local_access = storage.hydration_access();
         for commit in commit_payloads {
             sedimentrees
-                .with_entry_or_default(id, |tree| tree.add_commit(commit))
-                .await;
+                .with_entry_hydrated(
+                    id,
+                    || load_tree::<Async, _>(&local_access, id),
+                    |tree| tree.add_commit(commit),
+                )
+                .await
+                .map_err(IoError::Storage)?;
         }
         for fragment in fragment_payloads {
             sedimentrees
-                .with_entry_or_default(id, |tree| tree.add_fragment(fragment))
-                .await;
+                .with_entry_hydrated(
+                    id,
+                    || load_tree::<Async, _>(&local_access, id),
+                    |tree| tree.add_fragment(fragment),
+                )
+                .await
+                .map_err(IoError::Storage)?;
         }
     }
 
@@ -212,21 +223,50 @@ pub(crate) async fn insert_commit_locally<
     Store: Storage<Async>,
     const SHARDS: usize,
 >(
-    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
 ) -> Result<bool, Store::Error> {
     let id = putter.sedimentree_id();
     let commit = verified_meta.payload().clone();
+    let head = commit.head();
 
     tracing::debug!("inserting commit {:?} locally", Digest::hash(&commit));
 
     putter.save_sedimentree_id().await?;
+
+    // Newness ("was this commit not already known?") is judged against the
+    // tree state *before* persisting. Read it from the resident cache, or
+    // hydrate-on-miss — both reflect pre-save state (we save below). This is
+    // O(1) on the resident hot path (no storage scan) and leaves the tree
+    // resident so the add is a cheap hit. A `None` (tree not in storage)
+    // means a brand-new tree, so the commit is necessarily new.
+    let was_added = sedimentrees
+        .with_hydrated_ref(
+            id,
+            || load_tree_via_putter::<Async, _>(putter),
+            |tree| !tree.has_loose_commit(head),
+        )
+        .await?
+        .unwrap_or(true);
+
+    // Persist before the in-RAM mutation (storage is the source of truth;
+    // the map is a cache that re-hydrates from it).
     putter.save_commit(verified_meta).await?;
 
-    let was_added = sedimentrees
-        .with_entry_or_default(id, |tree| tree.add_commit(commit))
-        .await;
+    // Apply to the in-RAM tree, hydrating on a miss in case it was evicted
+    // between the read above and here. On that (rare) miss the loader reloads
+    // post-save state — which already contains the commit — so `add_commit`
+    // is a harmless no-op and the resident tree is the full, correct history.
+    sedimentrees
+        .with_entry_hydrated(
+            id,
+            || load_tree_via_putter::<Async, _>(putter),
+            |tree| {
+                tree.add_commit(commit);
+            },
+        )
+        .await?;
 
     Ok(was_added)
 }
@@ -239,19 +279,38 @@ pub(crate) async fn insert_fragment_locally<
     Store: Storage<Async>,
     const SHARDS: usize,
 >(
-    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
 ) -> Result<bool, Store::Error> {
     let id = putter.sedimentree_id();
     let fragment = verified_meta.payload().clone();
+    let head = fragment.head();
 
     putter.save_sedimentree_id().await?;
+
+    // Newness from pre-save tree state (resident or hydrated); see
+    // `insert_commit_locally`.
+    let was_added = sedimentrees
+        .with_hydrated_ref(
+            id,
+            || load_tree_via_putter::<Async, _>(putter),
+            |tree| !tree.has_fragment(head),
+        )
+        .await?
+        .unwrap_or(true);
+
     putter.save_fragment(verified_meta).await?;
 
-    let was_added = sedimentrees
-        .with_entry_or_default(id, |tree| tree.add_fragment(fragment))
-        .await;
+    sedimentrees
+        .with_entry_hydrated(
+            id,
+            || load_tree_via_putter::<Async, _>(putter),
+            |tree| {
+                tree.add_fragment(fragment);
+            },
+        )
+        .await?;
 
     Ok(was_added)
 }
@@ -261,7 +320,7 @@ pub(crate) async fn insert_fragment_locally<
 /// Prunes dominated fragments and loose commits covered by fragments,
 /// keeping only the minimal covering set. Storage retains the full history.
 pub(crate) async fn minimize_tree<Metric: DepthMetric, const SHARDS: usize>(
-    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     depth_metric: &Metric,
     id: SedimentreeId,
 ) {
@@ -270,6 +329,165 @@ pub(crate) async fn minimize_tree<Metric: DepthMetric, const SHARDS: usize>(
             tree.ensure_minimized(depth_metric);
         })
         .await;
+}
+
+/// Get a sedimentree from the in-memory cache, hydrating it from durable
+/// storage on a miss.
+///
+/// This is the single read entry point that makes the in-memory
+/// [`BoundedShardedMap`] safe to evict: every reader that needs the *full*
+/// tree state must go through here so an evicted (or never-resident) tree is
+/// transparently reloaded from storage rather than silently seen as empty.
+///
+/// # Deadlock safety
+///
+/// Hydration loads from storage (an `.await` that, on Wasm, is an async
+/// `IndexedDB` transaction) **without holding any shard lock**. Only after
+/// the load completes does it briefly lock the shard to install the tree.
+/// Never hold the shard mutex across the storage await.
+///
+/// # Concurrency
+///
+/// Concurrent misses for the same id each load independently (a bounded,
+/// self-correcting "thundering herd"); the first to install wins and the
+/// rest are dropped — correct because all loads read the same durable
+/// source. Single-flight de-duplication is intentionally not implemented.
+///
+/// Returns `None` only when the tree does not exist. Existence is recorded
+/// by the sedimentree-id index, *not* by having commits/fragments: a tree
+/// may be registered while empty (e.g. an `add_sedimentree` of an empty
+/// tree), in which case this returns `Some(empty tree)`. A miss with no
+/// stored data therefore consults the id index to distinguish "registered
+/// but empty" (→ `Some`) from "never stored" (→ `None`).
+pub(crate) async fn get_or_hydrate<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>(
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    storage: &StoragePowerbox<Store, Auth>,
+    depth_metric: &Metric,
+    id: SedimentreeId,
+) -> Result<Option<Sedimentree>, Store::Error> {
+    // Fast path: resident hit (also records an LRU access). Minimize in place
+    // first if dirty so callers that feed the wire (fingerprint summaries /
+    // resolvers) always observe the minimal form.
+    if let Some(tree) = sedimentrees
+        .with_entry(&id, |tree| tree.minimized(depth_metric).clone())
+        .await
+    {
+        tracing::trace!("sedimentree {id:?} cache hit");
+        return Ok(Some(tree));
+    }
+
+    // Miss: load full history from storage with NO shard lock held.
+    tracing::debug!("sedimentree {id:?} cache miss; hydrating from storage");
+    let local_access = storage.hydration_access();
+    let loose_commits: Vec<LooseCommit> = local_access
+        .load_loose_commits::<Async>(id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.payload().clone())
+        .collect();
+    let fragments: Vec<Fragment> = local_access
+        .load_fragments::<Async>(id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.payload().clone())
+        .collect();
+
+    // Existence is recorded by the sedimentree-id index, not by having
+    // commits/fragments: a tree can be registered while empty (e.g. an
+    // `add_sedimentree` of an empty tree). If the tree has no data, consult
+    // the index to distinguish "registered but empty" from "nonexistent".
+    if loose_commits.is_empty() && fragments.is_empty() {
+        let known = local_access.load_all_sedimentree_ids::<Async>().await?;
+        if known.contains(&id) {
+            tracing::trace!("sedimentree {id:?} registered but empty");
+            return Ok(Some(Sedimentree::default()));
+        }
+        tracing::trace!("sedimentree {id:?} not found in storage");
+        return Ok(None);
+    }
+
+    let hydrated = Sedimentree::new(fragments, loose_commits).minimize(depth_metric);
+
+    // Install (or adopt a concurrently-installed value). Enforces the LRU
+    // cap; the lock is only taken now, after the await above. The tree is
+    // already minimal, so wrap it clean.
+    sedimentrees
+        .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(hydrated.clone()))
+        .await;
+    Ok(Some(hydrated))
+}
+
+/// Reconstruct a sedimentree's full history directly from storage.
+///
+/// Returns `Ok(None)` if storage holds no commits and no fragments for `id`
+/// (a brand-new or empty tree); otherwise the rebuilt tree. Used as the
+/// hydrate-on-miss loader for the write paths so a mutation applied to an
+/// evicted tree starts from its complete durable state, not an empty
+/// default.
+///
+/// The tree is **not** minimized here: the write paths re-minimize after
+/// their mutation (or minimization happens lazily on read), so minimizing
+/// in the loader would be redundant — which is why no [`DepthMetric`] is
+/// needed.
+pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
+    access: &crate::storage::local_access::LocalStorageAccess<Store>,
+    id: SedimentreeId,
+) -> Result<Option<MinimizedSedimentree>, Store::Error> {
+    let loose_commits: Vec<LooseCommit> = access
+        .load_loose_commits::<Async>(id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.payload().clone())
+        .collect();
+    let fragments: Vec<Fragment> = access
+        .load_fragments::<Async>(id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.payload().clone())
+        .collect();
+
+    if loose_commits.is_empty() && fragments.is_empty() {
+        return Ok(None);
+    }
+    // Full history, not yet minimized: wrap dirty so the next read minimizes.
+    Ok(Some(MinimizedSedimentree::new(Sedimentree::new(
+        fragments,
+        loose_commits,
+    ))))
+}
+
+/// Like [`load_tree`], but loads via a [`Putter`] (used by the local insert
+/// paths, which already hold a putter scoped to the tree).
+async fn load_tree_via_putter<Async: FutureForm, Store: Storage<Async>>(
+    putter: &Putter<Async, Store>,
+) -> Result<Option<MinimizedSedimentree>, Store::Error> {
+    let loose_commits: Vec<LooseCommit> = putter
+        .load_loose_commits()
+        .await?
+        .into_iter()
+        .map(|vm| vm.payload().clone())
+        .collect();
+    let fragments: Vec<Fragment> = putter
+        .load_fragments()
+        .await?
+        .into_iter()
+        .map(|vm| vm.payload().clone())
+        .collect();
+
+    if loose_commits.is_empty() && fragments.is_empty() {
+        return Ok(None);
+    }
+    // Full history, not yet minimized: wrap dirty so the next read minimizes.
+    Ok(Some(MinimizedSedimentree::new(Sedimentree::new(
+        fragments,
+        loose_commits,
+    ))))
 }
 
 /// Look up a blob from local storage by its digest.

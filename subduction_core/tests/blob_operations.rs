@@ -16,6 +16,7 @@ use sedimentree_core::{
     id::SedimentreeId,
 };
 use subduction_core::{
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
         message::SyncMessage,
         test_utils::{
@@ -26,7 +27,6 @@ use subduction_core::{
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
     subduction::{
         Subduction,
@@ -84,7 +84,7 @@ fn new_dispatch_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));

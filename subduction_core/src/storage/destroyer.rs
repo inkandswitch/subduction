@@ -78,6 +78,17 @@ impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
     pub fn delete_fragments(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.delete_fragments(self.sedimentree_id)
     }
+
+    /// Remove this sedimentree's id from the durable id index.
+    ///
+    /// Existence is tracked by the id index independently of having
+    /// commits/fragments, so removing a tree must delete its id (not just
+    /// its data) for it to disappear from
+    /// [`load_all_sedimentree_ids`](crate::storage::traits::Storage::load_all_sedimentree_ids).
+    #[must_use]
+    pub fn delete_sedimentree_id(&self) -> Async::Future<'_, Result<(), Store::Error>> {
+        self.storage.delete_sedimentree_id(self.sedimentree_id)
+    }
 }
 
 impl<Async: FutureForm, Store: Storage<Async>> Clone for Destroyer<Async, Store> {
