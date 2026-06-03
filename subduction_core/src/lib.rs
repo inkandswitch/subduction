@@ -96,6 +96,7 @@ pub mod authenticated;
 pub mod connection;
 pub mod handler;
 pub mod handshake;
+pub mod minimized_sedimentree;
 pub mod multiplexer;
 pub mod nonce_cache;
 pub mod peer;

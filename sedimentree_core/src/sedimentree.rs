@@ -3,7 +3,6 @@
 mod commit_dag;
 
 use alloc::{
-    boxed::Box,
     collections::{BTreeSet, VecDeque},
     vec,
     vec::Vec,
@@ -192,78 +191,20 @@ pub struct Diff<'a> {
     pub right_missing_commits: Vec<&'a LooseCommit>,
 }
 
+/// The heads that survive minimization, computed once and consumed by both
+/// [`Sedimentree::minimize`] (rebuild) and [`Sedimentree::minimize_in_place`]
+/// (retain). See [`Sedimentree::keep_sets`].
+struct KeepSets {
+    fragment_heads: Set<CommitId>,
+    commit_heads: Set<CommitId>,
+}
+
 /// All of the Sedimentree metadata about all the fragments for a series of payload.
-///
-/// # Minimal-form cache
-///
-/// A [`Sedimentree`] memoizes the result of [`minimize`](Self::minimize) in the
-/// private `minimal` field. The cache is an *ephemeral derived value*: it is
-/// **not** part of the tree's identity. Two trees with equal `fragments` +
-/// `commits` compare equal, order equal, and hash equal regardless of whether
-/// either has a populated cache. This is why the equality / ordering / hashing
-/// trait impls below are hand-written to consider only `fragments` and
-/// `commits`, and why [`Clone`] does not copy the cache (a clone may be mutated
-/// independently, which would leave it with a stale memo).
-///
-/// Any mutation of `fragments` / `commits` must call
-/// [`invalidate_minimal`](Self::invalidate_minimal).
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
 pub struct Sedimentree {
     fragments: Map<CommitId, Fragment>,
     commits: Map<CommitId, LooseCommit>,
-    /// Memoized minimal form. `None` = dirty / not yet computed. Ephemeral:
-    /// excluded from [`Sedimentree`]'s identity (see type docs).
-    minimal: Option<Box<Sedimentree>>,
-}
-
-impl Clone for Sedimentree {
-    /// Clones the tree contents but **not** the minimal-form cache: the clone
-    /// starts dirty so an independent mutation cannot leave a stale memo.
-    fn clone(&self) -> Self {
-        Self {
-            fragments: self.fragments.clone(),
-            commits: self.commits.clone(),
-            minimal: None,
-        }
-    }
-}
-
-impl PartialEq for Sedimentree {
-    /// Equality is defined solely by tree contents; the ephemeral minimal-form
-    /// cache is not part of a tree's identity.
-    fn eq(&self, other: &Self) -> bool {
-        self.fragments == other.fragments && self.commits == other.commits
-    }
-}
-
-impl Eq for Sedimentree {}
-
-#[cfg(not(feature = "std"))]
-impl PartialOrd for Sedimentree {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[cfg(not(feature = "std"))]
-impl Ord for Sedimentree {
-    /// Ordering considers only tree contents (the minimal-form cache is
-    /// ephemeral and excluded from identity).
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.fragments
-            .cmp(&other.fragments)
-            .then_with(|| self.commits.cmp(&other.commits))
-    }
-}
-
-#[cfg(not(feature = "std"))]
-impl core::hash::Hash for Sedimentree {
-    /// Hashes only tree contents so equal trees hash equally regardless of
-    /// cache state (consistent with [`PartialEq`]).
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        self.fragments.hash(state);
-        self.commits.hash(state);
-    }
 }
 
 impl Sedimentree {
@@ -287,15 +228,7 @@ impl Sedimentree {
         Self {
             fragments: fragment_map,
             commits: commit_map,
-            minimal: None,
         }
-    }
-
-    /// Drop the memoized minimal form. Must be called after any mutation of
-    /// `fragments` / `commits` so a later read recomputes rather than serving
-    /// a stale memo.
-    fn invalidate_minimal(&mut self) {
-        self.minimal = None;
     }
 
     /// Merge another [`Sedimentree`] into this one.
@@ -306,12 +239,11 @@ impl Sedimentree {
         for (id, c) in other.commits {
             insert_or_tiebreak(&mut self.commits, id, c);
         }
-        self.invalidate_minimal();
     }
 
     /// The minimal ordered hash of this [`Sedimentree`].
     #[must_use]
-    pub fn minimal_hash<M: DepthMetric>(&mut self, depth_metric: &M) -> MinimalTreeHash {
+    pub fn minimal_hash<M: DepthMetric>(&self, depth_metric: &M) -> MinimalTreeHash {
         let minimal = self.minimize(depth_metric);
 
         // Hash causal identities (head, boundary, commit heads)
@@ -344,7 +276,7 @@ impl Sedimentree {
     /// Returns `true` if the commit was not already present
     pub fn add_commit(&mut self, commit: LooseCommit) -> bool {
         let id = commit.head();
-        let inserted = match self.commits.entry(id) {
+        match self.commits.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(commit);
                 true
@@ -355,9 +287,7 @@ impl Sedimentree {
                 }
                 false
             }
-        };
-        self.invalidate_minimal();
-        inserted
+        }
     }
 
     /// Add a fragment to the [`Sedimentree`].
@@ -365,7 +295,7 @@ impl Sedimentree {
     /// Returns `true` if the fragment was not already present
     pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
         let id = fragment.head();
-        let inserted = match self.fragments.entry(id) {
+        match self.fragments.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(fragment);
                 true
@@ -376,9 +306,7 @@ impl Sedimentree {
                 }
                 false
             }
-        };
-        self.invalidate_minimal();
-        inserted
+        }
     }
 
     /// Compute the difference between two local [`Sedimentree`]s.
@@ -442,7 +370,7 @@ impl Sedimentree {
     /// Returns true if this [`Sedimentree`] has a fragment starting with the given digest.
     #[must_use]
     pub fn has_fragment_starting_with<M: DepthMetric>(
-        &mut self,
+        &self,
         id: CommitId,
         depth_metric: &M,
     ) -> bool {
@@ -612,30 +540,60 @@ impl Sedimentree {
     /// In practice `|M|` is small (depth distribution is geometric in
     /// the metric) and the deepest-first sweep prunes early.
     #[must_use]
-    pub fn minimize<M: DepthMetric>(&mut self, depth_metric: &M) -> Sedimentree {
-        if let Some(cached) = self.minimal.as_deref() {
-            debug_assert_eq!(
-                *cached,
-                self.minimize_uncached(depth_metric),
-                "Sedimentree minimal cache served a stale result: a different \
-                 DepthMetric was used than the one that populated the cache. The \
-                 cache assumes all `minimize` calls on a given tree use the same \
-                 `depth_metric`."
-            );
-            return cached.clone();
-        }
+    pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
+        let KeepSets {
+            fragment_heads,
+            commit_heads,
+        } = self.keep_sets(depth_metric);
 
-        let minimized = self.minimize_uncached(depth_metric);
-        self.minimal = Some(Box::new(minimized.clone()));
-        minimized
+        let minimized_fragments: Vec<Fragment> = self
+            .fragments
+            .values()
+            .filter(|f| fragment_heads.contains(&f.head()))
+            .cloned()
+            .collect();
+
+        let commits: Vec<LooseCommit> = self
+            .commits
+            .values()
+            .filter(|c| commit_heads.contains(&c.head()))
+            .cloned()
+            .collect();
+
+        Sedimentree::new(minimized_fragments, commits)
     }
 
-    /// Compute the minimal form without consulting or populating the cache.
+    /// Minimize this [`Sedimentree`] **in place**, dropping dominated
+    /// fragments and covered loose commits without allocating a second tree.
     ///
-    /// This is the pure, deterministic implementation;
-    /// [`minimize`](Self::minimize) wraps it with memoization.
-    #[must_use]
-    fn minimize_uncached<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
+    /// This is the destructive counterpart to [`minimize`](Self::minimize):
+    /// where `minimize` returns a fresh minimal tree and leaves `self`
+    /// untouched, `minimize_in_place` mutates `self` to *become* its own
+    /// minimal form. The two are guaranteed to agree:
+    /// `{ let mut t = x.clone(); t.minimize_in_place(m); t } == x.minimize(m)`
+    /// for any tree `x` and metric `m` (both share [`keep_sets`](Self::keep_sets)).
+    ///
+    /// Prefer this over `*tree = tree.minimize(m)` at owner sites: it avoids
+    /// cloning every retained fragment/commit and rebuilding the maps.
+    pub fn minimize_in_place<M: DepthMetric>(&mut self, depth_metric: &M) {
+        let KeepSets {
+            fragment_heads,
+            commit_heads,
+        } = self.keep_sets(depth_metric);
+
+        self.fragments.retain(|head, _| fragment_heads.contains(head));
+        self.commits.retain(|head, _| commit_heads.contains(head));
+    }
+
+    /// Compute the set of fragment heads and commit heads that survive
+    /// minimization, without materializing either output representation.
+    ///
+    /// This is the single source of truth for minimization, shared by
+    /// [`minimize`](Self::minimize) (which rebuilds a fresh tree) and
+    /// [`minimize_in_place`](Self::minimize_in_place) (which `retain`s on the
+    /// existing maps). Keeping the keep-set computation in one place is what
+    /// guarantees the two stay byte-for-byte equivalent.
+    fn keep_sets<M: DepthMetric>(&self, depth_metric: &M) -> KeepSets {
         // Sort fragments by head bytes before grouping so the iteration
         // order is independent of the underlying `Map`'s. With the `std`
         // feature `Map = HashMap`, whose iteration order is hasher-state-
@@ -696,18 +654,17 @@ impl Sedimentree {
             }
         }
 
+        let fragment_heads: Set<CommitId> =
+            minimized_fragments.iter().map(Fragment::head).collect();
+
         // Prune loose commits whose ranges are covered by kept fragments.
         let dag = commit_dag::CommitDag::from_commits(self.commits.values());
-        let keepers = dag.simplify(&minimized_fragments, depth_metric);
+        let commit_heads = dag.simplify(&minimized_fragments, depth_metric);
 
-        let commits = self
-            .commits
-            .values()
-            .filter(|c| keepers.contains(&c.head()))
-            .cloned()
-            .collect();
-
-        Sedimentree::new(minimized_fragments, commits)
+        KeepSets {
+            fragment_heads,
+            commit_heads,
+        }
     }
 
     /// Collect all [`CommitId`]s reachable by walking backward through
@@ -961,7 +918,7 @@ impl Sedimentree {
     /// and which do not appear in the [`LooseCommit`] graph, plus the heads of
     /// the loose commit graph.
     #[must_use]
-    pub fn heads<M: DepthMetric>(&mut self, depth_metric: &M) -> Vec<CommitId> {
+    pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<CommitId> {
         let minimized = self.minimize(depth_metric);
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.values());
 
@@ -1038,12 +995,10 @@ pub enum CommitOrFragment {
 
 impl core::fmt::Debug for Sedimentree {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // The `minimal` cache field is an ephemeral implementation detail and
-        // is intentionally omitted (hence `finish_non_exhaustive`).
         f.debug_struct("Sedimentree")
             .field("fragments", &self.fragments.len())
             .field("commits", &self.commits.len())
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
@@ -1553,7 +1508,7 @@ mod tests {
                 .with_arbitrary::<Scenario>()
                 .for_each(|Scenario { commits }| {
                     let tree = Sedimentree::new(vec![], commits.clone());
-                    let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+                    let minimized = tree.minimize(&CountLeadingZeroBytes);
                     assert_eq!(tree, minimized);
                 });
         }
@@ -1577,8 +1532,8 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<ArbitraryDag>()
                 .for_each(|ArbitraryDag { tree }| {
-                    let once = tree.clone().minimize(&CountLeadingZeroBytes);
-                    let twice = once.clone().minimize(&CountLeadingZeroBytes);
+                    let once = tree.minimize(&CountLeadingZeroBytes);
+                    let twice = once.minimize(&CountLeadingZeroBytes);
                     assert_eq!(
                         once, twice,
                         "minimize on tree-with-fragments is not idempotent"
@@ -1682,7 +1637,7 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<Sedimentree>()
                 .for_each(|tree| {
-                    let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+                    let minimized = tree.minimize(&CountLeadingZeroBytes);
                     let input_set: Set<_> = tree.fragments().cloned().collect();
                     for fragment in minimized.fragments() {
                         assert!(
@@ -1698,7 +1653,7 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<Sedimentree>()
                 .for_each(|tree| {
-                    let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+                    let minimized = tree.minimize(&CountLeadingZeroBytes);
                     let fragments: Vec<_> = minimized.fragments().collect();
                     for (i, f1) in fragments.iter().enumerate() {
                         for (j, f2) in fragments.iter().enumerate() {
@@ -1718,8 +1673,8 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<Sedimentree>()
                 .for_each(|tree| {
-                    let once = tree.clone().minimize(&CountLeadingZeroBytes);
-                    let twice = once.clone().minimize(&CountLeadingZeroBytes);
+                    let once = tree.minimize(&CountLeadingZeroBytes);
+                    let twice = once.minimize(&CountLeadingZeroBytes);
 
                     let once_set: Set<_> = once.fragments().cloned().collect();
                     let twice_set: Set<_> = twice.fragments().cloned().collect();
@@ -1793,11 +1748,11 @@ mod tests {
                     .for_each(|(a, b)| {
                         let mut ab = a.clone();
                         ab.merge(b.clone());
-                        let min_ab = ab.clone().minimize(&CountLeadingZeroBytes);
+                        let min_ab = ab.minimize(&CountLeadingZeroBytes);
 
                         let mut ba = b.clone();
                         ba.merge(a.clone());
-                        let min_ba = ba.clone().minimize(&CountLeadingZeroBytes);
+                        let min_ba = ba.minimize(&CountLeadingZeroBytes);
 
                         assert_eq!(min_ab, min_ba, "minimize(a ∪ b) == minimize(b ∪ a)");
                     });
@@ -1808,12 +1763,12 @@ mod tests {
                 bolero::check!()
                     .with_arbitrary::<(Sedimentree, Sedimentree)>()
                     .for_each(|(a, b)| {
-                        let min_a = a.clone().minimize(&CountLeadingZeroBytes);
-                        let min_b = b.clone().minimize(&CountLeadingZeroBytes);
+                        let min_a = a.minimize(&CountLeadingZeroBytes);
+                        let min_b = b.minimize(&CountLeadingZeroBytes);
 
                         let mut merged = a.clone();
                         merged.merge(b.clone());
-                        let min_merged = merged.clone().minimize(&CountLeadingZeroBytes);
+                        let min_merged = merged.minimize(&CountLeadingZeroBytes);
 
                         // Every commit in minimize(a) must appear in minimize(a ∪ b)
                         // OR be covered by a fragment in minimize(a ∪ b)
@@ -1954,7 +1909,7 @@ mod tests {
                     .with_arbitrary::<Sedimentree>()
                     .for_each(|tree| {
                         if tree.loose_commits().count() > 0 {
-                            let heads = tree.clone().heads(&CountLeadingZeroBytes);
+                            let heads = tree.heads(&CountLeadingZeroBytes);
                             assert!(
                                 !heads.is_empty(),
                                 "a sedimentree with loose commits must have at least one head"
@@ -1968,7 +1923,7 @@ mod tests {
                 bolero::check!()
                     .with_arbitrary::<Sedimentree>()
                     .for_each(|tree| {
-                        let heads = tree.clone().heads(&CountLeadingZeroBytes);
+                        let heads = tree.heads(&CountLeadingZeroBytes);
                         if tree.loose_commits().count() == 0 && tree.fragments().count() == 0 {
                             assert!(heads.is_empty(), "an empty tree must have no heads");
                         }
@@ -1980,7 +1935,7 @@ mod tests {
                 bolero::check!()
                     .with_arbitrary::<Sedimentree>()
                     .for_each(|tree| {
-                        let heads = tree.clone().heads(&CountLeadingZeroBytes);
+                        let heads = tree.heads(&CountLeadingZeroBytes);
                         let unique: Set<_> = heads.iter().collect();
                         assert_eq!(
                             heads.len(),
@@ -1995,9 +1950,9 @@ mod tests {
                 bolero::check!()
                     .with_arbitrary::<Sedimentree>()
                     .for_each(|tree| {
-                        let heads_before = tree.clone().heads(&CountLeadingZeroBytes);
-                        let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
-                        let heads_after = minimized.clone().heads(&CountLeadingZeroBytes);
+                        let heads_before = tree.heads(&CountLeadingZeroBytes);
+                        let minimized = tree.minimize(&CountLeadingZeroBytes);
+                        let heads_after = minimized.heads(&CountLeadingZeroBytes);
 
                         let before_set: Set<_> = heads_before.into_iter().collect();
                         let after_set: Set<_> = heads_after.into_iter().collect();
@@ -2017,9 +1972,9 @@ mod tests {
                 bolero::check!()
                     .with_arbitrary::<(Sedimentree, LooseCommit)>()
                     .for_each(|(tree, commit)| {
-                        let mut minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+                        let mut minimized = tree.minimize(&CountLeadingZeroBytes);
                         minimized.add_commit(commit.clone());
-                        let re_minimized = minimized.clone().minimize(&CountLeadingZeroBytes);
+                        let re_minimized = minimized.minimize(&CountLeadingZeroBytes);
 
                         // minimize invariants hold
                         let frags: Vec<_> = re_minimized.fragments().collect();
@@ -2035,7 +1990,7 @@ mod tests {
                         }
 
                         // re-minimizing again is idempotent
-                        let triple = re_minimized.clone().minimize(&CountLeadingZeroBytes);
+                        let triple = re_minimized.minimize(&CountLeadingZeroBytes);
                         assert_eq!(
                             re_minimized, triple,
                             "minimize must be idempotent after add_commit"
@@ -2048,9 +2003,9 @@ mod tests {
                 bolero::check!()
                     .with_arbitrary::<(Sedimentree, Fragment)>()
                     .for_each(|(tree, fragment)| {
-                        let mut minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+                        let mut minimized = tree.minimize(&CountLeadingZeroBytes);
                         minimized.add_fragment(fragment.clone());
-                        let re_minimized = minimized.clone().minimize(&CountLeadingZeroBytes);
+                        let re_minimized = minimized.minimize(&CountLeadingZeroBytes);
 
                         let frags: Vec<_> = re_minimized.fragments().collect();
                         for (i, f1) in frags.iter().enumerate() {
@@ -2064,7 +2019,7 @@ mod tests {
                             }
                         }
 
-                        let triple = re_minimized.clone().minimize(&CountLeadingZeroBytes);
+                        let triple = re_minimized.minimize(&CountLeadingZeroBytes);
                         assert_eq!(
                             re_minimized, triple,
                             "minimize must be idempotent after add_fragment"
@@ -2128,8 +2083,8 @@ mod tests {
                             b_patched.add_commit(c.clone());
                         }
 
-                        let min_a = a_patched.clone().minimize(&CountLeadingZeroBytes);
-                        let min_b = b_patched.clone().minimize(&CountLeadingZeroBytes);
+                        let min_a = a_patched.minimize(&CountLeadingZeroBytes);
+                        let min_b = b_patched.minimize(&CountLeadingZeroBytes);
 
                         assert_eq!(
                             min_a, min_b,
@@ -2243,7 +2198,7 @@ mod tests {
         #[test]
         fn minimize_empty_sedimentree() {
             let tree = Sedimentree::new(vec![], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert_eq!(minimized.fragments().count(), 0);
             assert_eq!(minimized.loose_commits().count(), 0);
@@ -2255,7 +2210,7 @@ mod tests {
             let fragment = make_fragment_at_depth(2, 1, BTreeSet::from([boundary_digest]), &[]);
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
 
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
             assert_eq!(fragments.len(), 1);
@@ -2285,7 +2240,7 @@ mod tests {
                 vec![deep_fragment.clone(), shallow_fragment.clone()],
                 vec![],
             );
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
             // Only deep fragment should remain
@@ -2304,7 +2259,7 @@ mod tests {
             let fragment2 = make_fragment_at_depth(2, 2, BTreeSet::from([boundary2]), &[]);
 
             let tree = Sedimentree::new(vec![fragment1.clone(), fragment2.clone()], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
             // Both should remain (neither supports the other)
@@ -2324,7 +2279,7 @@ mod tests {
                 .collect();
 
             let tree = Sedimentree::new(input_fragments.clone(), vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
             // All should remain (same depth, can't support each other)
@@ -2356,7 +2311,7 @@ mod tests {
                 vec![deep_fragment.clone(), shallow_fragment.clone()],
                 vec![],
             );
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
             // Both should remain (deep doesn't fully support shallow)
@@ -2389,7 +2344,7 @@ mod tests {
 
             let tree =
                 Sedimentree::new(vec![deep1.clone(), deep2.clone(), shallow.clone()], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
             assert_eq!(fragments.len(), 3);
@@ -2411,7 +2366,7 @@ mod tests {
             let shallow = make_fragment_at_depth(2, 10, BTreeSet::from([shallow_boundary]), &[]);
 
             let tree = Sedimentree::new(vec![deep.clone(), shallow.clone()], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
             let fragments = collect_fragments(&minimized);
 
             // Both should remain (no overlap)
@@ -2430,7 +2385,7 @@ mod tests {
             let fragment = make_fragment_at_depth(2, 1, BTreeSet::from([boundary]), &[]);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert_eq!(minimized.fragments().count(), 1);
         }
@@ -2443,7 +2398,7 @@ mod tests {
             let fragment = Fragment::new(sedimentree_id, head, BTreeSet::new(), &[], blob_meta);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert_eq!(minimized.fragments().count(), 1);
         }
@@ -2458,7 +2413,7 @@ mod tests {
                 Fragment::new(sedimentree_id, head, BTreeSet::from([head]), &[], blob_meta);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             // Should still work
             assert_eq!(minimized.fragments().count(), 1);
@@ -2480,214 +2435,9 @@ mod tests {
             );
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert_eq!(minimized.fragments().count(), 1);
-        }
-    }
-
-    /// Tests for the memoized minimal-form cache.
-    ///
-    /// Invariants pinned here:
-    /// - a cache *hit* returns the same value as a fresh `minimize`;
-    /// - every mutation (`add_commit` / `add_fragment` / `merge`) invalidates
-    ///   the cache so a stale memo is never served;
-    /// - the cache is excluded from equality / ordering / hashing;
-    /// - [`Clone`] starts the clone dirty (never inherits a stale memo).
-    mod minimal_cache_tests {
-        use alloc::{collections::BTreeSet, vec};
-
-        use crate::{
-            blob::{Blob, BlobMeta},
-            commit::CountLeadingZeroBytes,
-            id::SedimentreeId,
-            loose_commit::LooseCommit,
-            sedimentree::Sedimentree,
-            test_utils::{commit_id_with_depth, make_fragment_at_depth},
-        };
-
-        /// A tree whose `minimize` actually drops a fragment: a deep fragment
-        /// dominates a shallower one (mirrors
-        /// `minimize_multi_depth_deep_dominates_shallow`), so the minimal form
-        /// is a strict subset — making a stale cache observably wrong.
-        fn dominating_tree() -> Sedimentree {
-            let deep_boundary = commit_id_with_depth(1, 100);
-            let shallow_head = commit_id_with_depth(2, 1);
-            let shallow_boundary = commit_id_with_depth(1, 101);
-
-            let deep_fragment = make_fragment_at_depth(
-                3,
-                1,
-                BTreeSet::from([deep_boundary]),
-                &[shallow_head, shallow_boundary],
-            );
-            let shallow_fragment =
-                make_fragment_at_depth(2, 1, BTreeSet::from([shallow_boundary]), &[]);
-
-            Sedimentree::new(vec![deep_fragment, shallow_fragment], vec![])
-        }
-
-        fn loose_commit(seed: u8) -> LooseCommit {
-            let blob_meta = BlobMeta::new(&Blob::new(vec![seed]));
-            LooseCommit::new(
-                SedimentreeId::new([seed; 32]),
-                commit_id_with_depth(0, seed),
-                BTreeSet::new(),
-                blob_meta,
-            )
-        }
-
-        #[test]
-        fn cache_hit_equals_fresh() {
-            let mut tree = dominating_tree();
-
-            let first = tree.minimize(&CountLeadingZeroBytes); // populates cache
-            let hit = tree.minimize(&CountLeadingZeroBytes); // served from cache
-            let fresh = tree.clone().minimize_uncached(&CountLeadingZeroBytes);
-
-            assert_eq!(first, fresh, "first minimize differs from uncached");
-            assert_eq!(hit, fresh, "cache-hit minimize differs from uncached");
-        }
-
-        #[test]
-        fn add_fragment_invalidates() {
-            let mut tree = dominating_tree();
-            let _warm = tree.minimize(&CountLeadingZeroBytes);
-
-            // A new, non-dominated shallow fragment must change the minimal form.
-            let new_boundary = commit_id_with_depth(1, 200);
-            tree.add_fragment(make_fragment_at_depth(
-                2,
-                50,
-                BTreeSet::from([new_boundary]),
-                &[],
-            ));
-
-            let after = tree.minimize(&CountLeadingZeroBytes);
-            let fresh = tree.clone().minimize_uncached(&CountLeadingZeroBytes);
-            assert_eq!(after, fresh, "stale cache served after add_fragment");
-        }
-
-        #[test]
-        fn add_commit_invalidates() {
-            let mut tree = Sedimentree::new(vec![], vec![]);
-            let _warm = tree.minimize(&CountLeadingZeroBytes);
-
-            tree.add_commit(loose_commit(7));
-
-            let after = tree.minimize(&CountLeadingZeroBytes);
-            let fresh = tree.clone().minimize_uncached(&CountLeadingZeroBytes);
-            assert_eq!(after, fresh, "stale cache served after add_commit");
-            assert_eq!(after.loose_commits().count(), 1);
-        }
-
-        #[test]
-        fn merge_invalidates() {
-            let mut tree = dominating_tree();
-            let _warm = tree.minimize(&CountLeadingZeroBytes);
-
-            let other_boundary = commit_id_with_depth(1, 201);
-            let other = Sedimentree::new(
-                vec![make_fragment_at_depth(
-                    2,
-                    60,
-                    BTreeSet::from([other_boundary]),
-                    &[],
-                )],
-                vec![],
-            );
-            tree.merge(other);
-
-            let after = tree.minimize(&CountLeadingZeroBytes);
-            let fresh = tree.clone().minimize_uncached(&CountLeadingZeroBytes);
-            assert_eq!(after, fresh, "stale cache served after merge");
-        }
-
-        #[test]
-        fn equality_ignores_cache_state() {
-            let clean = dominating_tree();
-            let mut warmed = dominating_tree();
-            let _warm = warmed.minimize(&CountLeadingZeroBytes); // populate cache
-
-            // Equal contents must compare equal regardless of cache state; this
-            // guards the hand-written `PartialEq`/`Eq` (and, under `no_std`, the
-            // `Ord`/`Hash`) impls that exclude the cache.
-            assert_eq!(clean, warmed, "cache population perturbed equality");
-        }
-
-        #[test]
-        fn clone_starts_dirty() {
-            let mut original = dominating_tree();
-            let _warm = original.minimize(&CountLeadingZeroBytes); // warm cache
-
-            // Clone then mutate the clone. If the clone had inherited the
-            // populated cache, the post-mutation minimize would be stale.
-            let mut cloned = original.clone();
-            let new_boundary = commit_id_with_depth(1, 202);
-            cloned.add_fragment(make_fragment_at_depth(
-                2,
-                70,
-                BTreeSet::from([new_boundary]),
-                &[],
-            ));
-
-            let after = cloned.minimize(&CountLeadingZeroBytes);
-            let fresh = cloned.clone().minimize_uncached(&CountLeadingZeroBytes);
-            assert_eq!(after, fresh, "clone inherited a stale minimal cache");
-        }
-
-        #[test]
-        fn repeated_reads_are_stable() {
-            // heads()/minimal_hash() go through the cache; repeated calls on an
-            // unchanged tree must return identical results.
-            let mut tree = dominating_tree();
-
-            let h1 = tree.heads(&CountLeadingZeroBytes);
-            let h2 = tree.heads(&CountLeadingZeroBytes);
-            assert_eq!(h1, h2);
-
-            let mh1 = tree.minimal_hash(&CountLeadingZeroBytes);
-            let mh2 = tree.minimal_hash(&CountLeadingZeroBytes);
-            assert_eq!(mh1, mh2);
-        }
-    }
-
-    /// Property tests for the minimal-form cache: for arbitrary trees, a
-    /// cache-warmed `minimize` must equal a fresh (uncached) `minimize`, and
-    /// repeated reads must be stable.
-    mod minimal_cache_proptests {
-        use super::*;
-        use crate::commit::CountLeadingZeroBytes;
-
-        #[test]
-        fn cache_equals_uncached_for_arbitrary_trees() {
-            bolero::check!()
-                .with_arbitrary::<Sedimentree>()
-                .for_each(|tree| {
-                    let fresh = tree.clone().minimize_uncached(&CountLeadingZeroBytes);
-
-                    let mut warmed = tree.clone();
-                    let first = warmed.minimize(&CountLeadingZeroBytes); // populate
-                    let hit = warmed.minimize(&CountLeadingZeroBytes); // cache hit
-
-                    assert_eq!(first, fresh, "first minimize != uncached");
-                    assert_eq!(hit, fresh, "cache hit != uncached");
-                });
-        }
-
-        #[test]
-        fn mutation_then_read_matches_fresh() {
-            bolero::check!()
-                .with_arbitrary::<(Sedimentree, Sedimentree)>()
-                .for_each(|(base, other)| {
-                    let mut tree = base.clone();
-                    let _warm = tree.minimize(&CountLeadingZeroBytes); // populate cache
-                    tree.merge(other.clone()); // must invalidate
-
-                    let after = tree.minimize(&CountLeadingZeroBytes);
-                    let fresh = tree.clone().minimize_uncached(&CountLeadingZeroBytes);
-                    assert_eq!(after, fresh, "stale cache after merge of arbitrary trees");
-                });
         }
     }
 
@@ -2805,7 +2555,7 @@ mod tests {
             // head = newest depth-2 commit, boundary = oldest depth-2 commit
             let frag = fragment(e, &[a], &[]);
             let tree = Sedimentree::new(vec![frag], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert!(
                 remaining_commit_ids(&minimized).is_empty(),
@@ -2831,7 +2581,7 @@ mod tests {
             ];
 
             let tree = Sedimentree::new(vec![], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert_eq!(
                 remaining_commit_ids(&minimized).len(),
@@ -2870,7 +2620,7 @@ mod tests {
 
             let frag = fragment(e, &[a], &[c]);
             let tree = Sedimentree::new(vec![frag], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert!(
                 remaining_commit_ids(&minimized).is_empty(),
@@ -2912,7 +2662,7 @@ mod tests {
 
             let frag = fragment(g, &[a], &[c, e]);
             let tree = Sedimentree::new(vec![frag], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert!(
                 remaining_commit_ids(&minimized).is_empty(),
@@ -2950,7 +2700,7 @@ mod tests {
 
             let frag = fragment(c, &[a], &[]);
             let tree = Sedimentree::new(vec![frag], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             let remaining = remaining_commit_ids(&minimized);
             assert!(
@@ -2991,7 +2741,7 @@ mod tests {
             // head = newest (A), boundary = oldest (D)
             let frag = fragment(a, &[d], &[]);
             let tree = Sedimentree::new(vec![frag], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert!(
                 remaining_commit_ids(&minimized).is_empty(),
@@ -3027,7 +2777,7 @@ mod tests {
 
             let frag = fragment(a, &[d], &[b]);
             let tree = Sedimentree::new(vec![frag], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert!(
                 remaining_commit_ids(&minimized).is_empty(),
@@ -3068,7 +2818,7 @@ mod tests {
             let frag1 = fragment(c, &[a], &[]);
             let frag2 = fragment(e, &[c], &[]);
             let tree = Sedimentree::new(vec![frag1, frag2], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert!(
                 remaining_commit_ids(&minimized).is_empty(),
@@ -3125,7 +2875,7 @@ mod tests {
             let frag1 = fragment(c, &[a], &[]);
             let frag2 = fragment(j, &[h], &[]);
             let tree = Sedimentree::new(vec![frag1, frag2], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             let remaining = remaining_commit_ids(&minimized);
             assert!(
@@ -3177,7 +2927,7 @@ mod tests {
             // Fragment covers the main chain only
             let frag = fragment(c, &[a], &[]);
             let tree = Sedimentree::new(vec![frag], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             let remaining = remaining_commit_ids(&minimized);
             assert!(
@@ -3226,7 +2976,7 @@ mod tests {
             let shallow_frag = fragment(c, &[a], &[]);
 
             let tree = Sedimentree::new(vec![deep_frag.clone(), shallow_frag.clone()], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             // Deep should dominate shallow
             let frags: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
@@ -3286,7 +3036,7 @@ mod tests {
             let deep_frag = fragment(g, &[e], &[]);
 
             let tree = Sedimentree::new(vec![shallow_frag.clone(), deep_frag.clone()], commits);
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             // Both fragments should survive (non-overlapping)
             let frags: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
@@ -3357,7 +3107,7 @@ mod tests {
                 vec![deep_frag.clone(), shallow1.clone(), shallow2.clone()],
                 commits,
             );
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             let frag_heads: BTreeSet<_> = minimized.fragments().map(Fragment::head).collect();
 
@@ -3423,7 +3173,7 @@ mod tests {
 
             let fragment = graph.make_fragment("a", &["d"], &["b", "c"]);
             let tree = graph.to_sedimentree_with_fragments(vec![fragment]);
-            let minimized = tree.clone().minimize(graph.depth_metric());
+            let minimized = tree.minimize(graph.depth_metric());
 
             let seed = FingerprintSeed::new(42, 99);
             let summary = minimized.fingerprint_summarize(&seed);
@@ -3486,7 +3236,7 @@ mod tests {
                 vec![deep_fragment.clone(), shallow_fragment.clone()],
                 vec![],
             );
-            let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+            let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             let seed = FingerprintSeed::new(42, 99);
             let summary = minimized.fingerprint_summarize(&seed);
@@ -3520,7 +3270,7 @@ mod tests {
             );
 
             let tree = graph.to_sedimentree();
-            let minimized = tree.clone().minimize(graph.depth_metric());
+            let minimized = tree.minimize(graph.depth_metric());
 
             let seed = FingerprintSeed::new(42, 99);
             let summary = minimized.fingerprint_summarize(&seed);
@@ -3659,8 +3409,8 @@ mod tests {
             peer_b.add_fragment(fragment.clone());
 
             // After sync, both minimize
-            let peer_a_min = peer_a.clone().minimize(graph.depth_metric());
-            let peer_b_min = peer_b.clone().minimize(graph.depth_metric());
+            let peer_a_min = peer_a.minimize(graph.depth_metric());
+            let peer_b_min = peer_b.minimize(graph.depth_metric());
 
             let seed = FingerprintSeed::new(42, 99);
             let summary_a = peer_a_min.fingerprint_summarize(&seed);
@@ -3795,7 +3545,7 @@ mod tests {
 
             // === LOCAL: 6 commits + 1 fragment ===
             let local_tree = Sedimentree::new(alloc::vec![fragment], commits);
-            let local_min = local_tree.clone().minimize(&CountLeadingZeroBytes);
+            let local_min = local_tree.minimize(&CountLeadingZeroBytes);
 
             // Verify minimize pruned A-D but kept E, F
             assert!(
@@ -3812,7 +3562,7 @@ mod tests {
 
             // === REMOTE: empty ===
             let remote_tree = Sedimentree::new(alloc::vec![], alloc::vec![]);
-            let remote_min = remote_tree.clone().minimize(&CountLeadingZeroBytes);
+            let remote_min = remote_tree.minimize(&CountLeadingZeroBytes);
 
             // === Fingerprint diff ===
             let seed = FingerprintSeed::new(42, 99);
@@ -3874,7 +3624,7 @@ mod tests {
             );
 
             // After minimize, remote's state matches local's
-            let remote_final = remote_post_sync.clone().minimize(&CountLeadingZeroBytes);
+            let remote_final = remote_post_sync.minimize(&CountLeadingZeroBytes);
             let remote_final_summary = remote_final.fingerprint_summarize(&seed);
 
             assert_eq!(
@@ -4007,7 +3757,7 @@ mod tests {
             // === ALICE: commits A..F + fragment(D→A) ===
             let alice_commits = all_commits[..6].to_vec(); // A through F
             let alice_tree = Sedimentree::new(alloc::vec![fragment.clone()], alice_commits);
-            let alice_min = alice_tree.clone().minimize(&CountLeadingZeroBytes);
+            let alice_min = alice_tree.minimize(&CountLeadingZeroBytes);
 
             assert!(
                 alice_min.has_loose_commit(e) && alice_min.has_loose_commit(f),
@@ -4021,7 +3771,7 @@ mod tests {
 
             // === BOB: all 7 commits, no fragment ===
             let bob_tree = Sedimentree::new(alloc::vec![], all_commits);
-            let bob_min = bob_tree.clone().minimize(&CountLeadingZeroBytes);
+            let bob_min = bob_tree.minimize(&CountLeadingZeroBytes);
             assert_eq!(
                 bob_min.loose_commits().count(),
                 7,
@@ -4080,8 +3830,8 @@ mod tests {
             }
 
             // === Round 3: Both re-minimize ===
-            let alice_final = alice_post_sync.clone().minimize(&CountLeadingZeroBytes);
-            let bob_final = bob_post_sync.clone().minimize(&CountLeadingZeroBytes);
+            let alice_final = alice_post_sync.minimize(&CountLeadingZeroBytes);
+            let bob_final = bob_post_sync.minimize(&CountLeadingZeroBytes);
 
             // Both should have the same fragments
             let alice_frag_heads: BTreeSet<_> =
@@ -4181,7 +3931,7 @@ mod tests {
             let fragment = graph.make_fragment("a", &["d"], &["b"]);
             let mut tree_after = tree.clone();
             tree_after.add_fragment(fragment);
-            let minimized = tree_after.clone().minimize(graph.depth_metric());
+            let minimized = tree_after.minimize(graph.depth_metric());
 
             // The minimized tree has fewer commits (some pruned by fragment)
             let minimized_commit_count = minimized.loose_commits().count();
@@ -4240,7 +3990,7 @@ mod tests {
             let deep = graph.make_fragment("a", &["c"], &["b"]);
             let mut tree_after = tree.clone();
             tree_after.add_fragment(deep);
-            let minimized = tree_after.clone().minimize(graph.depth_metric());
+            let minimized = tree_after.minimize(graph.depth_metric());
 
             // The shallow fragment should be pruned (dominated by deep)
             let min_frag_count = minimized.fragments().count();
@@ -4307,7 +4057,7 @@ mod tests {
             // Step 3: Alice ingests Bob's fragment and minimizes
             let mut alice_after = alice_tree.clone();
             alice_after.add_fragment(fragment);
-            let _alice_minimized = alice_after.clone().minimize(graph.depth_metric());
+            let _alice_minimized = alice_after.minimize(graph.depth_metric());
 
             // Step 4: Alice resolves Bob's requested fingerprints using the
             // ORIGINAL resolver (not the now-minimized tree)
@@ -4360,7 +4110,7 @@ mod tests {
             // Alice ingests and minimizes — only a is pruned (covered by fragment)
             let mut alice_after = alice_tree.clone();
             alice_after.add_fragment(fragment);
-            let minimized = alice_after.clone().minimize(graph.depth_metric());
+            let minimized = alice_after.minimize(graph.depth_metric());
             let surviving = minimized.loose_commits().count();
             assert!(
                 surviving > 0 && surviving < commit_count,
@@ -4417,7 +4167,7 @@ mod tests {
 
             let mut alice_after = alice_tree.clone();
             alice_after.add_fragment(fragment);
-            let minimized = alice_after.clone().minimize(graph.depth_metric());
+            let minimized = alice_after.minimize(graph.depth_metric());
             let surviving = minimized.loose_commits().count();
             assert!(
                 surviving < 4,
@@ -4482,7 +4232,7 @@ mod tests {
             // Alice ingests deep fragment and minimizes (shallow gets pruned)
             let mut alice_after = alice_tree.clone();
             alice_after.add_fragment(deep);
-            let minimized = alice_after.clone().minimize(graph.depth_metric());
+            let minimized = alice_after.minimize(graph.depth_metric());
             assert_eq!(
                 minimized.fragments().count(),
                 1,
@@ -4565,7 +4315,7 @@ mod tests {
             let mut alice_after = alice_tree.clone();
             alice_after.add_fragment(frag1);
             alice_after.add_fragment(frag2);
-            let minimized = alice_after.clone().minimize(graph.depth_metric());
+            let minimized = alice_after.minimize(graph.depth_metric());
             let surviving = minimized.loose_commits().count();
             assert!(
                 surviving < commit_count,
@@ -4708,7 +4458,7 @@ mod tests {
                     // Merge new data and minimize — simulates receiving a sync response
                     let mut merged = tree_a.clone();
                     merged.merge(tree_b.clone());
-                    let _minimized = merged.clone().minimize(&CountLeadingZeroBytes);
+                    let _minimized = merged.minimize(&CountLeadingZeroBytes);
 
                     // The resolver is independent — still resolves sendable items.
                     // Coverage fingerprints (fragment head/boundary) intentionally

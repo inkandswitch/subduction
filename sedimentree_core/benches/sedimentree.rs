@@ -493,7 +493,7 @@ mod sedimentree {
             let tree = synthetic_sedimentree(size, size, 1);
 
             group.bench_with_input(BenchmarkId::new("linear_dag", size), &tree, |b, t| {
-                b.iter(|| t.clone().minimize(black_box(&metric)));
+                b.iter(|| t.minimize(black_box(&metric)));
             });
         }
 
@@ -505,7 +505,7 @@ mod sedimentree {
             let tree = Sedimentree::new(vec![], commits);
 
             group.bench_with_input(BenchmarkId::new("merge_heavy_dag", size), &tree, |b, t| {
-                b.iter(|| t.clone().minimize(black_box(&metric)));
+                b.iter(|| t.minimize(black_box(&metric)));
             });
         }
 
@@ -521,7 +521,7 @@ mod sedimentree {
                 BenchmarkId::new("wide_dag", format!("{width}w_{depth}d")),
                 &tree,
                 |b, t| {
-                    b.iter(|| t.clone().minimize(black_box(&metric)));
+                    b.iter(|| t.minimize(black_box(&metric)));
                 },
             );
         }
@@ -547,7 +547,7 @@ mod sedimentree {
             let tree = synthetic_sedimentree(size, size, 1);
 
             group.bench_with_input(BenchmarkId::new("linear_dag", size), &tree, |b, t| {
-                b.iter(|| t.clone().heads(black_box(&metric)));
+                b.iter(|| t.heads(black_box(&metric)));
             });
         }
 
@@ -563,7 +563,7 @@ mod sedimentree {
                 BenchmarkId::new("wide_dag", format!("{width}heads")),
                 &tree,
                 |b, t| {
-                    b.iter(|| t.clone().heads(black_box(&metric)));
+                    b.iter(|| t.heads(black_box(&metric)));
                 },
             );
         }
@@ -748,47 +748,7 @@ mod sedimentree {
             let tree = synthetic_sedimentree(size, size, 1);
 
             group.bench_with_input(BenchmarkId::from_parameter(size), &tree, |b, t| {
-                b.iter(|| t.clone().minimal_hash(black_box(&metric)));
-            });
-        }
-
-        group.finish();
-    }
-
-    /// Benchmark the minimal-form cache: repeated reads on an unchanged tree.
-    ///
-    /// **Intent**: Demonstrate the read-path win from memoizing `minimize`.
-    /// `cached` warms the cache once, then measures repeated `heads()` reads
-    /// (which hit the cache). `uncached` measures the same read path while
-    /// forcing a recompute each time (`clone().heads()` starts dirty), i.e.
-    /// the pre-cache behaviour. The gap is the saved re-minimization.
-    ///
-    /// **Expected complexity**: cached read ≈ O(minimal tree) clone of the
-    /// memo; uncached ≈ O(tree) re-minimization + post-processing.
-    pub fn bench_minimal_cache(c: &mut Criterion) {
-        let mut group = c.benchmark_group("minimal_cache");
-        let metric = CountLeadingZeroBytes;
-
-        for size in [100, 500, 2000, 5000] {
-            group.throughput(Throughput::Elements(size as u64));
-
-            let base = synthetic_sedimentree(size, size, 1);
-
-            // Cached: warm once, then repeated reads hit the memo.
-            group.bench_with_input(BenchmarkId::new("cached_heads", size), &base, |b, t| {
-                let mut warm = t.clone();
-                drop(warm.heads(black_box(&metric))); // populate cache
-                b.iter(|| warm.heads(black_box(&metric)));
-            });
-
-            // Uncached: each read recomputes (clone starts dirty) — the
-            // pre-cache behaviour, for comparison.
-            group.bench_with_input(BenchmarkId::new("uncached_heads", size), &base, |b, t| {
-                b.iter_batched(
-                    || t.clone(),
-                    |mut fresh| fresh.heads(black_box(&metric)),
-                    BatchSize::SmallInput,
-                );
+                b.iter(|| t.minimal_hash(black_box(&metric)));
             });
         }
 
@@ -893,7 +853,7 @@ mod topology {
                 BenchmarkId::new("linear/minimize", size),
                 &linear_tree,
                 |b, t| {
-                    b.iter(|| t.clone().minimize(black_box(&metric)));
+                    b.iter(|| t.minimize(black_box(&metric)));
                 },
             );
 
@@ -901,7 +861,7 @@ mod topology {
                 BenchmarkId::new("linear/heads", size),
                 &linear_tree,
                 |b, t| {
-                    b.iter(|| t.clone().heads(black_box(&metric)));
+                    b.iter(|| t.heads(black_box(&metric)));
                 },
             );
 
@@ -913,7 +873,7 @@ mod topology {
                 BenchmarkId::new("merge_heavy/minimize", size),
                 &merge_tree,
                 |b, t| {
-                    b.iter(|| t.clone().minimize(black_box(&metric)));
+                    b.iter(|| t.minimize(black_box(&metric)));
                 },
             );
 
@@ -921,7 +881,7 @@ mod topology {
                 BenchmarkId::new("merge_heavy/heads", size),
                 &merge_tree,
                 |b, t| {
-                    b.iter(|| t.clone().heads(black_box(&metric)));
+                    b.iter(|| t.heads(black_box(&metric)));
                 },
             );
 
@@ -933,7 +893,7 @@ mod topology {
                 BenchmarkId::new("very_merge_heavy/minimize", size),
                 &frequent_merge_tree,
                 |b, t| {
-                    b.iter(|| t.clone().minimize(black_box(&metric)));
+                    b.iter(|| t.minimize(black_box(&metric)));
                 },
             );
         }
@@ -961,11 +921,11 @@ mod topology {
             let tree = Sedimentree::new(vec![], commits);
 
             group.bench_with_input(BenchmarkId::new("minimize", size), &tree, |b, t| {
-                b.iter(|| t.clone().minimize(black_box(&metric)));
+                b.iter(|| t.minimize(black_box(&metric)));
             });
 
             group.bench_with_input(BenchmarkId::new("heads", size), &tree, |b, t| {
-                b.iter(|| t.clone().heads(black_box(&metric)));
+                b.iter(|| t.heads(black_box(&metric)));
             });
         }
 
@@ -1007,7 +967,6 @@ criterion_group! {
         sedimentree::bench_heads,
         sedimentree::bench_add_operations,
         sedimentree::bench_minimal_hash,
-        sedimentree::bench_minimal_cache,
         fragment::bench_supports,
         topology::bench_dag_topology_comparison,
         topology::bench_deep_chains,

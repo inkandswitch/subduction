@@ -19,7 +19,6 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    sedimentree::Sedimentree,
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -27,6 +26,7 @@ use crate::{
     connection::{Connection, message::SyncDiff},
     peer::id::PeerId,
     policy::storage::StoragePolicy,
+    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
 };
@@ -47,7 +47,7 @@ pub(crate) async fn recv_batch_sync_response<
     Auth: StoragePolicy<Async>,
     const SHARDS: usize,
 >(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     storage: &StoragePowerbox<Store, Auth>,
     from: &PeerId,
     id: SedimentreeId,
@@ -212,7 +212,7 @@ pub(crate) async fn insert_commit_locally<
     Store: Storage<Async>,
     const SHARDS: usize,
 >(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
 ) -> Result<bool, Store::Error> {
@@ -239,7 +239,7 @@ pub(crate) async fn insert_fragment_locally<
     Store: Storage<Async>,
     const SHARDS: usize,
 >(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
 ) -> Result<bool, Store::Error> {
@@ -261,13 +261,13 @@ pub(crate) async fn insert_fragment_locally<
 /// Prunes dominated fragments and loose commits covered by fragments,
 /// keeping only the minimal covering set. Storage retains the full history.
 pub(crate) async fn minimize_tree<Metric: DepthMetric, const SHARDS: usize>(
-    sedimentrees: &ShardedMap<SedimentreeId, Sedimentree, SHARDS>,
+    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     depth_metric: &Metric,
     id: SedimentreeId,
 ) {
     sedimentrees
         .with_entry(&id, |tree| {
-            *tree = tree.minimize(depth_metric);
+            tree.ensure_minimized(depth_metric);
         })
         .await;
 }

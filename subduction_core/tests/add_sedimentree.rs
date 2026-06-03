@@ -192,7 +192,7 @@ fn minimize_keeps_loose_commits_with_interior_parents() {
         "pre-minimize: 1 loose commit"
     );
 
-    let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
+    let minimized = tree.minimize(&CountLeadingZeroBytes);
     assert_eq!(
         minimized.loose_commits().count(),
         1,
@@ -239,7 +239,7 @@ async fn fingerprint_summary_has_all_items_after_add_sedimentree() -> TestResult
     );
 
     // Now check after minimize
-    let minimized = sedimentree.clone().minimize(&CountLeadingZeroBytes);
+    let minimized = sedimentree.minimize(&CountLeadingZeroBytes);
     let minimized_summary = minimized.fingerprint_summarize(&seed);
     assert_eq!(
         minimized_summary.commit_fingerprints().len(),

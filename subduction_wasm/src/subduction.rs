@@ -34,6 +34,7 @@ use subduction_core::{
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
+    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
@@ -393,11 +394,13 @@ impl WasmSubduction {
         // Merge + minimize sequentially (ShardedMap access is &mut per entry).
         for (id, sedimentree) in loaded {
             sedimentrees
-                .with_entry_or_default(id, |tree: &mut Sedimentree| tree.merge(sedimentree))
+                .with_entry_or_default(id, |tree: &mut MinimizedSedimentree| {
+                    tree.merge(sedimentree);
+                })
                 .await;
             sedimentrees
                 .with_entry(&id, |tree| {
-                    *tree = tree.minimize(&depth_metric);
+                    tree.ensure_minimized(&depth_metric);
                 })
                 .await;
         }

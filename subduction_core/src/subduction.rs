@@ -82,6 +82,7 @@ use crate::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
+    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::Timeout,
@@ -149,7 +150,7 @@ pub struct Subduction<
 
     timer: Timer,
     depth_metric: Metric,
-    sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+    sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     storage: StoragePowerbox<Store, Auth>,
 
     /// Active connections, keyed by peer ID.
@@ -393,7 +394,7 @@ where
         handler: Arc<Hdl>,
         discovery_id: Option<DiscoveryId>,
         signer: Sign,
-        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
@@ -1284,7 +1285,7 @@ where
         if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
-            let tree = self.sedimentrees.get_cloned(&id).await;
+            let tree = self.get_minimized_tree(id).await;
             if let Some(tree) = tree {
                 let conns = self.all_connections().await;
                 for conn in conns {
@@ -1518,9 +1519,9 @@ where
         self.minimize_tree(id).await;
 
         let heads = {
-            let mut shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
             shard
-                .get_mut(&id)
+                .get(&id)
                 .map(|s| s.heads(&self.depth_metric))
                 .unwrap_or_default()
         };
@@ -1667,9 +1668,9 @@ where
         self.minimize_tree(id).await;
 
         let heads = {
-            let mut shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
             shard
-                .get_mut(&id)
+                .get(&id)
                 .map(|s| s.heads(&self.depth_metric))
                 .unwrap_or_default()
         };
@@ -1779,7 +1780,7 @@ where
                 for commit in commit_payloads {
                     tree.add_commit(commit);
                 }
-                *tree = tree.minimize(&self.depth_metric);
+                tree.ensure_minimized(&self.depth_metric);
             })
             .await;
 
@@ -1851,7 +1852,7 @@ where
                 for fragment in fragment_payloads {
                     tree.add_fragment(fragment);
                 }
-                *tree = tree.minimize(&self.depth_metric);
+                tree.ensure_minimized(&self.depth_metric);
             })
             .await;
         tracing::info!("bulk-insert of {count} fragments complete, tree minimized");
@@ -1940,7 +1941,7 @@ where
                 for fragment in fragment_payloads {
                     tree.add_fragment(fragment);
                 }
-                *tree = tree.minimize(&self.depth_metric);
+                tree.ensure_minimized(&self.depth_metric);
             })
             .await;
 
@@ -2015,7 +2016,7 @@ impl<
 {
     /// Returns a reference to the sedimentrees map.
     #[must_use]
-    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>> {
+    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
         &self.sedimentrees
     }
 
@@ -2498,7 +2499,7 @@ where
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = FingerprintSeed::random();
-            let resolver = self.sedimentrees.get_cloned(&id).await.map_or_else(
+            let resolver = self.get_minimized_tree(id).await.map_or_else(
                 || Sedimentree::default().fingerprint_resolver(&seed),
                 |t| t.fingerprint_resolver(&seed),
             );
@@ -2768,14 +2769,10 @@ where
                     for conn in peer_conns {
                         tracing::debug!("Using connection to peer {}", conn.peer_id());
                         let seed = FingerprintSeed::random();
-                        let resolver = self
-                            .sedimentrees
-                            .get_cloned(&id)
-                            .await
-                            .map_or_else(
-                                || Sedimentree::default().fingerprint_resolver(&seed),
-                                |t| t.fingerprint_resolver(&seed),
-                            );
+                        let resolver = self.get_minimized_tree(id).await.map_or_else(
+                            || Sedimentree::default().fingerprint_resolver(&seed),
+                            |t| t.fingerprint_resolver(&seed),
+                        );
 
                         // Mux missing means the peer was torn down between
                         // the connection snapshot and here; report it
@@ -3196,9 +3193,9 @@ where
         let mut out = Vec::new();
         for idx in self.sedimentrees.shard_indices() {
             if let Some(shard) = self.sedimentrees.shard_at(idx) {
-                let mut guard = shard.lock().await;
+                let guard = shard.lock().await;
                 out.reserve(guard.len());
-                for (id, tree) in guard.iter_mut() {
+                for (id, tree) in guard.iter() {
                     out.push((*id, tree.heads(&self.depth_metric)));
                 }
             }
@@ -3493,6 +3490,19 @@ where
     /// keeping only the minimal covering. Storage retains the full history.
     async fn minimize_tree(&self, id: SedimentreeId) {
         ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
+    }
+
+    /// Clone out the **minimal** form of a stored sedimentree, minimizing it in
+    /// place first if it is dirty.
+    ///
+    /// Use this (rather than `sedimentrees.get_cloned`) on paths that feed the
+    /// wire — fingerprint summaries / resolvers — where a non-minimal tree
+    /// would produce an incorrect diff.
+    async fn get_minimized_tree(&self, id: SedimentreeId) -> Option<Sedimentree> {
+        let mut shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+        shard
+            .get_mut(&id)
+            .map(|entry| entry.minimized(&self.depth_metric).clone())
     }
 }
 

@@ -42,6 +42,7 @@ use crate::{
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
+    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     subduction::{
@@ -84,7 +85,7 @@ pub struct SyncHandler<
     const SHARDS: usize = 256,
     R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
-    sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+    sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     storage: StoragePowerbox<Store, Auth>,
@@ -151,7 +152,7 @@ impl<
     /// [`Subduction::new`]: crate::subduction::Subduction::new
     #[allow(clippy::type_complexity)]
     pub fn new(
-        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
@@ -184,7 +185,7 @@ impl<
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
-        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
@@ -719,7 +720,7 @@ impl<
                 if !loose_commits.is_empty() || !fragments.is_empty() {
                     let sedimentree =
                         Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-                    entry.insert(sedimentree);
+                    entry.insert(MinimizedSedimentree::already_minimal(sedimentree));
                     tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
                 }
             }
@@ -731,8 +732,10 @@ impl<
                 their_fingerprints.fragment_fingerprints().len()
             );
 
-            let heads = sedimentree.heads(&self.depth_metric);
-            let diff = sedimentree.diff_remote_fingerprints(their_fingerprints);
+            // Wire diff requires the minimal form.
+            let minimal = sedimentree.minimized(&self.depth_metric);
+            let heads = minimal.heads(&self.depth_metric);
+            let diff = minimal.diff_remote_fingerprints(their_fingerprints);
             (
                 diff.local_only_commits
                     .iter()
@@ -868,9 +871,9 @@ impl<
 
     /// Compute the current heads for a sedimentree (without a counter).
     async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
-        let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
+        let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
         locked
-            .get_mut(&id)
+            .get(&id)
             .map(|s| s.heads(&self.depth_metric))
             .unwrap_or_default()
     }
