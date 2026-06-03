@@ -10,7 +10,7 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta},
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 
