@@ -9,20 +9,28 @@
 //!
 //! # Storage Layout
 //!
+//! Trees are sharded one level deep under `trees/` by a hex bucket taken from
+//! the first two bytes of the `SedimentreeId` (65,536 buckets, `0000`..`ffff`).
+//! The leaf directory is the hex of the remaining 30 bytes, so the full id is
+//! never stored redundantly — it is reconstructed by concatenating the bucket
+//! and leaf names. Because the id is a cryptographic hash, its prefix bytes are
+//! uniformly distributed and buckets fill evenly with no extra hashing.
+//!
 //! Commits and fragments are stored together with their blobs:
 //!
 //! ```text
 //! root/
 //! └── trees/
-//!     └── {sedimentree_id_hex}/
-//!         ├── commits/
-//!         │   └── {commit_id_hex}/
-//!         │       ├── {digest_hex}.meta   ← Signed<LooseCommit> bytes
-//!         │       └── {digest_hex}.blob   ← Blob bytes
-//!         └── fragments/
-//!             └── {fragment_head_hex}/
-//!                 ├── {digest_hex}.meta   ← Signed<Fragment> bytes
-//!                 └── {digest_hex}.blob   ← Blob bytes
+//!     └── {id_prefix_hex}/                   ← bucket: first 2 bytes (4 hex chars)
+//!         └── {id_remainder_hex}/            ← leaf: remaining 30 bytes (60 hex chars)
+//!             ├── commits/
+//!             │   └── {commit_id_hex}/
+//!             │       ├── {digest_hex}.meta   ← Signed<LooseCommit> bytes
+//!             │       └── {digest_hex}.blob   ← Blob bytes
+//!             └── fragments/
+//!                 └── {fragment_head_hex}/
+//!                     ├── {digest_hex}.meta   ← Signed<Fragment> bytes
+//!                     └── {digest_hex}.blob   ← Blob bytes
 //! ```
 //!
 //! # Example
@@ -62,6 +70,15 @@ use thiserror::Error;
 /// the same content-addressed path.
 static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
+/// Number of leading [`SedimentreeId`] bytes used as the on-disk bucket name
+/// under `trees/`. Two bytes give 65,536 buckets (`0000`..`ffff`).
+///
+/// Because a `SedimentreeId` is a cryptographic hash, its leading bytes are
+/// uniformly distributed, so this prefix shards trees evenly across buckets
+/// with no additional hashing. The remaining bytes form the leaf directory
+/// name, so the full id is never stored redundantly.
+const TREE_BUCKET_PREFIX_BYTES: usize = 2;
+
 /// Errors that can occur during filesystem storage operations.
 #[derive(Debug, Error)]
 pub enum FsStorageError {
@@ -85,19 +102,22 @@ pub enum FsStorageError {
 
 /// Filesystem-based storage backend.
 ///
-/// Uses a CAS layout with compound storage (commits/fragments stored with their blobs):
+/// Uses a CAS layout with compound storage (commits/fragments stored with their
+/// blobs), sharded one level deep by a hex bucket from the first two bytes of
+/// the `SedimentreeId`:
 /// ```text
 /// root/
 /// └── trees/
-///     └── {sedimentree_id_hex}/
-///         ├── commits/
-///         │   └── {commit_id_hex}/
-///         │       ├── {digest_hex}.meta   ← Signed<LooseCommit>
-///         │       └── {digest_hex}.blob   ← Blob
-///         └── fragments/
-///             └── {fragment_head_hex}/
-///                 ├── {digest_hex}.meta   ← Signed<Fragment>
-///                 └── {digest_hex}.blob   ← Blob
+///     └── {id_prefix_hex}/                   ← bucket: first 2 bytes (4 hex chars)
+///         └── {id_remainder_hex}/            ← leaf: remaining 30 bytes (60 hex chars)
+///             ├── commits/
+///             │   └── {commit_id_hex}/
+///             │       ├── {digest_hex}.meta   ← Signed<LooseCommit>
+///             │       └── {digest_hex}.blob   ← Blob
+///             └── fragments/
+///                 └── {fragment_head_hex}/
+///                     ├── {digest_hex}.meta   ← Signed<Fragment>
+///                     └── {digest_hex}.blob   ← Blob
 /// ```
 #[derive(Debug, Clone)]
 pub struct FsStorage {
@@ -130,15 +150,32 @@ impl FsStorage {
         let trees_dir = root.join("trees");
         let mut ids = Set::new();
 
-        if let Ok(entries) = std::fs::read_dir(trees_dir) {
-            for entry in entries.flatten() {
-                if let Ok(name) = entry.file_name().into_string()
-                    && let Ok(bytes) = hex::decode(&name)
-                    && bytes.len() == 32
+        // Two-level walk: trees/{bucket}/{leaf}. The bucket is the first
+        // `TREE_BUCKET_PREFIX_BYTES` of the id (hex-encoded), the leaf is the
+        // remaining bytes. A full id is reconstructed by concatenating the two.
+        let Ok(buckets) = std::fs::read_dir(&trees_dir) else {
+            return ids;
+        };
+
+        for bucket in buckets.flatten() {
+            let Ok(bucket_name) = bucket.file_name().into_string() else {
+                continue;
+            };
+
+            // Bucket dir names are exactly the hex of the prefix bytes.
+            if bucket_name.len() != TREE_BUCKET_PREFIX_BYTES * 2 {
+                continue;
+            }
+
+            let Ok(leaves) = std::fs::read_dir(bucket.path()) else {
+                continue;
+            };
+
+            for leaf in leaves.flatten() {
+                if let Ok(leaf_name) = leaf.file_name().into_string()
+                    && let Some(id) = Self::reconstruct_id(&bucket_name, &leaf_name)
                 {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&bytes);
-                    ids.insert(SedimentreeId::new(arr));
+                    ids.insert(id);
                 }
             }
         }
@@ -146,9 +183,31 @@ impl FsStorage {
         ids
     }
 
+    /// Reconstruct a [`SedimentreeId`] from its on-disk bucket + leaf names.
+    ///
+    /// The bucket holds the hex of the first `TREE_BUCKET_PREFIX_BYTES` of the
+    /// id; the leaf holds the hex of the remaining bytes. Concatenating them
+    /// yields the full 64-char hex id. Returns `None` for any name that does
+    /// not decode to exactly 32 bytes.
+    fn reconstruct_id(bucket_name: &str, leaf_name: &str) -> Option<SedimentreeId> {
+        let mut full_hex = String::with_capacity(bucket_name.len() + leaf_name.len());
+        full_hex.push_str(bucket_name);
+        full_hex.push_str(leaf_name);
+
+        let bytes = hex::decode(&full_hex).ok()?;
+        let arr: [u8; 32] = bytes.try_into().ok()?;
+        Some(SedimentreeId::new(arr))
+    }
+
     fn tree_path(&self, id: SedimentreeId) -> PathBuf {
-        let hex = hex::encode(id.as_bytes());
-        self.root.join("trees").join(hex)
+        // Shard into one level of hex buckets: trees/{bucket}/{leaf}. The id is
+        // already a cryptographic hash, so its prefix bytes are uniformly
+        // distributed — slicing the prefix gives an even fan-out for free with
+        // no additional hashing. See the module docs for the rationale.
+        let (prefix, rest) = id.as_bytes().split_at(TREE_BUCKET_PREFIX_BYTES);
+        let bucket = hex::encode(prefix);
+        let leaf = hex::encode(rest);
+        self.root.join("trees").join(bucket).join(leaf)
     }
 
     fn commits_dir(&self, id: SedimentreeId) -> PathBuf {

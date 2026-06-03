@@ -251,3 +251,88 @@ async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// Sedimentree IDs are sharded on disk as `trees/{first-2-bytes}/{rest}`.
+/// Reopening storage must reconstruct every id exactly by concatenating the
+/// bucket and leaf directory names — including ids that share a bucket prefix
+/// (same first two bytes, different remainder), which exercises the two-level
+/// `load_tree_ids` walk rather than a flat single-level scan.
+#[tokio::test]
+async fn sedimentree_ids_roundtrip_through_sharded_layout() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+
+    // Construct ids that deliberately collide on the first two bytes (the
+    // bucket) but differ in the remainder (the leaf), plus an id in a
+    // different bucket entirely.
+    let mut share_a = [0u8; 32];
+    share_a[0] = 0xAB;
+    share_a[1] = 0xCD;
+    share_a[31] = 0x01;
+
+    let mut share_b = [0u8; 32];
+    share_b[0] = 0xAB;
+    share_b[1] = 0xCD;
+    share_b[31] = 0x02;
+
+    let mut other = [0u8; 32];
+    other[0] = 0x12;
+    other[1] = 0x34;
+    other[15] = 0xFF;
+
+    let expected: BTreeSet<SedimentreeId> = [share_a, share_b, other]
+        .into_iter()
+        .map(SedimentreeId::new)
+        .collect();
+
+    {
+        let storage = FsStorage::new(dir.path().to_path_buf())?;
+        for id in &expected {
+            Storage::<Sendable>::save_sedimentree_id(&storage, *id).await?;
+        }
+    }
+
+    // Reopen: forces load_tree_ids to walk trees/{bucket}/{leaf} from disk and
+    // rebuild the id set, rather than reading a warm in-memory cache.
+    let reopened = FsStorage::new(dir.path().to_path_buf())?;
+    let loaded = Storage::<Sendable>::load_all_sedimentree_ids(&reopened).await?;
+
+    let loaded_set: BTreeSet<SedimentreeId> = loaded.into_iter().collect();
+    assert_eq!(
+        loaded_set, expected,
+        "every sedimentree id must round-trip through the sharded on-disk layout"
+    );
+
+    Ok(())
+}
+
+/// A tree written under the sharded layout must be fully readable after a
+/// reopen — i.e. the bucket path used for writes matches the one used for
+/// reads. Guards against a bucket/leaf split mismatch between `tree_path` on
+/// the write and read sides.
+#[tokio::test]
+async fn commit_readable_after_reopen_under_sharding() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x7E);
+    let head = CommitId::new([0x99; 32]);
+
+    {
+        let storage = FsStorage::new(dir.path().to_path_buf())?;
+        let blob = Blob::new(vec![7; 32]);
+        let verified_blob = VerifiedBlobMeta::new(blob);
+        let verified: VerifiedMeta<LooseCommit> =
+            VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, BTreeSet::new()), verified_blob)
+                .await;
+        Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+    }
+
+    let reopened = FsStorage::new(dir.path().to_path_buf())?;
+    let loaded = Storage::<Sendable>::load_loose_commit(&reopened, id, head)
+        .await?
+        .expect("commit must be loadable from the sharded path after reopen");
+
+    assert_eq!(loaded.payload().head(), head);
+
+    Ok(())
+}
