@@ -10,7 +10,7 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta},
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 
@@ -39,12 +39,6 @@ fn tree_of(commits: Vec<LooseCommit>) -> Sedimentree {
 /// Fingerprinting is a pure, deterministic function of the
 /// `(seed_bytes, commit_id_bytes)` tuple: the same inputs always yield the
 /// same fingerprint, across arbitrary seeds and ids.
-///
-/// This is the *law* that the old hardcoded `assert_ne!` examples gestured
-/// at but couldn't state. (We deliberately do NOT assert "different inputs ⇒
-/// different fingerprints": the fingerprint is a 64-bit `SipHash`, so
-/// collisions exist and that is not a universal property — see the
-/// `seed_*`/`value_*` witness tests below for the non-colliding examples.)
 #[test]
 fn fingerprint_is_deterministic_over_arbitrary_inputs() {
     bolero::check!()

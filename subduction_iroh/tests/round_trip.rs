@@ -618,11 +618,9 @@ async fn large_message_handling() -> TestResult {
 
 // ─── Multi-commit delivery ──────────────────────────────────────────────────
 
-/// All commits from a multi-commit batch arrive at the server.
-///
-/// Renamed from `message_ordering`: sync is set-based over content-addressed
-/// commits (random ids here), so per-commit ordering is not a protocol
-/// guarantee. This asserts complete delivery of the batch.
+/// All commits from a multi-commit batch arrive at the server. Sync is
+/// set-based over content-addressed commits, so per-commit ordering is not a
+/// protocol guarantee — this asserts complete delivery, not order.
 #[tokio::test]
 async fn multiple_commits_all_delivered() -> TestResult {
     init_tracing();

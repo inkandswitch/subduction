@@ -260,9 +260,8 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             TestSpawn,
         );
 
-    // Register a MIX: peer 1's connection fails on send, peer 2's succeeds.
-    // (Same connection type with a per-instance failure flag, so both can
-    // live in this monomorphic `Subduction<FailingSendMockConnection>`.)
+    // One connection fails on send, the other succeeds. A per-instance failure
+    // flag lets both live in this monomorphic `Subduction<FailingSendMockConnection>`.
     let failing_peer = PeerId::new([1u8; 32]);
     let healthy_peer = PeerId::new([2u8; 32]);
     let failing_conn = FailingSendMockConnection::with_peer_id_failing(failing_peer, true);
@@ -282,8 +281,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     let (head, parents, blob) = make_commit_parts();
     let _ = subduction.add_commit(id, head, parents, blob).await;
 
-    // ONLY the failing connection should have been unregistered; the healthy
-    // one must remain. Assert by peer identity, not just count.
+    // Only the failing connection should be unregistered; the healthy one remains.
     let remaining = subduction.connected_peer_ids().await;
     assert!(
         !remaining.contains(&failing_peer),

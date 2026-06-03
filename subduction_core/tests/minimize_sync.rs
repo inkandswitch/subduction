@@ -139,10 +139,8 @@ async fn add_fragment_prunes_dominated_shallow_fragment() -> TestResult {
         )
         .await?;
 
-    // After adding the deep fragment, minimize_tree should have pruned
-    // the shallow fragment (dominated by the deep one). Assert by IDENTITY,
-    // not count: a count of 1 alone cannot distinguish "kept the deep
-    // fragment" (correct) from "kept the shallow one" (a wrong-survivor bug).
+    // The deep fragment dominates the shallow one, so only the deep fragment
+    // should remain. Check by head identity, not count.
     let fragments_after = subduction
         .get_fragments(sed_id)
         .await
@@ -241,10 +239,9 @@ async fn fingerprint_summary_excludes_dominated_fragments() -> TestResult {
     let seed = FingerprintSeed::new(42, 99);
     let summary = tree.fingerprint_summarize(&seed);
 
-    // Assert by fingerprint IDENTITY, not count: the surviving fragment
-    // fingerprint must be the *deep* fragment's, and the dominated shallow
-    // fragment's fingerprint must be absent. A bare `len() == 1` would pass
-    // even if the wrong (shallow) fragment survived.
+    // The summary's fragment fingerprints must be exactly the deep fragment's;
+    // the dominated shallow fragment's fingerprint must be absent. Check by
+    // fingerprint identity, not count.
     let deep_fp = Fingerprint::new(&seed, &deep_head);
     let shallow_fp = Fingerprint::new(&seed, &shallow_head);
     assert_eq!(
@@ -292,9 +289,8 @@ async fn independent_fragments_both_survive_minimize() -> TestResult {
         )
         .await?;
 
-    // Assert both specific fragments survive by IDENTITY: independent
-    // (mutually non-dominating) fragments must each be kept. A `len() == 2`
-    // count alone wouldn't catch a bug that kept the wrong two.
+    // Independent (mutually non-dominating) fragments must each be kept.
+    // Check both heads by identity, not count.
     let surviving_heads: BTreeSet<CommitId> = subduction
         .get_fragments(sed_id)
         .await

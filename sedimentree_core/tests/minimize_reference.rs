@@ -382,9 +382,8 @@ fn minimize_is_deterministic_within_process() {
         });
 }
 
-/// `minimize_in_place` must produce exactly the same result as the
-/// rebuild-based `minimize`. This is the headline guarantee that lets owner
-/// sites swap `*tree = tree.minimize(m)` for `tree.minimize_in_place(m)`.
+/// For any tree, `minimize_in_place` produces the same result as the
+/// rebuild-based `minimize`.
 #[test]
 fn minimize_in_place_equals_minimize() {
     bolero::check!()

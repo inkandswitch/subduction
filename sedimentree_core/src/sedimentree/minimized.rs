@@ -235,41 +235,33 @@ mod tests {
         assert!(m.is_dirty(), "merge must mark dirty");
     }
 
-    /// Wire-correctness invariant the in-place/dirty-flag design hinges on:
-    /// reading a **dirty** (not-yet-minimized) tree through `minimized(...)`
-    /// must produce the SAME `FingerprintSummary` as the old eager-collapse
-    /// behavior (`tree.minimize(metric).fingerprint_summarize(seed)`).
-    ///
-    /// If `minimized` ever forgot to minimize, or minimized differently, the
-    /// wire diff would silently send the wrong fingerprints. This pins it.
+    /// A dirty tree read through `minimized(...)` produces the same
+    /// `FingerprintSummary` as `tree.minimize(metric).fingerprint_summarize()`.
+    /// The wire diff relies on the minimal form, so `minimized` must minimize
+    /// before exposing the tree.
     #[test]
-    fn dirty_tree_summary_matches_eager_collapse() {
+    fn dirty_tree_summary_matches_minimize() {
         let full = dominating_tree();
         let seed = FingerprintSeed::new(0x1234, 0x5678);
 
-        // Old behavior: eagerly collapse, then summarize.
-        let eager_summary = full
+        let expected = full
             .clone()
             .minimize(&CountLeadingZeroBytes)
             .fingerprint_summarize(&seed);
 
-        // New behavior: wrap dirty (un-minimized), read via `minimized`.
         let mut m = MinimizedSedimentree::new(full);
-        assert!(m.is_dirty(), "precondition: tree starts dirty");
-        let lazy_summary = m
+        assert!(m.is_dirty());
+        let actual = m
             .minimized(&CountLeadingZeroBytes)
             .fingerprint_summarize(&seed);
 
-        assert_eq!(
-            lazy_summary, eager_summary,
-            "lazy minimize-on-read must match eager collapse for wire summaries"
-        );
+        assert_eq!(actual, expected, "minimized read must match minimize");
     }
 
-    /// Same invariant, but with the mutation applied *through the wrapper*
-    /// after construction (the real ingest pattern: add then read).
+    /// The same equivalence holds when the tree is mutated through the wrapper
+    /// (the ingest pattern: add, then read).
     #[test]
-    fn summary_after_wrapper_mutation_matches_eager_collapse() {
+    fn summary_after_wrapper_mutation_matches_minimize() {
         let seed = FingerprintSeed::new(7, 9);
 
         let deep_boundary = commit_id_with_depth(1, 100);
@@ -283,8 +275,7 @@ mod tests {
         );
         let shallow = make_fragment_at_depth(2, 1, BTreeSet::from([shallow_boundary]), &[]);
 
-        // Build the equivalent tree two ways.
-        let eager = Sedimentree::new(vec![deep.clone(), shallow.clone()], vec![])
+        let expected = Sedimentree::new(vec![deep.clone(), shallow.clone()], vec![])
             .minimize(&CountLeadingZeroBytes)
             .fingerprint_summarize(&seed);
 
@@ -292,14 +283,11 @@ mod tests {
         m.add_fragment(shallow);
         m.add_fragment(deep);
         assert!(m.is_dirty());
-        let lazy = m
+        let actual = m
             .minimized(&CountLeadingZeroBytes)
             .fingerprint_summarize(&seed);
 
-        assert_eq!(
-            lazy, eager,
-            "wrapper-mutated dirty read must match eager collapse"
-        );
+        assert_eq!(actual, expected);
     }
 
     #[test]

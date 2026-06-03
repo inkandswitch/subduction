@@ -574,8 +574,8 @@ impl Sedimentree {
     /// `{ let mut t = x.clone(); t.minimize_in_place(m); t } == x.minimize(m)`
     /// for any tree `x` and metric `m` (both share [`keep_sets`](Self::keep_sets)).
     ///
-    /// Prefer this over `*tree = tree.minimize(m)` at owner sites: it avoids
-    /// cloning every retained fragment/commit and rebuilding the maps.
+    /// Avoids cloning every retained fragment/commit and rebuilding the maps,
+    /// which [`minimize`](Self::minimize) must do to leave `self` intact.
     pub fn minimize_in_place<M: DepthMetric>(&mut self, depth_metric: &M) {
         let KeepSets {
             fragment_heads,
@@ -590,11 +590,9 @@ impl Sedimentree {
     /// Compute the set of fragment heads and commit heads that survive
     /// minimization, without materializing either output representation.
     ///
-    /// This is the single source of truth for minimization, shared by
-    /// [`minimize`](Self::minimize) (which rebuilds a fresh tree) and
+    /// Shared by [`minimize`](Self::minimize) (which rebuilds a fresh tree) and
     /// [`minimize_in_place`](Self::minimize_in_place) (which `retain`s on the
-    /// existing maps). Keeping the keep-set computation in one place is what
-    /// guarantees the two stay byte-for-byte equivalent.
+    /// existing maps), so the two produce identical results.
     fn keep_sets<M: DepthMetric>(&self, depth_metric: &M) -> KeepSets {
         // Sort fragments by head bytes before grouping so the iteration
         // order is independent of the underlying `Map`'s. With the `std`

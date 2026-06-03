@@ -534,11 +534,10 @@ async fn large_message_handling() -> TestResult {
     Ok(())
 }
 
+/// All commits from a multi-commit batch are delivered. Sync convergence is
+/// set-based over content-addressed commits, so per-commit ordering is not a
+/// protocol guarantee — this verifies complete delivery, not order.
 #[tokio::test]
-// Renamed from `message_ordering`: sync convergence is set-based over
-// content-addressed commits, so per-commit *ordering* is not a guarantee the
-// protocol makes (and these commits use random ids). What this verifies is
-// that *all* commits from a multi-commit batch are delivered.
 async fn multiple_commits_all_delivered() -> TestResult {
     init_tracing();
 
