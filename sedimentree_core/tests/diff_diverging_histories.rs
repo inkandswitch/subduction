@@ -317,7 +317,7 @@ fn minimize_loose_only_preserves_fingerprints() {
     ]);
 
     let depth_metric = CountLeadingZeroBytes;
-    let minimized = local.minimize(&depth_metric);
+    let minimized = local.clone().minimize(&depth_metric);
 
     let summary_raw = local.fingerprint_summarize(&SEED);
     let summary_min = minimized.fingerprint_summarize(&SEED);

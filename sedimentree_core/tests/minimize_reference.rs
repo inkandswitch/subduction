@@ -173,7 +173,7 @@ fn loose_commit_pruning_agrees_with_naive() {
     bolero::check!()
         .with_arbitrary::<ArbitraryDag>()
         .for_each(|ArbitraryDag { tree }| {
-            let prod = tree.minimize(&CountLeadingZeroBytes);
+            let prod = tree.clone().minimize(&CountLeadingZeroBytes);
 
             // Feed production's kept fragments to the naive pruner so
             // we test loose-commit pruning in isolation from
@@ -209,7 +209,7 @@ fn minimize_preserves_known_commit_ids() {
     bolero::check!()
         .with_arbitrary::<ArbitraryDag>()
         .for_each(|ArbitraryDag { tree }| {
-            let prod = tree.minimize(&CountLeadingZeroBytes);
+            let prod = tree.clone().minimize(&CountLeadingZeroBytes);
 
             let known_before = knowable_checkpoints(tree);
             let known_after = knowable_checkpoints(&prod);
@@ -235,7 +235,7 @@ fn dropped_loose_commits_are_covered_by_kept_fragments() {
     bolero::check!()
         .with_arbitrary::<ArbitraryDag>()
         .for_each(|ArbitraryDag { tree }| {
-            let prod = tree.minimize(&CountLeadingZeroBytes);
+            let prod = tree.clone().minimize(&CountLeadingZeroBytes);
 
             let kept_loose: BTreeSet<CommitId> =
                 prod.loose_commits().map(LooseCommit::head).collect();
@@ -268,7 +268,7 @@ fn all_reachable_commit_ids_remain_knowable() {
     bolero::check!()
         .with_arbitrary::<ArbitraryDag>()
         .for_each(|ArbitraryDag { tree }| {
-            let prod = tree.minimize(&CountLeadingZeroBytes);
+            let prod = tree.clone().minimize(&CountLeadingZeroBytes);
 
             let reachable_before = reachable_commit_ids(tree);
             let known_after = knowable_checkpoints(&prod);
@@ -353,7 +353,7 @@ fn fragment_minimization_preserves_coverage() {
     bolero::check!()
         .with_arbitrary::<ArbitraryDag>()
         .for_each(|ArbitraryDag { tree }| {
-            let prod = tree.minimize(&CountLeadingZeroBytes);
+            let prod = tree.clone().minimize(&CountLeadingZeroBytes);
 
             let cov_before = coverage(tree.fragments());
             let cov_after = coverage(prod.fragments());
@@ -376,8 +376,8 @@ fn minimize_is_deterministic_within_process() {
     bolero::check!()
         .with_arbitrary::<ArbitraryDag>()
         .for_each(|ArbitraryDag { tree }| {
-            let m1 = tree.minimize(&CountLeadingZeroBytes);
-            let m2 = tree.minimize(&CountLeadingZeroBytes);
+            let m1 = tree.clone().minimize(&CountLeadingZeroBytes);
+            let m2 = tree.clone().minimize(&CountLeadingZeroBytes);
             assert_eq!(m1, m2, "minimize not deterministic within a process");
         });
 }
@@ -402,8 +402,8 @@ fn minimize_is_deterministic_across_constructions() {
             commits.shuffle(&mut rng);
 
             let alt = Sedimentree::new(frags, commits);
-            let m_orig = tree.minimize(&CountLeadingZeroBytes);
-            let m_alt = alt.minimize(&CountLeadingZeroBytes);
+            let m_orig = tree.clone().minimize(&CountLeadingZeroBytes);
+            let m_alt = alt.clone().minimize(&CountLeadingZeroBytes);
 
             assert_eq!(
                 m_orig, m_alt,
@@ -412,7 +412,7 @@ fn minimize_is_deterministic_across_constructions() {
         });
 }
 
-/// `tree.minimize().minimize() == tree.minimize()`. Pre-fix this could
+/// `tree.clone().minimize().minimize() == tree.clone().minimize()`. Pre-fix this could
 /// fail: `Sedimentree::new` produced a fresh `HashMap` whose iteration
 /// order differed from the input's, so re-minimize picked a different
 /// mutual-dominance representative.
@@ -421,8 +421,8 @@ fn minimize_is_idempotent() {
     bolero::check!()
         .with_arbitrary::<ArbitraryDag>()
         .for_each(|ArbitraryDag { tree }| {
-            let once = tree.minimize(&CountLeadingZeroBytes);
-            let twice = once.minimize(&CountLeadingZeroBytes);
+            let once = tree.clone().minimize(&CountLeadingZeroBytes);
+            let twice = once.clone().minimize(&CountLeadingZeroBytes);
             assert_eq!(once, twice, "minimize is not idempotent");
         });
 }
@@ -436,7 +436,7 @@ fn minimize_with_no_fragments_keeps_all_commits() {
             let commits: Vec<LooseCommit> = tree.loose_commits().cloned().collect();
             let stripped = Sedimentree::new(vec![], commits.clone());
 
-            let minimized = stripped.minimize(&CountLeadingZeroBytes);
+            let minimized = stripped.clone().minimize(&CountLeadingZeroBytes);
             let prod_set: BTreeSet<CommitId> =
                 minimized.loose_commits().map(LooseCommit::head).collect();
             let orig_set: BTreeSet<CommitId> = commits.iter().map(LooseCommit::head).collect();
@@ -467,8 +467,8 @@ fn minimal_hash_is_stable_across_constructions() {
             commits.shuffle(&mut rng);
 
             let alt = Sedimentree::new(frags, commits);
-            let h_orig = tree.minimal_hash(&CountLeadingZeroBytes);
-            let h_alt = alt.minimal_hash(&CountLeadingZeroBytes);
+            let h_orig = tree.clone().minimal_hash(&CountLeadingZeroBytes);
+            let h_alt = alt.clone().minimal_hash(&CountLeadingZeroBytes);
 
             assert_eq!(
                 h_orig.as_bytes(),
@@ -478,7 +478,7 @@ fn minimal_hash_is_stable_across_constructions() {
         });
 }
 
-/// `tree.minimize().fingerprint_summarize(seed)` is stable across
+/// `tree.clone().minimize().fingerprint_summarize(seed)` is stable across
 /// constructions. `fingerprint_summarize` is itself order-independent;
 /// this pins the composed sync-flow behaviour against `minimize`'s
 /// pre-fix non-determinism.
@@ -502,9 +502,11 @@ fn fingerprint_summary_of_minimized_tree_is_stable() {
             let seed = FingerprintSeed::new(0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210);
 
             let s_orig = tree
+                .clone()
                 .minimize(&CountLeadingZeroBytes)
                 .fingerprint_summarize(&seed);
             let s_alt = alt
+                .clone()
                 .minimize(&CountLeadingZeroBytes)
                 .fingerprint_summarize(&seed);
 

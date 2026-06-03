@@ -1518,9 +1518,9 @@ where
         self.minimize_tree(id).await;
 
         let heads = {
-            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            let mut shard = self.sedimentrees.get_shard_containing(&id).lock().await;
             shard
-                .get(&id)
+                .get_mut(&id)
                 .map(|s| s.heads(&self.depth_metric))
                 .unwrap_or_default()
         };
@@ -1667,9 +1667,9 @@ where
         self.minimize_tree(id).await;
 
         let heads = {
-            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
+            let mut shard = self.sedimentrees.get_shard_containing(&id).lock().await;
             shard
-                .get(&id)
+                .get_mut(&id)
                 .map(|s| s.heads(&self.depth_metric))
                 .unwrap_or_default()
         };
@@ -3196,9 +3196,9 @@ where
         let mut out = Vec::new();
         for idx in self.sedimentrees.shard_indices() {
             if let Some(shard) = self.sedimentrees.shard_at(idx) {
-                let guard = shard.lock().await;
+                let mut guard = shard.lock().await;
                 out.reserve(guard.len());
-                for (id, tree) in guard.iter() {
+                for (id, tree) in guard.iter_mut() {
                     out.push((*id, tree.heads(&self.depth_metric)));
                 }
             }

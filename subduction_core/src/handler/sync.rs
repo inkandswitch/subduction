@@ -868,9 +868,9 @@ impl<
 
     /// Compute the current heads for a sedimentree (without a counter).
     async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
-        let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
+        let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
         locked
-            .get(&id)
+            .get_mut(&id)
             .map(|s| s.heads(&self.depth_metric))
             .unwrap_or_default()
     }

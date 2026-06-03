@@ -51,7 +51,7 @@ fn diamond_merge_fragment_covers_interior() {
     let tree = graph.to_sedimentree_with_fragments(vec![fragment.clone()]);
 
     // Use the mock depth metric from TestGraph instead of CountLeadingZeroBytes
-    let minimized = tree.minimize(graph.depth_metric());
+    let minimized = tree.clone().minimize(graph.depth_metric());
 
     // Fragment should be kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -91,7 +91,7 @@ fn diamond_partial_coverage() {
     let fragment = graph.make_fragment("a", &["d"], &["b"]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment]);
 
-    let minimized = tree.minimize(graph.depth_metric());
+    let minimized = tree.clone().minimize(graph.depth_metric());
 
     // Fragment should be kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -117,7 +117,7 @@ fn independent_branches_separate_fragments() {
     let fragment2 = graph.make_fragment("c", &["d"], &[]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment1, fragment2]);
 
-    let minimized = tree.minimize(graph.depth_metric());
+    let minimized = tree.clone().minimize(graph.depth_metric());
 
     // Both fragments should be kept (independent, neither supports the other)
     assert_eq!(minimized.fragments().count(), 2);
@@ -143,7 +143,7 @@ fn deep_linear_chain() {
     let fragment = graph.make_fragment("a", &["e"], &["b", "c", "d"]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment]);
 
-    let minimized = tree.minimize(graph.depth_metric());
+    let minimized = tree.clone().minimize(graph.depth_metric());
 
     // Single fragment kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -210,7 +210,7 @@ fn nested_fragments_three_levels() {
     );
 
     // Use CountLeadingZeroBytes since digests were created with commit_id_with_depth
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
     // Only deepest fragment should remain
@@ -262,7 +262,7 @@ fn overlapping_same_depth_both_kept() {
     );
 
     // Use CountLeadingZeroBytes since digests were created with commit_id_with_depth
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
     // Both should be kept (same depth, different ranges)
@@ -295,7 +295,7 @@ fn fragment_boundary_at_merge() {
     let fragment = graph.make_fragment("a", &["d"], &["b", "c"]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment]);
 
-    let minimized = tree.minimize(graph.depth_metric());
+    let minimized = tree.clone().minimize(graph.depth_metric());
 
     // Fragment should be kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -363,7 +363,7 @@ fn collective_support_from_multiple_deep_keeps_shallow() {
         vec![],
     );
 
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    let minimized = tree.clone().minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
     assert_eq!(fragments.len(), 3);
