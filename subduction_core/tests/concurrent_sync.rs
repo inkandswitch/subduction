@@ -303,8 +303,9 @@ async fn connect_pair(
 /// This test was added because the original implementation used a sequential
 /// `for id in tree_ids { sync_with_peer(..).await }` loop, causing
 /// head-of-line blocking where each document waited for the previous one's
-/// round trip to complete. The fix uses `FuturesUnordered` to fire all
-/// sync requests concurrently.
+/// round trip to complete. `full_sync_with_peer` now spawns each document's
+/// sync onto the runtime so they proceed concurrently (and, on a
+/// multi-threaded runtime, in parallel).
 ///
 /// The test creates two nodes, adds one commit to each of N different
 /// sedimentree IDs on Alice, then syncs with Bob. The storage on Bob's
@@ -396,8 +397,8 @@ async fn full_sync_with_peer_is_concurrent() -> TestResult {
 /// Regression test: verify that many independent `sync_with_peer` calls
 /// (simulating JS `Promise.all` over N documents) run concurrently.
 ///
-/// Unlike [`full_sync_with_peer_is_concurrent`] which tests the internal
-/// `FuturesUnordered` inside `full_sync_with_peer`, this test fires N
+/// Unlike [`full_sync_with_peer_is_concurrent`] which tests the spawned
+/// per-document fan-out inside `full_sync_with_peer`, this test fires N
 /// independent `sync_with_peer` calls from outside — the same code path
 /// that a Wasm caller hits when doing:
 ///

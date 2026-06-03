@@ -453,6 +453,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        'a: 'static,
         Metric: Clone,
         SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
         <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
@@ -559,6 +560,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
@@ -646,6 +648,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
