@@ -192,29 +192,50 @@ where
         Conn::SendError: Send + 'static,
         WireMsg: Encode + Decode + From<SyncMessage> + Send,
     {
-        let time_limit = timeout.unwrap_or(self.multiplexer.default_time_limit());
+        let idle_timeout = timeout.unwrap_or(self.multiplexer.default_idle_timeout());
         async move {
             let req_id = req.req_id;
-            let rx = self.multiplexer.register_pending(req_id).await;
+            let mut rx = self.multiplexer.register_pending(req_id).await;
 
             let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
             Connection::<Sendable, WireMsg>::send(&self.authenticated, &wire_msg)
                 .await
                 .map_err(CallError::Send)?;
 
-            match self.timer.timeout(time_limit, rx.boxed()).await {
-                Ok(Ok(resp)) => {
-                    tracing::debug!("request {req_id:?} completed");
-                    Ok(resp)
-                }
-                Ok(Err(_)) => {
-                    tracing::error!("request {req_id:?} response dropped");
-                    Err(CallError::ResponseDropped)
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {req_id:?} timed out");
-                    self.multiplexer.cancel_pending(&req_id).await;
-                    Err(CallError::Timeout)
+            // Progress-aware idle wait. Each iteration waits up to
+            // `idle_timeout` for our response. If that window elapses
+            // without our response, we time out *only if the connection
+            // made no progress* during it — i.e. no other request
+            // completed (the completion epoch is unchanged). If some other
+            // request did complete, the connection is alive and we re-arm,
+            // keeping a request queued behind a draining batch patient.
+            let mut last_epoch = self.multiplexer.completion_epoch();
+            loop {
+                match self.timer.timeout(idle_timeout, (&mut rx).boxed()).await {
+                    Ok(Ok(resp)) => {
+                        tracing::debug!("request {req_id:?} completed");
+                        return Ok(resp);
+                    }
+                    Ok(Err(_)) => {
+                        tracing::debug!("request {req_id:?} response channel dropped");
+                        return Err(CallError::ResponseDropped);
+                    }
+                    Err(TimedOut) => {
+                        let epoch = self.multiplexer.completion_epoch();
+                        if epoch != last_epoch {
+                            last_epoch = epoch;
+                            tracing::trace!(
+                                "request {req_id:?} idle window elapsed but connection \
+                                 made progress; re-arming"
+                            );
+                            continue;
+                        }
+                        tracing::warn!(
+                            "request {req_id:?} timed out (connection idle for {idle_timeout:?})"
+                        );
+                        self.multiplexer.cancel_pending(&req_id).await;
+                        return Err(CallError::Timeout);
+                    }
                 }
             }
         }
@@ -261,29 +282,50 @@ where
         Conn: Connection<Local, WireMsg> + PartialEq,
         WireMsg: Encode + Decode + From<SyncMessage>,
     {
-        let time_limit = timeout.unwrap_or(self.multiplexer.default_time_limit());
+        let idle_timeout = timeout.unwrap_or(self.multiplexer.default_idle_timeout());
         async move {
             let req_id = req.req_id;
-            let rx = self.multiplexer.register_pending(req_id).await;
+            let mut rx = self.multiplexer.register_pending(req_id).await;
 
             let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
             Connection::<Local, WireMsg>::send(&self.authenticated, &wire_msg)
                 .await
                 .map_err(CallError::Send)?;
 
-            match self.timer.timeout(time_limit, rx.boxed_local()).await {
-                Ok(Ok(resp)) => {
-                    tracing::debug!("request {req_id:?} completed");
-                    Ok(resp)
-                }
-                Ok(Err(_)) => {
-                    tracing::error!("request {req_id:?} response dropped");
-                    Err(CallError::ResponseDropped)
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {req_id:?} timed out");
-                    self.multiplexer.cancel_pending(&req_id).await;
-                    Err(CallError::Timeout)
+            // Progress-aware idle wait — see the `Sendable` variant for the
+            // full rationale. Re-arm on connection progress (completion
+            // epoch advanced); fail only after a full silent idle window.
+            let mut last_epoch = self.multiplexer.completion_epoch();
+            loop {
+                match self
+                    .timer
+                    .timeout(idle_timeout, (&mut rx).boxed_local())
+                    .await
+                {
+                    Ok(Ok(resp)) => {
+                        tracing::debug!("request {req_id:?} completed");
+                        return Ok(resp);
+                    }
+                    Ok(Err(_)) => {
+                        tracing::debug!("request {req_id:?} response channel dropped");
+                        return Err(CallError::ResponseDropped);
+                    }
+                    Err(TimedOut) => {
+                        let epoch = self.multiplexer.completion_epoch();
+                        if epoch != last_epoch {
+                            last_epoch = epoch;
+                            tracing::trace!(
+                                "request {req_id:?} idle window elapsed but connection \
+                                 made progress; re-arming"
+                            );
+                            continue;
+                        }
+                        tracing::warn!(
+                            "request {req_id:?} timed out (connection idle for {idle_timeout:?})"
+                        );
+                        self.multiplexer.cancel_pending(&req_id).await;
+                        return Err(CallError::Timeout);
+                    }
                 }
             }
         }

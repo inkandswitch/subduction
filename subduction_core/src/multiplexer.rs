@@ -24,22 +24,65 @@ use async_lock::Mutex;
 use futures::channel::oneshot;
 use sedimentree_core::collections::Map;
 
+use alloc::sync::Arc;
+
 use crate::{
     connection::message::{BatchSyncResponse, RequestId},
     peer::id::PeerId,
 };
 
+/// Default per-call idle timeout.
+///
+/// This is an **idle** timeout, not a total-deadline: it is the maximum
+/// tolerable gap between *completions* on a connection, not the total
+/// lifetime of a single request. Each completion on the connection
+/// re-arms it (see [`Multiplexer::completion_epoch`]), so a request
+/// queued behind others that are completing stays patient and only fails
+/// once the connection has been silent for this long.
+///
+/// Single source of truth: the builder default and the Wasm bindings both
+/// reference this constant.
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Generic request-response multiplexer.
 ///
-/// Holds the pending-response map, request ID counter, and timeout
-/// strategy. Transport backends embed this and delegate their
-/// request-response impls to it.
+/// Holds the pending-response map, request ID counter, idle-timeout
+/// default, and a shared completion epoch. Transport backends embed this
+/// and delegate their request-response impls to it.
+///
+/// # Progress-aware ("idle") timeouts
+///
+/// A multiplexed connection may carry many concurrent in-flight requests
+/// (e.g. one per document in a large sync). Timing each request out on an
+/// *absolute* deadline since-send is wrong: a request merely queued
+/// behind others that are completing would false-fire even though the
+/// connection is healthy and making progress.
+///
+/// Instead, completions advance a shared [`completion_epoch`]. A waiting
+/// `call` snapshots the epoch and waits in `idle_timeout`-sized windows;
+/// if the epoch advanced over a window, the connection made progress
+/// (some request completed) and the caller re-arms rather than failing. A
+/// request times out only after a full window passes with **no**
+/// completion anywhere on the connection.
+///
+/// [`completion_epoch`]: Multiplexer::completion_epoch
 #[derive(Debug)]
 pub struct Multiplexer {
     peer_id: PeerId,
     req_id_counter: AtomicU64,
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
-    default_time_limit: Duration,
+    default_idle_timeout: Duration,
+
+    /// Monotonic count of completions (responses matched to a waiting
+    /// caller) on this connection.
+    ///
+    /// Shared (`Arc`) across multiplexer clones so every concurrent caller
+    /// observes the same progress signal. Bumped in
+    /// [`resolve_pending`](Self::resolve_pending); read by waiting `call`s
+    /// to decide whether the connection is alive. This is the
+    /// "reset on progress" fuse: completions re-arm it, idle gaps burn it
+    /// down.
+    completion_epoch: Arc<AtomicU64>,
 }
 
 impl Clone for Multiplexer {
@@ -48,7 +91,8 @@ impl Clone for Multiplexer {
             peer_id: self.peer_id,
             req_id_counter: AtomicU64::new(self.req_id_counter.load(Ordering::Relaxed)),
             pending: Mutex::new(Map::new()),
-            default_time_limit: self.default_time_limit,
+            default_idle_timeout: self.default_idle_timeout,
+            completion_epoch: Arc::clone(&self.completion_epoch),
         }
     }
 }
@@ -77,7 +121,7 @@ impl Multiplexer {
     /// Panics if the platform's random number generator is unavailable.
     #[must_use]
     #[allow(clippy::expect_used)]
-    pub fn new(peer_id: PeerId, default_time_limit: Duration) -> Self {
+    pub fn new(peer_id: PeerId, default_idle_timeout: Duration) -> Self {
         Self {
             peer_id,
             req_id_counter: AtomicU64::new({
@@ -86,7 +130,8 @@ impl Multiplexer {
                 u64::from_be_bytes(buf)
             }),
             pending: Mutex::new(Map::new()),
-            default_time_limit,
+            default_idle_timeout,
+            completion_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -95,9 +140,23 @@ impl Multiplexer {
         self.peer_id
     }
 
-    /// The default per-call time limit.
-    pub const fn default_time_limit(&self) -> Duration {
-        self.default_time_limit
+    /// The default per-call idle timeout: the maximum tolerable gap
+    /// between completions on this connection before a waiting call gives
+    /// up. See [`DEFAULT_IDLE_TIMEOUT`] and the type-level docs.
+    pub const fn default_idle_timeout(&self) -> Duration {
+        self.default_idle_timeout
+    }
+
+    /// The current completion epoch: a monotonic count of responses
+    /// matched to a waiting caller on this connection.
+    ///
+    /// A waiting `call` compares this across an idle window to decide
+    /// whether the connection made progress (stay patient) or went silent
+    /// (time out). The value itself is meaningless in isolation; only
+    /// *changes* matter.
+    #[must_use]
+    pub fn completion_epoch(&self) -> u64 {
+        self.completion_epoch.load(Ordering::Acquire)
     }
 
     /// Generate the next request ID.
@@ -157,6 +216,13 @@ impl Multiplexer {
         let req_id = resp.req_id;
         let mut pending = self.pending.lock().await;
         if let Some(tx) = pending.remove(&req_id) {
+            // Progress beat: a request completed on this connection. Bump
+            // the shared epoch so any concurrently-waiting `call` observes
+            // that the connection is alive and re-arms its idle window.
+            // Only genuine completions count — `cancel_all_pending` (on
+            // disconnect) deliberately does NOT bump, since a torn-down
+            // connection is not making progress.
+            self.completion_epoch.fetch_add(1, Ordering::Release);
             drop(tx.send(resp.clone()));
             tracing::debug!("routed BatchSyncResponse for {req_id:?} to pending caller");
             true
@@ -170,10 +236,93 @@ impl Multiplexer {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::{
+        connection::message::SyncResult, remote_heads::RemoteHeads,
+    };
     use core::time::Duration;
+    use sedimentree_core::id::SedimentreeId;
 
     fn test_mux() -> Multiplexer {
         Multiplexer::new(PeerId::new([1u8; 32]), Duration::from_secs(5))
+    }
+
+    fn response_for(req_id: RequestId) -> BatchSyncResponse {
+        BatchSyncResponse {
+            req_id,
+            id: SedimentreeId::new([2u8; 32]),
+            result: SyncResult::NotFound,
+            responder_heads: RemoteHeads::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_epoch_starts_at_zero() {
+        let mux = test_mux();
+        assert_eq!(mux.completion_epoch(), 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_advances_completion_epoch() {
+        let mux = test_mux();
+        let req_id = mux.next_request_id();
+        let _rx = mux.register_pending(req_id).await;
+
+        let before = mux.completion_epoch();
+        assert!(mux.resolve_pending(&response_for(req_id)).await);
+        assert_eq!(
+            mux.completion_epoch(),
+            before + 1,
+            "a delivered response must advance the completion epoch"
+        );
+    }
+
+    #[tokio::test]
+    async fn unmatched_resolve_does_not_advance_epoch() {
+        let mux = test_mux();
+        let unknown = mux.next_request_id();
+
+        let before = mux.completion_epoch();
+        assert!(!mux.resolve_pending(&response_for(unknown)).await);
+        assert_eq!(
+            mux.completion_epoch(),
+            before,
+            "a response with no pending caller is not progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_all_pending_does_not_advance_epoch() {
+        // A torn-down connection is not "making progress" — disconnect
+        // teardown must not look like a completion to waiting callers.
+        let mux = test_mux();
+        let req_id = mux.next_request_id();
+        let _rx = mux.register_pending(req_id).await;
+
+        let before = mux.completion_epoch();
+        mux.cancel_all_pending().await;
+        assert_eq!(
+            mux.completion_epoch(),
+            before,
+            "cancel_all_pending must not advance the completion epoch"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_epoch_is_shared_across_clones() {
+        // The epoch is the cross-caller progress signal; clones (one per
+        // concurrent caller path) must observe the same counter.
+        let mux = test_mux();
+        let clone = mux.clone();
+        let req_id = mux.next_request_id();
+        let _rx = mux.register_pending(req_id).await;
+
+        assert!(mux.resolve_pending(&response_for(req_id)).await);
+        assert_eq!(
+            clone.completion_epoch(),
+            mux.completion_epoch(),
+            "a clone must observe completions resolved on the original"
+        );
+        assert!(clone.completion_epoch() >= 1);
     }
 
     #[tokio::test]

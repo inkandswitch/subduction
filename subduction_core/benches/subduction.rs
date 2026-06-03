@@ -999,6 +999,56 @@ mod display {
     }
 }
 
+mod multiplexer {
+    use core::time::Duration;
+
+    use criterion::{Criterion, black_box};
+    use futures::executor::block_on;
+    use subduction_core::multiplexer::Multiplexer;
+
+    use super::generators::{batch_sync_response_from_seed, peer_id_from_seed};
+
+    /// Microbenchmarks for the request-response multiplexer hot path.
+    ///
+    /// **Intent**: Quantify the per-request overhead of the progress-aware
+    /// ("idle") timeout machinery — specifically the `completion_epoch`
+    /// read/bump added to `resolve_pending`. The register → resolve
+    /// round-trip is on the critical path for every sync response.
+    ///
+    /// **Expected performance**: Sub-microsecond; dominated by the
+    /// `async_lock::Mutex` round-trip on the pending map, with the atomic
+    /// epoch bump being a negligible addition.
+    pub fn bench_multiplexer(c: &mut Criterion) {
+        let mut group = c.benchmark_group("multiplexer");
+
+        // The completion-epoch read performed by a waiting `call` on each
+        // idle window. Must be cheap — it can be hit frequently under load.
+        group.bench_function("completion_epoch_read", |b| {
+            let mux = Multiplexer::new(peer_id_from_seed(1), Duration::from_secs(30));
+            b.iter(|| black_box(mux.completion_epoch()));
+        });
+
+        // Full register + resolve round-trip (includes the epoch bump).
+        // This is the per-response hot path the GRACE change touches.
+        group.bench_function("register_resolve_roundtrip", |b| {
+            let mux = Multiplexer::new(peer_id_from_seed(2), Duration::from_secs(30));
+            let resp = batch_sync_response_from_seed(7, 0, 0, 0);
+            b.iter(|| {
+                block_on(async {
+                    let req_id = mux.next_request_id();
+                    // Use a response whose req_id matches the freshly minted id.
+                    let mut r = resp.clone();
+                    r.req_id = req_id;
+                    let _rx = mux.register_pending(req_id).await;
+                    black_box(mux.resolve_pending(&r).await);
+                });
+            });
+        });
+
+        group.finish();
+    }
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
@@ -1007,6 +1057,7 @@ criterion_group! {
         id::bench_storage_key,
         message::bench_message_construction,
         message::bench_message_request_id,
+        multiplexer::bench_multiplexer,
         sync::bench_sync_diff,
         sync::bench_batch_sync,
         collections::bench_collections,
