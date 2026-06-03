@@ -5,7 +5,7 @@ use subduction_core::timeout::Timeout;
 use crate::{
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     sleep::TokioSleeper,
-    tokio::unified::UnifiedWebSocket,
+    tokio::{TrackedTokioSpawn, unified::UnifiedWebSocket},
     websocket::{KeepAlive, WebSocket},
 };
 
@@ -835,6 +835,7 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
         P,
         Sig,
         O,
+        TrackedTokioSpawn,
         M,
     >,
 >;

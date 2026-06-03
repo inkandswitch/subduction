@@ -57,6 +57,7 @@ type TestSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         InstantTimeout,
+        TokioSpawn,
     >,
 >;
 
@@ -643,6 +644,7 @@ type OpenMockSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         InstantTimeout,
+        TokioSpawn,
     >,
 >;
 
@@ -663,6 +665,7 @@ type RestrictiveMockSubduction = Arc<
         RestrictiveFetchPolicy,
         MemorySigner,
         InstantTimeout,
+        TokioSpawn,
     >,
 >;
 

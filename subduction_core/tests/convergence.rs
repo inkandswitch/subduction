@@ -47,6 +47,7 @@ type TestSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         InstantTimeout,
+        TokioSpawn,
     >,
 >;
 
@@ -409,6 +410,7 @@ type DeepSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         InstantTimeout,
+        TokioSpawn,
         AlwaysDeep,
     >,
 >;

@@ -25,7 +25,10 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
-    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
+    tokio::{
+        TimeoutTokio, TokioSpawn, TrackedTokioSpawn, client::TokioWebSocketClient,
+        server::TokioWebSocketServer,
+    },
     websocket::KeepAlive,
 };
 use testresult::TestResult;
@@ -81,6 +84,7 @@ type TestSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         TimeoutTokio,
+        TokioSpawn,
     >,
 >;
 
@@ -110,6 +114,7 @@ type ServerSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         TimeoutTokio,
+        TrackedTokioSpawn,
     >,
 >;
 
@@ -154,6 +159,7 @@ fn setup_client_subduction(
         OpenPolicy,
         MemorySigner,
         TimeoutTokio,
+        TokioSpawn,
         CountLeadingZeroBytes,
     >,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
@@ -181,6 +187,7 @@ fn setup_server_subduction(
         OpenPolicy,
         MemorySigner,
         TimeoutTokio,
+        TrackedTokioSpawn,
         CountLeadingZeroBytes,
     >,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
@@ -188,7 +195,7 @@ fn setup_server_subduction(
     SubductionBuilder::new()
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
+        .spawner(TrackedTokioSpawn::new(tokio_util::task::TaskTracker::new()))
         .timer(TimeoutTokio)
         .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>()
 }

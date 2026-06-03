@@ -764,6 +764,7 @@ pub fn new_test_subduction() -> (
             OpenPolicy,
             MemorySigner,
             InstantTimeout,
+            TestSpawn,
             CountLeadingZeroBytes,
         >,
     >,

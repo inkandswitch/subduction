@@ -40,10 +40,14 @@ futures = { workspace = true, features = ["executor"] }
 rand = { workspace = true, features = ["std_rng"] }
 subduction_core = { path = ".", features = ["bolero", "std", "test_utils"] }
 testresult = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [[bench]]
 name = "subduction"
+harness = false
+
+[[bench]]
+name = "inbound_dispatch"
 harness = false
 
 [features]

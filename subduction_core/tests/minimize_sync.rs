@@ -74,6 +74,7 @@ type TestSubduction = Arc<
         OpenPolicy,
         subduction_crypto::signer::memory::MemorySigner,
         InstantTimeout,
+        TokioSpawn,
         CountLeadingZeroBytes,
     >,
 >;

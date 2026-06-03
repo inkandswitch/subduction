@@ -65,6 +65,7 @@ fn make_subduction() -> (
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
             InstantTimeout,
+            TokioSpawn,
             CountLeadingZeroBytes,
         >,
     >,

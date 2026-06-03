@@ -155,6 +155,7 @@ type ClientSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         TimeoutTokio,
+        TrackedTokioSpawn,
     >,
 >;
 

@@ -139,6 +139,7 @@ type WasmSubductionCore = Subduction<
     JsPolicy,
     JsSigner,
     JsTimeout,
+    WasmSpawn,
     WasmHashMetric,
     WASM_SHARD_COUNT,
 >;

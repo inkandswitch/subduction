@@ -59,6 +59,7 @@ type TestSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         FuturesTimerTimeout,
+        TokioSpawn,
         CountLeadingZeroBytes,
     >,
 >;

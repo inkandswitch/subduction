@@ -140,6 +140,7 @@ pub struct Subduction<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric = CountLeadingZeroBytes,
     const SHARDS: usize = 256,
 > {
@@ -216,6 +217,11 @@ pub struct Subduction<
 
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
+
+    /// Runtime spawner, retained so post-construction operations (the
+    /// per-document cold-start fan-out) can spawn onto the worker pool.
+    /// On `Sendable` this is `tokio::spawn`; on `Local`, `spawn_local`.
+    spawner: Sp,
 
     _phantom: core::marker::PhantomData<&'a Async>,
 }
@@ -334,9 +340,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
@@ -389,7 +396,7 @@ where
     /// );
     /// ```
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    pub fn new<Sp: Spawn<Async> + Send + Sync + 'static>(
+    pub fn new(
         handler: Arc<Hdl>,
         discovery_id: Option<DiscoveryId>,
         signer: Sign,
@@ -406,12 +413,13 @@ where
         spawner: Sp,
     ) -> (
         Arc<Self>,
-        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
         Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Timer: Send + Sync + 'a,
+        Sp: Clone + Send + Sync + 'static,
     {
         tracing::info!("initializing Subduction instance");
 
@@ -419,6 +427,7 @@ where
         let (queue_sender, queue_receiver) = async_channel::bounded(2048);
         let (response_sender, response_receiver) = async_channel::bounded(8192);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
+        let stored_spawner = spawner.clone();
         let manager = ConnectionManager::<Async, Authenticated<Conn, Async>, Hdl::Message, Sp>::new(
             spawner,
             manager_receiver,
@@ -454,6 +463,7 @@ where
             connection_closed: closed_receiver,
             abort_manager_handle,
             abort_listener_handle,
+            spawner: stored_spawner,
             _phantom: PhantomData,
         });
 
@@ -462,7 +472,7 @@ where
 
         (
             sd.clone(),
-            ListenerFuture::<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>::new(
+            ListenerFuture::<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>::new(
                 Async::start_listener(sd, abort_listener_reg),
             ),
             crate::connection::manager::ManagerFuture::new(abortable_manager),
@@ -2021,9 +2031,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     /// Returns a reference to the sedimentrees map.
     #[must_use]
@@ -2101,9 +2112,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
@@ -3021,79 +3033,6 @@ where
         Ok(PerPeerSync(out))
     }
 
-    /// Sync all known [`Sedimentree`]s with a single peer.
-    ///
-    /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
-    /// All sedimentrees are synced **concurrently** using [`FuturesUnordered`],
-    /// avoiding head-of-line blocking where a slow document stalls the rest.
-    /// The multiplexer supports multiple in-flight requests per connection,
-    /// each keyed by a unique [`crate::connection::message::RequestId`].
-    ///
-    /// Errors are collected rather than short-circuiting, so a failure on one
-    /// sedimentree does not prevent the rest from syncing.
-    pub async fn full_sync_with_peer(
-        &self,
-        peer_id: &PeerId,
-        subscribe: bool,
-        timeout: Option<Duration>,
-    ) -> (
-        bool,
-        SyncStats,
-        Vec<(
-            Authenticated<Conn, Async>,
-            CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
-        )>,
-        Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
-    ) {
-        tracing::info!(
-            "Requesting batch sync for all sedimentrees with peer {}",
-            peer_id
-        );
-        // Enumerate from storage so evicted (cold) trees are still synced.
-        // Each `sync_with_peer` hydrates through the LRU cache, so the
-        // resident set stays bounded even across a full sweep.
-        let tree_ids = self.sedimentree_ids().await;
-
-        let mut sync_futures: FuturesUnordered<_> = tree_ids
-            .into_iter()
-            .map(|id| async move {
-                let result = self.sync_with_peer(peer_id, id, subscribe, timeout).await;
-                (id, result)
-            })
-            .collect();
-
-        let mut had_success = false;
-        let mut stats = SyncStats::new();
-        let mut call_errs = Vec::new();
-        let mut io_errs = Vec::new();
-
-        while let Some((id, result)) = sync_futures.next().await {
-            match result {
-                Ok((success, step_stats, step_errs)) => {
-                    if success {
-                        had_success = true;
-                    }
-                    stats.commits_received += step_stats.commits_received;
-                    stats.fragments_received += step_stats.fragments_received;
-                    stats.commits_sent += step_stats.commits_sent;
-                    stats.fragments_sent += step_stats.fragments_sent;
-                    call_errs.extend(step_errs);
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to sync sedimentree {:?} with peer {}: {}",
-                        id,
-                        peer_id,
-                        e
-                    );
-                    io_errs.push((id, e));
-                }
-            }
-        }
-
-        (had_success, stats, call_errs, io_errs)
-    }
-
     /// Sync all known [`Sedimentree`]s with all connected peers.
     pub async fn full_sync_with_all_peers(
         &self,
@@ -3168,9 +3107,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
@@ -3604,6 +3544,128 @@ where
     }
 }
 
+/// Multi-document cold-start fan-out. Separated into its own `impl` block so
+/// the extra spawn-related bounds (`SpawnDocSync`, `Timer: Send + Sync`,
+/// `Async: 'static`) constrain only `full_sync_with_peer` and not the rest of
+/// the sync surface.
+impl<
+    'a,
+    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
+        + SpawnDocSync<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
+        + 'static,
+    Store: Storage<Async>,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
+    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
+    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+    Sign: Signer<Async>,
+    Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+    Sp: Spawn<Async> + Send + Sync + 'static,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
+where
+    'a: 'static,
+    Hdl::Message: From<SyncMessage>,
+    Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
+    ManagedConnection<Conn, Async, Timer>: ManagedCall<
+            Async,
+            Hdl::Message,
+            SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
+        >,
+{
+    /// Sync all known [`Sedimentree`]s with a single peer.
+    ///
+    /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
+    /// Each document's sync is **spawned onto the runtime** (via the configured
+    /// [`Spawn`](crate::connection::manager::Spawn)) so that — on a `Sendable`
+    /// multi-threaded runtime — independent documents verify, ingest, and
+    /// minimize in parallel across worker threads rather than all draining
+    /// through one caller task. On `Local` (Wasm) the spawner runs tasks on the
+    /// same thread, preserving today's concurrency-without-parallelism.
+    ///
+    /// All documents are spawned at once (no in-flight cap), matching the
+    /// concurrency level of the pre-spawn single-task fan-out. A shared results
+    /// channel collects each task's outcome and doubles as the join mechanism,
+    /// since [`Spawn`](crate::connection::manager::Spawn) discards task output.
+    ///
+    /// Errors are collected rather than short-circuiting, so a failure on one
+    /// sedimentree does not prevent the rest from syncing.
+    pub async fn full_sync_with_peer(
+        self: &Arc<Self>,
+        peer_id: &PeerId,
+        subscribe: bool,
+        timeout: Option<Duration>,
+    ) -> (
+        bool,
+        SyncStats,
+        Vec<(
+            Authenticated<Conn, Async>,
+            CallError<<Conn as Connection<Async, Hdl::Message>>::SendError>,
+        )>,
+        Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
+    ) {
+        tracing::info!(
+            "Requesting batch sync for all sedimentrees with peer {}",
+            peer_id
+        );
+        let tree_ids = self.sedimentrees.into_keys().await;
+
+        // Shared results channel. Each spawned per-document task reports its
+        // outcome here; the channel is the join mechanism (`Spawn` discards task
+        // output). Unbounded to match `main`'s fan-out semantics (which collects
+        // every document into one `FuturesUnordered` with no in-flight cap) — we
+        // add parallelism without changing the concurrency level.
+        let (tx, rx) =
+            async_channel::unbounded::<DocSyncResult<Async, Store, Conn, Hdl::Message>>();
+
+        let mut had_success = false;
+        let mut stats = SyncStats::new();
+        let mut call_errs = Vec::new();
+        let mut io_errs = Vec::new();
+
+        let mut outstanding = 0usize;
+        for id in tree_ids {
+            self.spawner.spawn(Async::doc_sync_task(
+                Arc::clone(self),
+                *peer_id,
+                id,
+                subscribe,
+                timeout,
+                tx.clone(),
+            ));
+            outstanding += 1;
+        }
+
+        // Drop our sender so the channel closes once all spawned tasks finish;
+        // drain the results to convergence.
+        drop(tx);
+        while outstanding > 0 {
+            let Ok((done_id, result)) = rx.recv().await else {
+                break;
+            };
+            outstanding -= 1;
+            match result {
+                Ok((success, step_stats, step_errs)) => {
+                    had_success |= success;
+                    stats.commits_received += step_stats.commits_received;
+                    stats.fragments_received += step_stats.fragments_received;
+                    stats.commits_sent += step_stats.commits_sent;
+                    stats.fragments_sent += step_stats.fragments_sent;
+                    call_errs.extend(step_errs);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to sync sedimentree {done_id:?} with peer {peer_id}: {e}"
+                    );
+                    io_errs.push((done_id, e));
+                }
+            }
+        }
+
+        (had_success, stats, call_errs, io_errs)
+    }
+}
+
 impl<
     'a,
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
@@ -3613,9 +3675,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Drop for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Drop for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
@@ -3632,10 +3695,11 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
 > ConnectionPolicy<Async>
-    for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+    for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     type ConnectionDisallowed = Auth::ConnectionDisallowed;
 
@@ -3656,10 +3720,11 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
 > StoragePolicy<Async>
-    for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+    for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     type FetchDisallowed = Auth::FetchDisallowed;
     type PutDisallowed = Auth::PutDisallowed;
@@ -3753,8 +3818,13 @@ pub trait StartListener<
 {
     /// Start the listener task for Subduction.
     #[allow(clippy::type_complexity)]
-    fn start_listener<Timer: Timeout<Self> + Clone + Send + Sync + 'a>(
-        subduction: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
+    fn start_listener<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -3794,8 +3864,13 @@ where
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
-    fn start_listener<Timer: Timeout<Self> + Clone + Send + Sync + 'a>(
-        subduction: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
+    fn start_listener<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -3806,6 +3881,129 @@ where
             }),
             abort_reg,
         )
+    }
+}
+
+/// Result of a single document's sync, as sent back through the fan-out
+/// channel by a spawned [`SpawnDocSync`] task.
+#[allow(clippy::type_complexity)]
+pub type DocSyncResult<Async, Store, Conn, WireMsg> = (
+    SedimentreeId,
+    Result<
+        (
+            bool,
+            SyncStats,
+            Vec<(
+                Authenticated<Conn, Async>,
+                CallError<<Conn as Connection<Async, WireMsg>>::SendError>,
+            )>,
+        ),
+        IoError<Async, Store, Conn, WireMsg>,
+    >,
+);
+
+/// Builds the `'static` future that syncs one document and reports the result
+/// back through a channel — the per-task unit of the cold-start fan-out in
+/// [`Subduction::full_sync_with_peer`].
+///
+/// This exists as a `#[future_form]`-split trait (mirroring [`StartListener`])
+/// solely so the per-task future can be constructed via `Async::from_future`
+/// with the correct `Send` bounds on `Sendable` and no `Send` requirement on
+/// `Local`. The bounded-channel driver loop itself stays in the generic method.
+pub trait SpawnDocSync<
+    'a,
+    Store: Storage<Self>,
+    Conn: Connection<Self, WireMsg> + PartialEq + 'a,
+    WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
+    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
+    Auth: ConnectionPolicy<Self> + StoragePolicy<Self>,
+    Sign: Signer<Self>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>: FutureForm + RunManager<Authenticated<Conn, Self>, WireMsg> + Sized
+{
+    /// Construct the spawnable future for syncing a single document.
+    #[allow(clippy::type_complexity)]
+    fn doc_sync_task<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        peer_id: PeerId,
+        id: SedimentreeId,
+        subscribe: bool,
+        timeout: Option<Duration>,
+        sender: async_channel::Sender<DocSyncResult<Self, Store, Conn, WireMsg>>,
+    ) -> Self::Future<'static, ()>
+    where
+        'a: 'static,
+        ManagedConnection<Conn, Self, Timer>:
+            ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>;
+}
+
+#[future_form(
+    Sendable where
+        Conn: Connection<Sendable, WireMsg> + PartialEq + Clone + Send + Sync + 'static,
+        WireMsg: Encode + Decode + Clone + Send + Sync + core::fmt::Debug + From<SyncMessage> + 'static,
+        Store: Storage<Sendable> + Send + Sync + 'static,
+        Store::Error: Send + 'static,
+        Auth: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'static,
+        Auth::PutDisallowed: Send + 'static,
+        Auth::FetchDisallowed: Send + 'static,
+        Sign: Signer<Sendable> + Send + Sync + 'static,
+        Metric: DepthMetric + Send + Sync + 'static,
+        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier + Send + Sync + 'static,
+        Hdl::HandlerError: Into<ListenError<Sendable, Store, Conn, WireMsg>> + Send + 'static,
+        Conn::DisconnectionError: Send + 'static,
+        Conn::RecvError: Send + 'static,
+        Conn::SendError: Send + 'static,
+    Local where
+        Conn: Connection<Local, WireMsg> + PartialEq + Clone + 'static,
+        WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
+        Store: Storage<Local> + 'static,
+        Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'static,
+        Sign: Signer<Local> + 'static,
+        Metric: DepthMetric + 'static,
+        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'static,
+        Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
+)]
+impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
+    SpawnDocSync<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
+where
+    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
+    Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
+    WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
+{
+    fn doc_sync_task<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        peer_id: PeerId,
+        id: SedimentreeId,
+        subscribe: bool,
+        timeout: Option<Duration>,
+        sender: async_channel::Sender<DocSyncResult<Self, Store, Conn, WireMsg>>,
+    ) -> Self::Future<'static, ()>
+    where
+        'a: 'static,
+        ManagedConnection<Conn, Self, Timer>:
+            ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>,
+    {
+        Async::from_future(async move {
+            let result = subduction
+                .sync_with_peer(&peer_id, id, subscribe, timeout)
+                .await;
+            // Always send a result (even an error) so the driver's drain count
+            // stays exact and a per-document failure can't wedge the loop. If
+            // the receiver is already gone (driver dropped), there's nothing to
+            // report to — discard.
+            sender.send((id, result)).await.ok();
+        })
     }
 }
 
@@ -3823,11 +4021,13 @@ pub struct ListenerFuture<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric = CountLeadingZeroBytes,
     const SHARDS: usize = 256,
 > {
     fut: Pin<Box<Abortable<Async::Future<'a, ()>>>>,
-    _phantom: PhantomData<(Store, Conn, Hdl, Auth, Sign, Timer, Metric)>,
+    #[allow(clippy::type_complexity)]
+    _phantom: PhantomData<(Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric)>,
 }
 
 impl<
@@ -3839,9 +4039,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<Async::Future<'a, ()>>) -> Self {
@@ -3867,9 +4068,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Deref for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Deref for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     type Target = Abortable<Async::Future<'a, ()>>;
 
@@ -3887,9 +4089,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Future for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Future for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     type Output = Result<(), Aborted>;
 
@@ -3907,9 +4110,10 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async>,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Unpin for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>
+> Unpin for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
 }
 
@@ -3994,23 +4198,32 @@ mod tests {
             CountLeadingZeroBytes,
         ));
 
-        let (subduction, _listener_fut, _actor_fut) =
-            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
-                handler.clone(),
-                None,
-                test_signer(),
-                sedimentrees,
-                connections,
-                subscriptions,
-                storage,
-                pending,
-                PeerCounter::default(),
-                NonceCache::default(),
-                InstantTimeout,
-                Duration::from_secs(30),
-                CountLeadingZeroBytes,
-                TestSpawn,
-            );
+        let (subduction, _listener_fut, _actor_fut) = Subduction::<
+            '_,
+            Sendable,
+            _,
+            FailingSendMockConnection,
+            _,
+            _,
+            _,
+            InstantTimeout,
+            _,
+        >::new(
+            handler.clone(),
+            None,
+            test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
+            storage,
+            pending,
+            PeerCounter::default(),
+            NonceCache::default(),
+            InstantTimeout,
+            Duration::from_secs(30),
+            CountLeadingZeroBytes,
+            TestSpawn,
+        );
 
         // Add a failing connection with a different peer ID than the sender
         let sender_peer_id = PeerId::new([1u8; 32]);
@@ -4063,23 +4276,32 @@ mod tests {
             CountLeadingZeroBytes,
         ));
 
-        let (subduction, _listener_fut, _actor_fut) =
-            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
-                handler.clone(),
-                None,
-                test_signer(),
-                sedimentrees,
-                connections,
-                subscriptions,
-                storage,
-                pending,
-                PeerCounter::default(),
-                NonceCache::default(),
-                InstantTimeout,
-                Duration::from_secs(30),
-                CountLeadingZeroBytes,
-                TestSpawn,
-            );
+        let (subduction, _listener_fut, _actor_fut) = Subduction::<
+            '_,
+            Sendable,
+            _,
+            FailingSendMockConnection,
+            _,
+            _,
+            _,
+            InstantTimeout,
+            _,
+        >::new(
+            handler.clone(),
+            None,
+            test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
+            storage,
+            pending,
+            PeerCounter::default(),
+            NonceCache::default(),
+            InstantTimeout,
+            Duration::from_secs(30),
+            CountLeadingZeroBytes,
+            TestSpawn,
+        );
 
         // Add a failing connection with a different peer ID than the sender
         let sender_peer_id = PeerId::new([1u8; 32]);
