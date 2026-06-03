@@ -21,6 +21,7 @@
 use std::collections::BTreeSet;
 
 use future_form::Sendable;
+use futures::future::BoxFuture;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     collections::Set,
@@ -30,7 +31,11 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::test_utils::test_signer,
-    storage::{memory::MemoryStorage, metrics::MetricsStorage, traits::Storage},
+    storage::{
+        memory::MemoryStorage,
+        metrics::{MetricsStorage, RefreshMetrics},
+        traits::Storage,
+    },
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use testresult::TestResult;
@@ -279,5 +284,153 @@ async fn save_batch_writes_through_to_inner() -> TestResult {
         stored_fragment.is_some(),
         "save_batch should have persisted the fragment"
     );
+    Ok(())
+}
+
+// ============================================================================
+// refresh_metrics scaling guarantee
+// ============================================================================
+
+/// A storage wrapper that delegates everything to [`MemoryStorage`] except
+/// the per-tree listing calls, which `panic!`. It lets a test assert that a
+/// code path does *not* enumerate per-tree contents.
+#[derive(Clone)]
+struct ListPanicsStorage {
+    inner: MemoryStorage,
+}
+
+impl ListPanicsStorage {
+    fn new() -> Self {
+        Self {
+            inner: MemoryStorage::new(),
+        }
+    }
+}
+
+impl Storage<Sendable> for ListPanicsStorage {
+    type Error = <MemoryStorage as Storage<Sendable>>::Error;
+
+    fn save_sedimentree_id(&self, id: SedimentreeId) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::save_sedimentree_id(&self.inner, id)
+    }
+
+    fn delete_sedimentree_id(&self, id: SedimentreeId) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::delete_sedimentree_id(&self.inner, id)
+    }
+
+    fn load_all_sedimentree_ids(&self) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
+        Storage::<Sendable>::load_all_sedimentree_ids(&self.inner)
+    }
+
+    fn save_loose_commit(
+        &self,
+        id: SedimentreeId,
+        verified: VerifiedMeta<LooseCommit>,
+    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::save_loose_commit(&self.inner, id, verified)
+    }
+
+    // The metrics refresh must NOT call this: it would be an O(trees) per-tree
+    // directory sweep. Panicking here turns a regression that re-introduces the
+    // sweep into a hard test failure — the panic is the assertion.
+    #[allow(clippy::panic)]
+    fn list_commit_ids(&self, _id: SedimentreeId) -> BoxFuture<'_, Result<Set<CommitId>, Self::Error>> {
+        panic!("list_commit_ids must not be called by refresh_metrics");
+    }
+
+    fn load_loose_commits(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
+        Storage::<Sendable>::load_loose_commits(&self.inner, id)
+    }
+
+    fn load_loose_commit(
+        &self,
+        id: SedimentreeId,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
+        Storage::<Sendable>::load_loose_commit(&self.inner, id, commit_id)
+    }
+
+    fn delete_loose_commit(
+        &self,
+        id: SedimentreeId,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::delete_loose_commit(&self.inner, id, commit_id)
+    }
+
+    fn delete_loose_commits(&self, id: SedimentreeId) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::delete_loose_commits(&self.inner, id)
+    }
+
+    fn save_fragment(
+        &self,
+        id: SedimentreeId,
+        verified: VerifiedMeta<Fragment>,
+    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::save_fragment(&self.inner, id, verified)
+    }
+
+    fn load_fragment(
+        &self,
+        id: SedimentreeId,
+        fragment_head: CommitId,
+    ) -> BoxFuture<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
+        Storage::<Sendable>::load_fragment(&self.inner, id, fragment_head)
+    }
+
+    #[allow(clippy::panic)]
+    fn list_fragment_ids(&self, _id: SedimentreeId) -> BoxFuture<'_, Result<Set<CommitId>, Self::Error>> {
+        panic!("list_fragment_ids must not be called by refresh_metrics");
+    }
+
+    fn load_fragments(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
+        Storage::<Sendable>::load_fragments(&self.inner, id)
+    }
+
+    fn delete_fragment(
+        &self,
+        id: SedimentreeId,
+        fragment_head: CommitId,
+    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::delete_fragment(&self.inner, id, fragment_head)
+    }
+
+    fn delete_fragments(&self, id: SedimentreeId) -> BoxFuture<'_, Result<(), Self::Error>> {
+        Storage::<Sendable>::delete_fragments(&self.inner, id)
+    }
+
+    fn save_batch(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<VerifiedMeta<LooseCommit>>,
+        fragments: Vec<VerifiedMeta<Fragment>>,
+    ) -> BoxFuture<'_, Result<usize, Self::Error>> {
+        Storage::<Sendable>::save_batch(&self.inner, id, commits, fragments)
+    }
+}
+
+/// `refresh_metrics` must refresh only the tree count, which is served from
+/// the backend's in-memory id set — it must never enumerate per-tree
+/// contents. We register several trees against a storage whose per-tree
+/// listing methods panic; a successful refresh proves the O(trees) sweep is
+/// gone (and guards against it being re-introduced).
+#[tokio::test]
+async fn refresh_metrics_does_not_sweep_per_tree() -> TestResult {
+    let inner = ListPanicsStorage::new();
+    for i in 1..=5u8 {
+        Storage::<Sendable>::save_sedimentree_id(&inner, SedimentreeId::new([i; 32])).await?;
+    }
+
+    let ms = MetricsStorage::new(inner);
+
+    // If refresh_metrics still swept per tree, list_*_ids would panic here.
+    ms.refresh_metrics().await?;
+
     Ok(())
 }

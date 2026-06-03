@@ -70,33 +70,21 @@ impl<Store: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S
     type Error = Store::Error;
 
     async fn refresh_metrics(&self) -> Result<(), Self::Error> {
-        let sedimentree_ids = Storage::<Sendable>::load_all_sedimentree_ids(&self.inner).await?;
-        let sedimentree_count = sedimentree_ids.len();
+        // Only the total sedimentree count is refreshed here. It is served from
+        // the backend's in-memory id set (e.g. `FsStorage`'s `ids_cache`), so
+        // this is O(1) in disk I/O regardless of tree count.
+        //
+        // We deliberately do NOT compute per-tree loose-commit / fragment
+        // totals: that required two `read_dir`s per tree, an O(trees) metadata
+        // sweep that becomes a continuous syscall storm at large tree counts
+        // (e.g. 20M `read_dir`s/minute at 10M trees on a 60s refresh).
+        let sedimentree_count =
+            Storage::<Sendable>::load_all_sedimentree_ids(&self.inner).await?.len();
 
         metrics::set_storage_sedimentrees(sedimentree_count);
 
-        let mut total_loose_commits = 0;
-        let mut total_fragments = 0;
-
-        for sedimentree_id in &sedimentree_ids {
-            // Count items per tree via identity listing.
-            // With subdirectory-based storage, this is a cheap directory scan.
-            let commit_ids =
-                Storage::<Sendable>::list_commit_ids(&self.inner, *sedimentree_id).await?;
-            let fragment_ids =
-                Storage::<Sendable>::list_fragment_ids(&self.inner, *sedimentree_id).await?;
-
-            total_loose_commits += commit_ids.len();
-            total_fragments += fragment_ids.len();
-        }
-
-        metrics::set_storage_loose_commits_total(total_loose_commits);
-        metrics::set_storage_fragments_total(total_fragments);
-
         tracing::debug!(
             sedimentrees = sedimentree_count,
-            loose_commits = total_loose_commits,
-            fragments = total_fragments,
             "Refreshed storage metrics"
         );
 

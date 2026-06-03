@@ -30,10 +30,6 @@ pub mod names {
     // Storage metrics (gauges - refreshed periodically from actual state).
     /// Current number of sedimentrees in storage.
     pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
-    /// Total loose commits across all sedimentrees.
-    pub const STORAGE_LOOSE_COMMITS_TOTAL: &str = "subduction_storage_loose_commits_total";
-    /// Total fragments across all sedimentrees.
-    pub const STORAGE_FRAGMENTS_TOTAL: &str = "subduction_storage_fragments_total";
     /// Storage operation duration in seconds.
     pub const STORAGE_OPERATION_DURATION_SECONDS: &str =
         "subduction_storage_operation_duration_seconds";
@@ -127,20 +123,6 @@ pub fn set_storage_sedimentrees(count: usize) {
     metrics::gauge!(names::STORAGE_SEDIMENTREES).set(count as f64);
 }
 
-/// Set the total number of loose commits across all sedimentrees.
-#[inline]
-#[allow(clippy::cast_precision_loss)]
-pub fn set_storage_loose_commits_total(count: usize) {
-    metrics::gauge!(names::STORAGE_LOOSE_COMMITS_TOTAL).set(count as f64);
-}
-
-/// Set the total number of fragments across all sedimentrees.
-#[inline]
-#[allow(clippy::cast_precision_loss)]
-pub fn set_storage_fragments_total(count: usize) {
-    metrics::gauge!(names::STORAGE_FRAGMENTS_TOTAL).set(count as f64);
-}
-
 /// Record the duration of a storage operation.
 #[inline]
 pub fn storage_operation_duration(operation: &'static str, duration_secs: f64) {
@@ -202,14 +184,6 @@ pub fn describe_all() {
     metrics::describe_gauge!(
         names::STORAGE_SEDIMENTREES,
         "Current number of sedimentrees in persistent storage."
-    );
-    metrics::describe_gauge!(
-        names::STORAGE_LOOSE_COMMITS_TOTAL,
-        "Total loose commits across all sedimentrees in storage."
-    );
-    metrics::describe_gauge!(
-        names::STORAGE_FRAGMENTS_TOTAL,
-        "Total fragments across all sedimentrees in storage."
     );
     metrics::describe_histogram!(
         names::STORAGE_OPERATION_DURATION_SECONDS,
