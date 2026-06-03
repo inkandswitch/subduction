@@ -169,13 +169,7 @@ impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
         _message: &SyncMessage,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let fail = self.fail_send;
-        Sendable::from_future(async move {
-            if fail {
-                Err(core::fmt::Error)
-            } else {
-                Ok(())
-            }
-        })
+        Sendable::from_future(async move { if fail { Err(core::fmt::Error) } else { Ok(()) } })
     }
 
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {

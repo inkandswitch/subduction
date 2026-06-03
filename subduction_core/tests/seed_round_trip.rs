@@ -75,7 +75,10 @@ fn seed_participates_in_fingerprint_witness() {
     let id = head(42);
     let fp_a: Fingerprint<CommitId> = Fingerprint::new(&FingerprintSeed::new(1, 2), &id);
     let fp_b: Fingerprint<CommitId> = Fingerprint::new(&FingerprintSeed::new(3, 4), &id);
-    assert_ne!(fp_a, fp_b, "distinct seeds must change the fingerprint here");
+    assert_ne!(
+        fp_a, fp_b,
+        "distinct seeds must change the fingerprint here"
+    );
 }
 
 /// The fingerprint actually incorporates the value: changing only the

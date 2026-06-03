@@ -95,8 +95,10 @@ fn diamond_partial_coverage() {
 
     // The A→D fragment must be kept, by identity (head == node "a"), not just
     // by count.
-    let heads: std::collections::BTreeSet<_> =
-        minimized.fragments().map(sedimentree_core::fragment::Fragment::head).collect();
+    let heads: std::collections::BTreeSet<_> = minimized
+        .fragments()
+        .map(sedimentree_core::fragment::Fragment::head)
+        .collect();
     assert_eq!(
         heads,
         std::collections::BTreeSet::from([graph.node_hash("a")]),
@@ -129,8 +131,10 @@ fn independent_branches_separate_fragments() {
     // Both fragments should be kept (independent, neither supports the other).
     // Assert by identity (heads "a" and "c"): a count of 2 alone wouldn't
     // catch a bug that kept the wrong fragments.
-    let heads: std::collections::BTreeSet<_> =
-        minimized.fragments().map(sedimentree_core::fragment::Fragment::head).collect();
+    let heads: std::collections::BTreeSet<_> = minimized
+        .fragments()
+        .map(sedimentree_core::fragment::Fragment::head)
+        .collect();
     assert_eq!(
         heads,
         std::collections::BTreeSet::from([graph.node_hash("a"), graph.node_hash("c")]),

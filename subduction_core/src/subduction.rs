@@ -77,12 +77,12 @@ use crate::{
     },
     handler::Handler,
     handshake::audience::DiscoveryId,
+    minimized_sedimentree::MinimizedSedimentree,
     multiplexer::Multiplexer,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
-    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::Timeout,
@@ -2016,7 +2016,9 @@ impl<
 {
     /// Returns a reference to the sedimentrees map.
     #[must_use]
-    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
+    pub const fn sedimentrees(
+        &self,
+    ) -> &Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
         &self.sedimentrees
     }
 

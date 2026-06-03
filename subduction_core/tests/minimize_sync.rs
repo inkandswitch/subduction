@@ -147,8 +147,10 @@ async fn add_fragment_prunes_dominated_shallow_fragment() -> TestResult {
         .get_fragments(sed_id)
         .await
         .expect("sedimentree should exist after adds");
-    let surviving_heads: BTreeSet<CommitId> =
-        fragments_after.iter().map(sedimentree_core::fragment::Fragment::head).collect();
+    let surviving_heads: BTreeSet<CommitId> = fragments_after
+        .iter()
+        .map(sedimentree_core::fragment::Fragment::head)
+        .collect();
     assert_eq!(
         surviving_heads,
         BTreeSet::from([deep_head]),

@@ -581,7 +581,8 @@ impl Sedimentree {
             commit_heads,
         } = self.keep_sets(depth_metric);
 
-        self.fragments.retain(|head, _| fragment_heads.contains(head));
+        self.fragments
+            .retain(|head, _| fragment_heads.contains(head));
         self.commits.retain(|head, _| commit_heads.contains(head));
     }
 

@@ -40,9 +40,9 @@ use crate::{
             SyncResult,
         },
     },
+    minimized_sedimentree::MinimizedSedimentree,
     peer::id::PeerId,
     policy::storage::StoragePolicy,
-    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     subduction::{

@@ -24,9 +24,9 @@ use subduction_crypto::verified_meta::VerifiedMeta;
 
 use crate::{
     connection::{Connection, message::SyncDiff},
+    minimized_sedimentree::MinimizedSedimentree,
     peer::id::PeerId,
     policy::storage::StoragePolicy,
-    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
 };

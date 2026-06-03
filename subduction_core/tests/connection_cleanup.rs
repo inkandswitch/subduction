@@ -10,9 +10,7 @@ use sedimentree_core::{
     id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
-    connection::test_utils::{
-        FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
-    },
+    connection::test_utils::{FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer},
     handler::sync::SyncHandler,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
@@ -270,8 +268,12 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     let failing_conn = FailingSendMockConnection::with_peer_id_failing(failing_peer, true);
     let healthy_conn = FailingSendMockConnection::with_peer_id_failing(healthy_peer, false);
 
-    subduction.add_connection(failing_conn.authenticated()).await?;
-    subduction.add_connection(healthy_conn.authenticated()).await?;
+    subduction
+        .add_connection(failing_conn.authenticated())
+        .await?;
+    subduction
+        .add_connection(healthy_conn.authenticated())
+        .await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 2);
 
     // Broadcast a commit: the send to `failing_peer` errors, to `healthy_peer`

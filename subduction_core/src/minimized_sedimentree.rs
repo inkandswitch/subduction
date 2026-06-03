@@ -28,10 +28,7 @@
 use core::ops::Deref;
 
 use sedimentree_core::{
-    depth::DepthMetric,
-    fragment::Fragment,
-    loose_commit::LooseCommit,
-    sedimentree::Sedimentree,
+    depth::DepthMetric, fragment::Fragment, loose_commit::LooseCommit, sedimentree::Sedimentree,
 };
 
 /// A [`Sedimentree`] plus an external "needs minimizing" flag.
@@ -252,7 +249,10 @@ mod tests {
         let seed = FingerprintSeed::new(0x1234, 0x5678);
 
         // Old behavior: eagerly collapse, then summarize.
-        let eager_summary = full.clone().minimize(&CountLeadingZeroBytes).fingerprint_summarize(&seed);
+        let eager_summary = full
+            .clone()
+            .minimize(&CountLeadingZeroBytes)
+            .fingerprint_summarize(&seed);
 
         // New behavior: wrap dirty (un-minimized), read via `minimized`.
         let mut m = MinimizedSedimentree::new(full);
@@ -297,7 +297,10 @@ mod tests {
             .minimized(&CountLeadingZeroBytes)
             .fingerprint_summarize(&seed);
 
-        assert_eq!(lazy, eager, "wrapper-mutated dirty read must match eager collapse");
+        assert_eq!(
+            lazy, eager,
+            "wrapper-mutated dirty read must match eager collapse"
+        );
     }
 
     #[test]

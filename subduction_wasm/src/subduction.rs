@@ -32,9 +32,9 @@ use subduction_core::{
     connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
+    minimized_sedimentree::MinimizedSedimentree,
     nonce_cache::NonceCache,
     peer::id::PeerId,
-    minimized_sedimentree::MinimizedSedimentree,
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
