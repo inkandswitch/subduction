@@ -36,25 +36,57 @@ fn tree_of(commits: Vec<LooseCommit>) -> Sedimentree {
     Sedimentree::new(vec![], commits)
 }
 
+/// Fingerprinting is a pure, deterministic function of the
+/// `(seed_bytes, commit_id_bytes)` tuple: the same inputs always yield the
+/// same fingerprint, across arbitrary seeds and ids.
+///
+/// This is the *law* that the old hardcoded `assert_ne!` examples gestured
+/// at but couldn't state. (We deliberately do NOT assert "different inputs ⇒
+/// different fingerprints": the fingerprint is a 64-bit `SipHash`, so
+/// collisions exist and that is not a universal property — see the
+/// `seed_*`/`value_*` witness tests below for the non-colliding examples.)
 #[test]
-fn different_seeds_produce_different_fingerprints() {
-    let id = head(42);
-    let seed_a = FingerprintSeed::new(1, 2);
-    let seed_b = FingerprintSeed::new(3, 4);
+fn fingerprint_is_deterministic_over_arbitrary_inputs() {
+    bolero::check!()
+        .with_arbitrary::<(u64, u64, [u8; 32])>()
+        .for_each(|&(s0, s1, id_bytes)| {
+            let seed = FingerprintSeed::new(s0, s1);
+            let id = CommitId::new(id_bytes);
 
-    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&seed_a, &id);
-    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&seed_b, &id);
+            let fp1: Fingerprint<CommitId> = Fingerprint::new(&seed, &id);
+            let fp2: Fingerprint<CommitId> = Fingerprint::new(&seed, &id);
+            assert_eq!(fp1, fp2, "fingerprint must be deterministic");
 
-    assert_ne!(fp_a, fp_b);
+            // Depends only on the raw bytes, not on `CommitId` identity.
+            let id_reconstructed = CommitId::new(id_bytes);
+            let fp3: Fingerprint<CommitId> = Fingerprint::new(&seed, &id_reconstructed);
+            assert_eq!(fp1, fp3, "fingerprint must depend only on the id bytes");
+        });
 }
 
+/// The fingerprint actually incorporates the seed: changing only the seed
+/// changes the fingerprint for these specific (non-colliding) inputs.
+///
+/// Witness, not a law — a 64-bit hash can collide for *some* seed pair, so
+/// this is a concrete demonstration that the seed participates, paired with
+/// the `fingerprint_is_deterministic_over_arbitrary_inputs` property.
 #[test]
-fn different_values_produce_different_fingerprints() {
+fn seed_participates_in_fingerprint_witness() {
+    let id = head(42);
+    let fp_a: Fingerprint<CommitId> = Fingerprint::new(&FingerprintSeed::new(1, 2), &id);
+    let fp_b: Fingerprint<CommitId> = Fingerprint::new(&FingerprintSeed::new(3, 4), &id);
+    assert_ne!(fp_a, fp_b, "distinct seeds must change the fingerprint here");
+}
+
+/// The fingerprint actually incorporates the value: changing only the
+/// commit id changes the fingerprint for these specific (non-colliding)
+/// inputs. Witness, not a law (see `seed_participates_in_fingerprint_witness`).
+#[test]
+fn value_participates_in_fingerprint_witness() {
     let seed = FingerprintSeed::new(7, 11);
     let fp_a: Fingerprint<CommitId> = Fingerprint::new(&seed, &head(1));
     let fp_b: Fingerprint<CommitId> = Fingerprint::new(&seed, &head(2));
-
-    assert_ne!(fp_a, fp_b);
+    assert_ne!(fp_a, fp_b, "distinct ids must change the fingerprint here");
 }
 
 /// `Fingerprint::new(seed, x)` depends only on `x`'s 32 raw bytes — it

@@ -93,8 +93,15 @@ fn diamond_partial_coverage() {
 
     let minimized = tree.minimize(graph.depth_metric());
 
-    // Fragment should be kept
-    assert_eq!(minimized.fragments().count(), 1);
+    // The A→D fragment must be kept, by identity (head == node "a"), not just
+    // by count.
+    let heads: std::collections::BTreeSet<_> =
+        minimized.fragments().map(sedimentree_core::fragment::Fragment::head).collect();
+    assert_eq!(
+        heads,
+        std::collections::BTreeSet::from([graph.node_hash("a")]),
+        "the A→D fragment must survive; got fragment heads {heads:?}"
+    );
 }
 
 /// Two independent branches with separate fragments (both depth 2).
@@ -119,8 +126,16 @@ fn independent_branches_separate_fragments() {
 
     let minimized = tree.minimize(graph.depth_metric());
 
-    // Both fragments should be kept (independent, neither supports the other)
-    assert_eq!(minimized.fragments().count(), 2);
+    // Both fragments should be kept (independent, neither supports the other).
+    // Assert by identity (heads "a" and "c"): a count of 2 alone wouldn't
+    // catch a bug that kept the wrong fragments.
+    let heads: std::collections::BTreeSet<_> =
+        minimized.fragments().map(sedimentree_core::fragment::Fragment::head).collect();
+    assert_eq!(
+        heads,
+        std::collections::BTreeSet::from([graph.node_hash("a"), graph.node_hash("c")]),
+        "both independent fragments must survive; got fragment heads {heads:?}"
+    );
 }
 
 /// Deep linear chain covered by single fragment (depth 3).

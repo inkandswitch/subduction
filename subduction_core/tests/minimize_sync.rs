@@ -10,8 +10,11 @@
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, crypto::fingerprint::FingerprintSeed,
-    id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob,
+    commit::CountLeadingZeroBytes,
+    crypto::fingerprint::{Fingerprint, FingerprintSeed},
+    id::SedimentreeId,
+    loose_commit::id::CommitId,
 };
 use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
@@ -137,12 +140,24 @@ async fn add_fragment_prunes_dominated_shallow_fragment() -> TestResult {
         .await?;
 
     // After adding the deep fragment, minimize_tree should have pruned
-    // the shallow fragment (dominated by the deep one).
-    let fragments_after = subduction.get_fragments(sed_id).await;
+    // the shallow fragment (dominated by the deep one). Assert by IDENTITY,
+    // not count: a count of 1 alone cannot distinguish "kept the deep
+    // fragment" (correct) from "kept the shallow one" (a wrong-survivor bug).
+    let fragments_after = subduction
+        .get_fragments(sed_id)
+        .await
+        .expect("sedimentree should exist after adds");
+    let surviving_heads: BTreeSet<CommitId> =
+        fragments_after.iter().map(sedimentree_core::fragment::Fragment::head).collect();
     assert_eq!(
-        fragments_after.as_ref().map(Vec::len),
-        Some(1),
-        "shallow fragment should be pruned — only deep fragment remains"
+        surviving_heads,
+        BTreeSet::from([deep_head]),
+        "only the deep fragment should survive: it dominates the shallow one. \
+         Got heads {surviving_heads:?}"
+    );
+    assert!(
+        !surviving_heads.contains(&shallow_head),
+        "the dominated shallow fragment must be pruned"
     );
 
     Ok(())
@@ -224,10 +239,20 @@ async fn fingerprint_summary_excludes_dominated_fragments() -> TestResult {
     let seed = FingerprintSeed::new(42, 99);
     let summary = tree.fingerprint_summarize(&seed);
 
+    // Assert by fingerprint IDENTITY, not count: the surviving fragment
+    // fingerprint must be the *deep* fragment's, and the dominated shallow
+    // fragment's fingerprint must be absent. A bare `len() == 1` would pass
+    // even if the wrong (shallow) fragment survived.
+    let deep_fp = Fingerprint::new(&seed, &deep_head);
+    let shallow_fp = Fingerprint::new(&seed, &shallow_head);
     assert_eq!(
-        summary.fragment_fingerprints().len(),
-        1,
-        "only the deep (non-dominated) fragment should be in the fingerprint summary"
+        summary.fragment_fingerprints(),
+        &BTreeSet::from([deep_fp]),
+        "summary must contain exactly the deep (non-dominated) fragment fingerprint"
+    );
+    assert!(
+        !summary.fragment_fingerprints().contains(&shallow_fp),
+        "the dominated shallow fragment's fingerprint must be excluded"
     );
 
     Ok(())
@@ -242,10 +267,11 @@ async fn independent_fragments_both_survive_minimize() -> TestResult {
     let sed_id = SedimentreeId::new([4u8; 32]);
 
     // Fragment 1: depth 2
+    let frag1_head = digest_with_leading_zeros(2, 1);
     subduction
         .add_fragment(
             sed_id,
-            digest_with_leading_zeros(2, 1),
+            frag1_head,
             BTreeSet::from([digest_with_leading_zeros(1, 100)]),
             &[],
             make_unique_blob(10),
@@ -253,21 +279,31 @@ async fn independent_fragments_both_survive_minimize() -> TestResult {
         .await?;
 
     // Fragment 2: depth 2, different range (no overlap)
+    let frag2_head = digest_with_leading_zeros(2, 2);
     subduction
         .add_fragment(
             sed_id,
-            digest_with_leading_zeros(2, 2),
+            frag2_head,
             BTreeSet::from([digest_with_leading_zeros(1, 101)]),
             &[],
             make_unique_blob(20),
         )
         .await?;
 
-    let fragments = subduction.get_fragments(sed_id).await;
+    // Assert both specific fragments survive by IDENTITY: independent
+    // (mutually non-dominating) fragments must each be kept. A `len() == 2`
+    // count alone wouldn't catch a bug that kept the wrong two.
+    let surviving_heads: BTreeSet<CommitId> = subduction
+        .get_fragments(sed_id)
+        .await
+        .expect("sedimentree should exist")
+        .iter()
+        .map(sedimentree_core::fragment::Fragment::head)
+        .collect();
     assert_eq!(
-        fragments.map(|f| f.len()),
-        Some(2),
-        "both independent fragments should survive minimization"
+        surviving_heads,
+        BTreeSet::from([frag1_head, frag2_head]),
+        "both independent fragments must survive minimization; got {surviving_heads:?}"
     );
 
     Ok(())

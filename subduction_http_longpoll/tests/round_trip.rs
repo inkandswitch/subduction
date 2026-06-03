@@ -535,7 +535,11 @@ async fn large_message_handling() -> TestResult {
 }
 
 #[tokio::test]
-async fn message_ordering() -> TestResult {
+// Renamed from `message_ordering`: sync convergence is set-based over
+// content-addressed commits, so per-commit *ordering* is not a guarantee the
+// protocol makes (and these commits use random ids). What this verifies is
+// that *all* commits from a multi-commit batch are delivered.
+async fn multiple_commits_all_delivered() -> TestResult {
     init_tracing();
 
     let server = TestServer::start(70).await;
@@ -545,9 +549,9 @@ async fn message_ordering() -> TestResult {
 
     let sed_id = SedimentreeId::new([70u8; 32]);
 
-    // Add 5 sequential commits with deterministic data
+    // Add 5 commits.
     for i in 0..5u8 {
-        let mut data = b"ordered-commit-".to_vec();
+        let mut data = b"commit-".to_vec();
         data.push(i);
         client
             .add_commit(sed_id, random_commit_id(), BTreeSet::new(), Blob::new(data))

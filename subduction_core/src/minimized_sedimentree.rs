@@ -141,12 +141,26 @@ mod tests {
     use alloc::{collections::BTreeSet, vec};
 
     use sedimentree_core::{
+        blob::{Blob, BlobMeta},
         commit::CountLeadingZeroBytes,
+        crypto::fingerprint::FingerprintSeed,
+        id::SedimentreeId,
+        loose_commit::{LooseCommit, id::CommitId},
         sedimentree::Sedimentree,
         test_utils::{commit_id_with_depth, make_fragment_at_depth},
     };
 
     use super::MinimizedSedimentree;
+
+    fn loose_commit(seed: u8) -> LooseCommit {
+        let blob_meta = BlobMeta::new(&Blob::new(vec![seed]));
+        LooseCommit::new(
+            SedimentreeId::new([seed; 32]),
+            CommitId::new([seed; 32]),
+            BTreeSet::new(),
+            blob_meta,
+        )
+    }
 
     /// A tree whose `minimize` drops a fragment: a deep fragment dominates a
     /// shallower one (mirrors `minimize_multi_depth_deep_dominates_shallow`).
@@ -197,13 +211,93 @@ mod tests {
     }
 
     #[test]
-    fn mutators_set_dirty() {
+    fn add_fragment_sets_dirty() {
         let mut m = MinimizedSedimentree::already_minimal(Sedimentree::default());
         assert!(!m.is_dirty());
 
         let frag = make_fragment_at_depth(2, 9, BTreeSet::from([commit_id_with_depth(1, 9)]), &[]);
         m.add_fragment(frag);
         assert!(m.is_dirty(), "add_fragment must mark dirty");
+    }
+
+    #[test]
+    fn add_commit_sets_dirty() {
+        let mut m = MinimizedSedimentree::already_minimal(Sedimentree::default());
+        assert!(!m.is_dirty());
+
+        m.add_commit(loose_commit(7));
+        assert!(m.is_dirty(), "add_commit must mark dirty");
+    }
+
+    #[test]
+    fn merge_sets_dirty() {
+        let mut m = MinimizedSedimentree::already_minimal(Sedimentree::default());
+        assert!(!m.is_dirty());
+
+        let other = Sedimentree::new(vec![], vec![loose_commit(8)]);
+        m.merge(other);
+        assert!(m.is_dirty(), "merge must mark dirty");
+    }
+
+    /// Wire-correctness invariant the in-place/dirty-flag design hinges on:
+    /// reading a **dirty** (not-yet-minimized) tree through `minimized(...)`
+    /// must produce the SAME `FingerprintSummary` as the old eager-collapse
+    /// behavior (`tree.minimize(metric).fingerprint_summarize(seed)`).
+    ///
+    /// If `minimized` ever forgot to minimize, or minimized differently, the
+    /// wire diff would silently send the wrong fingerprints. This pins it.
+    #[test]
+    fn dirty_tree_summary_matches_eager_collapse() {
+        let full = dominating_tree();
+        let seed = FingerprintSeed::new(0x1234, 0x5678);
+
+        // Old behavior: eagerly collapse, then summarize.
+        let eager_summary = full.clone().minimize(&CountLeadingZeroBytes).fingerprint_summarize(&seed);
+
+        // New behavior: wrap dirty (un-minimized), read via `minimized`.
+        let mut m = MinimizedSedimentree::new(full);
+        assert!(m.is_dirty(), "precondition: tree starts dirty");
+        let lazy_summary = m
+            .minimized(&CountLeadingZeroBytes)
+            .fingerprint_summarize(&seed);
+
+        assert_eq!(
+            lazy_summary, eager_summary,
+            "lazy minimize-on-read must match eager collapse for wire summaries"
+        );
+    }
+
+    /// Same invariant, but with the mutation applied *through the wrapper*
+    /// after construction (the real ingest pattern: add then read).
+    #[test]
+    fn summary_after_wrapper_mutation_matches_eager_collapse() {
+        let seed = FingerprintSeed::new(7, 9);
+
+        let deep_boundary = commit_id_with_depth(1, 100);
+        let shallow_head = commit_id_with_depth(2, 1);
+        let shallow_boundary = commit_id_with_depth(1, 101);
+        let deep = make_fragment_at_depth(
+            3,
+            1,
+            BTreeSet::from([deep_boundary]),
+            &[shallow_head, shallow_boundary],
+        );
+        let shallow = make_fragment_at_depth(2, 1, BTreeSet::from([shallow_boundary]), &[]);
+
+        // Build the equivalent tree two ways.
+        let eager = Sedimentree::new(vec![deep.clone(), shallow.clone()], vec![])
+            .minimize(&CountLeadingZeroBytes)
+            .fingerprint_summarize(&seed);
+
+        let mut m = MinimizedSedimentree::already_minimal(Sedimentree::default());
+        m.add_fragment(shallow);
+        m.add_fragment(deep);
+        assert!(m.is_dirty());
+        let lazy = m
+            .minimized(&CountLeadingZeroBytes)
+            .fingerprint_summarize(&seed);
+
+        assert_eq!(lazy, eager, "wrapper-mutated dirty read must match eager collapse");
     }
 
     #[test]

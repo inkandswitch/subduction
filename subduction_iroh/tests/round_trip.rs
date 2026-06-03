@@ -616,11 +616,15 @@ async fn large_message_handling() -> TestResult {
     Ok(())
 }
 
-// ─── SyncMessage Ordering ───────────────────────────────────────────────────────
+// ─── Multi-commit delivery ──────────────────────────────────────────────────
 
-/// Five sequential commits all arrive at the server.
+/// All commits from a multi-commit batch arrive at the server.
+///
+/// Renamed from `message_ordering`: sync is set-based over content-addressed
+/// commits (random ids here), so per-commit ordering is not a protocol
+/// guarantee. This asserts complete delivery of the batch.
 #[tokio::test]
-async fn message_ordering() -> TestResult {
+async fn multiple_commits_all_delivered() -> TestResult {
     init_tracing();
 
     let server = TestServer::start(60).await;
@@ -630,7 +634,7 @@ async fn message_ordering() -> TestResult {
     let sed_id = SedimentreeId::new([70u8; 32]);
 
     for i in 0..5u8 {
-        let mut data = b"ordered-commit-".to_vec();
+        let mut data = b"commit-".to_vec();
         data.push(i);
         client
             .subduction
