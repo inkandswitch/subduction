@@ -63,6 +63,7 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     depth::DepthMetric,
     id::SedimentreeId,
+    sedimentree::minimized::MinimizedSedimentree,
 };
 
 use crate::{
@@ -75,7 +76,6 @@ use crate::{
     },
     handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
-    minimized_sedimentree::MinimizedSedimentree,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},

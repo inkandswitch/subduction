@@ -19,12 +19,12 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
+    sedimentree::minimized::MinimizedSedimentree,
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
 use crate::{
     connection::{Connection, message::SyncDiff},
-    minimized_sedimentree::MinimizedSedimentree,
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     sharded_map::ShardedMap,

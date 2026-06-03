@@ -1,6 +1,7 @@
 //! The main Sedimentree data structure and related types.
 
 mod commit_dag;
+pub mod minimized;
 
 use alloc::{
     collections::{BTreeSet, VecDeque},

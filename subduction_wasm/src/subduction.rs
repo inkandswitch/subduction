@@ -26,13 +26,12 @@ use sedimentree_core::{
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::id::CommitId,
-    sedimentree::Sedimentree,
+    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_core::{
     connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
-    minimized_sedimentree::MinimizedSedimentree,
     nonce_cache::NonceCache,
     peer::id::PeerId,
     sharded_map::ShardedMap,

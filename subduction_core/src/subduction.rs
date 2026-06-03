@@ -77,7 +77,6 @@ use crate::{
     },
     handler::Handler,
     handshake::audience::DiscoveryId,
-    minimized_sedimentree::MinimizedSedimentree,
     multiplexer::Multiplexer,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
@@ -121,7 +120,7 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::{FingerprintResolver, Sedimentree},
+    sedimentree::{FingerprintResolver, Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::{
     signed::Signed, signer::Signer, verified_author::VerifiedAuthor, verified_meta::VerifiedMeta,

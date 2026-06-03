@@ -27,7 +27,7 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::{FingerprintSummary, Sedimentree},
+    sedimentree::{FingerprintSummary, Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 
@@ -40,7 +40,6 @@ use crate::{
             SyncResult,
         },
     },
-    minimized_sedimentree::MinimizedSedimentree,
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     sharded_map::ShardedMap,

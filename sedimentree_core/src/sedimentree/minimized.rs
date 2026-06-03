@@ -3,11 +3,10 @@
 //!
 //! # Why the dirty flag lives here, not on `Sedimentree`
 //!
-//! `Sedimentree` (in `sedimentree_core`) is a pure data type: equality,
-//! ordering, and hashing are defined solely by its contents, and it has no
-//! notion of "minimal vs. not". Minimization is a *policy* of the owning sync
-//! layer, so the dirty bit that drives lazy minimization belongs to the owner
-//! — this wrapper — rather than polluting the data type.
+//! [`Sedimentree`] is a pure data type: equality, ordering, and hashing are
+//! defined solely by its contents, and it has no notion of "minimal vs. not".
+//! The dirty bit that drives *lazy* minimization is a caching concern, so it
+//! belongs on this wrapper rather than polluting the data type's identity.
 //!
 //! # Behavior
 //!
@@ -21,13 +20,13 @@
 //!   free.
 //!
 //! The wrapper [`Deref`]s to [`Sedimentree`] for read-only access. Callers that
-//! depend on the minimal form (the wire / sync paths) must call
-//! [`ensure_minimized`](Self::ensure_minimized) first — which the owner already
-//! does at every point it previously eagerly minimized.
+//! depend on the minimal form (wire / sync paths) must call
+//! [`minimized`](Self::minimized) (or [`ensure_minimized`](Self::ensure_minimized))
+//! first.
 
 use core::ops::Deref;
 
-use sedimentree_core::{
+use crate::{
     depth::DepthMetric, fragment::Fragment, loose_commit::LooseCommit, sedimentree::Sedimentree,
 };
 
@@ -137,7 +136,7 @@ impl From<Sedimentree> for MinimizedSedimentree {
 mod tests {
     use alloc::{collections::BTreeSet, vec};
 
-    use sedimentree_core::{
+    use crate::{
         blob::{Blob, BlobMeta},
         commit::CountLeadingZeroBytes,
         crypto::fingerprint::FingerprintSeed,
