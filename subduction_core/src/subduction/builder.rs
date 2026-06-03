@@ -63,7 +63,7 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     depth::DepthMetric,
     id::SedimentreeId,
-    sedimentree::Sedimentree,
+    sedimentree::minimized::MinimizedSedimentree,
 };
 
 use crate::{
@@ -138,7 +138,7 @@ pub struct SubductionBuilder<
 /// fields that don't otherwise need it.
 #[derive(Debug)]
 struct SedimentreesOption<const SHARDS: usize>(
-    Option<Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>>,
+    Option<Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>>,
 );
 
 impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
@@ -360,7 +360,7 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     #[must_use]
     pub fn sedimentrees(
         mut self,
-        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, SHARDS>>,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     ) -> Self {
         self.sedimentrees = SedimentreesOption(Some(sedimentrees));
         self

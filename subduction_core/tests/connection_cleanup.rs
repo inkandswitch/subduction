@@ -10,9 +10,7 @@ use sedimentree_core::{
     id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
-    connection::test_utils::{
-        FailingSendMockConnection, InstantTimeout, MockConnection, TestSpawn, test_signer,
-    },
+    connection::test_utils::{FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer},
     handler::sync::SyncHandler,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
@@ -245,7 +243,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     ));
 
     let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _, InstantTimeout>::new(
+        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
             test_signer(),
@@ -262,27 +260,41 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             TestSpawn,
         );
 
-    // Register two connections that will succeed
-    let peer_id1 = PeerId::new([1u8; 32]);
-    let peer_id2 = PeerId::new([2u8; 32]);
-    let conn1 = MockConnection::with_peer_id(peer_id1);
-    let conn2 = MockConnection::with_peer_id(peer_id2);
+    // One connection fails on send, the other succeeds. A per-instance failure
+    // flag lets both live in this monomorphic `Subduction<FailingSendMockConnection>`.
+    let failing_peer = PeerId::new([1u8; 32]);
+    let healthy_peer = PeerId::new([2u8; 32]);
+    let failing_conn = FailingSendMockConnection::with_peer_id_failing(failing_peer, true);
+    let healthy_conn = FailingSendMockConnection::with_peer_id_failing(healthy_peer, false);
 
-    subduction.add_connection(conn1.authenticated()).await?;
-    subduction.add_connection(conn2.authenticated()).await?;
+    subduction
+        .add_connection(failing_conn.authenticated())
+        .await?;
+    subduction
+        .add_connection(healthy_conn.authenticated())
+        .await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 2);
 
-    // Add a commit - sends will succeed
+    // Broadcast a commit: the send to `failing_peer` errors, to `healthy_peer`
+    // succeeds.
     let id = SedimentreeId::new([1u8; 32]);
     let (head, parents, blob) = make_commit_parts();
-
     let _ = subduction.add_commit(id, head, parents, blob).await;
 
-    // Both connections should still be registered (sends succeeded)
+    // Only the failing connection should be unregistered; the healthy one remains.
+    let remaining = subduction.connected_peer_ids().await;
+    assert!(
+        !remaining.contains(&failing_peer),
+        "the connection whose send failed must be unregistered; remaining={remaining:?}"
+    );
+    assert!(
+        remaining.contains(&healthy_peer),
+        "the connection whose send succeeded must remain; remaining={remaining:?}"
+    );
     assert_eq!(
-        subduction.connected_peer_ids().await.len(),
-        2,
-        "Both connections should remain registered when sends succeed"
+        remaining.len(),
+        1,
+        "exactly one (the healthy) connection should remain"
     );
 
     Ok(())

@@ -99,12 +99,16 @@ impl Connection<Sendable, SyncMessage> for MockConnection {
     }
 }
 
-/// A mock connection that always fails on send.
+/// A mock connection whose `send` failure is configurable per instance.
 ///
-/// This is useful for testing connection cleanup when send operations fail.
+/// Useful for testing connection cleanup when send operations fail — and,
+/// because failure is per-instance, for mixing failing and succeeding
+/// connections within a single (monomorphic) `Subduction<Conn>`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FailingSendMockConnection {
     peer_id: PeerId,
+    /// When `true`, `send` returns `Err`; when `false`, `send` succeeds.
+    fail_send: bool,
 }
 
 impl FailingSendMockConnection {
@@ -113,13 +117,25 @@ impl FailingSendMockConnection {
     pub const fn new() -> Self {
         Self {
             peer_id: PeerId::new([0u8; 32]),
+            fail_send: true,
         }
     }
 
     /// Create a new failing mock connection with a specific peer ID.
     #[must_use]
     pub const fn with_peer_id(peer_id: PeerId) -> Self {
-        Self { peer_id }
+        Self {
+            peer_id,
+            fail_send: true,
+        }
+    }
+
+    /// Create a mock connection with a specific peer ID and explicit
+    /// send-failure behavior. Pass `fail_send = false` for a connection
+    /// whose sends succeed (so it should survive a broadcast cleanup pass).
+    #[must_use]
+    pub const fn with_peer_id_failing(peer_id: PeerId, fail_send: bool) -> Self {
+        Self { peer_id, fail_send }
     }
 
     /// Wrap this connection in an `Authenticated` wrapper for testing.
@@ -152,7 +168,8 @@ impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
         &self,
         _message: &SyncMessage,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
-        Sendable::from_future(async { Err(core::fmt::Error) })
+        let fail = self.fail_send;
+        Sendable::from_future(async move { if fail { Err(core::fmt::Error) } else { Ok(()) } })
     }
 
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {

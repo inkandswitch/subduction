@@ -382,6 +382,45 @@ fn minimize_is_deterministic_within_process() {
         });
 }
 
+/// For any tree, `minimize_in_place` produces the same result as the
+/// rebuild-based `minimize`.
+#[test]
+fn minimize_in_place_equals_minimize() {
+    bolero::check!()
+        .with_arbitrary::<ArbitraryDag>()
+        .for_each(|ArbitraryDag { tree }| {
+            let rebuilt = tree.minimize(&CountLeadingZeroBytes);
+
+            let mut in_place = tree.clone();
+            in_place.minimize_in_place(&CountLeadingZeroBytes);
+
+            assert_eq!(
+                in_place, rebuilt,
+                "minimize_in_place diverged from rebuild minimize"
+            );
+        });
+}
+
+/// `minimize_in_place` is idempotent: applying it to an already-minimal tree
+/// leaves it unchanged (and still equal to a fresh rebuild minimize).
+#[test]
+fn minimize_in_place_is_idempotent() {
+    bolero::check!()
+        .with_arbitrary::<ArbitraryDag>()
+        .for_each(|ArbitraryDag { tree }| {
+            let mut t = tree.clone();
+            t.minimize_in_place(&CountLeadingZeroBytes);
+            let once = t.clone();
+            t.minimize_in_place(&CountLeadingZeroBytes);
+            assert_eq!(t, once, "minimize_in_place not idempotent");
+            assert_eq!(
+                t,
+                tree.minimize(&CountLeadingZeroBytes),
+                "idempotent in-place result differs from rebuild minimize"
+            );
+        });
+}
+
 /// Building the same logical `Sedimentree` from differently-ordered
 /// inputs produces equal `minimize` outputs. Regression test for the
 /// cross-process non-determinism bug: pre-fix, `minimize` iterated

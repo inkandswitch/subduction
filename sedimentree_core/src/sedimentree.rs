@@ -1,6 +1,7 @@
 //! The main Sedimentree data structure and related types.
 
 mod commit_dag;
+pub mod minimized;
 
 use alloc::{
     collections::{BTreeSet, VecDeque},
@@ -189,6 +190,14 @@ pub struct Diff<'a> {
 
     /// Commits present in the left tree but not the right.
     pub right_missing_commits: Vec<&'a LooseCommit>,
+}
+
+/// The heads that survive minimization, computed once and consumed by both
+/// [`Sedimentree::minimize`] (rebuild) and [`Sedimentree::minimize_in_place`]
+/// (retain). See [`Sedimentree::keep_sets`].
+struct KeepSets {
+    fragment_heads: Set<CommitId>,
+    commit_heads: Set<CommitId>,
 }
 
 /// All of the Sedimentree metadata about all the fragments for a series of payload.
@@ -533,6 +542,58 @@ impl Sedimentree {
     /// the metric) and the deepest-first sweep prunes early.
     #[must_use]
     pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
+        let KeepSets {
+            fragment_heads,
+            commit_heads,
+        } = self.keep_sets(depth_metric);
+
+        let minimized_fragments: Vec<Fragment> = self
+            .fragments
+            .values()
+            .filter(|f| fragment_heads.contains(&f.head()))
+            .cloned()
+            .collect();
+
+        let commits: Vec<LooseCommit> = self
+            .commits
+            .values()
+            .filter(|c| commit_heads.contains(&c.head()))
+            .cloned()
+            .collect();
+
+        Sedimentree::new(minimized_fragments, commits)
+    }
+
+    /// Minimize this [`Sedimentree`] **in place**, dropping dominated
+    /// fragments and covered loose commits without allocating a second tree.
+    ///
+    /// This is the destructive counterpart to [`minimize`](Self::minimize):
+    /// where `minimize` returns a fresh minimal tree and leaves `self`
+    /// untouched, `minimize_in_place` mutates `self` to *become* its own
+    /// minimal form. The two are guaranteed to agree:
+    /// `{ let mut t = x.clone(); t.minimize_in_place(m); t } == x.minimize(m)`
+    /// for any tree `x` and metric `m` (both share [`keep_sets`](Self::keep_sets)).
+    ///
+    /// Avoids cloning every retained fragment/commit and rebuilding the maps,
+    /// which [`minimize`](Self::minimize) must do to leave `self` intact.
+    pub fn minimize_in_place<M: DepthMetric>(&mut self, depth_metric: &M) {
+        let KeepSets {
+            fragment_heads,
+            commit_heads,
+        } = self.keep_sets(depth_metric);
+
+        self.fragments
+            .retain(|head, _| fragment_heads.contains(head));
+        self.commits.retain(|head, _| commit_heads.contains(head));
+    }
+
+    /// Compute the set of fragment heads and commit heads that survive
+    /// minimization, without materializing either output representation.
+    ///
+    /// Shared by [`minimize`](Self::minimize) (which rebuilds a fresh tree) and
+    /// [`minimize_in_place`](Self::minimize_in_place) (which `retain`s on the
+    /// existing maps), so the two produce identical results.
+    fn keep_sets<M: DepthMetric>(&self, depth_metric: &M) -> KeepSets {
         // Sort fragments by head bytes before grouping so the iteration
         // order is independent of the underlying `Map`'s. With the `std`
         // feature `Map = HashMap`, whose iteration order is hasher-state-
@@ -593,18 +654,17 @@ impl Sedimentree {
             }
         }
 
+        let fragment_heads: Set<CommitId> =
+            minimized_fragments.iter().map(Fragment::head).collect();
+
         // Prune loose commits whose ranges are covered by kept fragments.
         let dag = commit_dag::CommitDag::from_commits(self.commits.values());
-        let keepers = dag.simplify(&minimized_fragments, depth_metric);
+        let commit_heads = dag.simplify(&minimized_fragments, depth_metric);
 
-        let commits = self
-            .commits
-            .values()
-            .filter(|c| keepers.contains(&c.head()))
-            .cloned()
-            .collect();
-
-        Sedimentree::new(minimized_fragments, commits)
+        KeepSets {
+            fragment_heads,
+            commit_heads,
+        }
     }
 
     /// Collect all [`CommitId`]s reachable by walking backward through

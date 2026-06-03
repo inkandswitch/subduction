@@ -26,7 +26,7 @@ use sedimentree_core::{
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::id::CommitId,
-    sedimentree::Sedimentree,
+    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_core::{
     connection::manager::Spawn,
@@ -393,11 +393,13 @@ impl WasmSubduction {
         // Merge + minimize sequentially (ShardedMap access is &mut per entry).
         for (id, sedimentree) in loaded {
             sedimentrees
-                .with_entry_or_default(id, |tree: &mut Sedimentree| tree.merge(sedimentree))
+                .with_entry_or_default(id, |tree: &mut MinimizedSedimentree| {
+                    tree.merge(sedimentree);
+                })
                 .await;
             sedimentrees
                 .with_entry(&id, |tree| {
-                    *tree = tree.minimize(&depth_metric);
+                    tree.ensure_minimized(&depth_metric);
                 })
                 .await;
         }
