@@ -1831,22 +1831,20 @@ where
 // deployment uses a `'static` `Subduction`, so this is not a practical
 // restriction.
 impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
-        + SpawnDocSync<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
+    Async: SubductionFutureForm<'static, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
+        + SpawnDocSync<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
         + 'static,
     Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + 'static,
     Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+    Timer: Timeout<Async> + Clone + Send + Sync + 'static,
     Sp: Spawn<Async> + Send + Sync + 'static,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
+> Subduction<'static, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 where
-    'a: 'static,
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
     ManagedConnection<Conn, Async, Timer>: ManagedCall<
@@ -3601,22 +3599,20 @@ where
 // narrow this method to `'static` `Subduction` instances (which every real
 // deployment is).
 impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
-        + SpawnDocSync<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
+    Async: SubductionFutureForm<'static, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
+        + SpawnDocSync<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
         + 'static,
     Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + 'static,
     Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+    Timer: Timeout<Async> + Clone + Send + Sync + 'static,
     Sp: Spawn<Async> + Send + Sync + 'static,
     Metric: DepthMetric,
     const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
+> Subduction<'static, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 where
-    'a: 'static,
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
     ManagedConnection<Conn, Async, Timer>: ManagedCall<
