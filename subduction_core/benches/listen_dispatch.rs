@@ -11,11 +11,11 @@
 //! the *dispatch mechanism* in isolation, with representative per-message work,
 //! and A/Bs the two strategies directly:
 //!
-//! - **`FuturesUnordered`** — every handler future pushed into one
-//!   `FuturesUnordered` drained by a single task (today's `listen()` at
-//!   `subduction.rs` `in_flight.push(...)`).
+//! - **`FuturesUnordered`** — baseline / historical: every handler future pushed into one
+//!   `FuturesUnordered` drained by a single task (concurrency, no parallelism).
 //! - **`spawn`** — each handler future `tokio::spawn`-ed onto the worker pool,
-//!   completion reported via a channel (the proposed change).
+//!   completion reported via a channel (mirrors the production spawned-dispatch path).
+//!
 //!
 //! ## Representative work
 //!
