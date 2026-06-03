@@ -4480,7 +4480,7 @@ mod tests {
         ));
 
         let (subduction, _listener_fut, _actor_fut) =
-            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
+            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout, _>::new(
                 handler,
                 None,
                 test_signer(),
