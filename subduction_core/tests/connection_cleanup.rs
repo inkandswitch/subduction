@@ -11,9 +11,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     collections::bounded_sharded_map::BoundedShardedMap,
-    connection::test_utils::{
-        FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
-    },
+    connection::test_utils::{FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer},
     handler::sync::SyncHandler,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},

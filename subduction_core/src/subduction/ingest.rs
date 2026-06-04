@@ -418,7 +418,9 @@ pub(crate) async fn get_or_hydrate<
     // cap; the lock is only taken now, after the await above. The tree is
     // already minimal, so wrap it clean.
     sedimentrees
-        .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(hydrated.clone()))
+        .get_or_insert_with(id, || {
+            MinimizedSedimentree::already_minimal(hydrated.clone())
+        })
         .await;
     Ok(Some(hydrated))
 }
