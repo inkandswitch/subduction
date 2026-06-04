@@ -236,16 +236,14 @@ impl Storage<Local> for JsStorage {
             // Prefer the optional single-key `containsSedimentreeId` when the
             // backend implements it (O(1) on IndexedDB). When absent, fall
             // back to enumerating all ids — correct, just O(total trees).
-            let has_method = js_sys::Reflect::get(
-                self.as_ref(),
-                &JsValue::from_str("containsSedimentreeId"),
-            )
-            .map(|m| m.is_function())
-            .unwrap_or(false);
+            let has_method =
+                js_sys::Reflect::get(self.as_ref(), &JsValue::from_str("containsSedimentreeId"))
+                    .map(|m| m.is_function())
+                    .unwrap_or(false);
 
             if has_method {
-                let js_promise =
-                    self.js_contains_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
+                let js_promise = self
+                    .js_contains_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
                 let js_value = JsFuture::from(js_promise)
                     .await
                     .map_err(JsStorageError::JsError)?;
