@@ -906,3 +906,76 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
     alice_listener_task.abort();
     Ok(())
 }
+
+/// A sync request for an id the responder has never stored must not pollute
+/// the responder's in-memory cache. Regression for the LRU cache-pollution
+/// bug: `recv_batch_sync_request` used to unconditionally install the
+/// (empty) built tree, which made a later `get_or_hydrate(id)` return
+/// `Some(empty)` instead of `None` — letting any authorized peer fabricate
+/// "existence" for arbitrary ids by requesting them.
+#[tokio::test]
+async fn sync_request_for_unknown_id_does_not_pollute_cache() -> TestResult {
+    let (alice, alice_listener, alice_actor) = make_subduction();
+
+    let unknown_id = SedimentreeId::new([0xABu8; 32]);
+    let peer_id = PeerId::new([7u8; 32]);
+
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    alice.add_connection(conn.authenticated()).await?;
+
+    let alice_actor_task = tokio::spawn(alice_actor);
+    let alice_listener_task = tokio::spawn(alice_listener);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Precondition: Alice has never stored this tree, so it does not exist.
+    assert!(
+        alice.get_commits(unknown_id).await.is_none(),
+        "precondition: unknown id must not exist before the request"
+    );
+
+    // A peer requests sync for the never-stored id (empty summary).
+    let request = BatchSyncRequest {
+        id: unknown_id,
+        req_id: RequestId {
+            requestor: peer_id,
+            nonce: 1,
+        },
+        fingerprint_summary: FingerprintSummary::new(TEST_SEED, BTreeSet::new(), BTreeSet::new()),
+        subscribe: false,
+    };
+    handle
+        .inbound_tx
+        .send(SyncMessage::BatchSyncRequest(request))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Alice still responds (advertising nothing) ...
+    let response = recv_skipping_heads_updates(&handle.outbound_rx)
+        .await
+        .expect("should receive response");
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+        panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected SyncResult::Ok, got {result:?}");
+    };
+    assert!(
+        diff.missing_commits.is_empty() && diff.missing_fragments.is_empty(),
+        "Alice has nothing to offer for an unknown id"
+    );
+
+    // ... but the unknown id must STILL read as nonexistent: the empty tree
+    // must not have been installed into the cache.
+    assert!(
+        alice.get_commits(unknown_id).await.is_none(),
+        "a sync request for an unknown id must not make it appear to exist"
+    );
+    assert!(
+        alice.get_fragments(unknown_id).await.is_none(),
+        "a sync request for an unknown id must not make it appear to exist"
+    );
+
+    alice_actor_task.abort();
+    alice_listener_task.abort();
+    Ok(())
+}

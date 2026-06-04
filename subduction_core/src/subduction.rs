@@ -3199,8 +3199,7 @@ where
             Ok(ids) => ids.into_iter().collect(),
             Err(e) => {
                 tracing::warn!(
-                    "sedimentree_ids: storage enumeration failed: {e}; \
-                                falling back to resident set"
+                    "sedimentree_ids: storage enumeration failed: {e}; falling back to resident set"
                 );
                 self.sedimentrees.into_keys().await
             }

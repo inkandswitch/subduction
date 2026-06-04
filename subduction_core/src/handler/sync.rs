@@ -698,20 +698,32 @@ impl<
             .collect();
 
         // Build the resident tree from the data we just loaded (reusing the
-        // fetcher reads above — no second storage round-trip) and install it
-        // through the cap-aware cache so eviction/recency are respected.
+        // fetcher reads above — no second storage round-trip).
+        let loose_commits: Vec<_> = commit_by_id
+            .values()
+            .map(|vm| vm.payload().clone())
+            .collect();
+        let fragments: Vec<_> = fragment_by_id
+            .values()
+            .map(|vm| vm.payload().clone())
+            .collect();
+
+        // Only install into the cache when there is actual stored data.
+        //
+        // Caching an empty tree for a never-stored id would make a later
+        // `get_or_hydrate(id)` return `Some(empty)` instead of `None`,
+        // corrupting the exists-vs-nonexistent contract eviction relies on —
+        // and would let any authorized peer pollute the cache by requesting
+        // arbitrary ids (`get_fetcher` gates on policy, not existence). When
+        // there is no data we diff against an ephemeral empty tree and cache
+        // nothing; the response correctly advertises no local items.
+        //
         // `get_or_insert_with` adopts a concurrently-installed value if one
-        // appeared, and records an LRU access either way. The built tree is
-        // already minimal, so it is wrapped clean.
-        let mut sedimentree = {
-            let loose_commits: Vec<_> = commit_by_id
-                .values()
-                .map(|vm| vm.payload().clone())
-                .collect();
-            let fragments: Vec<_> = fragment_by_id
-                .values()
-                .map(|vm| vm.payload().clone())
-                .collect();
+        // appeared and records an LRU access; the built tree is already
+        // minimal, so it is wrapped clean.
+        let mut sedimentree = if loose_commits.is_empty() && fragments.is_empty() {
+            MinimizedSedimentree::already_minimal(Sedimentree::default())
+        } else {
             let built = Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
             self.sedimentrees
                 .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(built))

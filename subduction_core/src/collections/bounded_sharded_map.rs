@@ -60,8 +60,12 @@ pub struct BoundedShardedMap<K: Hash + Ord, V, const N: usize = 256> {
     /// Monotonic logical clock; `fetch_add(1)` stamps each access.
     tick: AtomicU64,
 
-    /// Per-shard resident capacity. `None` ⇒ unbounded (no eviction and no
-    /// recency bookkeeping — identical cost to a plain `ShardedMap`).
+    /// Per-shard resident capacity. `None` ⇒ unbounded: no eviction and no
+    /// recency *updates* (no atomic tick increment, no LRU touch on access).
+    /// Each entry still carries a `Tick` (one `u64`) because the value type
+    /// is `(V, Tick)` regardless, so there is a small fixed per-entry memory
+    /// overhead versus a bare `ShardedMap` — but no per-access bookkeeping
+    /// cost on the unbounded path.
     per_shard_capacity: Option<usize>,
 }
 
