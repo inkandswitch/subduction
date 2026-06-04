@@ -400,12 +400,21 @@ pub(crate) async fn get_or_hydrate<
 
     // Existence is recorded by the sedimentree-id index, not by having
     // commits/fragments: a tree can be registered while empty (e.g. an
-    // `add_sedimentree` of an empty tree). If the tree has no data, consult
-    // the index to distinguish "registered but empty" from "nonexistent".
+    // `add_sedimentree` of an empty tree). If the tree has no data, a
+    // single-key index lookup distinguishes "registered but empty" from
+    // "nonexistent" — O(1), without enumerating every id.
     if loose_commits.is_empty() && fragments.is_empty() {
-        let known = local_access.load_all_sedimentree_ids::<Async>().await?;
-        if known.contains(&id) {
+        if local_access.contains_sedimentree_id::<Async>(id).await? {
             tracing::trace!("sedimentree {id:?} registered but empty");
+            // Cache the empty tree so repeat reads are resident hits rather
+            // than repeated storage lookups. Safe to install here (unlike the
+            // sync-request path) because the id is confirmed in the index, so
+            // this cannot fabricate existence for a never-stored id.
+            sedimentrees
+                .get_or_insert_with(id, || {
+                    MinimizedSedimentree::already_minimal(Sedimentree::default())
+                })
+                .await;
             return Ok(Some(Sedimentree::default()));
         }
         tracing::trace!("sedimentree {id:?} not found in storage");

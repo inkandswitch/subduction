@@ -86,6 +86,22 @@ impl MemoryStorage {
         })
     }
 
+    /// Single-key existence check for a sedimentree id (O(1)).
+    ///
+    /// Implements the optional `containsSedimentreeId` storage method so the
+    /// hydration hot path avoids enumerating every id.
+    #[wasm_bindgen(js_name = containsSedimentreeId)]
+    pub fn contains_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
+        let inner = self.inner.clone();
+        let id: SedimentreeId = sedimentree_id.clone().into();
+        future_to_promise(async move {
+            let present = Storage::<Local>::contains_sedimentree_id(&inner, id)
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            Ok(JsValue::from_bool(present))
+        })
+    }
+
     // ==================== Commits (compound with blob) ====================
 
     /// Save a commit with its blob.

@@ -154,6 +154,21 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         })
     }
 
+    fn contains_sedimentree_id(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<bool, Self::Error>> {
+        Async::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.contains_sedimentree_id(sedimentree_id).await;
+            metrics::storage_operation_duration(
+                "contains_sedimentree_id",
+                start.elapsed().as_secs_f64(),
+            );
+            result
+        })
+    }
+
     // ==================== Loose Commits (compound with blob) ====================
 
     fn save_loose_commit(

@@ -109,6 +109,13 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
         Storage::<Sendable>::load_all_sedimentree_ids(&self.inner)
     }
 
+    fn contains_sedimentree_id(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<bool, Self::Error>> {
+        Storage::<Sendable>::contains_sedimentree_id(&self.inner, id)
+    }
+
     fn save_loose_commit(
         &self,
         id: SedimentreeId,

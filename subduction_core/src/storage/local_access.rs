@@ -57,6 +57,18 @@ impl<Store> LocalStorageAccess<Store> {
         self.storage.load_all_sedimentree_ids()
     }
 
+    /// Whether a sedimentree ID is registered (single-key existence check).
+    #[must_use]
+    pub fn contains_sedimentree_id<Async: FutureForm>(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<bool, Store::Error>>
+    where
+        Store: Storage<Async>,
+    {
+        self.storage.contains_sedimentree_id(sedimentree_id)
+    }
+
     /// Load all loose commits with their blobs for a sedimentree.
     ///
     /// Used for hydration at startup.

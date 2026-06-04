@@ -313,6 +313,17 @@ impl Storage<Sendable> for FsStorage {
         })
     }
 
+    fn contains_sedimentree_id(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<bool, Self::Error>> {
+        Sendable::from_future(async move {
+            tracing::debug!(?sedimentree_id, "FsStorage::contains_sedimentree_id");
+            // Single-key check against the in-memory id cache (no directory scan).
+            Ok(self.ids_cache.lock().await.contains(&sedimentree_id))
+        })
+    }
+
     // ==================== Commits (compound with blob) ====================
 
     fn save_loose_commit(
@@ -799,6 +810,16 @@ impl Storage<Local> for FsStorage {
         &self,
     ) -> <Local as FutureForm>::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_all_sedimentree_ids(self))
+    }
+
+    fn contains_sedimentree_id(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Local as FutureForm>::Future<'_, Result<bool, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::contains_sedimentree_id(
+            self,
+            sedimentree_id,
+        ))
     }
 
     fn save_loose_commit(
