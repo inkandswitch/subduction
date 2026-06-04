@@ -304,11 +304,13 @@ mod managed_connection {
 // ── Progress-aware ("idle") timeout behavior ────────────────────────────
 
 mod idle_timeout {
-    use std::sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc,
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        },
+        time::Duration as StdDuration,
     };
-    use std::time::Duration as StdDuration;
 
     use futures::future::BoxFuture;
     use subduction_core::{

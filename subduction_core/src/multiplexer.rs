@@ -236,9 +236,7 @@ impl Multiplexer {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::{
-        connection::message::SyncResult, remote_heads::RemoteHeads,
-    };
+    use crate::{connection::message::SyncResult, remote_heads::RemoteHeads};
     use core::time::Duration;
     use sedimentree_core::id::SedimentreeId;
 
