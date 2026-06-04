@@ -96,11 +96,18 @@ is_hex() {
 migrated=0
 skipped=0
 
-for entry in "$trees_dir"/*; do
-  # Handle an empty trees/ (the glob stays literal when nothing matches).
-  [ -e "$entry" ] || continue
-  [ -d "$entry" ] || continue
-
+# Enumerate top-level entries with `find ... -print0` streamed into the loop
+# rather than a `for entry in "$trees_dir"/*` glob. At the scale this migration
+# targets (millions of trees), a glob would force the shell to expand, sort,
+# and hold the entire entry list in memory before the first iteration — a large
+# up-front memory spike that can stall or OOM on a small host. `find -print0`
+# streams one entry at a time with no full-list materialization.
+#
+# Process substitution (`done < <(...)`) keeps the loop in the parent shell so
+# the `migrated`/`skipped` counters survive (a `find | while` pipe would run the
+# loop in a subshell and discard them), and avoids masking a `find` failure
+# under `set -o pipefail`.
+while IFS= read -r -d '' entry; do
   name="$(basename "$entry")"
 
   # Already-sharded bucket: 4 hex chars. Leave it in place (idempotent).
@@ -137,7 +144,7 @@ for entry in "$trees_dir"/*; do
 
   echo "warning: unrecognized entry name, leaving in place: $name" >&2
   skipped=$((skipped + 1))
-done
+done < <(find "$trees_dir" -mindepth 1 -maxdepth 1 -type d -print0)
 
 if [ "$dry_run" = true ]; then
   echo "dry-run complete: $migrated would be migrated, $skipped skipped."
