@@ -4,17 +4,17 @@
 //!
 //! The `inbound_dispatch.rs` `server_fan_in` scenario runs the server *and*
 //! all client nodes on one shared runtime, so its thread-scaling can't tell us
-//! whether the server's single-task `listen()` dispatch is the bottleneck — the
-//! clients get the extra cores too. Wiring a real spawned-dispatch variant into
-//! the production `listen()` proved invasive (it forces `'static`/`Send` bounds
-//! through the whole `StartListener` lifetime chain). So this bench reproduces
-//! the *dispatch mechanism* in isolation, with representative per-message work,
-//! and A/Bs the two strategies directly:
+//! whether the server's `listen()` dispatch is the bottleneck — the clients get
+//! the extra cores too. This bench reproduces the *dispatch mechanism* in
+//! isolation, with representative per-message work, and A/Bs the two strategies
+//! directly so the win attributable to dispatch alone is unconfounded:
 //!
-//! - **`FuturesUnordered`** — baseline / historical: every handler future pushed into one
-//!   `FuturesUnordered` drained by a single task (concurrency, no parallelism).
+//! - **`FuturesUnordered`** — the pre-change dispatch: every handler future
+//!   pushed into one `FuturesUnordered` drained by a single task (concurrency,
+//!   no parallelism). This is no longer what production `listen()` does.
 //! - **`spawn`** — each handler future `tokio::spawn`-ed onto the worker pool,
-//!   completion reported via a channel (mirrors the production spawned-dispatch path).
+//!   completion reported via a channel. This is what production `listen()` now
+//!   does after this change.
 //!
 //!
 //! ## Representative work

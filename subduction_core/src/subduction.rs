@@ -128,6 +128,18 @@ use subduction_crypto::{
 
 use pending_blob_requests::PendingBlobRequests;
 
+/// Maximum number of inbound handler-dispatch tasks the listener keeps in
+/// flight at once.
+///
+/// The listener spawns one task per inbound message; without a cap, a fast or
+/// hostile peer could make it drain the bounded `msg_queue` and spawn tasks
+/// faster than they complete, converting queue backpressure into unbounded
+/// runtime-task growth. While at the cap the listener stops accepting new
+/// messages and prioritises draining completions, so `msg_queue` backpressure
+/// flows back to the senders. Sized well above the queue's steady-state depth
+/// so it only engages under genuine overload.
+const MAX_INFLIGHT_DISPATCH: usize = 1024;
+
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
 #[allow(clippy::type_complexity)]
@@ -635,8 +647,8 @@ where
 
     /// Gracefully shut down the manager and listener loops by closing
     /// the channels they read from. Unlike [`Drop`] (which aborts mid-
-    /// await), the listener drains its in-flight `Handler::handle`
-    /// `FuturesUnordered` before exiting. Idempotent.
+    /// await), the listener drains its outstanding spawned `Handler::handle`
+    /// dispatch tasks before exiting. Idempotent.
     pub fn shutdown(&self) {
         self.manager_channel.close();
         self.msg_queue.close();
@@ -1858,9 +1870,12 @@ where
     /// This method runs indefinitely, processing messages as they arrive.
     /// If no peers are connected, it will wait until a peer connects.
     ///
-    /// Dispatches messages concurrently using [`FuturesUnordered`], which
-    /// significantly improves throughput when handling many independent
-    /// requests (e.g., batch sync requests for different sedimentrees).
+    /// Each inbound message is dispatched as its own task via the configured
+    /// [`Spawn`](crate::connection::manager::Spawn), so independent handlers
+    /// (e.g. batch-sync requests for different sedimentrees) run in parallel
+    /// across worker threads on `Sendable` and concurrently on `Local`. A
+    /// completion channel reports each task's outcome back so a broken
+    /// connection is still torn down on a handler error.
     ///
     /// The handler stored on this instance receives each decoded message
     /// and decides what to do with it. For the standard sync protocol,
@@ -1960,7 +1975,18 @@ where
                 // than responses because incoming requests can wait (bounded by
                 // msg_queue backpressure) while our callers are actively blocked
                 // on response routing.
-                msg_result = self.msg_queue.recv().fuse() => {
+                //
+                // While at the in-flight cap, this arm is disabled (its future
+                // never resolves) so the listener stops pulling from msg_queue
+                // and the biased select drains completions (`done`) first —
+                // re-applying queue backpressure to the senders.
+                msg_result = async {
+                    if outstanding >= MAX_INFLIGHT_DISPATCH {
+                        futures::future::pending::<_>().await
+                    } else {
+                        self.msg_queue.recv().await
+                    }
+                }.fuse() => {
                     if let Ok((conn, msg)) = msg_result {
                         let peer_id = conn.peer_id();
                         tracing::debug!(
@@ -2024,20 +2050,27 @@ where
                         outstanding += 1;
                     } else {
                         tracing::info!("SyncMessage queue closed");
-                        // Drain outstanding spawned dispatch tasks before exit.
-                        while outstanding > 0 {
-                            match done_rx.recv().await {
-                                Ok((conn, result)) => {
-                                    outstanding -= 1;
-                                    if let Err(e) = result {
-                                        tracing::error!(
-                                            peer = %conn.peer_id(),
-                                            "error dispatching message during shutdown: {e}"
-                                        );
-                                    }
-                                }
-                                Err(_) => break,
+                        // Drop our retained sender so the channel closes once
+                        // every spawned task's clone is gone (no more dispatches
+                        // happen after this — we `break` below). Drain to close
+                        // rather than to `outstanding == 0` so a task that exits
+                        // without sending (e.g. a panic before reporting) cannot
+                        // wedge shutdown; we surface the discrepancy afterward.
+                        drop(done_tx);
+                        while let Ok((conn, result)) = done_rx.recv().await {
+                            outstanding -= 1;
+                            if let Err(e) = result {
+                                tracing::error!(
+                                    peer = %conn.peer_id(),
+                                    "error dispatching message during shutdown: {e}"
+                                );
                             }
+                        }
+                        if outstanding != 0 {
+                            tracing::warn!(
+                                "{outstanding} inbound dispatch task(s) finished \
+                                 without reporting during shutdown (likely panicked)"
+                            );
                         }
                         break;
                     }
@@ -3684,13 +3717,14 @@ where
             outstanding += 1;
         }
 
-        // Drop our sender so the channel closes once all spawned tasks finish;
-        // drain the results to convergence.
+        // Drop our sender so the channel closes once every spawned task's
+        // sender clone is gone, then drain results until close. We drain to
+        // channel-closed (not to `outstanding == 0`) so that a task which exits
+        // without sending — e.g. a panic before `tx.send` — cannot wedge the
+        // loop or make it return early silently; instead the channel closes and
+        // we surface the discrepancy below.
         drop(tx);
-        while outstanding > 0 {
-            let Ok((done_id, result)) = rx.recv().await else {
-                break;
-            };
+        while let Ok((done_id, result)) = rx.recv().await {
             outstanding -= 1;
             match result {
                 Ok((success, step_stats, step_errs)) => {
@@ -3708,6 +3742,13 @@ where
                     io_errs.push((done_id, e));
                 }
             }
+        }
+
+        if outstanding != 0 {
+            tracing::warn!(
+                "full_sync_with_peer: {outstanding} per-document sync task(s) \
+                 finished without reporting a result (likely panicked)"
+            );
         }
 
         (had_success, stats, call_errs, io_errs)
