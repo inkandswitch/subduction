@@ -172,18 +172,18 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `max_resident_trees` - Optional cap on the number of sedimentrees kept
+    ///   resident in memory (default: 1024). The in-memory map is an LRU cache
+    ///   over `IndexedDB`; cold trees are evicted and re-hydrated on demand. The
+    ///   cap is per-shard-approximate, with an effective floor of
+    ///   `WASM_SHARD_COUNT` (4). `0` or omitted uses the default. Grouped with
+    ///   `max_pending_blob_requests` as the capacity/tuning knobs.
     /// * `policy` - Optional connection/storage authorization policy.
     ///   Defaults to allow-all.
     /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
     ///   Defaults to allow-all.
     /// * `on_remote_heads` - Optional callback fired when a peer's heads change.
     /// * `on_ephemeral` - Optional callback fired on inbound ephemeral messages.
-    /// * `max_resident_trees` - Optional cap on the number of sedimentrees kept
-    ///   resident in memory (default: 1024). The in-memory map is an LRU cache
-    ///   over `IndexedDB`; cold trees are evicted and re-hydrated on demand. The
-    ///   cap is per-shard-approximate, with an effective floor of
-    ///   `WASM_SHARD_COUNT` (4). `0` or omitted uses the default. This is the
-    ///   last positional argument so existing call sites stay valid.
     ///
     /// # Panics
     ///
@@ -198,11 +198,11 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        max_resident_trees: Option<usize>,
         policy: Option<JsPolicy>,
         ephemeral_policy: Option<JsEphemeralPolicy>,
         on_remote_heads: Option<js_sys::Function>,
         on_ephemeral: Option<js_sys::Function>,
-        max_resident_trees: Option<usize>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
