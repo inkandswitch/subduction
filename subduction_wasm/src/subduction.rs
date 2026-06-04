@@ -9,7 +9,7 @@ use alloc::{
 };
 use async_lock::Mutex;
 use core::{fmt::Debug, time::Duration};
-use sedimentree_core::collections::{Map, Set};
+use sedimentree_core::collections::Map;
 
 use from_js_ref::FromJsRef;
 use future_form::Local;
@@ -26,7 +26,6 @@ use sedimentree_core::{
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::id::CommitId,
-    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_core::{
     collections::bounded_sharded_map::BoundedShardedMap,
@@ -38,7 +37,6 @@ use subduction_core::{
     storage::powerbox::StoragePowerbox,
     subduction::{
         Subduction,
-        error::HydrationError,
         pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
     timestamp::TimestampSeconds,
@@ -59,7 +57,7 @@ use crate::{
     batch_input::{WasmCommitInput, WasmFragmentInput},
     error::{
         WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHandshakeError,
-        WasmHydrationError, WasmIoError, WasmLongPollConnectError, WasmWriteError,
+        WasmIoError, WasmLongPollConnectError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -311,221 +309,6 @@ impl WasmSubduction {
             ephemeral_handler: ephemeral_for_wasm,
             keyhive_handler,
         }
-    }
-
-    /// Hydrate a [`Subduction`] instance from external storage.
-    ///
-    /// Loads all sedimentree data from storage and reconstructs the in-memory
-    /// state before initializing the sync engine.
-    ///
-    /// # Arguments
-    ///
-    /// * `signer` - The cryptographic signer for this node's identity
-    /// * `storage` - Storage backend for persisting data
-    /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
-    ///   When set, clients can connect without knowing the server's peer ID.
-    /// * `hash_metric_override` - Optional custom depth metric function
-    /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
-    /// * `max_resident_trees` - Optional cap on the number of sedimentrees kept
-    ///   resident in memory (default: 1024). The in-memory map is an LRU cache
-    ///   over `IndexedDB`; cold trees are evicted and re-hydrated on demand. The
-    ///   cap is per-shard-approximate, with an effective floor of
-    ///   `WASM_SHARD_COUNT` (4). `0` or omitted uses the default.
-    /// * `policy` - Optional connection/storage authorization policy.
-    ///   Defaults to allow-all.
-    /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
-    ///   Defaults to allow-all.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `hash_metric_override` is `Some` but the underlying JS value
-    /// cannot be cast to a `Function`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WasmHydrationError`] if hydration fails.
-    #[wasm_bindgen]
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    pub async fn hydrate(
-        signer: JsSigner,
-        storage: JsStorage,
-        service_name: Option<String>,
-        hash_metric_override: Option<JsToDepth>,
-        max_pending_blob_requests: Option<usize>,
-        max_resident_trees: Option<usize>,
-        policy: Option<JsPolicy>,
-        ephemeral_policy: Option<JsEphemeralPolicy>,
-        on_remote_heads: Option<js_sys::Function>,
-        on_ephemeral: Option<js_sys::Function>,
-    ) -> Result<Self, WasmHydrationError> {
-        use subduction_core::storage::traits::Storage as _;
-
-        tracing::debug!("hydrating new Subduction node");
-        let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
-        #[allow(clippy::expect_used)]
-        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(|h| {
-            JsValue::from(h)
-                .dyn_into()
-                .expect("hash_metric_override is not a Function")
-        });
-        let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
-        let depth_metric = WasmHashMetric(raw_fn);
-        let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
-        // `None` or an explicit `0` falls back to the default cap.
-        let max_resident = match max_resident_trees {
-            Some(n) if n > 0 => n,
-            _ => WASM_DEFAULT_MAX_RESIDENT_TREES,
-        };
-
-        // Load sedimentree IDs from raw storage before wrapping in powerbox
-        let ids: Set<SedimentreeId> = storage
-            .load_all_sedimentree_ids()
-            .await
-            .map_err(HydrationError::LoadAllIdsError)?;
-
-        // Hydrate sedimentrees from storage.
-        //
-        // Each sedimentree is loaded concurrently — commits and fragments
-        // for each ID are independent and can overlap their IndexedDB reads.
-        // Within each sedimentree, commits and fragments are loaded in
-        // parallel via `try_join`.
-        let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
-        let loaded: Vec<_> = futures::future::try_join_all(ids.iter().map(|&id| {
-            let storage = &storage;
-            async move {
-                let (commits, fragments) = futures::future::try_join(
-                    async {
-                        storage
-                            .load_loose_commits(id)
-                            .await
-                            .map_err(HydrationError::LoadLooseCommitsError)
-                    },
-                    async {
-                        storage
-                            .load_fragments(id)
-                            .await
-                            .map_err(HydrationError::LoadFragmentsError)
-                    },
-                )
-                .await?;
-
-                let loose_commits: Vec<_> =
-                    commits.into_iter().map(|v| v.payload().clone()).collect();
-                let fragments: Vec<_> =
-                    fragments.into_iter().map(|v| v.payload().clone()).collect();
-
-                Ok::<_, HydrationError<Local, JsStorage>>((
-                    id,
-                    Sedimentree::new(fragments, loose_commits),
-                ))
-            }
-        }))
-        .await?;
-
-        // Merge + minimize sequentially (BoundedShardedMap access is per entry).
-        for (id, sedimentree) in loaded {
-            sedimentrees
-                .with_entry_or_default(id, |tree: &mut MinimizedSedimentree| {
-                    tree.merge(sedimentree);
-                })
-                .await;
-            sedimentrees
-                .with_entry(&id, |tree| {
-                    tree.ensure_minimized(&depth_metric);
-                })
-                .await;
-        }
-
-        let policy = policy.unwrap_or_else(make_open_policy);
-
-        let connections = Arc::new(Mutex::new(Map::new()));
-        let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
-        let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
-
-        let observer = match on_remote_heads {
-            Some(f) => crate::remote_heads::JsRemoteHeadsObserver::with_callback(f),
-            None => crate::remote_heads::JsRemoteHeadsObserver::new(),
-        };
-        let sync_handler = SyncHandler::with_remote_heads_observer(
-            sedimentrees.clone(),
-            connections.clone(),
-            subscriptions.clone(),
-            powerbox.clone(),
-            pending_blob_requests.clone(),
-            depth_metric.clone(),
-            observer.clone(),
-        );
-
-        let eph_policy = ephemeral_policy.unwrap_or_else(make_open_ephemeral_policy);
-        let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
-            connections.clone(),
-            eph_policy,
-            EphemeralConfig::default(),
-            JsClock,
-        );
-        let ephemeral_for_wasm = ephemeral_handler.clone();
-
-        let send_counter = sync_handler.send_counter().clone();
-        let keyhive_handler = Arc::new(Mutex::new(None));
-        let handler = Arc::new(WasmComposedHandler::new(
-            sync_handler,
-            ephemeral_handler,
-            WasmKeyhiveHandler::new(keyhive_handler.clone()),
-        ));
-
-        let (core, listener_fut, manager_fut) = Subduction::new(
-            handler,
-            discovery_id,
-            signer,
-            sedimentrees,
-            connections,
-            subscriptions,
-            powerbox,
-            pending_blob_requests,
-            send_counter,
-            NonceCache::default(),
-            JsTimeout,
-            Duration::from_secs(30),
-            depth_metric,
-            WasmSpawn,
-        );
-
-        wasm_bindgen_futures::spawn_local(async move {
-            let manager = manager_fut.fuse();
-            let listener = listener_fut.fuse();
-
-            match select(manager, listener).await {
-                Either::Left((manager_result, _pin)) => {
-                    if let Err(Aborted) = manager_result {
-                        tracing::error!("Subduction manager aborted");
-                    }
-                }
-                Either::Right((listener_result, _pin)) => {
-                    if let Err(Aborted) = listener_result {
-                        tracing::error!("Subduction listener aborted");
-                    }
-                }
-            }
-        });
-
-        // Always drain the ephemeral channel to prevent "channel full" warnings
-        // in EphemeralHandler when no JS callback is registered.
-        let observer = on_ephemeral.map(crate::ephemeral::JsEphemeralObserver::new);
-        wasm_bindgen_futures::spawn_local(async move {
-            while let Ok(event) = ephemeral_rx.recv().await {
-                if let Some(ref obs) = observer {
-                    obs.on_event(event.id, event.sender, &event.payload);
-                }
-            }
-        });
-
-        Ok(Self {
-            core,
-            js_storage,
-            ephemeral_handler: ephemeral_for_wasm,
-            keyhive_handler,
-        })
     }
 
     /// Persist a whole [`Sedimentree`](sedimentree_wasm::WasmSedimentree)
