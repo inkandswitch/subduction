@@ -23,7 +23,7 @@
 //! | `depth_metric` | [`.depth_metric()`] | [`CountLeadingZeroBytes`] |
 //! | `nonce_cache` | [`.nonce_cache()`] | [`NonceCache::default()`] |
 //! | `max_pending_blob_requests` | [`.max_pending_blob_requests()`] | `10_000` |
-//! | `sedimentrees` | [`.sedimentrees()`] | Empty [`ShardedMap::new()`] |
+//! | `sedimentrees` | [`.sedimentrees()`] | Empty [`BoundedShardedMap::new()`] |
 //!
 //! # Example
 //!
@@ -53,7 +53,7 @@
 //! [`.sedimentrees()`]: SubductionBuilder::sedimentrees
 //! [`CountLeadingZeroBytes`]: sedimentree_core::commit::CountLeadingZeroBytes
 //! [`NonceCache::default()`]: crate::nonce_cache::NonceCache
-//! [`ShardedMap::new()`]: crate::sharded_map::ShardedMap::new
+//! [`BoundedShardedMap::new()`]: crate::collections::bounded_sharded_map::BoundedShardedMap::new
 
 use alloc::sync::Arc;
 use async_lock::Mutex;
@@ -68,6 +68,7 @@ use sedimentree_core::{
 
 use crate::{
     authenticated::Authenticated,
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
         Connection,
         managed::{ManagedCall, ManagedConnection},
@@ -80,7 +81,6 @@ use crate::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::RemoteHeadsNotifier,
-    sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, traits::Storage},
     timeout::Timeout,
 };
@@ -129,16 +129,17 @@ pub struct SubductionBuilder<
     depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
+    max_resident_trees: Option<usize>,
     sedimentrees: SedimentreesOption<SHARDS>,
 }
 
-/// Internal helper: stores an optional pre-populated `ShardedMap`.
+/// Internal helper: stores an optional pre-populated `BoundedShardedMap`.
 ///
 /// Using a wrapper struct avoids placing the const generic `SHARDS` on
 /// fields that don't otherwise need it.
 #[derive(Debug)]
 struct SedimentreesOption<const SHARDS: usize>(
-    Option<Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>>,
+    Option<Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>>,
 );
 
 impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
@@ -161,7 +162,7 @@ impl<const SHARDS: usize>
     /// calling [`build`](SubductionBuilder::build).
     ///
     /// The const generic `SHARDS` controls the number of shards in the
-    /// internal [`ShardedMap`]. Defaults to 256 if not specified.
+    /// internal [`BoundedShardedMap`]. Defaults to 256 if not specified.
     #[must_use]
     pub fn new() -> Self {
         SubductionBuilder {
@@ -174,6 +175,7 @@ impl<const SHARDS: usize>
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
             max_pending_blob_requests: DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            max_resident_trees: None,
             sedimentrees: SedimentreesOption::default(),
         }
     }
@@ -207,6 +209,7 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -234,6 +237,7 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -261,6 +265,7 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -285,6 +290,7 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize>
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -330,6 +336,7 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
             depth_metric: metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
+            max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
     }
@@ -352,15 +359,44 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
         self
     }
 
+    /// Bound the number of sedimentrees kept resident in memory.
+    ///
+    /// The in-memory sedimentree map is an LRU cache over durable storage:
+    /// when the resident set exceeds this many trees, the least-recently-used
+    /// trees are evicted and transparently re-hydrated from storage on next
+    /// access. This bounds memory by the active working set rather than the
+    /// total number of documents ever synced.
+    ///
+    /// # Approximate, not a strict global cap
+    ///
+    /// The bound is enforced **per shard**: `max` is divided across the
+    /// map's shards (`ceil(max / SHARDS)` per shard, floored at 1). So the
+    /// effective global ceiling is `ceil(max / SHARDS) * SHARDS`, which can
+    /// exceed `max` and is **at least `SHARDS`** (256 by default). Setting a
+    /// value smaller than the shard count therefore still permits up to one
+    /// resident tree per shard. Treat `max` as an order-of-magnitude target,
+    /// not an exact limit. See
+    /// [`BoundedShardedMap::with_capacity`](crate::collections::bounded_sharded_map::BoundedShardedMap::with_capacity).
+    ///
+    /// Defaults to unbounded (no eviction) — set this on servers / clients
+    /// that sync large numbers of documents. Ignored if a pre-populated
+    /// [`sedimentrees`](Self::sedimentrees) map is supplied (configure the
+    /// cap on that map directly via `with_capacity`).
+    #[must_use]
+    pub const fn max_resident_trees(mut self, max: usize) -> Self {
+        self.max_resident_trees = Some(max);
+        self
+    }
+
     /// Provide a pre-populated sedimentree map.
     ///
     /// Use this for hydration: load sedimentree state from storage,
     /// then pass the populated map here. Defaults to an empty
-    /// [`ShardedMap::new()`](ShardedMap::new).
+    /// [`BoundedShardedMap::new()`](crate::collections::bounded_sharded_map::BoundedShardedMap::new).
     #[must_use]
     pub fn sedimentrees(
         mut self,
-        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     ) -> Self {
         self.sedimentrees = SedimentreesOption(Some(sedimentrees));
         self
@@ -427,10 +463,14 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
                 SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
             >,
     {
-        let sedimentrees = self
-            .sedimentrees
-            .0
-            .unwrap_or_else(|| Arc::new(ShardedMap::new()));
+        let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
+            let map = BoundedShardedMap::new();
+            let map = match self.max_resident_trees {
+                Some(cap) => map.with_capacity(cap),
+                None => map,
+            };
+            Arc::new(map)
+        });
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -528,10 +568,14 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
     {
-        let sedimentrees = self
-            .sedimentrees
-            .0
-            .unwrap_or_else(|| Arc::new(ShardedMap::new()));
+        let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
+            let map = BoundedShardedMap::new();
+            let map = match self.max_resident_trees {
+                Some(cap) => map.with_capacity(cap),
+                None => map,
+            };
+            Arc::new(map)
+        });
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -615,10 +659,14 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
     {
-        let sedimentrees = self
-            .sedimentrees
-            .0
-            .unwrap_or_else(|| Arc::new(ShardedMap::new()));
+        let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
+            let map = BoundedShardedMap::new();
+            let map = match self.max_resident_trees {
+                Some(cap) => map.with_capacity(cap),
+                None => map,
+            };
+            Arc::new(map)
+        });
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));

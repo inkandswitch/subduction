@@ -96,6 +96,16 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         })
     }
 
+    fn contains_sedimentree_id(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<bool, Self::Error>> {
+        Async::from_future(async move {
+            tracing::debug!(?sedimentree_id, "MemoryStorage::contains_sedimentree_id");
+            Ok(self.ids.lock().await.contains(&sedimentree_id))
+        })
+    }
+
     // ==================== Loose Commits (compound with blob) ====================
 
     fn save_loose_commit(
@@ -374,5 +384,70 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
 
             Ok(num_commits + num_fragments)
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn sid(n: u8) -> SedimentreeId {
+        SedimentreeId::new([n; 32])
+    }
+
+    /// `contains_sedimentree_id` reflects registration: false before, true
+    /// after `save_sedimentree_id`, false again after `delete_sedimentree_id`,
+    /// and always agrees with `load_all_sedimentree_ids` membership.
+    #[tokio::test]
+    async fn contains_tracks_registration_and_agrees_with_load_all() {
+        let store = MemoryStorage::new();
+        let id = sid(7);
+        let other = sid(8);
+
+        // Absent before registration.
+        assert!(
+            !Storage::<Sendable>::contains_sedimentree_id(&store, id)
+                .await
+                .expect("infallible"),
+            "unregistered id must not be contained"
+        );
+
+        Storage::<Sendable>::save_sedimentree_id(&store, id)
+            .await
+            .expect("save");
+
+        // Present after registration — even with no commits/fragments (the
+        // registered-but-empty case the hydration path relies on).
+        assert!(
+            Storage::<Sendable>::contains_sedimentree_id(&store, id)
+                .await
+                .expect("infallible"),
+            "registered id must be contained even when empty"
+        );
+        assert!(
+            !Storage::<Sendable>::contains_sedimentree_id(&store, other)
+                .await
+                .expect("infallible"),
+            "a different, unregistered id must not be contained"
+        );
+
+        // Agreement with the enumerating API.
+        let all = Storage::<Sendable>::load_all_sedimentree_ids(&store)
+            .await
+            .expect("load all");
+        assert!(all.contains(&id));
+        assert!(!all.contains(&other));
+
+        // Absent again after deletion.
+        Storage::<Sendable>::delete_sedimentree_id(&store, id)
+            .await
+            .expect("delete");
+        assert!(
+            !Storage::<Sendable>::contains_sedimentree_id(&store, id)
+                .await
+                .expect("infallible"),
+            "deleted id must no longer be contained"
+        );
     }
 }

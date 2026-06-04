@@ -165,13 +165,14 @@ async function setupPeer(
       window.syncer = new Subduction(
         signer,
         new MemoryStorage(),
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        callback
+        null, // service_name
+        null, // hash_metric_override
+        null, // max_pending_blob_requests
+        null, // max_resident_trees
+        null, // policy
+        null, // ephemeral_policy
+        null, // on_remote_heads
+        callback // on_ephemeral
       );
 
       const url = new URL(wsUrl);

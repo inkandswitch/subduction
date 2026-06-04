@@ -25,7 +25,7 @@ test.describe("Subduction", () => {
       expect(result.hasStorage).toBe(true);
     });
 
-    test("should hydrate Subduction from existing storage", async ({ page }) => {
+    test("a second node over the same storage sees persisted trees", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
@@ -34,7 +34,7 @@ test.describe("Subduction", () => {
         const syncer1 = new Subduction(signer, storage);
         const ids1 = await syncer1.sedimentreeIds();
 
-        const syncer2 = await Subduction.hydrate(signer, storage);
+        const syncer2 = new Subduction(signer, storage);
         const ids2 = await syncer2.sedimentreeIds();
 
         return {
@@ -758,8 +758,8 @@ test.describe("Subduction", () => {
     });
   });
 
-  test.describe("Hydration", () => {
-    test("should persist and retrieve commits across hydrate", async ({ page }) => {
+  test.describe("Cross-instance persistence", () => {
+    test("persists and retrieves commits across a new instance", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
@@ -775,8 +775,8 @@ test.describe("Subduction", () => {
         const commitCountBefore = commitsBefore ? commitsBefore.length : 0;
         const blobMetaSizeBefore = commitsBefore ? Number(commitsBefore[0].blobMeta.sizeBytes) : 0;
 
-        // Hydrate a new instance from the same storage
-        const syncer2 = await Subduction.hydrate(signer, storage);
+        // A new instance over the same storage hydrates on demand.
+        const syncer2 = new Subduction(signer, storage);
         const idsAfter = await syncer2.sedimentreeIds();
         const commitsAfter = await syncer2.getCommits(sedId);
         const commitCountAfter = commitsAfter ? commitsAfter.length : 0;
@@ -800,7 +800,7 @@ test.describe("Subduction", () => {
       expect(result.blobMetaSizeAfter).toBe(3);
     });
 
-    test("should hydrate multiple sedimentrees correctly", async ({ page }) => {
+    test("a new instance reads multiple persisted sedimentrees correctly", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } =
           window.subduction;
@@ -827,8 +827,8 @@ test.describe("Subduction", () => {
         // Verify initial state
         const idsBefore = await syncer1.sedimentreeIds();
 
-        // Hydrate a new instance from the same storage
-        const syncer2 = await Subduction.hydrate(signer, storage);
+        // A new instance over the same storage hydrates on demand.
+        const syncer2 = new Subduction(signer, storage);
         const idsAfter = await syncer2.sedimentreeIds();
 
         // Verify all 3 sedimentrees loaded with correct commit counts

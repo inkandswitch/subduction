@@ -368,6 +368,16 @@ impl Sedimentree {
         self.commits.contains_key(&id)
     }
 
+    /// Returns true if this [`Sedimentree`] has a fragment whose head is `id`.
+    ///
+    /// Fragments are keyed by head, so this is an exact-identity membership
+    /// check (cf. [`has_fragment_starting_with`](Self::has_fragment_starting_with),
+    /// which tests boundary coverage).
+    #[must_use]
+    pub fn has_fragment(&self, id: CommitId) -> bool {
+        self.fragments.contains_key(&id)
+    }
+
     /// Returns true if this [`Sedimentree`] has a fragment starting with the given digest.
     #[must_use]
     pub fn has_fragment_starting_with<M: DepthMetric>(

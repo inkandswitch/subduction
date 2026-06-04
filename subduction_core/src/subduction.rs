@@ -63,6 +63,7 @@ pub(crate) mod peers;
 
 use crate::{
     authenticated::Authenticated,
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
         Connection,
         backoff::Backoff,
@@ -82,7 +83,6 @@ use crate::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
-    sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::Timeout,
 };
@@ -149,7 +149,7 @@ pub struct Subduction<
 
     timer: Timer,
     depth_metric: Metric,
-    sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+    sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     storage: StoragePowerbox<Store, Auth>,
 
     /// Active connections, keyed by peer ID.
@@ -359,7 +359,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// let sedimentrees = Arc::new(ShardedMap::new());
+    /// let sedimentrees = Arc::new(BoundedShardedMap::new());
     /// let connections = Arc::new(Mutex::new(Map::new()));
     /// let subscriptions = Arc::new(Mutex::new(Map::new()));
     /// let storage = StoragePowerbox::new(storage, Arc::new(policy));
@@ -393,7 +393,7 @@ where
         handler: Arc<Hdl>,
         discovery_id: Option<DiscoveryId>,
         signer: Sign,
-        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
@@ -1237,12 +1237,10 @@ where
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, Store::Error> {
         tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
-        let tree = self.sedimentrees.get_cloned(&id).await;
-        if tree.is_none() {
-            return Ok(None);
-        }
 
-        tracing::debug!("Found sedimentree with id {:?}", id);
+        // Read blobs straight from durable storage. Storage is the source of
+        // truth, so we do not gate on in-RAM cache residency (an evicted tree
+        // must still return its blobs). `None` ⇔ storage holds nothing.
         let local_access = self.storage.hydration_access();
         let mut results = Vec::new();
 
@@ -1284,7 +1282,10 @@ where
         if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
-            let tree = self.get_minimized_tree(id).await;
+            // No blobs locally. Hydrate (cache or storage) to decide whether
+            // the tree exists; only then ask peers for its data. The hydrated
+            // tree is already minimized for wire use.
+            let tree = self.get_or_hydrate(id).await?;
             if let Some(tree) = tree {
                 let conns = self.all_connections().await;
                 for conn in conns {
@@ -1393,22 +1394,31 @@ where
         &self,
         id: SedimentreeId,
     ) -> Result<(), IoError<Async, Store, Conn, Hdl::Message>> {
-        let maybe_sedimentree = self.sedimentrees.remove(&id).await;
+        // Drop the in-RAM cache entry (if resident) and delete from durable
+        // storage unconditionally. We must NOT gate storage deletion on RAM
+        // residency: with the LRU cache, an existing tree may have been
+        // evicted from memory, yet still needs deleting from disk.
+        self.sedimentrees.remove(&id).await;
 
-        if maybe_sedimentree.is_some() {
-            let destroyer = self.storage.local_destroyer(id);
+        let destroyer = self.storage.local_destroyer(id);
 
-            // With compound storage, deleting commits/fragments also deletes their blobs
-            destroyer
-                .delete_loose_commits()
-                .await
-                .map_err(IoError::Storage)?;
+        // With compound storage, deleting commits/fragments also deletes their blobs.
+        destroyer
+            .delete_loose_commits()
+            .await
+            .map_err(IoError::Storage)?;
 
-            destroyer
-                .delete_fragments()
-                .await
-                .map_err(IoError::Storage)?;
-        }
+        destroyer
+            .delete_fragments()
+            .await
+            .map_err(IoError::Storage)?;
+
+        // Existence is recorded by the id index; remove it so the tree no
+        // longer appears in `sedimentree_ids` / enumeration.
+        destroyer
+            .delete_sedimentree_id()
+            .await
+            .map_err(IoError::Storage)?;
 
         Ok(())
     }
@@ -1517,13 +1527,14 @@ where
 
         self.minimize_tree(id).await;
 
-        let heads = {
-            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
-            shard
-                .get(&id)
-                .map(|s| s.heads(&self.depth_metric))
-                .unwrap_or_default()
-        };
+        // Read the just-written tree's heads via the cache (counts as an
+        // access — appropriate, the tree was just written so it is hot).
+        let heads = self
+            .sedimentrees
+            .get_cloned(&id)
+            .await
+            .map(|s| s.heads(&self.depth_metric))
+            .unwrap_or_default();
         {
             let conns = {
                 let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
@@ -1666,13 +1677,14 @@ where
 
         self.minimize_tree(id).await;
 
-        let heads = {
-            let shard = self.sedimentrees.get_shard_containing(&id).lock().await;
-            shard
-                .get(&id)
-                .map(|s| s.heads(&self.depth_metric))
-                .unwrap_or_default()
-        };
+        // Read the just-written tree's heads via the cache (counts as an
+        // access — the tree was just written so it is hot).
+        let heads = self
+            .sedimentrees
+            .get_cloned(&id)
+            .await
+            .map(|s| s.heads(&self.depth_metric))
+            .unwrap_or_default();
 
         let conns = {
             let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
@@ -1774,14 +1786,14 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sedimentrees
-            .with_entry_or_default(id, |tree| {
-                for commit in commit_payloads {
-                    tree.add_commit(commit);
-                }
-                tree.ensure_minimized(&self.depth_metric);
-            })
-            .await;
+        self.with_tree_hydrated(id, move |tree| {
+            for commit in commit_payloads {
+                tree.add_commit(commit);
+            }
+        })
+        .await
+        .map_err(WriteError::Io)?;
+        self.minimize_tree(id).await;
 
         tracing::info!("bulk-insert of {count} commits complete, tree minimized");
         Ok(())
@@ -1846,14 +1858,14 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sedimentrees
-            .with_entry_or_default(id, |tree| {
-                for fragment in fragment_payloads {
-                    tree.add_fragment(fragment);
-                }
-                tree.ensure_minimized(&self.depth_metric);
-            })
-            .await;
+        self.with_tree_hydrated(id, move |tree| {
+            for fragment in fragment_payloads {
+                tree.add_fragment(fragment);
+            }
+        })
+        .await
+        .map_err(WriteError::Io)?;
+        self.minimize_tree(id).await;
         tracing::info!("bulk-insert of {count} fragments complete, tree minimized");
         Ok(())
     }
@@ -1932,17 +1944,17 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sedimentrees
-            .with_entry_or_default(id, |tree| {
-                for commit in commit_payloads {
-                    tree.add_commit(commit);
-                }
-                for fragment in fragment_payloads {
-                    tree.add_fragment(fragment);
-                }
-                tree.ensure_minimized(&self.depth_metric);
-            })
-            .await;
+        self.with_tree_hydrated(id, move |tree| {
+            for commit in commit_payloads {
+                tree.add_commit(commit);
+            }
+            for fragment in fragment_payloads {
+                tree.add_fragment(fragment);
+            }
+        })
+        .await
+        .map_err(WriteError::Io)?;
+        self.minimize_tree(id).await;
 
         tracing::info!(
             "bulk-insert of {commit_count} commits and {fragment_count} fragments \
@@ -2017,7 +2029,7 @@ impl<
     #[must_use]
     pub const fn sedimentrees(
         &self,
-    ) -> &Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
+    ) -> &Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
         &self.sedimentrees
     }
 
@@ -2500,10 +2512,11 @@ where
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = FingerprintSeed::random();
-            let resolver = self.get_minimized_tree(id).await.map_or_else(
-                || Sedimentree::default().fingerprint_resolver(&seed),
-                |t| t.fingerprint_resolver(&seed),
-            );
+            // A nonexistent tree syncs as empty: we advertise nothing and the
+            // peer sends us everything it has. The hydrated tree is already
+            // minimized for the wire diff.
+            let tree = self.get_or_hydrate(id).await?.unwrap_or_default();
+            let resolver = tree.fingerprint_resolver(&seed);
 
             tracing::debug!(
                 "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -2753,9 +2766,15 @@ where
         };
         tracing::debug!("Found {} peer(s)", peers.len());
 
+        // Hydrate the tree once (from the LRU cache or storage) and share it
+        // across all per-peer tasks, rather than re-reading it per peer. A
+        // nonexistent tree syncs as empty.
+        let shared_tree = self.get_or_hydrate(id).await?.unwrap_or_default();
+
         let mut set: FuturesUnordered<_> = peers
             .iter()
             .map(|(peer_id, peer_conns)| {
+                let shared_tree = shared_tree.clone();
                 async move {
                     tracing::debug!(
                         "Requesting batch sync for sedimentree {:?} from {} connections",
@@ -2770,10 +2789,7 @@ where
                     for conn in peer_conns {
                         tracing::debug!("Using connection to peer {}", conn.peer_id());
                         let seed = FingerprintSeed::random();
-                        let resolver = self.get_minimized_tree(id).await.map_or_else(
-                            || Sedimentree::default().fingerprint_resolver(&seed),
-                            |t| t.fingerprint_resolver(&seed),
-                        );
+                        let resolver = shared_tree.fingerprint_resolver(&seed);
 
                         // Mux missing means the peer was torn down between
                         // the connection snapshot and here; report it
@@ -3033,7 +3049,10 @@ where
             "Requesting batch sync for all sedimentrees with peer {}",
             peer_id
         );
-        let tree_ids = self.sedimentrees.into_keys().await;
+        // Enumerate from storage so evicted (cold) trees are still synced.
+        // Each `sync_with_peer` hydrates through the LRU cache, so the
+        // resident set stays bounded even across a full sweep.
+        let tree_ids = self.sedimentree_ids().await;
 
         let mut sync_futures: FuturesUnordered<_> = tree_ids
             .into_iter()
@@ -3089,7 +3108,9 @@ where
         Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
     ) {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
-        let tree_ids = self.sedimentrees.into_keys().await;
+        // Enumerate from storage (complete across evictions); per-tree sync
+        // hydrates through the bounded LRU cache.
+        let tree_ids = self.sedimentree_ids().await;
 
         let mut sync_futures: FuturesUnordered<_> = tree_ids
             .into_iter()
@@ -3163,41 +3184,87 @@ where
      * PUBLIC UTILITIES *
      ********************/
 
-    /// Get an iterator over all known sedimentree IDs.
+    /// Get all known sedimentree IDs.
+    ///
+    /// Enumerates from durable storage (not just the in-RAM cache), so the
+    /// list stays complete even after cold trees are evicted from memory.
+    /// On a storage error, logs and falls back to the resident set.
     pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
-        self.sedimentrees.into_keys().await
+        match self
+            .storage
+            .hydration_access()
+            .load_all_sedimentree_ids::<Async>()
+            .await
+        {
+            Ok(ids) => ids.into_iter().collect(),
+            Err(e) => {
+                tracing::warn!(
+                    "sedimentree_ids: storage enumeration failed: {e}; falling back to resident set"
+                );
+                self.sedimentrees.into_keys().await
+            }
+        }
     }
 
     /// Get all commits for a given sedimentree ID.
+    ///
+    /// Hydrates from storage on an in-RAM cache miss, so an evicted tree
+    /// returns its real commits. Returns `None` when the tree does not exist
+    /// in storage. On a storage error, logs and returns `None`.
     pub async fn get_commits(&self, id: SedimentreeId) -> Option<Vec<LooseCommit>> {
-        self.sedimentrees
-            .get_cloned(&id)
-            .await
-            .map(|tree| tree.loose_commits().cloned().collect())
+        let tree = self.hydrated_or_log(id).await?;
+        Some(tree.loose_commits().cloned().collect())
     }
 
     /// Get all fragments for a given sedimentree ID.
+    ///
+    /// Hydrates from storage on an in-RAM cache miss. Returns `None` when the
+    /// tree does not exist in storage (see [`get_commits`]).
+    ///
+    /// [`get_commits`]: Self::get_commits
     pub async fn get_fragments(&self, id: SedimentreeId) -> Option<Vec<Fragment>> {
-        self.sedimentrees
-            .get_cloned(&id)
-            .await
-            .map(|tree| tree.fragments().cloned().collect())
+        let tree = self.hydrated_or_log(id).await?;
+        Some(tree.fragments().cloned().collect())
     }
 
-    /// Get the current heads for every locally known sedimentree.
+    /// Hydrate a tree, logging and returning `None` on storage error or when
+    /// the tree does not exist. Helper for the best-effort getters.
+    async fn hydrated_or_log(&self, id: SedimentreeId) -> Option<Sedimentree> {
+        match self.get_or_hydrate(id).await {
+            Ok(maybe_tree) => maybe_tree,
+            Err(e) => {
+                tracing::warn!("hydration failed for sedimentree {id:?}: {e}");
+                None
+            }
+        }
+    }
+
+    /// Get the current heads for every known sedimentree.
     ///
-    /// Walks each shard exactly once, computing heads while holding the
-    /// shard's lock (matching the existing pattern in `SyncHandler`).
+    /// Enumerates from durable storage so the result is complete even after
+    /// cold trees have been evicted from the in-RAM cache. Each tree is
+    /// hydrated on demand through the bounded LRU cache, so memory stays
+    /// bounded across the sweep (an uncommon, potentially slow operation at
+    /// large document counts).
+    ///
     /// An inner empty `Vec<CommitId>` means the sedimentree exists but has
-    /// no heads yet.
+    /// no heads — this is also returned for an id whose hydration *fails*
+    /// transiently (logged), so a storage error is not silently reported as
+    /// "tree does not exist". An id that no longer exists (e.g. deleted
+    /// between enumeration and hydration) is omitted.
     pub async fn get_all_heads(&self) -> Vec<(SedimentreeId, Vec<CommitId>)> {
-        let mut out = Vec::new();
-        for idx in self.sedimentrees.shard_indices() {
-            if let Some(shard) = self.sedimentrees.shard_at(idx) {
-                let guard = shard.lock().await;
-                out.reserve(guard.len());
-                for (id, tree) in guard.iter() {
-                    out.push((*id, tree.heads(&self.depth_metric)));
+        let ids = self.sedimentree_ids().await;
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            match self.get_or_hydrate(id).await {
+                Ok(Some(tree)) => out.push((id, tree.heads(&self.depth_metric))),
+                // Tree genuinely gone (raced with a delete): omit it.
+                Ok(None) => {}
+                // Transient hydration failure: keep the id (it was just
+                // enumerated from storage) with empty, advisory heads.
+                Err(e) => {
+                    tracing::warn!("get_all_heads: hydration failed for {id:?}: {e}");
+                    out.push((id, Vec::new()));
                 }
             }
         }
@@ -3242,9 +3309,16 @@ where
             .await?;
 
         let sedimentree = Sedimentree::new(fragments, loose_commits);
+        // Hydrate-on-miss so merging into an evicted tree preserves its full
+        // durable history.
+        let access = self.storage.hydration_access();
         self.sedimentrees
-            .with_entry_or_default(id, |tree| tree.merge(sedimentree))
-            .await;
+            .with_entry_hydrated(
+                id,
+                || ingest::load_tree::<Async, _>(&access, id),
+                |tree| tree.merge(sedimentree),
+            )
+            .await?;
 
         Ok(())
     }
@@ -3300,13 +3374,14 @@ where
 
         // Resolve requested fingerprints → digests via the pre-captured resolver.
         // The resolver was built from the tree state at fingerprint time,
-        // so minimize cannot invalidate these lookups.
+        // so minimize cannot invalidate these lookups. Hydrate from storage
+        // on a cache miss so an evicted tree reports its real heads; a
+        // nonexistent tree has no heads.
         let heads = self
-            .sedimentrees
-            .get_cloned(&id)
-            .await
-            .unwrap_or_default()
-            .heads(&self.depth_metric);
+            .get_or_hydrate(id)
+            .await?
+            .map(|tree| tree.heads(&self.depth_metric))
+            .unwrap_or_default();
 
         let requested_commit_ids: Vec<CommitId> = requesting
             .commit_fingerprints
@@ -3493,17 +3568,39 @@ where
         ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
     }
 
-    /// Clone out the **minimal** form of a stored sedimentree, minimizing it in
-    /// place first if it is dirty.
+    /// Get a sedimentree from the in-memory LRU cache, hydrating it from
+    /// durable storage on a miss. The returned tree is already minimized for
+    /// wire use (fingerprint summaries / resolvers). Returns `None` if the
+    /// tree does not exist. See [`ingest::get_or_hydrate`].
+    async fn get_or_hydrate(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<Option<Sedimentree>, IoError<Async, Store, Conn, Hdl::Message>> {
+        ingest::get_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
+            .await
+            .map_err(IoError::Storage)
+    }
+
+    /// Mutate the in-memory tree for `id`, hydrating it from storage first if
+    /// it is not resident.
     ///
-    /// Use this (rather than `sedimentrees.get_cloned`) on paths that feed the
-    /// wire — fingerprint summaries / resolvers — where a non-minimal tree
-    /// would produce an incorrect diff.
-    async fn get_minimized_tree(&self, id: SedimentreeId) -> Option<Sedimentree> {
-        let mut shard = self.sedimentrees.get_shard_containing(&id).lock().await;
-        shard
-            .get_mut(&id)
-            .map(|entry| entry.minimized(&self.depth_metric).clone())
+    /// The write-path counterpart to [`get_or_hydrate`](Self::get_or_hydrate):
+    /// a mutation applied to an evicted tree starts from its full durable
+    /// history rather than an empty default. The caller is responsible for
+    /// having persisted the underlying data to storage *before* calling this
+    /// (storage is the source of truth). The mutation runs against the
+    /// [`MinimizedSedimentree`] wrapper, which it marks dirty; callers
+    /// re-minimize (e.g. via [`minimize_tree`](Self::minimize_tree)) afterward.
+    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree) -> R, R>(
+        &self,
+        id: SedimentreeId,
+        mutate: F,
+    ) -> Result<R, IoError<Async, Store, Conn, Hdl::Message>> {
+        let access = self.storage.hydration_access();
+        self.sedimentrees
+            .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access, id), mutate)
+            .await
+            .map_err(IoError::Storage)
     }
 }
 
@@ -3820,13 +3917,13 @@ impl<
 mod tests {
     use super::*;
     use crate::{
+        collections::bounded_sharded_map::BoundedShardedMap,
         connection::test_utils::{
             FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
         },
         handler::sync::SyncHandler,
         nonce_cache::NonceCache,
         policy::open::OpenPolicy,
-        sharded_map::ShardedMap,
         storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
         subduction::pending_blob_requests::{
             DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests,
@@ -3880,7 +3977,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult {
-        let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+        let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
@@ -3949,7 +4046,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_recv_fragment_removes_connection_on_send_failure() -> TestResult {
-        let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+        let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
@@ -4011,6 +4108,121 @@ mod tests {
             subduction.connected_peer_ids().await.len(),
             0,
             "Connection should be removed after send failure"
+        );
+
+        Ok(())
+    }
+
+    /// Keystone invariant for the in-RAM sedimentree LRU cache: a tree must
+    /// be fully reconstructable from durable storage alone, with no help
+    /// from the in-RAM map.
+    ///
+    /// Storage is the source of truth; the in-RAM
+    /// [`BoundedShardedMap`](crate::collections::bounded_sharded_map::BoundedShardedMap)
+    /// is a cache. Every write persists to storage *before* (or independent
+    /// of) the in-RAM mutation, so dropping a tree from RAM and reloading it
+    /// from storage is lossless. This test pins that invariant — if a future
+    /// change ever leaves data only in the in-RAM tree, eviction would
+    /// silently lose it and this test fails.
+    ///
+    /// Procedure: write commits + fragments via the public store API,
+    /// snapshot the resident (minimized) tree, evict it from the in-RAM map
+    /// *only* (`BoundedShardedMap::remove` does not touch storage), rebuild
+    /// from storage exactly as hydration does, and assert equality.
+    #[tokio::test]
+    async fn tree_is_reconstructable_from_storage_alone() -> TestResult {
+        let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
+            Arc::new(BoundedShardedMap::with_key(0, 0));
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        )));
+
+        let handler = Arc::new(SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            storage.clone(),
+            pending.clone(),
+            CountLeadingZeroBytes,
+        ));
+
+        let (subduction, _listener_fut, _actor_fut) =
+            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
+                handler,
+                None,
+                test_signer(),
+                sedimentrees.clone(),
+                connections,
+                subscriptions,
+                storage.clone(),
+                pending,
+                PeerCounter::default(),
+                NonceCache::default(),
+                InstantTimeout,
+                Duration::from_secs(30),
+                CountLeadingZeroBytes,
+                TestSpawn,
+            );
+
+        let id = SedimentreeId::new([0x5A; 32]);
+
+        // Write a commit and a fragment via the public (persist-only) API.
+        let (_chead, cparents, cblob) = make_commit_parts();
+        subduction
+            .store_commit(id, CommitId::new([0xC0; 32]), cparents, cblob)
+            .await?;
+
+        let (fhead, fboundary, fcheckpoints, fblob) = make_fragment_parts();
+        subduction
+            .store_fragment(id, fhead, fboundary, &fcheckpoints, fblob)
+            .await?;
+
+        // Snapshot the resident tree, then evict it from the in-RAM map
+        // ONLY (this does not delete anything from storage). The writes ran
+        // `minimize_tree`, so the resident wrapper is clean; take its inner
+        // (minimal) tree for comparison with the rehydrated minimal form.
+        let resident = sedimentrees
+            .get_cloned(&id)
+            .await
+            .ok_or("tree should be resident after writes")?
+            .into_tree();
+        let evicted = sedimentrees.remove(&id).await;
+        assert!(evicted.is_some(), "tree should have been in the map");
+        assert!(
+            sedimentrees.get_cloned(&id).await.is_none(),
+            "tree must be gone from the in-RAM map after eviction"
+        );
+
+        // Reconstruct purely from storage, exactly as hydration does.
+        let access = storage.hydration_access();
+        let loaded_commits: Vec<LooseCommit> = access
+            .load_loose_commits::<Sendable>(id)
+            .await?
+            .into_iter()
+            .map(|vm| vm.payload().clone())
+            .collect();
+        let loaded_fragments: Vec<Fragment> = access
+            .load_fragments::<Sendable>(id)
+            .await?
+            .into_iter()
+            .map(|vm| vm.payload().clone())
+            .collect();
+
+        assert!(
+            !loaded_commits.is_empty() || !loaded_fragments.is_empty(),
+            "storage must hold the persisted data after in-RAM eviction"
+        );
+
+        let rehydrated =
+            Sedimentree::new(loaded_fragments, loaded_commits).minimize(&CountLeadingZeroBytes);
+
+        assert_eq!(
+            rehydrated, resident,
+            "tree rebuilt from storage must equal the evicted resident tree \
+             (storage is the source of truth; eviction must be lossless)"
         );
 
         Ok(())

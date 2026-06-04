@@ -91,6 +91,19 @@ pub trait Storage<Async: FutureForm + ?Sized> {
         &self,
     ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
 
+    /// Whether a sedimentree ID is registered (a single-key existence check).
+    ///
+    /// Existence is tracked by the id index independently of whether the tree
+    /// has any commits/fragments, so a registered-but-empty tree returns
+    /// `true`. Backends must implement this as a single-key lookup, *not* by
+    /// enumerating [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids):
+    /// it is on the hydration hot path (cache-miss existence checks), where an
+    /// `O(total trees)` scan would be a latency and `DoS` hazard.
+    fn contains_sedimentree_id(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<bool, Self::Error>>;
+
     // ==================== Loose Commits (compound with blob) ====================
 
     /// Save a verified loose commit with its blob.

@@ -41,6 +41,11 @@ export interface SedimentreeStorage {
     saveSedimentreeId(sedimentreeId: SedimentreeId): Promise<void>;
     deleteSedimentreeId(sedimentreeId: SedimentreeId): Promise<void>;
     loadAllSedimentreeIds(): Promise<SedimentreeId[]>;
+    // Optional single-key existence check. When implemented, it is used on the
+    // hydration hot path instead of enumerating every id via
+    // loadAllSedimentreeIds (which is O(total) — e.g. an IndexedDB getAllKeys).
+    // Backends over IndexedDB should implement this as a single `get`/`count`.
+    containsSedimentreeId?(sedimentreeId: SedimentreeId): Promise<boolean>;
 
     // Compound storage for commits (signed data + blob stored together)
     saveCommit(sedimentreeId: SedimentreeId, commitId: CommitId, signedCommit: SignedLooseCommit, blob: Uint8Array): Promise<void>;
@@ -79,6 +84,9 @@ extern "C" {
 
     #[wasm_bindgen(method, js_name = loadAllSedimentreeIds)]
     fn js_load_all_sedimentree_ids(this: &JsStorage) -> Promise;
+
+    #[wasm_bindgen(method, js_name = containsSedimentreeId)]
+    fn js_contains_sedimentree_id(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
 
     // ==================== Commits (compound with blob) ====================
 
@@ -215,6 +223,35 @@ impl Storage<Local> for JsStorage {
                 ids.insert(wasm_id.into());
             }
             Ok(ids)
+        })
+    }
+
+    fn contains_sedimentree_id(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<bool, Self::Error>> {
+        Local::from_future(async move {
+            tracing::debug!(?sedimentree_id, "JsStorage::contains_sedimentree_id");
+
+            // Prefer the optional single-key `containsSedimentreeId` when the
+            // backend implements it (O(1) on IndexedDB). When absent, fall
+            // back to enumerating all ids — correct, just O(total trees).
+            let has_method =
+                js_sys::Reflect::get(self.as_ref(), &JsValue::from_str("containsSedimentreeId"))
+                    .map(|m| m.is_function())
+                    .unwrap_or(false);
+
+            if has_method {
+                let js_promise = self
+                    .js_contains_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
+                let js_value = JsFuture::from(js_promise)
+                    .await
+                    .map_err(JsStorageError::JsError)?;
+                return Ok(js_value.is_truthy());
+            }
+
+            let all = self.load_all_sedimentree_ids().await?;
+            Ok(all.contains(&sedimentree_id))
         })
     }
 

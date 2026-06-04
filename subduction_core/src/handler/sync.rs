@@ -21,7 +21,7 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
-    collections::{Entry, Map, Set},
+    collections::{Map, Set},
     crypto::digest::Digest,
     depth::DepthMetric,
     fragment::Fragment,
@@ -33,6 +33,7 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 
 use crate::{
     authenticated::Authenticated,
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
         Connection,
         message::{
@@ -42,7 +43,6 @@ use crate::{
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
-    sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     subduction::{
         error::{BlobRequestErr, IoError, ListenError},
@@ -84,7 +84,7 @@ pub struct SyncHandler<
     const SHARDS: usize = 256,
     R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
-    sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+    sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     storage: StoragePowerbox<Store, Auth>,
@@ -151,7 +151,7 @@ impl<
     /// [`Subduction::new`]: crate::subduction::Subduction::new
     #[allow(clippy::type_complexity)]
     pub fn new(
-        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
@@ -184,7 +184,7 @@ impl<
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
-        sedimentrees: Arc<ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
@@ -697,58 +697,59 @@ impl<
             .map(|vm| (vm.payload().head(), vm))
             .collect();
 
-        let (
-            local_commit_ids,
-            local_fragment_ids,
-            our_missing_commit_fingerprints,
-            our_missing_fragment_fingerprints,
-            raw_heads,
-        ) = {
-            let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
+        // Build the resident tree from the data we just loaded (reusing the
+        // fetcher reads above — no second storage round-trip).
+        let loose_commits: Vec<_> = commit_by_id
+            .values()
+            .map(|vm| vm.payload().clone())
+            .collect();
+        let fragments: Vec<_> = fragment_by_id
+            .values()
+            .map(|vm| vm.payload().clone())
+            .collect();
 
-            if let Entry::Vacant(entry) = locked.entry(id) {
-                let loose_commits: Vec<_> = commit_by_id
-                    .values()
-                    .map(|vm| vm.payload().clone())
-                    .collect();
-                let fragments: Vec<_> = fragment_by_id
-                    .values()
-                    .map(|vm| vm.payload().clone())
-                    .collect();
-
-                if !loose_commits.is_empty() || !fragments.is_empty() {
-                    let sedimentree =
-                        Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-                    entry.insert(MinimizedSedimentree::already_minimal(sedimentree));
-                    tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
-                }
-            }
-
-            let sedimentree = locked.entry(id).or_default();
-            tracing::debug!(
-                "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commit fps and {} fragment fps",
-                their_fingerprints.commit_fingerprints().len(),
-                their_fingerprints.fragment_fingerprints().len()
-            );
-
-            // Wire diff requires the minimal form.
-            let minimal = sedimentree.minimized(&self.depth_metric);
-            let heads = minimal.heads(&self.depth_metric);
-            let diff = minimal.diff_remote_fingerprints(their_fingerprints);
-            (
-                diff.local_only_commits
-                    .iter()
-                    .map(|(id, _)| **id)
-                    .collect::<Vec<_>>(),
-                diff.local_only_fragments
-                    .iter()
-                    .map(|(id, _)| **id)
-                    .collect::<Vec<_>>(),
-                diff.remote_only_commit_fingerprints,
-                diff.remote_only_fragment_fingerprints,
-                heads,
-            )
+        // Only install into the cache when there is actual stored data.
+        //
+        // Caching an empty tree for a never-stored id would make a later
+        // `get_or_hydrate(id)` return `Some(empty)` instead of `None`,
+        // corrupting the exists-vs-nonexistent contract eviction relies on —
+        // and would let any authorized peer pollute the cache by requesting
+        // arbitrary ids (`get_fetcher` gates on policy, not existence). When
+        // there is no data we diff against an ephemeral empty tree and cache
+        // nothing; the response correctly advertises no local items.
+        //
+        // `get_or_insert_with` adopts a concurrently-installed value if one
+        // appeared and records an LRU access; the built tree is already
+        // minimal, so it is wrapped clean.
+        let mut sedimentree = if loose_commits.is_empty() && fragments.is_empty() {
+            MinimizedSedimentree::already_minimal(Sedimentree::default())
+        } else {
+            let built = Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
+            self.sedimentrees
+                .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(built))
+                .await
         };
+
+        tracing::debug!(
+            "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commit fps and {} fragment fps",
+            their_fingerprints.commit_fingerprints().len(),
+            their_fingerprints.fragment_fingerprints().len()
+        );
+
+        // The wire diff requires the minimal form. A freshly built value is
+        // already minimal, but an adopted concurrently-installed value may be
+        // dirty, so minimize before computing heads / diff.
+        let minimal = sedimentree.minimized(&self.depth_metric);
+        let raw_heads = minimal.heads(&self.depth_metric);
+        let diff = minimal.diff_remote_fingerprints(their_fingerprints);
+        let local_commit_ids: Vec<_> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+        let local_fragment_ids: Vec<_> = diff
+            .local_only_fragments
+            .iter()
+            .map(|(id, _)| **id)
+            .collect();
+        let our_missing_commit_fingerprints = diff.remote_only_commit_fingerprints;
+        let our_missing_fragment_fingerprints = diff.remote_only_fragment_fingerprints;
 
         let responder_heads = RemoteHeads {
             counter: self.send_counter.next(conn.peer_id()).await,
@@ -868,13 +869,28 @@ impl<
         ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
     }
 
+    /// Get a sedimentree from the in-memory LRU cache, hydrating from
+    /// durable storage on a miss. Returns `None` if the tree does not exist.
+    /// See [`ingest::get_or_hydrate`].
+    async fn get_or_hydrate(&self, id: SedimentreeId) -> Result<Option<Sedimentree>, Store::Error> {
+        ingest::get_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id).await
+    }
+
     /// Compute the current heads for a sedimentree (without a counter).
+    ///
+    /// Routes through [`get_or_hydrate`](Self::get_or_hydrate) so an
+    /// evicted (or never-resident) tree reports its real heads from storage
+    /// rather than empty. A nonexistent tree (or a storage error) yields
+    /// empty heads (best-effort; the heads field is advisory).
     async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
-        let locked = self.sedimentrees.get_shard_containing(&id).lock().await;
-        locked
-            .get(&id)
-            .map(|s| s.heads(&self.depth_metric))
-            .unwrap_or_default()
+        match self.get_or_hydrate(id).await {
+            Ok(Some(tree)) => tree.heads(&self.depth_metric),
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                tracing::warn!("heads_for({id:?}): hydration failed: {e}");
+                Vec::new()
+            }
+        }
     }
 
     async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
