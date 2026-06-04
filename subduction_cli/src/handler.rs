@@ -69,6 +69,9 @@ pub(crate) struct CliHandler {
     >,
     pub(crate) ephemeral: CliEphemeralHandler,
     pub(crate) keyhive: CliKeyhiveHandler,
+    /// When false, inbound keyhive (SUK) wire messages are
+    /// dropped instead of delegated to the keyhive handler.
+    pub(crate) keyhive_enabled: bool,
 }
 
 impl core::fmt::Debug for CliHandler {
@@ -115,6 +118,9 @@ impl Handler<Sendable, CliConn> for CliHandler {
                 }
 
                 CliWireMessage::Keyhive(keyhive_msg) => {
+                    if !self.keyhive_enabled {
+                        return Ok(());
+                    }
                     if let Err(e) =
                         Handler::<Sendable, CliConn>::handle(&self.keyhive, conn, keyhive_msg).await
                     {

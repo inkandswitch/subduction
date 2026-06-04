@@ -185,6 +185,16 @@ pub(crate) struct ServerArgs {
     /// Intended for testing sync without keyhive delegation.
     #[arg(long)]
     pub(crate) open_policy: bool,
+
+    /// Skip the periodic keyhive cache refresh task.
+    #[arg(long)]
+    pub(crate) no_keyhive_cache_refresh: bool,
+
+    /// Disable keyhive entirely on the server: drop inbound keyhive (SUK) wire
+    /// messages instead of delegating them, and skip the periodic cache refresh
+    /// (implies `--no-keyhive-cache-refresh`).
+    #[arg(long)]
+    pub(crate) no_keyhive: bool,
 }
 
 impl ServerArgs {
@@ -298,23 +308,25 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let storage_policy = Arc::new(policy_handle);
 
     // Periodic keyhive cache refresh.
-    let refresh_proto = Arc::clone(&keyhive_protocol);
-    let refresh_cancel = token.clone();
-    tokio::spawn(async move {
-        let mut tick = time::interval(Duration::from_secs(2));
-        tick.tick().await;
-        loop {
-            tokio::select! {
-                () = refresh_cancel.cancelled() => break,
-                _ = tick.tick() => {
-                    if let Err(e) = refresh_proto.refresh_cache().await {
-                        tracing::warn!(error = %e, "refresh_cache failed");
+    if !(args.no_keyhive_cache_refresh || args.no_keyhive) {
+        let refresh_proto = Arc::clone(&keyhive_protocol);
+        let refresh_cancel = token.clone();
+        tokio::spawn(async move {
+            let mut tick = time::interval(Duration::from_secs(2));
+            tick.tick().await;
+            loop {
+                tokio::select! {
+                    () = refresh_cancel.cancelled() => break,
+                    _ = tick.tick() => {
+                        if let Err(e) = refresh_proto.refresh_cache().await {
+                            tracing::warn!(error = %e, "refresh_cache failed");
+                        }
                     }
                 }
             }
-        }
-        tracing::debug!("keyhive cache refresh task shutting down");
-    });
+            tracing::debug!("keyhive cache refresh task shutting down");
+        });
+    }
 
     let builder = subduction_core::subduction::builder::SubductionBuilder::new()
         .signer(signer.clone())
@@ -365,6 +377,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 sync: sync_handler,
                 ephemeral: ephemeral_handler.clone(),
                 keyhive: keyhive_handler,
+                keyhive_enabled: !args.no_keyhive,
             });
 
             (handler, ephemeral_handler)
