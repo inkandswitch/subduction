@@ -21,13 +21,13 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
-    collections::{Entry, Map, Set},
+    collections::{Map, Set},
     crypto::digest::Digest,
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::{FingerprintSummary, Sedimentree, minimized::MinimizedSedimentree},
+    sedimentree::{FingerprintSummary, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 
@@ -706,22 +706,22 @@ impl<
         ) = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
-            if let Entry::Vacant(entry) = locked.entry(id) {
-                let loose_commits: Vec<_> = commit_by_id
-                    .values()
-                    .map(|vm| vm.payload().clone())
-                    .collect();
-                let fragments: Vec<_> = fragment_by_id
-                    .values()
-                    .map(|vm| vm.payload().clone())
-                    .collect();
+            let loose_commits: Vec<_> = commit_by_id
+                .values()
+                .map(|vm| vm.payload().clone())
+                .collect();
+            let fragments: Vec<_> = fragment_by_id
+                .values()
+                .map(|vm| vm.payload().clone())
+                .collect();
 
-                if !loose_commits.is_empty() || !fragments.is_empty() {
-                    let sedimentree =
-                        Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-                    entry.insert(MinimizedSedimentree::already_minimal(sedimentree));
-                    tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
-                }
+            if ingest::try_insert_hydrated_minimal_tree(
+                locked.entry(id),
+                loose_commits,
+                fragments,
+                &self.depth_metric,
+            ) {
+                tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
             }
 
             let sedimentree = locked.entry(id).or_default();

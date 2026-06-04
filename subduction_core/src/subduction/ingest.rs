@@ -11,15 +11,16 @@
 
 use alloc::vec::Vec;
 use future_form::FutureForm;
+use futures::future::try_join;
 use sedimentree_core::{
     blob::Blob,
-    collections::{Map, Set},
+    collections::{Entry, Map, Set},
     crypto::digest::Digest,
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    sedimentree::minimized::MinimizedSedimentree,
+    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -254,6 +255,76 @@ pub(crate) async fn insert_fragment_locally<
         .await;
 
     Ok(was_added)
+}
+
+/// Insert a minimized in-memory sedimentree if the shard entry is vacant.
+///
+/// Returns `true` when a tree was inserted. Used by the batch-sync responder
+/// (which has already loaded storage) and by [`hydrate_sedimentree_if_absent`].
+pub(crate) fn try_insert_hydrated_minimal_tree<Metric: DepthMetric>(
+    entry: Entry<'_, SedimentreeId, MinimizedSedimentree>,
+    loose_commits: Vec<LooseCommit>,
+    fragments: Vec<Fragment>,
+    depth_metric: &Metric,
+) -> bool {
+    if loose_commits.is_empty() && fragments.is_empty() {
+        return false;
+    }
+    if let Entry::Vacant(v) = entry {
+        let sedimentree = Sedimentree::new(fragments, loose_commits).minimize(depth_metric);
+        v.insert(MinimizedSedimentree::already_minimal(sedimentree));
+        true
+    } else {
+        false
+    }
+}
+
+/// Load a sedimentree from local storage into the in-memory cache if absent.
+///
+/// Per-doc hydration for outgoing sync: builds an accurate fingerprint summary
+/// without requiring a full startup [`Subduction::hydrate`]. No-op when the
+/// sedimentree is already in memory or storage has no data for `id`.
+pub(crate) async fn hydrate_sedimentree_if_absent<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>(
+    sedimentrees: &ShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    storage: &StoragePowerbox<Store, Auth>,
+    depth_metric: &Metric,
+    id: SedimentreeId,
+) -> Result<(), Store::Error> {
+    if sedimentrees.get_cloned(&id).await.is_some() {
+        return Ok(());
+    }
+
+    let local_access = storage.hydration_access();
+    let (commits, fragments) = try_join(
+        local_access.load_loose_commits::<Async>(id),
+        local_access.load_fragments::<Async>(id),
+    )
+    .await?;
+
+    if commits.is_empty() && fragments.is_empty() {
+        return Ok(());
+    }
+
+    let loose_commits: Vec<LooseCommit> = commits.iter().map(|v| v.payload().clone()).collect();
+    let fragment_payloads: Vec<Fragment> = fragments.iter().map(|v| v.payload().clone()).collect();
+
+    let mut shard = sedimentrees.get_shard_containing(&id).lock().await;
+    if try_insert_hydrated_minimal_tree(
+        shard.entry(id),
+        loose_commits,
+        fragment_payloads,
+        depth_metric,
+    ) {
+        tracing::debug!("hydrated sedimentree {id:?} from storage");
+    }
+
+    Ok(())
 }
 
 /// Re-minimize a sedimentree in the in-memory cache.

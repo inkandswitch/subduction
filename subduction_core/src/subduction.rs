@@ -1237,12 +1237,14 @@ where
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, Store::Error> {
         tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
-        let tree = self.sedimentrees.get_cloned(&id).await;
-        if tree.is_none() {
-            return Ok(None);
-        }
+        ingest::hydrate_sedimentree_if_absent(
+            &self.sedimentrees,
+            &self.storage,
+            &self.depth_metric,
+            id,
+        )
+        .await?;
 
-        tracing::debug!("Found sedimentree with id {:?}", id);
         let local_access = self.storage.hydration_access();
         let mut results = Vec::new();
 
@@ -1284,7 +1286,7 @@ where
         if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
-            let tree = self.get_minimized_tree(id).await;
+            let tree = self.get_or_hydrate_minimized_tree(id).await.map_err(IoError::Storage)?;
             if let Some(tree) = tree {
                 let conns = self.all_connections().await;
                 for conn in conns {
@@ -2500,10 +2502,14 @@ where
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = FingerprintSeed::random();
-            let resolver = self.get_minimized_tree(id).await.map_or_else(
-                || Sedimentree::default().fingerprint_resolver(&seed),
-                |t| t.fingerprint_resolver(&seed),
-            );
+            let resolver = self
+                .get_or_hydrate_minimized_tree(id)
+                .await
+                .map_err(IoError::Storage)?
+                .map_or_else(
+                    || Sedimentree::default().fingerprint_resolver(&seed),
+                    |t| t.fingerprint_resolver(&seed),
+                );
 
             tracing::debug!(
                 "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -2770,10 +2776,14 @@ where
                     for conn in peer_conns {
                         tracing::debug!("Using connection to peer {}", conn.peer_id());
                         let seed = FingerprintSeed::random();
-                        let resolver = self.get_minimized_tree(id).await.map_or_else(
-                            || Sedimentree::default().fingerprint_resolver(&seed),
-                            |t| t.fingerprint_resolver(&seed),
-                        );
+                        let resolver = self
+                            .get_or_hydrate_minimized_tree(id)
+                            .await
+                            .map_err(IoError::Storage)?
+                            .map_or_else(
+                                || Sedimentree::default().fingerprint_resolver(&seed),
+                                |t| t.fingerprint_resolver(&seed),
+                            );
 
                         // Mux missing means the peer was torn down between
                         // the connection snapshot and here; report it
@@ -3496,14 +3506,27 @@ where
     /// Clone out the **minimal** form of a stored sedimentree, minimizing it in
     /// place first if it is dirty.
     ///
-    /// Use this (rather than `sedimentrees.get_cloned`) on paths that feed the
-    /// wire — fingerprint summaries / resolvers — where a non-minimal tree
-    /// would produce an incorrect diff.
-    async fn get_minimized_tree(&self, id: SedimentreeId) -> Option<Sedimentree> {
+    /// Loads from local storage first when the sedimentree is not yet in memory
+    /// (per-doc hydration). Use this on paths that feed the wire — fingerprint
+    /// summaries / resolvers — where a non-minimal tree would produce an
+    /// incorrect diff, and where an empty in-memory tree would cause redundant
+    /// re-sync from peers.
+    async fn get_or_hydrate_minimized_tree(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<Option<Sedimentree>, Store::Error> {
+        ingest::hydrate_sedimentree_if_absent(
+            &self.sedimentrees,
+            &self.storage,
+            &self.depth_metric,
+            id,
+        )
+        .await?;
+
         let mut shard = self.sedimentrees.get_shard_containing(&id).lock().await;
-        shard
+        Ok(shard
             .get_mut(&id)
-            .map(|entry| entry.minimized(&self.depth_metric).clone())
+            .map(|entry| entry.minimized(&self.depth_metric).clone()))
     }
 }
 
