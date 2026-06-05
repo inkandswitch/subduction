@@ -81,7 +81,13 @@ impl<H> CliWireHandler for H where
 
 /// The concrete sync handler type for the CLI server.
 pub(crate) type CliSyncHandler = Arc<
-    SyncHandler<Sendable, MetricsStorage<FsStorage>, CliConn, CliKeyhivePolicyHandle, CountLeadingZeroBytes>,
+    SyncHandler<
+        Sendable,
+        MetricsStorage<FsStorage>,
+        CliConn,
+        CliKeyhivePolicyHandle,
+        CountLeadingZeroBytes,
+    >,
 >;
 
 /// Server handler with keyhive disabled: keyhive (SUK) wire messages are
@@ -157,7 +163,8 @@ impl core::fmt::Debug for CliHandler {
 
 impl core::fmt::Debug for CliHandlerNoKeyhive {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CliHandlerNoKeyhive").finish_non_exhaustive()
+        f.debug_struct("CliHandlerNoKeyhive")
+            .finish_non_exhaustive()
     }
 }
 
