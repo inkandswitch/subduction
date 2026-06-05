@@ -54,6 +54,10 @@ harness = false
 name = "listen_dispatch"
 harness = false
 
+[[bench]]
+name = "listen_dispatch_local"
+harness = false
+
 [features]
 default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary", "subduction_crypto/arbitrary"]
