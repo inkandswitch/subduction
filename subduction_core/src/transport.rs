@@ -32,6 +32,10 @@ use future_form::FutureForm;
 ///
 /// - `send_bytes` must deliver the entire byte slice atomically (no partial sends).
 /// - `recv_bytes` must return a complete message frame (no fragmentation).
+/// - A `recv_bytes` error is terminal: the connection read loop treats any
+///   error as the end of the connection and tears it down. Transports that can
+///   recover from transient read failures must do so internally (retry below
+///   this layer) and only surface an error when the connection is truly gone.
 pub trait Transport<Async: FutureForm + ?Sized>: Clone + PartialEq {
     /// A problem when sending bytes.
     type SendError: core::error::Error;

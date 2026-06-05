@@ -74,7 +74,7 @@ test.beforeAll(async ({ browserName }) => {
 
   subductionServer = spawn(
     cliPath,
-    ["server", "--socket", `${WS_HOST}:${currentPort}`, "--ephemeral-key", "--open-policy"],
+    ["server", "--socket", `${WS_HOST}:${currentPort}`, "--ephemeral-key", "--auth", "open"],
     {
       cwd: path.join(__dirname, "../.."),
       stdio: "pipe",
