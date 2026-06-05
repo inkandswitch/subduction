@@ -24,7 +24,10 @@
 
 use std::time::Duration;
 
+use future_form::Sendable;
 use futures_util::StreamExt;
+use subduction_core::peer::id::PeerId;
+use subduction_websocket::websocket::WebSocket;
 use tokio::net::{TcpListener, TcpStream};
 use tungstenite::protocol::WebSocketConfig;
 
@@ -182,10 +185,6 @@ async fn oversized_frame_poisons_receiver_stream() {
 /// together, and requires the recv to resolve within a short budget.
 #[tokio::test]
 async fn listen_error_tears_down_connection_promptly() {
-    use future_form::Sendable;
-    use subduction_core::peer::id::PeerId;
-    use subduction_websocket::websocket::WebSocket;
-
     let (mut client_ws, server_ws) = connected_pair(RECV_CAP).await;
 
     let (ws, sender_task): (
@@ -277,10 +276,6 @@ async fn listen_error_tears_down_connection_promptly() {
 /// without enqueuing a second Close of its own.
 #[tokio::test]
 async fn clean_close_tears_down_promptly_without_double_close() {
-    use future_form::Sendable;
-    use subduction_core::peer::id::PeerId;
-    use subduction_websocket::websocket::WebSocket;
-
     // Nothing here is over-cap; this exercises the clean-close path.
     let (mut client_ws, server_ws) = connected_pair(RECV_CAP).await;
 

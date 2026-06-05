@@ -16,6 +16,11 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{FutureExt, future::BoxFuture};
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{peer::id::PeerId, transport::Transport};
+use tungstenite::{
+    Error, Message,
+    error::{CapacityError, ProtocolError},
+    protocol::{CloseFrame, frame::coding::CloseCode},
+};
 
 use crate::{
     error::{DisconnectionError, RecvError, RunError, SendError},
@@ -547,12 +552,11 @@ impl ReadErrorKind {
                   unanticipated fatal read error; a catch-all is the correct \
                   default and means new tungstenite variants fail safe."
     )]
-    pub(crate) const fn classify(e: &tungstenite::Error) -> Self {
-        use tungstenite::{Error, error::CapacityError};
+    pub(crate) const fn classify(e: &Error) -> Self {
         match e {
             Error::ConnectionClosed
             | Error::AlreadyClosed
-            | Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake) => {
+            | Error::Protocol(ProtocolError::ResetWithoutClosingHandshake) => {
                 Self::ExpectedDisconnect
             }
 
@@ -580,16 +584,14 @@ impl ReadErrorKind {
     ///   double-close.
     ///
     /// This is a pure function of the category — unit-testable without a socket.
-    fn close_frame(self) -> Option<tungstenite::Message> {
-        use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
-
+    fn close_frame(self) -> Option<Message> {
         let (code, reason) = match self {
             Self::OverCapacity => (CloseCode::Size, "message exceeds size limit"),
             Self::Fatal => (CloseCode::Error, "internal error"),
             Self::ExpectedDisconnect => return None,
         };
 
-        Some(tungstenite::Message::Close(Some(CloseFrame {
+        Some(Message::Close(Some(CloseFrame {
             code,
             reason: reason.into(),
         })))
@@ -612,8 +614,6 @@ where
     S: Sleeper<Async>,
     Async: FutureForm + ?Sized,
 {
-    use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
-
     let mut consecutive_misses: u32 = 0;
     let threshold = config.missed_pong_threshold.get();
 
@@ -718,8 +718,6 @@ mod tests {
     /// learns precisely why.
     #[test]
     fn classify_over_cap_originates_close_size() {
-        use tungstenite::{Error, error::CapacityError, protocol::frame::coding::CloseCode};
-
         let err = Error::Capacity(CapacityError::MessageTooLong {
             size: 100,
             max_size: 10,
@@ -727,7 +725,7 @@ mod tests {
         let kind = ReadErrorKind::classify(&err);
         assert_eq!(kind, ReadErrorKind::OverCapacity);
 
-        let Some(tungstenite::Message::Close(Some(frame))) = kind.close_frame() else {
+        let Some(Message::Close(Some(frame))) = kind.close_frame() else {
             unreachable!("over-cap must originate a Close(Some(_)) frame");
         };
         assert_eq!(frame.code, CloseCode::Size, "over-cap should send 1009");
@@ -739,8 +737,6 @@ mod tests {
     /// auto-echoes), so we must not double-close.
     #[test]
     fn classify_expected_disconnects_send_no_close() {
-        use tungstenite::{Error, error::ProtocolError};
-
         for err in [
             Error::ConnectionClosed,
             Error::AlreadyClosed,
@@ -763,23 +759,18 @@ mod tests {
     /// (1011 Internal Error).
     #[test]
     fn classify_unexpected_originates_close_error() {
-        use tungstenite::{Error, error::ProtocolError, protocol::frame::coding::CloseCode};
-
         // A protocol error other than the benign reset is unexpected.
         let err = Error::Protocol(ProtocolError::UnmaskedFrameFromClient);
         let kind = ReadErrorKind::classify(&err);
         assert_eq!(kind, ReadErrorKind::Fatal);
 
-        let Some(tungstenite::Message::Close(Some(frame))) = kind.close_frame() else {
+        let Some(Message::Close(Some(frame))) = kind.close_frame() else {
             unreachable!("fatal must originate a Close(Some(_)) frame");
         };
         assert_eq!(frame.code, CloseCode::Error, "fatal should send 1011");
     }
 
     async fn create_mock_websocket_stream() -> WebSocketStream<Cursor<Vec<u8>>> {
-        use async_tungstenite::WebSocketStream;
-        use futures::io::Cursor;
-
         let buffer = Cursor::new(Vec::new());
         WebSocketStream::from_raw_socket(buffer, tungstenite::protocol::Role::Client, None).await
     }
@@ -819,8 +810,6 @@ mod tests {
     /// `Close(Away, ...)`. Mock-time so we're CI-jitter-free.
     #[tokio::test(start_paused = true)]
     async fn keepalive_loop_times_out_on_silent_peer() -> TestResult {
-        use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
-
         let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));

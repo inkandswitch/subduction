@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use iroh::endpoint::{RecvStream, SendStream};
+use iroh::endpoint::{ReadError, ReadExactError, RecvStream, SendStream};
 
 use crate::{
     error::{RunError, StreamError},
@@ -85,8 +85,6 @@ enum StreamReadErrorKind {
 
 impl StreamReadErrorKind {
     const fn classify(e: &StreamError) -> Self {
-        use iroh::endpoint::{ReadError, ReadExactError};
-
         match e {
             // Peer-driven terminations (graceful or abrupt) are benign: the
             // connection was lost, the stream finished, the peer reset it
@@ -228,6 +226,8 @@ pub async fn sender_task(
 
 #[cfg(test)]
 mod tests {
+    use iroh::endpoint::{ReadError, ReadExactError};
+
     use super::{StreamError, StreamReadErrorKind};
 
     /// An over-cap frame classifies as `OverCapacity` and closes with the
@@ -250,8 +250,6 @@ mod tests {
     /// disconnects, not fatal errors.
     #[test]
     fn peer_stream_termination_is_expected_disconnect() {
-        use iroh::endpoint::{ReadError, ReadExactError};
-
         let cases = [
             StreamError::Read(ReadExactError::ReadError(ReadError::Reset(7u32.into()))),
             StreamError::Read(ReadExactError::ReadError(ReadError::ClosedStream)),
