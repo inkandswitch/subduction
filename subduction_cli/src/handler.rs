@@ -58,7 +58,7 @@ pub(crate) type CliKeyhiveHandler = SendableKeyhiveHandler<
 type CliListenError = ListenError<Sendable, MetricsStorage<FsStorage>, CliConn, CliWireMessage>;
 
 /// Bundles the bounds the server's connection plumbing requires of a CLI
-/// handler, so [`CliHandler`] and [`CliHandlerNoKeyhive`] can be used
+/// handler, so [`CliHandler`] and [`CliHandlerOpenPolicy`] can be used
 /// interchangeably as the `H` of [`CliSubduction`](crate::server) without
 /// repeating the full bound at every site.
 pub(crate) trait CliWireHandler:
@@ -96,12 +96,12 @@ pub(crate) type CliSyncHandler = Arc<
 ///
 /// This is also the shared sync + ephemeral core that the keyhive-enabled
 /// [`CliHandler`] embeds and delegates its non-keyhive arms to.
-pub(crate) struct CliHandlerNoKeyhive {
+pub(crate) struct CliHandlerOpenPolicy {
     sync: CliSyncHandler,
     ephemeral: CliEphemeralHandler,
 }
 
-impl CliHandlerNoKeyhive {
+impl CliHandlerOpenPolicy {
     pub(crate) const fn new(sync: CliSyncHandler, ephemeral: CliEphemeralHandler) -> Self {
         Self { sync, ephemeral }
     }
@@ -138,7 +138,7 @@ impl CliHandlerNoKeyhive {
 /// Server handler with keyhive enabled: keyhive (SUK) wire messages are
 /// delegated to [`CliKeyhiveHandler`] and disconnects drive its bookkeeping.
 pub(crate) struct CliHandler {
-    core: CliHandlerNoKeyhive,
+    core: CliHandlerOpenPolicy,
     keyhive: CliKeyhiveHandler,
 }
 
@@ -149,7 +149,7 @@ impl CliHandler {
         keyhive: CliKeyhiveHandler,
     ) -> Self {
         Self {
-            core: CliHandlerNoKeyhive::new(sync, ephemeral),
+            core: CliHandlerOpenPolicy::new(sync, ephemeral),
             keyhive,
         }
     }
@@ -161,9 +161,9 @@ impl core::fmt::Debug for CliHandler {
     }
 }
 
-impl core::fmt::Debug for CliHandlerNoKeyhive {
+impl core::fmt::Debug for CliHandlerOpenPolicy {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CliHandlerNoKeyhive")
+        f.debug_struct("CliHandlerOpenPolicy")
             .finish_non_exhaustive()
     }
 }
@@ -179,7 +179,7 @@ impl RemoteHeadsNotifier for CliHandler {
     }
 }
 
-impl RemoteHeadsNotifier for CliHandlerNoKeyhive {
+impl RemoteHeadsNotifier for CliHandlerOpenPolicy {
     fn notify_remote_heads(
         &self,
         id: sedimentree_core::id::SedimentreeId,
@@ -226,7 +226,7 @@ impl Handler<Sendable, CliConn> for CliHandler {
     }
 }
 
-impl Handler<Sendable, CliConn> for CliHandlerNoKeyhive {
+impl Handler<Sendable, CliConn> for CliHandlerOpenPolicy {
     type Message = CliWireMessage;
     type HandlerError = CliListenError;
 

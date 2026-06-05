@@ -43,7 +43,7 @@ use subduction_keyhive::{connection::KeyhiveConnection, runtime::init_sendable_k
 
 use crate::{
     handler::{
-        CliConn, CliEphemeralHandler, CliHandler, CliHandlerNoKeyhive, CliKeyhiveHandler,
+        CliConn, CliEphemeralHandler, CliHandler, CliHandlerOpenPolicy, CliKeyhiveHandler,
         CliKeyhiveProtocol, CliSyncHandler, CliWireHandler,
     },
     key,
@@ -57,7 +57,7 @@ use crate::{
 ///
 /// Generic over the handler `H` so the same connection plumbing serves both
 /// the keyhive-enabled ([`CliHandler`]) and keyhive-disabled
-/// ([`CliHandlerNoKeyhive`]) servers.
+/// ([`CliHandlerOpenPolicy`]) servers.
 type CliSubduction<H> = Arc<
     Subduction<
         'static,
@@ -341,7 +341,7 @@ async fn run_open(args: ServerArgs, token: CancellationToken) -> Result<()> {
         common,
         storage_policy,
         None,
-        |sync, ephemeral| Arc::new(CliHandlerNoKeyhive::new(sync, ephemeral)),
+        |sync, ephemeral| Arc::new(CliHandlerOpenPolicy::new(sync, ephemeral)),
     )
     .await
 }
