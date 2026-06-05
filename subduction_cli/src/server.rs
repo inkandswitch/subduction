@@ -186,15 +186,16 @@ pub(crate) struct ServerArgs {
     #[arg(long)]
     pub(crate) open_policy: bool,
 
-    /// Skip the periodic keyhive cache refresh task.
-    #[arg(long)]
-    pub(crate) no_keyhive_cache_refresh: bool,
+    /// Enable keyhive access control and sync. When `false`, inbound keyhive
+    /// (SUK) wire messages are dropped instead of delegated, and the periodic
+    /// cache refresh is skipped (overriding `--keyhive-cache-refresh`).
+    #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
+    pub(crate) keyhive: bool,
 
-    /// Disable keyhive entirely on the server: drop inbound keyhive (SUK) wire
-    /// messages instead of delegating them, and skip the periodic cache refresh
-    /// (implies `--no-keyhive-cache-refresh`).
-    #[arg(long)]
-    pub(crate) no_keyhive: bool,
+    /// Run the periodic keyhive cache refresh task. Ignored (treated as
+    /// `false`) when `--keyhive=false`.
+    #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
+    pub(crate) keyhive_cache_refresh: bool,
 }
 
 impl ServerArgs {
@@ -308,7 +309,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let storage_policy = Arc::new(policy_handle);
 
     // Periodic keyhive cache refresh.
-    if !(args.no_keyhive_cache_refresh || args.no_keyhive) {
+    if args.keyhive && args.keyhive_cache_refresh {
         let refresh_proto = Arc::clone(&keyhive_protocol);
         let refresh_cancel = token.clone();
         tokio::spawn(async move {
@@ -377,7 +378,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 sync: sync_handler,
                 ephemeral: ephemeral_handler.clone(),
                 keyhive: keyhive_handler,
-                keyhive_enabled: !args.no_keyhive,
+                keyhive_enabled: args.keyhive,
             });
 
             (handler, ephemeral_handler)

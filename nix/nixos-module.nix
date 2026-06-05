@@ -167,8 +167,32 @@ in {
 
       keyhive = lib.mkOption {
         type = lib.types.bool;
+        default = false;
+        description = ''
+          Enable keyhive-based access control and sync (passes
+          `--keyhive <bool>`).
+
+          When false (the default), the server drops inbound keyhive
+          (SUK) wire messages instead of delegating them and skips the
+          periodic keyhive cache refresh.
+
+          When true, keyhive participates normally. Note that keyhive
+          authorization still requires the storage policy to consult it;
+          this option only governs the keyhive wire/refresh path.
+        '';
+      };
+
+      keyhiveCacheRefresh = lib.mkOption {
+        type = lib.types.bool;
         default = true;
-        description = "Enable keyhive-based authorization. When false, uses open (allow-all) policy.";
+        description = ''
+          Run the periodic keyhive cache refresh task (passes
+          `--keyhive-cache-refresh <bool>`).
+
+          Only has an effect when
+          {option}`services.subduction.server.keyhive` is true; the
+          refresh is always skipped while keyhive is disabled.
+        '';
       };
 
       wsPeers = lib.mkOption {
@@ -313,7 +337,11 @@ in {
                 ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
                 ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
                 ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
-                ++ lib.optionals (!cfg.server.keyhive) ["--keyhive" "false"]
+                ++ ["--keyhive" (lib.boolToString cfg.server.keyhive)]
+                ++ lib.optionals cfg.server.keyhive [
+                  "--keyhive-cache-refresh"
+                  (lib.boolToString cfg.server.keyhiveCacheRefresh)
+                ]
                 ++ lib.concatMap (peer: ["--ws-peer" peer]) cfg.server.wsPeers
                 ++ lib.optionals cfg.server.iroh.enable ["--iroh"]
                 ++ lib.optionals (cfg.server.iroh.enable && cfg.server.iroh.directOnly) ["--iroh-direct-only"]
