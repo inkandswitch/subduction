@@ -94,9 +94,7 @@ impl StreamReadErrorKind {
             // is already closed. None of these is a local fault.
             StreamError::Read(
                 ReadExactError::ReadError(
-                    ReadError::ConnectionLost(_)
-                    | ReadError::Reset(_)
-                    | ReadError::ClosedStream,
+                    ReadError::ConnectionLost(_) | ReadError::Reset(_) | ReadError::ClosedStream,
                 )
                 | ReadExactError::FinishedEarly(_),
             )
