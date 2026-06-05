@@ -190,23 +190,22 @@ pub(crate) struct ServerArgs {
 
     /// Authorization mode for the server.
     ///
-    /// - `keyhive` (default): keyhive-based access control and sync. Inbound
-    ///   keyhive (SUK) wire messages are delegated and the periodic cache
-    ///   refresh runs (subject to `--keyhive-cache-refresh`).
-    /// - `open`: allow-all storage policy with the keyhive runtime path
-    ///   disabled. Inbound keyhive messages are dropped, no cache refresh
-    ///   runs, and disconnect events are not forwarded to keyhive. Intended
-    ///   for testing sync without keyhive delegation.
-    ///
-    /// Note: keyhive storage is still initialized at startup in both modes
-    /// (its identity is derived from the signing key); `open` only disables
-    /// the keyhive wire/refresh/disconnect path and the keyhive policy, not
-    /// keyhive construction itself.
+    /// - `keyhive` (default): keyhive-based access control and sync. The full
+    ///   keyhive stack is initialized (storage, identity, protocol, on-disk
+    ///   ingest), inbound keyhive (SUK) wire messages are delegated, peers are
+    ///   registered with keyhive, and the periodic cache refresh runs (subject
+    ///   to `--keyhive-cache-refresh`).
+    /// - `open`: allow-all storage policy with keyhive entirely absent. No
+    ///   keyhive storage, identity, protocol, ingest, refresh, or peer
+    ///   registration is created; inbound keyhive messages are dropped.
+    ///   Intended for testing sync without keyhive delegation.
     #[arg(long, value_enum, default_value_t = AuthMode::Keyhive)]
     pub(crate) auth: AuthMode,
 
-    /// Run the periodic keyhive cache refresh task. Has no effect under
-    /// `--auth open`, where keyhive is disabled entirely.
+    /// Run the periodic keyhive cache refresh task.
+    ///
+    /// Only takes effect under `--auth keyhive`; in `open` mode keyhive is
+    /// absent so no refresh task exists regardless of this flag.
     #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
     pub(crate) keyhive_cache_refresh: bool,
 }
@@ -222,8 +221,9 @@ pub(crate) enum AuthMode {
 }
 
 impl AuthMode {
-    /// Whether keyhive participates: the keyhive stack is initialized, inbound
-    /// SUK messages are delegated, and the cache-refresh task runs.
+    /// Whether `--auth` selected keyhive: the full keyhive stack is
+    /// initialized and inbound SUK messages are delegated. (The periodic
+    /// cache refresh additionally depends on `--keyhive-cache-refresh`.)
     pub(crate) const fn keyhive_enabled(self) -> bool {
         matches!(self, AuthMode::Keyhive)
     }
@@ -286,8 +286,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
         tracing::warn!("keyhive ingest_from_storage failed: {e}");
     }
 
-    // Keyhive-backed authorization (unless `--auth` overrode it; keyhive mode
-    // always uses keyhive policy here).
+    // Keyhive-backed authorization.
     let storage_policy = Arc::new(CliKeyhivePolicyHandle::new(Arc::clone(&shared_keyhive)));
 
     // Periodic keyhive cache refresh.
