@@ -353,69 +353,124 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
     #[allow(clippy::too_many_lines)]
     pub async fn listen(&self) -> Result<(), RunError> {
         tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
-        let mut in_chan = self.ws_reader.lock().await;
-        while let Some(ws_msg) = in_chan.next().await {
-            tracing::debug!(
-                "received WebSocket message for peer {} on channel {}",
-                self.peer_id,
-                self.chan_id
-            );
 
-            match ws_msg {
-                Ok(tungstenite::Message::Binary(bytes)) => {
-                    self.inbound_writer
-                        .send(bytes.to_vec())
-                        .await
-                        .map_err(|e| {
+        // Outcome to return once the loop ends. Teardown (closing the inbound
+        // channel so a parked `recv_bytes` is notified) happens uniformly after
+        // the loop, regardless of *why* it ended — error, remote Close, or EOF.
+        // This is what stops the connection from sitting half-open until
+        // keepalive reaps it (~80 s with `KeepAlive::balanced`).
+        let outcome: Result<(), RunError> = {
+            let mut in_chan = self.ws_reader.lock().await;
+            loop {
+                let Some(ws_msg) = in_chan.next().await else {
+                    // Stream ended (EOF). The write half is already gone, so
+                    // there is nothing to gracefully close — just tear down.
+                    tracing::debug!(peer_id = ?self.peer_id, "websocket stream ended (EOF)");
+                    break Ok(());
+                };
+
+                tracing::debug!(
+                    "received WebSocket message for peer {} on channel {}",
+                    self.peer_id,
+                    self.chan_id
+                );
+
+                match ws_msg {
+                    Ok(tungstenite::Message::Binary(bytes)) => {
+                        if let Err(e) = self.inbound_writer.send(bytes.to_vec()).await {
                             tracing::error!(
                                 "failed to send inbound message to channel {}",
                                 self.chan_id,
                             );
-                            RunError::ChanSend(Box::new(e))
-                        })?;
+                            break Err(RunError::ChanSend(Box::new(e)));
+                        }
 
-                    tracing::debug!("forwarded inbound message to channel {}", self.chan_id);
-                }
-                Ok(tungstenite::Message::Text(text)) => {
-                    tracing::warn!("unexpected text message: {}", text);
-                }
-                Ok(tungstenite::Message::Ping(p)) => {
-                    tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received ping");
-                    // Non-blocking so a saturated outbound queue can't
-                    // stall the listener. A dropped pong may cost one
-                    // keepalive cycle on the remote side.
-                    if let Err(e) = self.outbound_tx.try_send(tungstenite::Message::Pong(p)) {
-                        tracing::warn!(
-                            error = ?e,
-                            peer_id = ?self.peer_id,
-                            "dropped pong reply (outbound full or closed)"
+                        tracing::debug!(
+                            "forwarded inbound message to channel {}",
+                            self.chan_id
                         );
                     }
-                }
-                Ok(tungstenite::Message::Pong(p)) => {
-                    tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received pong");
-                    self.pong_received.store(true, Ordering::Relaxed);
-                }
-                Ok(tungstenite::Message::Frame(f)) => {
-                    tracing::warn!("unexpected frame: {:x?}", f);
-                }
-                Ok(tungstenite::Message::Close(_)) => {
-                    tracing::info!("received close message, shutting down listener");
-                    break;
-                }
-                Err(e) => {
-                    // Distinguish between expected disconnects and real errors
-                    if is_expected_disconnect(&e) {
-                        tracing::debug!("connection closed: {}", e);
-                    } else {
-                        tracing::error!("error reading from websocket: {}", e);
+                    Ok(tungstenite::Message::Text(text)) => {
+                        tracing::warn!("unexpected text message: {}", text);
                     }
-                    Err(e)?;
+                    Ok(tungstenite::Message::Ping(p)) => {
+                        tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received ping");
+                        // Non-blocking so a saturated outbound queue can't
+                        // stall the listener. A dropped pong may cost one
+                        // keepalive cycle on the remote side.
+                        if let Err(e) = self.outbound_tx.try_send(tungstenite::Message::Pong(p)) {
+                            tracing::warn!(
+                                error = ?e,
+                                peer_id = ?self.peer_id,
+                                "dropped pong reply (outbound full or closed)"
+                            );
+                        }
+                    }
+                    Ok(tungstenite::Message::Pong(p)) => {
+                        tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received pong");
+                        self.pong_received.store(true, Ordering::Relaxed);
+                    }
+                    Ok(tungstenite::Message::Frame(f)) => {
+                        tracing::warn!("unexpected frame: {:x?}", f);
+                    }
+                    Ok(tungstenite::Message::Close(_)) => {
+                        // The peer initiated the close; `tungstenite` has
+                        // already auto-echoed the Close reply, so we must NOT
+                        // originate our own (it would be a redundant
+                        // double-close). Just stop reading.
+                        tracing::info!(
+                            peer_id = ?self.peer_id,
+                            "received close message, shutting down listener"
+                        );
+                        break Ok(());
+                    }
+                    Err(e) => {
+                        // Classify once; the category drives log severity and
+                        // whether *we* originate a graceful Close frame.
+                        let kind = ReadErrorKind::classify(&e);
+                        match kind {
+                            ReadErrorKind::ExpectedDisconnect => {
+                                tracing::debug!(peer_id = ?self.peer_id, "connection closed: {e}");
+                            }
+                            ReadErrorKind::OverCapacity => {
+                                // Peer-induced (they sent a message exceeding
+                                // our cap). Not a server fault — warn, don't
+                                // error.
+                                tracing::warn!(
+                                    peer_id = ?self.peer_id,
+                                    "peer sent an over-capacity message; closing connection: {e}"
+                                );
+                            }
+                            ReadErrorKind::Fatal => {
+                                tracing::error!(
+                                    peer_id = ?self.peer_id,
+                                    "error reading from websocket: {e}"
+                                );
+                            }
+                        }
+
+                        // For errors where we are the party ending the
+                        // connection (over-cap / fatal), send a best-effort
+                        // graceful Close frame so the peer learns why. The
+                        // sender task drains it before the channel-close below
+                        // takes effect (`async-channel` allows buffered
+                        // messages to be received after `close()`).
+                        if let Some(close_frame) = kind.close_frame() {
+                            drop(self.outbound_tx.try_send(close_frame));
+                        }
+
+                        break Err(RunError::from(e));
+                    }
                 }
             }
-        }
+        };
 
-        Ok(())
+        // Uniform teardown: the read half is dead however we got here, so close
+        // both channels. This notifies a parked `recv_bytes` immediately and
+        // exits the sender task (after it flushes any queued graceful Close).
+        self.close_channels();
+
+        outcome
     }
 }
 
@@ -462,18 +517,86 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
     }
 }
 
-/// Check if a WebSocket error is an expected disconnect (not a real error).
+/// How a read error from the WebSocket should be treated by the listener.
 ///
-/// These are normal occurrences when the remote end closes without a proper
-/// WebSocket close handshake (e.g., browser tab closed, network disconnect).
-const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
-    use tungstenite::Error;
-    matches!(
-        e,
-        Error::ConnectionClosed
+/// Parsing the raw [`tungstenite::Error`] into this category up front keeps the
+/// listen loop's branching honest: the log severity and the teardown decision
+/// both follow from the category rather than from ad-hoc `matches!` checks
+/// scattered through the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadErrorKind {
+    /// A benign disconnect: the remote end went away, with or without a clean
+    /// close handshake (browser tab closed, network drop, TCP reset). Normal
+    /// lifecycle, log quietly.
+    ExpectedDisconnect,
+
+    /// Peer-induced: the remote sent a message larger than our configured cap.
+    /// This is the peer's doing, not a fault on our side, so it should not be
+    /// logged at error severity. The connection cannot continue (the framing
+    /// is desynchronized once an over-cap frame is seen), so it is still a
+    /// teardown condition — just not an *alarm* condition.
+    OverCapacity,
+
+    /// A genuine transport/protocol fault we did not anticipate. Log loudly and
+    /// tear the connection down.
+    Fatal,
+}
+
+impl ReadErrorKind {
+    /// Classify a [`tungstenite::Error`] surfaced while reading.
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "anything we don't explicitly name is, by definition, an \
+                  unanticipated fatal read error; a catch-all is the correct \
+                  default and means new tungstenite variants fail safe."
+    )]
+    pub(crate) const fn classify(e: &tungstenite::Error) -> Self {
+        use tungstenite::{Error, error::CapacityError};
+        match e {
+            Error::ConnectionClosed
             | Error::AlreadyClosed
-            | Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)
-    )
+            | Error::Protocol(
+                tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+            ) => Self::ExpectedDisconnect,
+
+            // An over-cap inbound message is peer-induced, not our fault.
+            Error::Capacity(CapacityError::MessageTooLong { .. }) => Self::OverCapacity,
+
+            _ => Self::Fatal,
+        }
+    }
+
+    /// The graceful RFC 6455 Close frame to send to the peer for this error
+    /// kind, or `None` if we should not originate a Close.
+    ///
+    /// We only originate a Close when *we* are the party deciding to end the
+    /// connection because of a problem:
+    ///
+    /// - [`Self::OverCapacity`] → `1009 Message Too Big`: tells the peer
+    ///   precisely why (their message exceeded our cap) so it can react
+    ///   (chunk, surface an error) instead of blindly reconnecting.
+    /// - [`Self::Fatal`] → `1011 Internal Error`: an unanticipated server-side
+    ///   condition.
+    /// - [`Self::ExpectedDisconnect`] → `None`: the *remote* initiated the
+    ///   close (or the socket is already gone). `tungstenite` auto-echoes the
+    ///   peer's Close frame, so originating our own would be a redundant
+    ///   double-close.
+    ///
+    /// This is a pure function of the category — unit-testable without a socket.
+    fn close_frame(self) -> Option<tungstenite::Message> {
+        use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+
+        let (code, reason) = match self {
+            Self::OverCapacity => (CloseCode::Size, "message exceeds size limit"),
+            Self::Fatal => (CloseCode::Error, "internal error"),
+            Self::ExpectedDisconnect => return None,
+        };
+
+        Some(tungstenite::Message::Close(Some(CloseFrame {
+            code,
+            reason: reason.into(),
+        })))
+    }
 }
 
 /// Keepalive task body.
@@ -591,6 +714,77 @@ mod tests {
     #[allow(clippy::expect_used, reason = "test-only helper")]
     const fn nz(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).expect("non-zero")
+    }
+
+    /// An over-cap message is peer-induced: classified as `OverCapacity`, and
+    /// we originate a graceful `Close(Size)` (1009 Message Too Big) so the peer
+    /// learns precisely why.
+    #[test]
+    fn classify_over_cap_originates_close_size() {
+        use tungstenite::{
+            Error,
+            error::CapacityError,
+            protocol::frame::coding::CloseCode,
+        };
+
+        let err = Error::Capacity(CapacityError::MessageTooLong {
+            size: 100,
+            max_size: 10,
+        });
+        let kind = ReadErrorKind::classify(&err);
+        assert_eq!(kind, ReadErrorKind::OverCapacity);
+
+        let Some(tungstenite::Message::Close(Some(frame))) = kind.close_frame() else {
+            unreachable!("over-cap must originate a Close(Some(_)) frame");
+        };
+        assert_eq!(frame.code, CloseCode::Size, "over-cap should send 1009");
+        assert!(!frame.reason.is_empty(), "should carry a reason string");
+    }
+
+    /// Benign disconnects classify as `ExpectedDisconnect` and do NOT originate
+    /// a Close frame: the remote already initiated the close (tungstenite
+    /// auto-echoes), so we must not double-close.
+    #[test]
+    fn classify_expected_disconnects_send_no_close() {
+        use tungstenite::{Error, error::ProtocolError};
+
+        for err in [
+            Error::ConnectionClosed,
+            Error::AlreadyClosed,
+            Error::Protocol(ProtocolError::ResetWithoutClosingHandshake),
+        ] {
+            let kind = ReadErrorKind::classify(&err);
+            assert_eq!(
+                kind,
+                ReadErrorKind::ExpectedDisconnect,
+                "{err:?} should be an expected disconnect"
+            );
+            assert!(
+                kind.close_frame().is_none(),
+                "expected disconnects must not originate a Close frame ({err:?})"
+            );
+        }
+    }
+
+    /// An unanticipated read error is `Fatal`: we originate a `Close(Error)`
+    /// (1011 Internal Error).
+    #[test]
+    fn classify_unexpected_originates_close_error() {
+        use tungstenite::{
+            Error,
+            error::ProtocolError,
+            protocol::frame::coding::CloseCode,
+        };
+
+        // A protocol error other than the benign reset is unexpected.
+        let err = Error::Protocol(ProtocolError::UnmaskedFrameFromClient);
+        let kind = ReadErrorKind::classify(&err);
+        assert_eq!(kind, ReadErrorKind::Fatal);
+
+        let Some(tungstenite::Message::Close(Some(frame))) = kind.close_frame() else {
+            unreachable!("fatal must originate a Close(Some(_)) frame");
+        };
+        assert_eq!(frame.code, CloseCode::Error, "fatal should send 1011");
     }
 
     async fn create_mock_websocket_stream() -> WebSocketStream<Cursor<Vec<u8>>> {
