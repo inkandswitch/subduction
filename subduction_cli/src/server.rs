@@ -181,21 +181,44 @@ pub(crate) struct ServerArgs {
     #[arg(long = "ready-file", value_name = "PATH")]
     pub(crate) ready_file: Option<PathBuf>,
 
-    /// Use an allow-all storage policy instead of keyhive-based access control.
-    /// Intended for testing sync without keyhive delegation.
-    #[arg(long)]
-    pub(crate) open_policy: bool,
+    /// Authorization mode for the server.
+    ///
+    /// - `keyhive` (default): keyhive-based access control and sync. Inbound
+    ///   keyhive (SUK) wire messages are delegated and the periodic cache
+    ///   refresh runs (subject to `--keyhive-cache-refresh`).
+    /// - `open`: allow-all storage policy with keyhive disabled. Inbound
+    ///   keyhive messages are dropped and no cache refresh runs. Intended for
+    ///   testing sync without keyhive delegation.
+    #[arg(long, value_enum, default_value_t = AuthMode::Keyhive)]
+    pub(crate) auth: AuthMode,
 
-    /// Enable keyhive access control and sync. When `false`, inbound keyhive
-    /// (SUK) wire messages are dropped instead of delegated, and the periodic
-    /// cache refresh is skipped (overriding `--keyhive-cache-refresh`).
-    #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
-    pub(crate) keyhive: bool,
-
-    /// Run the periodic keyhive cache refresh task. Ignored (treated as
-    /// `false`) when `--keyhive=false`.
+    /// Run the periodic keyhive cache refresh task. Has no effect under
+    /// `--auth open`, where keyhive is disabled entirely.
     #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
     pub(crate) keyhive_cache_refresh: bool,
+}
+
+/// Server authorization mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum AuthMode {
+    /// Keyhive-based access control and sync (the default).
+    Keyhive,
+
+    /// Allow-all storage policy with keyhive disabled.
+    Open,
+}
+
+impl AuthMode {
+    /// Whether keyhive participates: inbound SUK messages are delegated and
+    /// the cache-refresh task is eligible to run.
+    pub(crate) const fn keyhive_enabled(self) -> bool {
+        matches!(self, AuthMode::Keyhive)
+    }
+
+    /// Whether to use the allow-all (open) storage policy.
+    pub(crate) const fn open_policy(self) -> bool {
+        matches!(self, AuthMode::Open)
+    }
 }
 
 impl ServerArgs {
@@ -300,7 +323,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         tracing::warn!("keyhive ingest_from_storage failed: {e}");
     }
 
-    let policy_handle = if args.open_policy {
+    let policy_handle = if args.auth.open_policy() {
         tracing::info!("Using open (allow-all) storage policy");
         CliKeyhivePolicyHandle::open()
     } else {
@@ -309,7 +332,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let storage_policy = Arc::new(policy_handle);
 
     // Periodic keyhive cache refresh.
-    if args.keyhive && args.keyhive_cache_refresh {
+    if args.auth.keyhive_enabled() && args.keyhive_cache_refresh {
         let refresh_proto = Arc::clone(&keyhive_protocol);
         let refresh_cancel = token.clone();
         tokio::spawn(async move {
@@ -378,7 +401,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 sync: sync_handler,
                 ephemeral: ephemeral_handler.clone(),
                 keyhive: keyhive_handler,
-                keyhive_enabled: args.keyhive,
+                keyhive_enabled: args.auth.keyhive_enabled(),
             });
 
             (handler, ephemeral_handler)

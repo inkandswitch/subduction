@@ -165,20 +165,19 @@ in {
         '';
       };
 
-      keyhive = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
+      auth = lib.mkOption {
+        type = lib.types.enum ["keyhive" "open"];
+        default = "keyhive";
         description = ''
-          Enable keyhive-based access control and sync (passes
-          `--keyhive <bool>`).
+          Authorization mode for the server (passes `--auth <mode>`).
 
-          When false (the default), the server drops inbound keyhive
-          (SUK) wire messages instead of delegating them and skips the
-          periodic keyhive cache refresh.
-
-          When true, keyhive participates normally. Note that keyhive
-          authorization still requires the storage policy to consult it;
-          this option only governs the keyhive wire/refresh path.
+          - `keyhive` (the default): keyhive-based access control and
+            sync. Inbound keyhive (SUK) wire messages are delegated and
+            the periodic cache refresh runs (subject to
+            {option}`services.subduction.server.keyhiveCacheRefresh`).
+          - `open`: allow-all storage policy with keyhive disabled.
+            Inbound keyhive messages are dropped and no cache refresh
+            runs.
         '';
       };
 
@@ -189,9 +188,8 @@ in {
           Run the periodic keyhive cache refresh task (passes
           `--keyhive-cache-refresh <bool>`).
 
-          Only has an effect when
-          {option}`services.subduction.server.keyhive` is true; the
-          refresh is always skipped while keyhive is disabled.
+          Only has an effect under {option}`services.subduction.server.auth`
+          = `keyhive`; the refresh is always skipped in `open` mode.
         '';
       };
 
@@ -337,8 +335,8 @@ in {
                 ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
                 ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
                 ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
-                ++ ["--keyhive" (lib.boolToString cfg.server.keyhive)]
-                ++ lib.optionals cfg.server.keyhive [
+                ++ ["--auth" cfg.server.auth]
+                ++ lib.optionals (cfg.server.auth == "keyhive") [
                   "--keyhive-cache-refresh"
                   (lib.boolToString cfg.server.keyhiveCacheRefresh)
                 ]
