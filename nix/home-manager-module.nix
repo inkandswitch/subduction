@@ -168,6 +168,34 @@ in {
           '';
         };
       };
+
+      auth = lib.mkOption {
+        type = lib.types.enum ["keyhive" "open"];
+        default = "keyhive";
+        description = ''
+          Authorization mode for the server (passes `--auth <mode>`).
+
+          - `keyhive` (the default): keyhive-based access control and
+            sync. Inbound keyhive (SUK) wire messages are delegated and
+            the periodic cache refresh runs (subject to
+            {option}`services.subduction.server.keyhiveCacheRefresh`).
+          - `open`: allow-all storage policy with keyhive disabled.
+            Inbound keyhive messages are dropped and no cache refresh
+            runs.
+        '';
+      };
+
+      keyhiveCacheRefresh = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Run the periodic keyhive cache refresh task (passes
+          `--keyhive-cache-refresh <bool>`).
+
+          Only has an effect under {option}`services.subduction.server.auth`
+          = `keyhive`; the refresh is always skipped in `open` mode.
+        '';
+      };
     };
 
   };
@@ -206,6 +234,11 @@ in {
       ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
       ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
       ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
+      ++ ["--auth" cfg.server.auth]
+      ++ lib.optionals (cfg.server.auth == "keyhive") [
+        "--keyhive-cache-refresh"
+        (lib.boolToString cfg.server.keyhiveCacheRefresh)
+      ]
       ++ lib.concatMap (peer: ["--ws-peer" peer]) cfg.server.wsPeers
       ++ lib.optionals cfg.server.iroh.enable ["--iroh"]
       ++ lib.optionals (cfg.server.iroh.enable && cfg.server.iroh.directOnly) ["--iroh-direct-only"]

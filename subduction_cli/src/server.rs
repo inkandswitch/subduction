@@ -16,7 +16,7 @@ use subduction_core::{
     nonce_cache::NonceCache,
     peer::id::PeerId,
     storage::metrics::{MetricsStorage, RefreshMetrics},
-    subduction::Subduction,
+    subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
@@ -42,7 +42,10 @@ use subduction_ephemeral::{
 use subduction_keyhive::{connection::KeyhiveConnection, runtime::init_sendable_keyhive};
 
 use crate::{
-    handler::{CliConn, CliEphemeralHandler, CliHandler, CliKeyhiveHandler, CliKeyhiveProtocol},
+    handler::{
+        CliConn, CliEphemeralHandler, CliHandler, CliHandlerOpenPolicy, CliKeyhiveHandler,
+        CliKeyhiveProtocol, CliSyncHandler, CliWireHandler,
+    },
     key,
     keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage},
     metrics,
@@ -51,13 +54,17 @@ use crate::{
 };
 
 /// Type alias for the unified Subduction instance.
-type CliSubduction = Arc<
+///
+/// Generic over the handler `H` so the same connection plumbing serves both
+/// the keyhive-enabled ([`CliHandler`]) and keyhive-disabled
+/// ([`CliHandlerOpenPolicy`]) servers.
+type CliSubduction<H> = Arc<
     Subduction<
         'static,
         future_form::Sendable,
         MetricsStorage<FsStorage>,
         CliConn,
-        CliHandler,
+        H,
         CliKeyhivePolicyHandle,
         MemorySigner,
         FuturesTimerTimeout,
@@ -181,10 +188,45 @@ pub(crate) struct ServerArgs {
     #[arg(long = "ready-file", value_name = "PATH")]
     pub(crate) ready_file: Option<PathBuf>,
 
-    /// Use an allow-all storage policy instead of keyhive-based access control.
-    /// Intended for testing sync without keyhive delegation.
-    #[arg(long)]
-    pub(crate) open_policy: bool,
+    /// Authorization mode for the server.
+    ///
+    /// - `keyhive` (default): keyhive-based access control and sync. The full
+    ///   keyhive stack is initialized (storage, identity, protocol, on-disk
+    ///   ingest), inbound keyhive (SUK) wire messages are delegated, peers are
+    ///   registered with keyhive, and the periodic cache refresh runs (subject
+    ///   to `--keyhive-cache-refresh`).
+    /// - `open`: allow-all storage policy with keyhive entirely absent. No
+    ///   keyhive storage, identity, protocol, ingest, refresh, or peer
+    ///   registration is created; inbound keyhive messages are dropped.
+    ///   Intended for testing sync without keyhive delegation.
+    #[arg(long, value_enum, default_value_t = AuthMode::Keyhive)]
+    pub(crate) auth: AuthMode,
+
+    /// Run the periodic keyhive cache refresh task.
+    ///
+    /// Only takes effect under `--auth keyhive`; in `open` mode keyhive is
+    /// absent so no refresh task exists regardless of this flag.
+    #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
+    pub(crate) keyhive_cache_refresh: bool,
+}
+
+/// Server authorization mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum AuthMode {
+    /// Keyhive-based access control and sync (the default).
+    Keyhive,
+
+    /// Allow-all storage policy with keyhive disabled.
+    Open,
+}
+
+impl AuthMode {
+    /// Whether `--auth` selected keyhive: the full keyhive stack is
+    /// initialized and inbound SUK messages are delegated. (The periodic
+    /// cache refresh additionally depends on `--keyhive-cache-refresh`.)
+    pub(crate) const fn keyhive_enabled(self) -> bool {
+        matches!(self, AuthMode::Keyhive)
+    }
 }
 
 impl ServerArgs {
@@ -204,71 +246,26 @@ impl ServerArgs {
 const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
 
 /// Run the server with both WebSocket and HTTP long-poll transports.
-#[allow(clippy::too_many_lines)]
+///
+/// Dispatches on `--auth`: [`run_with_keyhive`] initializes and runs the full
+/// keyhive stack, while [`run_open`] builds nothing keyhive-related at all.
 pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()> {
+    if args.auth.keyhive_enabled() {
+        run_with_keyhive(args, token).await
+    } else {
+        run_open(args, token).await
+    }
+}
+
+/// Run the server with keyhive-based access control and sync enabled.
+async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<()> {
     tracing::warn!("Subduction server v{}", env!("CARGO_PKG_VERSION"));
 
-    let addr: SocketAddr = args.socket.parse()?;
-    let data_dir = args
-        .data_dir
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("./data"));
+    let common = SetupCommon::init(&args, &token).await?;
 
-    // Initialize and start metrics server if enabled
-    if args.metrics {
-        let metrics_handle = metrics::init_metrics();
-        let metrics_addr: SocketAddr = ([0, 0, 0, 0], args.metrics_port).into();
-        metrics::start_metrics_server(metrics_addr, metrics_handle).await?;
-    }
-
-    tracing::info!("Initializing filesystem storage at {:?}", data_dir);
-    let fs_storage = FsStorage::new(data_dir.clone())?;
-    let storage = MetricsStorage::new(fs_storage);
-
-    // Background metrics refresh
-    if args.metrics {
-        storage.refresh_metrics().await?;
-
-        let metrics_storage = storage.clone();
-        let metrics_token = token.clone();
-        let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
-        tokio::spawn(async move {
-            let mut interval = time::interval(refresh_interval);
-            interval.tick().await;
-
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if let Err(e) = metrics_storage.refresh_metrics().await {
-                            tracing::warn!("Failed to refresh storage metrics: {e}");
-                        }
-                    }
-                    () = metrics_token.cancelled() => {
-                        tracing::debug!("Stopping metrics refresh task");
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    let seed = key::resolve_key_seed(&args.key)?;
-    let signer = key::signer_from_seed(&seed);
-    let keyhive_signer = key::keyhive_signer_from_seed(&seed);
-
-    let peer_id = PeerId::from(signer.verifying_key());
-    let handshake_max_drift = Duration::from_secs(args.handshake_max_drift);
-
-    let service_name = args
-        .service_name
-        .clone()
-        .unwrap_or_else(|| args.socket.clone());
-
-    let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
-    let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
-
-    // Initialize keyhive.
-    let keyhive_root = data_dir.join(".keyhive");
+    // Initialize the full keyhive stack: storage, identity, protocol, ingest.
+    let keyhive_signer = key::keyhive_signer_from_seed(&common.seed);
+    let keyhive_root = common.data_dir.join(".keyhive");
     tracing::info!("Initializing keyhive storage at {:?}", keyhive_root);
     let fs_keyhive_storage = FsKeyhiveStorage::new(keyhive_root)?;
 
@@ -289,34 +286,186 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         tracing::warn!("keyhive ingest_from_storage failed: {e}");
     }
 
-    let policy_handle = if args.open_policy {
-        tracing::info!("Using open (allow-all) storage policy");
-        CliKeyhivePolicyHandle::open()
-    } else {
-        CliKeyhivePolicyHandle::new(Arc::clone(&shared_keyhive))
-    };
-    let storage_policy = Arc::new(policy_handle);
+    // Keyhive-backed authorization.
+    let storage_policy = Arc::new(CliKeyhivePolicyHandle::new(Arc::clone(&shared_keyhive)));
 
     // Periodic keyhive cache refresh.
-    let refresh_proto = Arc::clone(&keyhive_protocol);
-    let refresh_cancel = token.clone();
-    tokio::spawn(async move {
-        let mut tick = time::interval(Duration::from_secs(2));
-        tick.tick().await;
-        loop {
-            tokio::select! {
-                () = refresh_cancel.cancelled() => break,
-                _ = tick.tick() => {
-                    if let Err(e) = refresh_proto.refresh_cache().await {
-                        tracing::warn!(error = %e, "refresh_cache failed");
+    if args.keyhive_cache_refresh {
+        let refresh_proto = Arc::clone(&keyhive_protocol);
+        let refresh_cancel = token.clone();
+        tokio::spawn(async move {
+            let mut tick = time::interval(Duration::from_secs(2));
+            tick.tick().await;
+            loop {
+                tokio::select! {
+                    () = refresh_cancel.cancelled() => break,
+                    _ = tick.tick() => {
+                        if let Err(e) = refresh_proto.refresh_cache().await {
+                            tracing::warn!(error = %e, "refresh_cache failed");
+                        }
                     }
                 }
             }
-        }
-        tracing::debug!("keyhive cache refresh task shutting down");
-    });
+            tracing::debug!("keyhive cache refresh task shutting down");
+        });
+    }
 
-    let builder = subduction_core::subduction::builder::SubductionBuilder::new()
+    let keyhive_for_handler = Arc::clone(&keyhive_protocol);
+    serve(
+        args,
+        token,
+        common,
+        storage_policy,
+        Some(keyhive_protocol),
+        move |sync, ephemeral| {
+            let keyhive = CliKeyhiveHandler::new(keyhive_for_handler, CliConnKeyhiveAdapter::new);
+            Arc::new(CliHandler::new(sync, ephemeral, keyhive))
+        },
+    )
+    .await
+}
+
+/// Run the server with keyhive disabled: an allow-all storage policy and no
+/// keyhive storage, identity, protocol, ingest, refresh, or peer registration.
+async fn run_open(args: ServerArgs, token: CancellationToken) -> Result<()> {
+    tracing::warn!("Subduction server v{}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Keyhive disabled (--auth=open); using open (allow-all) storage policy");
+
+    let common = SetupCommon::init(&args, &token).await?;
+    let storage_policy = Arc::new(CliKeyhivePolicyHandle::open());
+
+    serve(
+        args,
+        token,
+        common,
+        storage_policy,
+        None,
+        |sync, ephemeral| Arc::new(CliHandlerOpenPolicy::new(sync, ephemeral)),
+    )
+    .await
+}
+
+/// Common setup shared by [`run_with_keyhive`] and [`run_open`]: parses
+/// addresses, starts the metrics endpoint and refresh task, opens filesystem
+/// storage, and derives the signing identity.
+struct SetupCommon {
+    addr: SocketAddr,
+    data_dir: PathBuf,
+    storage: MetricsStorage<FsStorage>,
+    seed: [u8; 32],
+    signer: MemorySigner,
+    peer_id: PeerId,
+    handshake_max_drift: Duration,
+    service_name: String,
+    discovery_id: Option<DiscoveryId>,
+    discovery_audience: Option<Audience>,
+}
+
+impl SetupCommon {
+    async fn init(args: &ServerArgs, token: &CancellationToken) -> Result<Self> {
+        let addr: SocketAddr = args.socket.parse()?;
+        let data_dir = args
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("./data"));
+
+        // Initialize and start metrics server if enabled
+        if args.metrics {
+            let metrics_handle = metrics::init_metrics();
+            let metrics_addr: SocketAddr = ([0, 0, 0, 0], args.metrics_port).into();
+            metrics::start_metrics_server(metrics_addr, metrics_handle).await?;
+        }
+
+        tracing::info!("Initializing filesystem storage at {:?}", data_dir);
+        let fs_storage = FsStorage::new(data_dir.clone())?;
+        let storage = MetricsStorage::new(fs_storage);
+
+        // Background metrics refresh
+        if args.metrics {
+            storage.refresh_metrics().await?;
+
+            let metrics_storage = storage.clone();
+            let metrics_token = token.clone();
+            let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
+            tokio::spawn(async move {
+                let mut interval = time::interval(refresh_interval);
+                interval.tick().await;
+
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            if let Err(e) = metrics_storage.refresh_metrics().await {
+                                tracing::warn!("Failed to refresh storage metrics: {e}");
+                            }
+                        }
+                        () = metrics_token.cancelled() => {
+                            tracing::debug!("Stopping metrics refresh task");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
+        let seed = key::resolve_key_seed(&args.key)?;
+        let signer = key::signer_from_seed(&seed);
+        let peer_id = PeerId::from(signer.verifying_key());
+        let handshake_max_drift = Duration::from_secs(args.handshake_max_drift);
+
+        let service_name = args
+            .service_name
+            .clone()
+            .unwrap_or_else(|| args.socket.clone());
+
+        let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
+        let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
+
+        Ok(Self {
+            addr,
+            data_dir,
+            storage,
+            seed,
+            signer,
+            peer_id,
+            handshake_max_drift,
+            service_name,
+            discovery_id,
+            discovery_audience,
+        })
+    }
+}
+
+/// Build the Subduction instance and run the transport accept loops.
+///
+/// Generic over the composed handler `H`. `keyhive_protocol` is `None` in open
+/// mode, in which case the connection plumbing skips all keyhive peer
+/// registration.
+#[allow(clippy::too_many_lines)]
+async fn serve<H, F>(
+    args: ServerArgs,
+    token: CancellationToken,
+    common: SetupCommon,
+    storage_policy: Arc<CliKeyhivePolicyHandle>,
+    keyhive_protocol: Option<CliKeyhiveProtocol>,
+    make_handler: F,
+) -> Result<()>
+where
+    H: CliWireHandler,
+    F: FnOnce(CliSyncHandler, CliEphemeralHandler) -> Arc<H>,
+{
+    let SetupCommon {
+        addr,
+        storage,
+        signer,
+        peer_id,
+        handshake_max_drift,
+        service_name,
+        discovery_id,
+        discovery_audience,
+        ..
+    } = common;
+
+    let builder = SubductionBuilder::new()
         .signer(signer.clone())
         .storage(storage, storage_policy)
         .spawner(TokioSpawn)
@@ -335,9 +484,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         builder
     };
 
-    let keyhive_handler =
-        CliKeyhiveHandler::new(Arc::clone(&keyhive_protocol), CliConnKeyhiveAdapter::new);
-    let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction, _, _, _) = builder
+    let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction<H>, _, _, _) = builder
         .build_composed(|sync_handler| {
             let connections = sync_handler.connections();
 
@@ -361,11 +508,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 }
             });
 
-            let handler = Arc::new(CliHandler {
-                sync: sync_handler,
-                ephemeral: ephemeral_handler.clone(),
-                keyhive: keyhive_handler,
-            });
+            let handler = make_handler(sync_handler, ephemeral_handler.clone());
 
             (handler, ephemeral_handler)
         });
@@ -522,7 +665,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     match iroh_subduction.add_connection(auth).await {
                                         Ok(_) => {
                                             iroh_ephemeral.subscribe_peer(remote).await;
-                                            notify_peer_connect(&iroh_keyhive_proto, auth_for_keyhive).await;
+                                            notify_peer_connect(iroh_keyhive_proto.as_ref(), auth_for_keyhive).await;
                                             iroh_subduction.full_sync_with_peer(&remote, true, None).await;
                                             tracing::info!("iroh: added peer {remote}");
                                         }
@@ -569,7 +712,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     peer_addr,
                     &peer_subduction,
                     &peer_ephemeral,
-                    &peer_keyhive,
+                    peer_keyhive.as_ref(),
                     &peer_signer,
                     &peer_service_name,
                     peer_cancel,
@@ -662,7 +805,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 uri.clone(),
                 &peer_subduction,
                 &peer_ephemeral,
-                &peer_keyhive,
+                peer_keyhive.as_ref(),
                 &peer_signer,
                 &peer_service_name,
                 peer_cancel,
@@ -716,12 +859,12 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
 /// Accept loop: routes incoming TCP connections to WebSocket or HTTP long-poll.
 #[allow(clippy::too_many_arguments)]
-async fn accept_loop(
+async fn accept_loop<H: CliWireHandler>(
     tcp_listener: TcpListener,
-    subduction: CliSubduction,
+    subduction: CliSubduction<H>,
     ephemeral: CliEphemeralHandler,
     lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
-    keyhive_proto: CliKeyhiveProtocol,
+    keyhive_proto: Option<CliKeyhiveProtocol>,
     cancel: CancellationToken,
     handshake_max_drift: Duration,
     max_message_size: usize,
@@ -816,12 +959,12 @@ async fn accept_loop(
 
 /// Handle a WebSocket connection: upgrade, handshake, add connection.
 #[allow(clippy::too_many_arguments)]
-async fn handle_websocket(
+async fn handle_websocket<H: CliWireHandler>(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
-    subduction: CliSubduction,
+    subduction: CliSubduction<H>,
     ephemeral: CliEphemeralHandler,
-    keyhive_proto: CliKeyhiveProtocol,
+    keyhive_proto: Option<CliKeyhiveProtocol>,
     handshake_max_drift: Duration,
     max_message_size: usize,
     max_frame_size: usize,
@@ -913,18 +1056,18 @@ async fn handle_websocket(
         tracing::error!("Failed to add WebSocket connection: {e}");
     } else {
         ephemeral.subscribe_peer(peer_id).await;
-        notify_peer_connect(&keyhive_proto, auth_for_keyhive).await;
+        notify_peer_connect(keyhive_proto.as_ref(), auth_for_keyhive).await;
     }
 }
 
 /// Handle an HTTP long-poll connection via hyper.
-async fn handle_http_longpoll(
+async fn handle_http_longpoll<H: CliWireHandler>(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
-    subduction: CliSubduction,
+    subduction: CliSubduction<H>,
     ephemeral: CliEphemeralHandler,
     handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
-    keyhive_proto: CliKeyhiveProtocol,
+    keyhive_proto: Option<CliKeyhiveProtocol>,
 ) {
     use http_body_util::Full;
     use hyper::{
@@ -992,7 +1135,7 @@ async fn handle_http_longpoll(
                     tracing::error!("Failed to add HTTP long-poll connection: {e}");
                 } else {
                     ephemeral.subscribe_peer(peer_id).await;
-                    notify_peer_connect(&keyhive_proto, auth_for_keyhive).await;
+                    notify_peer_connect(keyhive_proto.as_ref(), auth_for_keyhive).await;
                 }
             }
 
@@ -1029,10 +1172,15 @@ async fn handle_http_longpoll(
 }
 
 /// Wrap a connection in a keyhive adapter and register the peer.
+///
+/// No-op when keyhive is disabled (`protocol` is `None`).
 async fn notify_peer_connect(
-    protocol: &CliKeyhiveProtocol,
+    protocol: Option<&CliKeyhiveProtocol>,
     conn: Authenticated<CliConn, Sendable>,
 ) {
+    let Some(protocol) = protocol else {
+        return;
+    };
     let adapter = CliConnKeyhiveAdapter::new(conn);
     let kh_peer_id = adapter.peer_id();
     protocol.add_peer(kh_peer_id, adapter).await;
@@ -1040,11 +1188,11 @@ async fn notify_peer_connect(
 
 /// Connect to a peer via WebSocket (outbound).
 #[allow(clippy::too_many_arguments)]
-async fn try_connect_ws(
+async fn try_connect_ws<H: CliWireHandler>(
     uri: Uri,
-    subduction: &CliSubduction,
+    subduction: &CliSubduction<H>,
     ephemeral: &CliEphemeralHandler,
-    keyhive_proto: &CliKeyhiveProtocol,
+    keyhive_proto: Option<&CliKeyhiveProtocol>,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -1149,12 +1297,12 @@ async fn try_connect_ws(
 
 /// Connect to a peer via Iroh (QUIC) transport (outbound).
 #[allow(clippy::too_many_arguments)]
-async fn try_connect_iroh(
+async fn try_connect_iroh<H: CliWireHandler>(
     endpoint: &iroh::Endpoint,
     addr: EndpointAddr,
-    subduction: &CliSubduction,
+    subduction: &CliSubduction<H>,
     ephemeral: &CliEphemeralHandler,
-    keyhive_proto: &CliKeyhiveProtocol,
+    keyhive_proto: Option<&CliKeyhiveProtocol>,
     signer: &MemorySigner,
     service_name: &str,
     cancel: CancellationToken,
@@ -1209,4 +1357,48 @@ async fn try_connect_iroh(
 
     tracing::info!("iroh: added peer {node_id} (subduction ID: {remote_id})");
     Ok(remote_id)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
+mod tests {
+    use clap::Parser;
+
+    use super::{AuthMode, ServerArgs};
+
+    fn parse(extra: &[&str]) -> ServerArgs {
+        let mut argv = vec!["server"];
+        argv.extend_from_slice(extra);
+        ServerArgs::try_parse_from(argv).expect("args parse")
+    }
+
+    #[test]
+    fn auth_defaults_to_keyhive() {
+        let args = parse(&[]);
+        assert_eq!(args.auth, AuthMode::Keyhive);
+        assert!(args.auth.keyhive_enabled());
+        // Cache refresh defaults on, and is eligible to run in keyhive mode.
+        assert!(args.keyhive_cache_refresh);
+    }
+
+    #[test]
+    fn auth_open_disables_keyhive() {
+        let args = parse(&["--auth", "open"]);
+        assert_eq!(args.auth, AuthMode::Open);
+        assert!(!args.auth.keyhive_enabled());
+    }
+
+    #[test]
+    fn keyhive_cache_refresh_is_settable() {
+        let args = parse(&["--keyhive-cache-refresh", "false"]);
+        assert!(!args.keyhive_cache_refresh);
+        // The refresh task only runs when BOTH keyhive is enabled and the
+        // flag is set; this mirrors the guard in `run`.
+        assert!(args.auth.keyhive_enabled());
+    }
+
+    #[test]
+    fn auth_rejects_unknown_mode() {
+        assert!(ServerArgs::try_parse_from(["server", "--auth", "nope"]).is_err());
+    }
 }
