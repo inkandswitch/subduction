@@ -152,7 +152,11 @@ pub struct Subduction<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    // `Clone` is required transitively (the struct derives `Clone` and stores
+    // `spawner: Sp`); stating it here keeps the struct signature consistent
+    // with the `Sp: Clone` bounds on `new()` / `SubductionBuilder::build()`
+    // and improves error messages.
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric = CountLeadingZeroBytes,
     const SHARDS: usize = 256,
 > {
@@ -352,7 +356,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
@@ -1834,377 +1838,7 @@ where
             }
         }
     }
-}
 
-// The listener loop lives in its own `impl` block because spawning each
-// inbound handler (`Async::dispatch_task`) requires `'static` / `Send` bounds
-// (`'a: 'static`, `Timer: Send + Sync`, `Sp: Send + Sync + 'static`,
-// `SpawnDocSync`) that the rest of the sync surface does not. Every real
-// deployment uses a `'static` `Subduction`, so this is not a practical
-// restriction.
-impl<
-    Async: SubductionFutureForm<'static, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
-        + SpawnDocSync<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
-        + 'static,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'static,
-    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone + Send + Sync + 'static,
-    Sp: Spawn<Async> + Send + Sync + 'static,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'static, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-where
-    Hdl::Message: From<SyncMessage>,
-    Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
-    ManagedConnection<Conn, Async, Timer>: ManagedCall<
-            Async,
-            Hdl::Message,
-            SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
-        >,
-{
-    /// Listen for incoming messages and dispatch them through the handler.
-    ///
-    /// This method runs indefinitely, processing messages as they arrive.
-    /// If no peers are connected, it will wait until a peer connects.
-    ///
-    /// Each inbound message is dispatched as its own task via the configured
-    /// [`Spawn`](crate::connection::manager::Spawn), so independent handlers
-    /// (e.g. batch-sync requests for different sedimentrees) run in parallel
-    /// across worker threads on `Sendable` and concurrently on `Local`. A
-    /// completion channel reports each task's outcome back so a broken
-    /// connection is still torn down on a handler error.
-    ///
-    /// The handler stored on this instance receives each decoded message
-    /// and decides what to do with it. For the standard sync protocol,
-    /// this is a [`SyncHandler`].
-    ///
-    /// # Errors
-    ///
-    /// * Returns `ListenError` if a handler error signals a broken connection.
-    #[allow(clippy::too_many_lines)]
-    pub async fn listen(
-        self: Arc<Self>,
-    ) -> Result<(), ListenError<Async, Store, Conn, Hdl::Message>> {
-        tracing::info!("starting Subduction listener with spawned dispatch");
-
-        let handler = &self.handler;
-
-        // Each inbound message is dispatched as its own spawned task (via the
-        // configured `Spawn`), so independent handlers verify/ingest in parallel
-        // across worker threads on `Sendable` (and run concurrently on `Local`,
-        // unchanged). The task reports `(conn, result)` back through this
-        // channel; `outstanding` tracks how many are in flight so shutdown can
-        // drain them. `Spawn` discards task output, hence the channel.
-        #[allow(clippy::type_complexity)]
-        let (done_tx, done_rx): (
-            async_channel::Sender<(Authenticated<Conn, Async>, Result<(), Hdl::HandlerError>)>,
-            async_channel::Receiver<(Authenticated<Conn, Async>, Result<(), Hdl::HandlerError>)>,
-        ) = async_channel::unbounded();
-        let mut outstanding: usize = 0;
-
-        loop {
-            futures::select_biased! {
-                // 1st priority: drain completed handler tasks. On error, the
-                // connection is broken — remove it and notify the handler.
-                done = done_rx.recv().fuse() => {
-                    if let Ok((conn, dispatch_result)) = done {
-                        outstanding = outstanding.saturating_sub(1);
-                        if let Err(e) = dispatch_result {
-                            let peer_id = conn.peer_id();
-                            tracing::error!(
-                                peer = %peer_id,
-                                "error dispatching message: {e}"
-                            );
-                            // Connection is broken — remove from conns map.
-                            if self.remove_connection(&conn).await == Some(true) {
-                                handler.on_peer_disconnect(peer_id).await;
-                            }
-                            tracing::warn!("removed failed connection from peer {}", peer_id);
-                        }
-                    }
-                }
-
-                // 2nd priority: route responses to complete our pending sync
-                // calls. Prioritized over incoming requests because completing
-                // round trips frees resources and unblocks callers. Response
-                // volume is self-limiting (bounded by our in-flight request count).
-                resp_result = self.response_queue.recv().fuse() => {
-                    if let Ok((conn, msg)) = resp_result {
-                        let peer_id = conn.peer_id();
-                        if let Some(resp) = msg.try_as_batch_sync_response() {
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
-                            };
-
-                            let mut consumed = false;
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        tracing::debug!(
-                                            "routed BatchSyncResponse to pending caller for peer {}",
-                                            peer_id
-                                        );
-                                        consumed = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if !consumed {
-                                tracing::warn!(
-                                    "BatchSyncResponse from peer {peer_id} had no pending caller"
-                                );
-                            }
-                        } else {
-                            tracing::warn!(
-                                "non-BatchSyncResponse message from peer {peer_id} \
-                                 arrived on response_queue — dropping"
-                            );
-                        }
-                    } else {
-                        tracing::info!("response queue closed");
-                        break;
-                    }
-                }
-
-                // 3rd priority: accept new requests from peers. Lower priority
-                // than responses because incoming requests can wait (bounded by
-                // msg_queue backpressure) while our callers are actively blocked
-                // on response routing.
-                //
-                // While at the in-flight cap, this arm is disabled (its future
-                // never resolves) so the listener stops pulling from msg_queue
-                // and the biased select drains completions (`done`) first —
-                // re-applying queue backpressure to the senders.
-                msg_result = async {
-                    if outstanding >= MAX_INFLIGHT_DISPATCH {
-                        futures::future::pending::<_>().await
-                    } else {
-                        self.msg_queue.recv().await
-                    }
-                }.fuse() => {
-                    if let Ok((conn, msg)) = msg_result {
-                        let peer_id = conn.peer_id();
-                        tracing::debug!(
-                            "Subduction listener received message from peer {}: {:?}",
-                            peer_id,
-                            msg
-                        );
-
-                        // Safety net: if a BatchSyncResponse ended up in the
-                        // request queue (should go through response_queue),
-                        // route it to the multiplexer rather than the handler.
-                        if let Some(resp) = msg.try_as_batch_sync_response() {
-                            tracing::debug!(
-                                "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
-                                 (expected response_queue) — routing to multiplexer"
-                            );
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
-                            };
-                            let mut consumed = false;
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        consumed = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if !consumed {
-                                tracing::warn!(
-                                    "BatchSyncResponse from peer {peer_id} via safety net \
-                                     had no pending caller"
-                                );
-                            }
-                            continue;
-                        }
-
-                        // For an inbound subscribing `BatchSyncRequest`,
-                        // propagate it upstream once the handler has run.
-                        // Gate on `authorize_fetch`, not handler success:
-                        // `recv_batch_sync_request` returns `Ok(())` even
-                        // after answering `Unauthorized`, so an
-                        // unauthorized peer would otherwise make us enrol
-                        // in upstream subscriptions we'd only filter-drop.
-                        let propagate = msg
-                            .try_as_subscribe_request()
-                            .map(|sed_id| (sed_id, peer_id));
-
-                        // Spawn the handler onto the runtime so its CPU-bound
-                        // work (verify/ingest) can run on any worker thread,
-                        // rather than serialising on this listener task.
-                        self.spawner.spawn(Async::dispatch_task(
-                            Arc::clone(&self),
-                            handler.clone(),
-                            conn.clone(),
-                            msg,
-                            propagate,
-                            done_tx.clone(),
-                        ));
-                        outstanding += 1;
-                    } else {
-                        tracing::info!("SyncMessage queue closed");
-                        // Drop our retained sender so the channel closes once
-                        // every spawned task's clone is gone (no more dispatches
-                        // happen after this — we `break` below). Drain to close
-                        // rather than to `outstanding == 0` so a task that exits
-                        // without sending (e.g. a panic before reporting) cannot
-                        // wedge shutdown; we surface the discrepancy afterward.
-                        drop(done_tx);
-                        while let Ok((conn, result)) = done_rx.recv().await {
-                            outstanding -= 1;
-                            if let Err(e) = result {
-                                tracing::error!(
-                                    peer = %conn.peer_id(),
-                                    "error dispatching message during shutdown: {e}"
-                                );
-                            }
-                        }
-                        if outstanding != 0 {
-                            tracing::warn!(
-                                "{outstanding} inbound dispatch task(s) finished \
-                                 without reporting during shutdown (likely panicked)"
-                            );
-                        }
-                        break;
-                    }
-                }
-
-                // 4th priority: handle closed connections
-                closed_result = self.connection_closed.recv().fuse() => {
-                    if let Ok((conn_id, conn)) = closed_result {
-                        let peer_id = conn.peer_id();
-                        tracing::warn!(
-                            "Connection {conn_id} from peer {peer_id} closed, removing"
-                        );
-                        if self.remove_connection(&conn).await == Some(true) {
-                            handler.on_peer_disconnect(peer_id).await;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Test-only observability surface.
-//
-// Gated as one block so the test-introspection API stays in one place and
-// out of the production `impl`s. Reads internal state to assert invariants.
-// ---------------------------------------------------------------------------
-
-#[cfg(any(feature = "test_utils", test))]
-impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
-    Hdl: Handler<Async, Conn>,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-{
-    /// Returns a reference to the sedimentrees map.
-    #[must_use]
-    pub const fn sedimentrees(
-        &self,
-    ) -> &Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
-        &self.sedimentrees
-    }
-
-    /// Number of multiplexers currently registered for `peer_id`.
-    ///
-    /// One multiplexer is created per connection, so at a quiescent point
-    /// this equals [`connection_count`](Self::connection_count).
-    pub async fn mux_count(&self, peer_id: &PeerId) -> usize {
-        self.multiplexers
-            .lock()
-            .await
-            .get(peer_id)
-            .map_or(0, Vec::len)
-    }
-
-    /// Number of connections currently registered for `peer_id`.
-    pub async fn connection_count(&self, peer_id: &PeerId) -> usize {
-        self.connections
-            .lock()
-            .await
-            .get(peer_id)
-            .map_or(0, NonEmpty::len)
-    }
-
-    /// Whether the connection/multiplexer invariant holds for `peer_id`:
-    /// a connected peer has at least one multiplexer, and a disconnected
-    /// peer has none.
-    ///
-    /// This is the presence/absence form the `expect("multiplexer
-    /// exists...")` sites depend on, not strict per-connection equality:
-    /// the non-last [`remove_connection`](Self::remove_connection) path
-    /// drops a connection without dropping its mux, so `mux_count` can
-    /// exceed `connection_count` while the peer is still connected.
-    pub async fn conn_mux_invariant_holds(&self, peer_id: &PeerId) -> bool {
-        let conns = self.connection_count(peer_id).await;
-        let muxes = self.mux_count(peer_id).await;
-        if conns > 0 { muxes > 0 } else { muxes == 0 }
-    }
-
-    /// Current per-peer send-counter value without incrementing it, or
-    /// `None` if the peer has no counter (never stamped, or cleared).
-    ///
-    /// Test-only observability for asserting that teardown does not reset
-    /// a still-connected peer's monotonic counter.
-    pub async fn send_counter_value(&self, peer_id: &PeerId) -> Option<u64> {
-        self.send_counter.peek(peer_id).await
-    }
-
-    /// Advance the per-peer send counter once, returning the new value.
-    ///
-    /// Test-only: lets a test put a peer's counter into a known non-zero
-    /// state so a later reset is observable.
-    pub async fn stamp_send_counter(&self, peer_id: PeerId) -> u64 {
-        self.send_counter.next(peer_id).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Sync methods — require the handler to implement `RemoteHeadsNotifier`
-// so that `responder_heads` from `BatchSyncResponse` can be surfaced.
-// ---------------------------------------------------------------------------
-
-impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-where
-    Hdl::Message: From<SyncMessage>,
-    Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
-    ManagedConnection<Conn, Async, Timer>: ManagedCall<
-            Async,
-            Hdl::Message,
-            SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
-        >,
-{
     /// Persist a whole sedimentree (its commits and fragments, paired with
     /// `blobs`) to local storage and the in-memory tree — **no network**.
     ///
@@ -3172,34 +2806,7 @@ where
 
         (had_success, stats, call_errs, io_errs)
     }
-}
 
-// ---------------------------------------------------------------------------
-// Public utilities and private helpers — no `RemoteHeadsNotifier` bound.
-// ---------------------------------------------------------------------------
-
-impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-where
-    Hdl::Message: From<SyncMessage>,
-    Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
-    ManagedConnection<Conn, Async, Timer>: ManagedCall<
-            Async,
-            Hdl::Message,
-            SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
-        >,
-{
     /********************
      * PUBLIC UTILITIES *
      ********************/
@@ -3624,13 +3231,13 @@ where
     }
 }
 
-// Multi-document cold-start fan-out. Separated into its own `impl` block so the
-// extra spawn-related bounds — `SpawnDocSync`, `Timer: Send + Sync`,
-// `Sp: Send + Sync + 'static`, `Hdl: RemoteHeadsNotifier`, and `'a: 'static` —
-// constrain only `full_sync_with_peer` and not the rest of the sync surface.
-// They are required to `Spawn` the per-document tasks as `'static` futures, and
-// narrow this method to `'static` `Subduction` instances (which every real
-// deployment is).
+// The spawning methods (`listen` + `full_sync_with_peer`) share their own
+// `impl` block because both `Spawn` `'static` futures (`Async::dispatch_task`
+// for inbound handlers, `Async::doc_sync_task` for per-document cold-start
+// fan-out) and so require bounds the rest of the sync surface does not:
+// `'a: 'static`, `Timer: Send + Sync`, `Sp: Send + Sync + 'static`, and
+// `SpawnDocSync`. Every real deployment uses a `'static` `Subduction`, so this
+// is not a practical restriction.
 impl<
     Async: SubductionFutureForm<'static, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
         + SpawnDocSync<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
@@ -3641,7 +3248,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone + Send + Sync + 'static,
-    Sp: Spawn<Async> + Send + Sync + 'static,
+    Sp: Spawn<Async> + Clone + Send + Sync + 'static,
     Metric: DepthMetric,
     const SHARDS: usize,
 > Subduction<'static, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
@@ -3654,6 +3261,238 @@ where
             SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
         >,
 {
+    /// Listen for incoming messages and dispatch them through the handler.
+    ///
+    /// This method runs indefinitely, processing messages as they arrive.
+    /// If no peers are connected, it will wait until a peer connects.
+    ///
+    /// Each inbound message is dispatched as its own task via the configured
+    /// [`Spawn`](crate::connection::manager::Spawn), so independent handlers
+    /// (e.g. batch-sync requests for different sedimentrees) run in parallel
+    /// across worker threads on `Sendable` and concurrently on `Local`. A
+    /// completion channel reports each task's outcome back so a broken
+    /// connection is still torn down on a handler error.
+    ///
+    /// The handler stored on this instance receives each decoded message
+    /// and decides what to do with it. For the standard sync protocol,
+    /// this is a [`SyncHandler`].
+    ///
+    /// # Errors
+    ///
+    /// * Returns `ListenError` if a handler error signals a broken connection.
+    #[allow(clippy::too_many_lines)]
+    pub async fn listen(
+        self: Arc<Self>,
+    ) -> Result<(), ListenError<Async, Store, Conn, Hdl::Message>> {
+        tracing::info!("starting Subduction listener with spawned dispatch");
+
+        let handler = &self.handler;
+
+        // Each inbound message is dispatched as its own spawned task (via the
+        // configured `Spawn`), so independent handlers verify/ingest in parallel
+        // across worker threads on `Sendable` (and run concurrently on `Local`,
+        // unchanged). The task reports `(conn, result)` back through this
+        // channel; `outstanding` tracks how many are in flight so shutdown can
+        // drain them. `Spawn` discards task output, hence the channel.
+        #[allow(clippy::type_complexity)]
+        let (done_tx, done_rx): (
+            async_channel::Sender<(Authenticated<Conn, Async>, Result<(), Hdl::HandlerError>)>,
+            async_channel::Receiver<(Authenticated<Conn, Async>, Result<(), Hdl::HandlerError>)>,
+        ) = async_channel::unbounded();
+        let mut outstanding: usize = 0;
+
+        loop {
+            futures::select_biased! {
+                // 1st priority: drain completed handler tasks. On error, the
+                // connection is broken — remove it and notify the handler.
+                done = done_rx.recv().fuse() => {
+                    if let Ok((conn, dispatch_result)) = done {
+                        outstanding = outstanding.saturating_sub(1);
+                        if let Err(e) = dispatch_result {
+                            let peer_id = conn.peer_id();
+                            tracing::error!(
+                                peer = %peer_id,
+                                "error dispatching message: {e}"
+                            );
+                            // Connection is broken — remove from conns map.
+                            if self.remove_connection(&conn).await == Some(true) {
+                                handler.on_peer_disconnect(peer_id).await;
+                            }
+                            tracing::warn!("removed failed connection from peer {}", peer_id);
+                        }
+                    }
+                }
+
+                // 2nd priority: route responses to complete our pending sync
+                // calls. Prioritized over incoming requests because completing
+                // round trips frees resources and unblocks callers. Response
+                // volume is self-limiting (bounded by our in-flight request count).
+                resp_result = self.response_queue.recv().fuse() => {
+                    if let Ok((conn, msg)) = resp_result {
+                        let peer_id = conn.peer_id();
+                        if let Some(resp) = msg.try_as_batch_sync_response() {
+                            let muxes_for_peer = {
+                                let multiplexers = self.multiplexers.lock().await;
+                                multiplexers.get(&peer_id).cloned()
+                            };
+
+                            let mut consumed = false;
+                            if let Some(muxes) = muxes_for_peer {
+                                for mux in &muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        tracing::debug!(
+                                            "routed BatchSyncResponse to pending caller for peer {}",
+                                            peer_id
+                                        );
+                                        consumed = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !consumed {
+                                tracing::warn!(
+                                    "BatchSyncResponse from peer {peer_id} had no pending caller"
+                                );
+                            }
+                        } else {
+                            tracing::warn!(
+                                "non-BatchSyncResponse message from peer {peer_id} \
+                                 arrived on response_queue — dropping"
+                            );
+                        }
+                    } else {
+                        tracing::info!("response queue closed");
+                        break;
+                    }
+                }
+
+                // 3rd priority: accept new requests from peers. Lower priority
+                // than responses because incoming requests can wait (bounded by
+                // msg_queue backpressure) while our callers are actively blocked
+                // on response routing.
+                //
+                // While at the in-flight cap, this arm is disabled (its future
+                // never resolves) so the listener stops pulling from msg_queue
+                // and the biased select drains completions (`done`) first —
+                // re-applying queue backpressure to the senders.
+                msg_result = async {
+                    if outstanding >= MAX_INFLIGHT_DISPATCH {
+                        futures::future::pending::<_>().await
+                    } else {
+                        self.msg_queue.recv().await
+                    }
+                }.fuse() => {
+                    if let Ok((conn, msg)) = msg_result {
+                        let peer_id = conn.peer_id();
+                        tracing::debug!(
+                            "Subduction listener received message from peer {}: {:?}",
+                            peer_id,
+                            msg
+                        );
+
+                        // Safety net: if a BatchSyncResponse ended up in the
+                        // request queue (should go through response_queue),
+                        // route it to the multiplexer rather than the handler.
+                        if let Some(resp) = msg.try_as_batch_sync_response() {
+                            tracing::debug!(
+                                "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
+                                 (expected response_queue) — routing to multiplexer"
+                            );
+                            let muxes_for_peer = {
+                                let multiplexers = self.multiplexers.lock().await;
+                                multiplexers.get(&peer_id).cloned()
+                            };
+                            let mut consumed = false;
+                            if let Some(muxes) = muxes_for_peer {
+                                for mux in &muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        consumed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !consumed {
+                                tracing::warn!(
+                                    "BatchSyncResponse from peer {peer_id} via safety net \
+                                     had no pending caller"
+                                );
+                            }
+                            continue;
+                        }
+
+                        // For an inbound subscribing `BatchSyncRequest`,
+                        // propagate it upstream once the handler has run.
+                        // Gate on `authorize_fetch`, not handler success:
+                        // `recv_batch_sync_request` returns `Ok(())` even
+                        // after answering `Unauthorized`, so an
+                        // unauthorized peer would otherwise make us enrol
+                        // in upstream subscriptions we'd only filter-drop.
+                        let propagate = msg
+                            .try_as_subscribe_request()
+                            .map(|sed_id| (sed_id, peer_id));
+
+                        // Spawn the handler onto the runtime so its CPU-bound
+                        // work (verify/ingest) can run on any worker thread,
+                        // rather than serialising on this listener task.
+                        self.spawner.spawn(Async::dispatch_task(
+                            Arc::clone(&self),
+                            handler.clone(),
+                            conn.clone(),
+                            msg,
+                            propagate,
+                            done_tx.clone(),
+                        ));
+                        outstanding += 1;
+                    } else {
+                        tracing::info!("SyncMessage queue closed");
+                        break;
+                    }
+                }
+
+                // 4th priority: handle closed connections
+                closed_result = self.connection_closed.recv().fuse() => {
+                    if let Ok((conn_id, conn)) = closed_result {
+                        let peer_id = conn.peer_id();
+                        tracing::warn!(
+                            "Connection {conn_id} from peer {peer_id} closed, removing"
+                        );
+                        if self.remove_connection(&conn).await == Some(true) {
+                            handler.on_peer_disconnect(peer_id).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Shutdown drain. Reached however the loop exited (msg_queue *or*
+        // response_queue closed), so outstanding spawned dispatch tasks are
+        // always drained rather than abandoned. Drop our retained sender so the
+        // channel closes once every spawned task's clone is gone (no more
+        // dispatches happen post-loop), then drain to channel-close rather than
+        // to `outstanding == 0` so a task that exits without reporting (e.g. a
+        // panic before `done_tx.send`) cannot wedge shutdown; the discrepancy
+        // is surfaced afterward.
+        drop(done_tx);
+        while let Ok((conn, result)) = done_rx.recv().await {
+            outstanding -= 1;
+            if let Err(e) = result {
+                tracing::error!(
+                    peer = %conn.peer_id(),
+                    "error dispatching message during shutdown: {e}"
+                );
+            }
+        }
+        if outstanding != 0 {
+            tracing::warn!(
+                "{outstanding} inbound dispatch task(s) finished without \
+                 reporting during shutdown (likely panicked)"
+            );
+        }
+
+        Ok(())
+    }
+
     /// Sync all known [`Sedimentree`]s with a single peer.
     ///
     /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
@@ -3689,13 +3528,18 @@ where
             "Requesting batch sync for all sedimentrees with peer {}",
             peer_id
         );
-        let tree_ids = self.sedimentrees.into_keys().await;
+        // Enumerate from storage (complete across evictions), mirroring
+        // `full_sync_with_all_peers`. Using the resident (LRU) set here would
+        // silently skip cold/evicted documents, contradicting "all known".
+        // Each per-document `sync_with_peer` hydrates through the LRU cache, so
+        // the resident set stays bounded even across a full sweep.
+        let tree_ids = self.sedimentree_ids().await;
 
         // Shared results channel. Each spawned per-document task reports its
         // outcome here; the channel is the join mechanism (`Spawn` discards task
-        // output). Unbounded to match `main`'s fan-out semantics (which collects
-        // every document into one `FuturesUnordered` with no in-flight cap) — we
-        // add parallelism without changing the concurrency level.
+        // output). Unbounded so the fan-out concurrency level is unbounded (one
+        // in-flight task per document), matching the single-task
+        // `FuturesUnordered` fan-out it replaces.
         let (tx, rx) =
             async_channel::unbounded::<DocSyncResult<Async, Store, Conn, Hdl::Message>>();
 
@@ -3755,6 +3599,90 @@ where
     }
 }
 
+// ---------------------------------------------------------------------------
+// Test-only observability surface.
+//
+// Gated as one block so the test-introspection API stays in one place and
+// out of the production `impl`s. Reads internal state to assert invariants.
+// ---------------------------------------------------------------------------
+
+#[cfg(any(feature = "test_utils", test))]
+impl<
+    'a,
+    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
+    Store: Storage<Async>,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
+    Hdl: Handler<Async, Conn>,
+    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+    Sign: Signer<Async>,
+    Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async> + Clone,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
+{
+    /// Returns a reference to the sedimentrees map.
+    #[must_use]
+    pub const fn sedimentrees(
+        &self,
+    ) -> &Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
+        &self.sedimentrees
+    }
+
+    /// Number of multiplexers currently registered for `peer_id`.
+    ///
+    /// One multiplexer is created per connection, so at a quiescent point
+    /// this equals [`connection_count`](Self::connection_count).
+    pub async fn mux_count(&self, peer_id: &PeerId) -> usize {
+        self.multiplexers
+            .lock()
+            .await
+            .get(peer_id)
+            .map_or(0, Vec::len)
+    }
+
+    /// Number of connections currently registered for `peer_id`.
+    pub async fn connection_count(&self, peer_id: &PeerId) -> usize {
+        self.connections
+            .lock()
+            .await
+            .get(peer_id)
+            .map_or(0, NonEmpty::len)
+    }
+
+    /// Whether the connection/multiplexer invariant holds for `peer_id`:
+    /// a connected peer has at least one multiplexer, and a disconnected
+    /// peer has none.
+    ///
+    /// This is the presence/absence form the `expect("multiplexer
+    /// exists...")` sites depend on, not strict per-connection equality:
+    /// the non-last [`remove_connection`](Self::remove_connection) path
+    /// drops a connection without dropping its mux, so `mux_count` can
+    /// exceed `connection_count` while the peer is still connected.
+    pub async fn conn_mux_invariant_holds(&self, peer_id: &PeerId) -> bool {
+        let conns = self.connection_count(peer_id).await;
+        let muxes = self.mux_count(peer_id).await;
+        if conns > 0 { muxes > 0 } else { muxes == 0 }
+    }
+
+    /// Current per-peer send-counter value without incrementing it, or
+    /// `None` if the peer has no counter (never stamped, or cleared).
+    ///
+    /// Test-only observability for asserting that teardown does not reset
+    /// a still-connected peer's monotonic counter.
+    pub async fn send_counter_value(&self, peer_id: &PeerId) -> Option<u64> {
+        self.send_counter.peek(peer_id).await
+    }
+
+    /// Advance the per-peer send counter once, returning the new value.
+    ///
+    /// Test-only: lets a test put a peer's counter into a known non-zero
+    /// state so a later reset is observable.
+    pub async fn stamp_send_counter(&self, peer_id: PeerId) -> u64 {
+        self.send_counter.next(peer_id).await
+    }
+}
+
 impl<
     'a,
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
@@ -3764,7 +3692,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > Drop for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
@@ -3784,7 +3712,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > ConnectionPolicy<Async>
@@ -3809,7 +3737,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > StoragePolicy<Async>
@@ -3909,7 +3837,7 @@ pub trait StartListener<
     #[allow(clippy::type_complexity)]
     fn start_listener<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
             Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -3956,7 +3884,7 @@ where
 {
     fn start_listener<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
             Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -4019,7 +3947,7 @@ pub trait SpawnDocSync<
     #[allow(clippy::type_complexity)]
     fn doc_sync_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
             Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -4042,7 +3970,7 @@ pub trait SpawnDocSync<
     #[allow(clippy::type_complexity)]
     fn dispatch_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
             Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -4092,7 +4020,7 @@ where
 {
     fn doc_sync_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
             Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -4122,7 +4050,7 @@ where
 
     fn dispatch_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
             Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -4170,7 +4098,7 @@ pub struct ListenerFuture<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric = CountLeadingZeroBytes,
     const SHARDS: usize = 256,
 > {
@@ -4188,7 +4116,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
@@ -4217,7 +4145,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > Deref for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
@@ -4238,7 +4166,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > Future for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
@@ -4259,7 +4187,7 @@ impl<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async>,
+    Sp: Spawn<Async> + Clone,
     Metric: DepthMetric,
     const SHARDS: usize,
 > Unpin for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
