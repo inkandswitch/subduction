@@ -88,8 +88,9 @@ use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    ListenerFuture, StartListener, Subduction, SubductionFutureForm,
+    StartListener, Subduction, SubductionFutureForm,
     error::ListenError,
+    listener_future::ListenerFuture,
     pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
 };
 

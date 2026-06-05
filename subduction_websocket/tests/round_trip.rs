@@ -97,7 +97,7 @@ fn setup_client_subduction(
 ) -> (
     TestSubduction,
     TestHandler,
-    subduction_core::subduction::ListenerFuture<
+    subduction_core::subduction::listener_future::ListenerFuture<
         'static,
         Sendable,
         MemoryStorage,
