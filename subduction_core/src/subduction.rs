@@ -4520,23 +4520,32 @@ mod tests {
             CountLeadingZeroBytes,
         ));
 
-        let (subduction, _listener_fut, _actor_fut) =
-            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout, _>::new(
-                handler,
-                None,
-                test_signer(),
-                sedimentrees.clone(),
-                connections,
-                subscriptions,
-                storage.clone(),
-                pending,
-                PeerCounter::default(),
-                NonceCache::default(),
-                InstantTimeout,
-                Duration::from_secs(30),
-                CountLeadingZeroBytes,
-                TestSpawn,
-            );
+        let (subduction, _listener_fut, _actor_fut) = Subduction::<
+            '_,
+            Sendable,
+            _,
+            FailingSendMockConnection,
+            _,
+            _,
+            _,
+            InstantTimeout,
+            _,
+        >::new(
+            handler,
+            None,
+            test_signer(),
+            sedimentrees.clone(),
+            connections,
+            subscriptions,
+            storage.clone(),
+            pending,
+            PeerCounter::default(),
+            NonceCache::default(),
+            InstantTimeout,
+            Duration::from_secs(30),
+            CountLeadingZeroBytes,
+            TestSpawn,
+        );
 
         let id = SedimentreeId::new([0x5A; 32]);
 
