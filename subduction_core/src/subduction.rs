@@ -3864,20 +3864,18 @@ pub trait SpawnDocSync<
     /// listener's cleanup arm can tear down a broken connection on error.
     #[allow(clippy::type_complexity)]
     fn dispatch_task<
-        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Timer: Timeout<Self> + Clone + Send + Sync + 'static,
         Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
-            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+            Subduction<'static, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
         >,
         handler: Arc<Hdl>,
         conn: Authenticated<Conn, Self>,
         msg: WireMsg,
         propagate: Option<(SedimentreeId, PeerId)>,
         sender: async_channel::Sender<(Authenticated<Conn, Self>, Result<(), Hdl::HandlerError>)>,
-    ) -> Self::Future<'static, ()>
-    where
-        'a: 'static;
+    ) -> Self::Future<'static, ()>;
 }
 
 #[future_form(
