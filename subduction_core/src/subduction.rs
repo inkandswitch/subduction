@@ -55,7 +55,9 @@
 
 pub mod builder;
 pub mod error;
+pub mod fragment_batch_item;
 pub mod pending_blob_requests;
+pub mod per_peer_sync;
 pub mod request;
 
 pub(crate) mod ingest;
@@ -99,6 +101,7 @@ use core::{
 use error::{
     AddConnectionError, IoError, ListenError, SendRequestedDataError, Unauthorized, WriteError,
 };
+use fragment_batch_item::FragmentBatchItem;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
     FutureExt, StreamExt,
@@ -106,6 +109,7 @@ use futures::{
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
 };
 use nonempty::NonEmpty;
+use per_peer_sync::PerPeerSync;
 use request::FragmentRequested;
 use sedimentree_core::{
     blob::{Blob, verified::VerifiedBlobMeta},
@@ -240,111 +244,6 @@ pub struct Subduction<
     spawner: Sp,
 
     _phantom: core::marker::PhantomData<&'a Async>,
-}
-
-/// The per-peer value in a [`PerPeerSync`]: `(succeeded, stats, per-connection
-/// call errors)`.
-pub type PeerSyncEntry<Conn, Async, SendErr> = (
-    bool,
-    SyncStats,
-    Vec<(Authenticated<Conn, Async>, CallError<SendErr>)>,
-);
-
-/// The underlying map of a [`PerPeerSync`], keyed by [`PeerId`].
-pub type PerPeerSyncMap<Conn, Async, SendErr> = Map<PeerId, PeerSyncEntry<Conn, Async, SendErr>>;
-
-/// Per-peer outcome of a broadcast / sync round, keyed by [`PeerId`].
-///
-/// Returned by [`sync_with_all_peers`](Subduction::sync_with_all_peers) and
-/// the round-trip `add_*` combinators
-/// ([`add_built_batch`](Subduction::add_built_batch),
-/// [`add_sedimentree`](Subduction::add_sedimentree)) so callers can observe
-/// which peers acked and which failed.
-///
-/// Each entry's value is a [`PeerSyncEntry`]. The newtype [`Deref`]s to the
-/// underlying [`Map`], so `.get(&peer)`, `.iter()`, `.is_empty()`, etc. work
-/// directly; it also implements [`IntoIterator`] and [`FromIterator`].
-pub struct PerPeerSync<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>(
-    PerPeerSyncMap<Conn, Async, SendErr>,
-);
-
-impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>
-    PerPeerSync<Conn, Async, SendErr>
-{
-    /// The inner per-peer map.
-    #[must_use]
-    pub const fn as_map(&self) -> &PerPeerSyncMap<Conn, Async, SendErr> {
-        &self.0
-    }
-
-    /// Consume into the inner per-peer map.
-    #[must_use]
-    pub fn into_map(self) -> PerPeerSyncMap<Conn, Async, SendErr> {
-        self.0
-    }
-}
-
-impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> core::fmt::Debug
-    for PerPeerSync<Conn, Async, SendErr>
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PerPeerSync")
-            .field("peers", &self.0.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> Default
-    for PerPeerSync<Conn, Async, SendErr>
-{
-    fn default() -> Self {
-        Self(Map::new())
-    }
-}
-
-impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> core::ops::Deref
-    for PerPeerSync<Conn, Async, SendErr>
-{
-    type Target = PerPeerSyncMap<Conn, Async, SendErr>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error> IntoIterator
-    for PerPeerSync<Conn, Async, SendErr>
-{
-    type Item = (PeerId, PeerSyncEntry<Conn, Async, SendErr>);
-    type IntoIter = <PerPeerSyncMap<Conn, Async, SendErr> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<Conn: Clone, Async: FutureForm, SendErr: core::error::Error>
-    FromIterator<(PeerId, PeerSyncEntry<Conn, Async, SendErr>)>
-    for PerPeerSync<Conn, Async, SendErr>
-{
-    fn from_iter<T: IntoIterator<Item = (PeerId, PeerSyncEntry<Conn, Async, SendErr>)>>(
-        iter: T,
-    ) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-/// A single fragment for [`Subduction::store_fragments_batch`].
-#[derive(Debug, Clone)]
-pub struct FragmentBatchItem {
-    /// The head commit of the fragment.
-    pub head: CommitId,
-    /// The boundary commits (fragment edges).
-    pub boundary: BTreeSet<CommitId>,
-    /// Checkpoint digests within the fragment.
-    pub checkpoints: Vec<CommitId>,
-    /// The blob containing the fragment's data.
-    pub blob: Blob,
 }
 
 impl<
@@ -2744,7 +2643,7 @@ where
                 }
             }
         }
-        Ok(PerPeerSync(out))
+        Ok(PerPeerSync::new(out))
     }
 
     /// Sync all known [`Sedimentree`]s with all connected peers.

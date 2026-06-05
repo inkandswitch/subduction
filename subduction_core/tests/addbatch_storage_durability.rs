@@ -36,7 +36,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{FragmentBatchItem, Subduction, builder::SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder, fragment_batch_item::FragmentBatchItem},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;

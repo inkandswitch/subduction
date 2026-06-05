@@ -1626,7 +1626,7 @@ pub struct WasmPeerResultMap(
 
 impl
     From<
-        subduction_core::subduction::PerPeerSync<
+        subduction_core::subduction::per_peer_sync::PerPeerSync<
             WasmConn,
             Local,
             crate::transport::JsTransportError,
@@ -1634,7 +1634,7 @@ impl
     > for WasmPeerResultMap
 {
     fn from(
-        per_peer: subduction_core::subduction::PerPeerSync<
+        per_peer: subduction_core::subduction::per_peer_sync::PerPeerSync<
             WasmConn,
             Local,
             crate::transport::JsTransportError,
