@@ -88,8 +88,16 @@ impl StreamReadErrorKind {
         use iroh::endpoint::{ReadError, ReadExactError};
 
         match e {
+            // Peer-driven terminations (graceful or abrupt) are benign: the
+            // connection was lost, the stream finished, the peer reset it
+            // (e.g. crash / SIGKILL surfacing as RESET_STREAM), or the stream
+            // is already closed. None of these is a local fault.
             StreamError::Read(
-                ReadExactError::ReadError(ReadError::ConnectionLost(_))
+                ReadExactError::ReadError(
+                    ReadError::ConnectionLost(_)
+                    | ReadError::Reset(_)
+                    | ReadError::ClosedStream,
+                )
                 | ReadExactError::FinishedEarly(_),
             )
             | StreamError::ConnectionClosed(_) => Self::ExpectedDisconnect,
@@ -238,6 +246,25 @@ mod tests {
         let code: u64 = kind.close_code().into();
         assert_eq!(code, 1009);
         assert!(!kind.close_reason().is_empty());
+    }
+
+    /// Peer-driven stream terminations (reset, already-closed) are benign
+    /// disconnects, not fatal errors.
+    #[test]
+    fn peer_stream_termination_is_expected_disconnect() {
+        use iroh::endpoint::{ReadError, ReadExactError};
+
+        let cases = [
+            StreamError::Read(ReadExactError::ReadError(ReadError::Reset(7u32.into()))),
+            StreamError::Read(ReadExactError::ReadError(ReadError::ClosedStream)),
+        ];
+        for err in cases {
+            assert_eq!(
+                StreamReadErrorKind::classify(&err),
+                StreamReadErrorKind::ExpectedDisconnect,
+                "{err:?} should be a benign disconnect"
+            );
+        }
     }
 
     /// Close-code mapping is stable across all kinds.
