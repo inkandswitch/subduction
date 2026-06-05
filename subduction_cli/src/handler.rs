@@ -22,7 +22,8 @@ use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     authenticated::Authenticated,
-    handler::Handler,
+    connection::message::SyncMessage,
+    handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     storage::metrics::MetricsStorage,
@@ -56,22 +57,96 @@ pub(crate) type CliKeyhiveHandler = SendableKeyhiveHandler<
 /// Concrete `ListenError` for the CLI handler.
 type CliListenError = ListenError<Sendable, MetricsStorage<FsStorage>, CliConn, CliWireMessage>;
 
-/// Handler that dispatches [`CliWireMessage`] variants to sub-handlers.
+/// Bundles the bounds the server's connection plumbing requires of a CLI
+/// handler, so [`CliHandler`] and [`CliHandlerNoKeyhive`] can be used
+/// interchangeably as the `H` of [`CliSubduction`](crate::server) without
+/// repeating the full bound at every site.
+pub(crate) trait CliWireHandler:
+    Handler<Sendable, CliConn, Message = CliWireMessage, HandlerError = CliListenError>
+    + RemoteHeadsNotifier
+    + Send
+    + Sync
+    + 'static
+{
+}
+
+impl<H> CliWireHandler for H where
+    H: Handler<Sendable, CliConn, Message = CliWireMessage, HandlerError = CliListenError>
+        + RemoteHeadsNotifier
+        + Send
+        + Sync
+        + 'static
+{
+}
+
+/// The concrete sync handler type for the CLI server.
+pub(crate) type CliSyncHandler = Arc<
+    SyncHandler<Sendable, MetricsStorage<FsStorage>, CliConn, CliKeyhivePolicyHandle, CountLeadingZeroBytes>,
+>;
+
+/// Server handler with keyhive disabled: keyhive (SUK) wire messages are
+/// dropped and disconnects are not forwarded to keyhive. Used by `--auth open`
+/// so a keyhive-free server never touches the keyhive runtime path.
+///
+/// This is also the shared sync + ephemeral core that the keyhive-enabled
+/// [`CliHandler`] embeds and delegates its non-keyhive arms to.
+pub(crate) struct CliHandlerNoKeyhive {
+    sync: CliSyncHandler,
+    ephemeral: CliEphemeralHandler,
+}
+
+impl CliHandlerNoKeyhive {
+    pub(crate) const fn new(sync: CliSyncHandler, ephemeral: CliEphemeralHandler) -> Self {
+        Self { sync, ephemeral }
+    }
+
+    /// Dispatch a `Sync` wire message.
+    async fn handle_sync(
+        &self,
+        conn: &Authenticated<CliConn, Sendable>,
+        sync_msg: SyncMessage,
+    ) -> Result<(), CliListenError> {
+        Handler::<Sendable, CliConn>::handle(self.sync.as_ref(), conn, sync_msg)
+            .await
+            .map_err(convert_sync_listen_error)
+    }
+
+    /// Dispatch an `Ephemeral` wire message (errors are logged, not fatal).
+    async fn handle_ephemeral(
+        &self,
+        conn: &Authenticated<CliConn, Sendable>,
+        eph_msg: subduction_ephemeral::message::EphemeralMessage,
+    ) {
+        if let Err(e) = Handler::<Sendable, CliConn>::handle(&self.ephemeral, conn, eph_msg).await {
+            tracing::error!(error = %e, "ephemeral handler error (non-fatal)");
+        }
+    }
+
+    /// Forward a peer disconnect to the sync and ephemeral handlers.
+    async fn disconnect_core(&self, peer: PeerId) {
+        Handler::<Sendable, CliConn>::on_peer_disconnect(self.sync.as_ref(), peer).await;
+        Handler::<Sendable, CliConn>::on_peer_disconnect(&self.ephemeral, peer).await;
+    }
+}
+
+/// Server handler with keyhive enabled: keyhive (SUK) wire messages are
+/// delegated to [`CliKeyhiveHandler`] and disconnects drive its bookkeeping.
 pub(crate) struct CliHandler {
-    pub(crate) sync: Arc<
-        subduction_core::handler::sync::SyncHandler<
-            Sendable,
-            MetricsStorage<FsStorage>,
-            CliConn,
-            CliKeyhivePolicyHandle,
-            CountLeadingZeroBytes,
-        >,
-    >,
-    pub(crate) ephemeral: CliEphemeralHandler,
-    pub(crate) keyhive: CliKeyhiveHandler,
-    /// When false, inbound keyhive (SUK) wire messages are
-    /// dropped instead of delegated to the keyhive handler.
-    pub(crate) keyhive_enabled: bool,
+    core: CliHandlerNoKeyhive,
+    keyhive: CliKeyhiveHandler,
+}
+
+impl CliHandler {
+    pub(crate) const fn new(
+        sync: CliSyncHandler,
+        ephemeral: CliEphemeralHandler,
+        keyhive: CliKeyhiveHandler,
+    ) -> Self {
+        Self {
+            core: CliHandlerNoKeyhive::new(sync, ephemeral),
+            keyhive,
+        }
+    }
 }
 
 impl core::fmt::Debug for CliHandler {
@@ -80,7 +155,24 @@ impl core::fmt::Debug for CliHandler {
     }
 }
 
+impl core::fmt::Debug for CliHandlerNoKeyhive {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CliHandlerNoKeyhive").finish_non_exhaustive()
+    }
+}
+
 impl RemoteHeadsNotifier for CliHandler {
+    fn notify_remote_heads(
+        &self,
+        id: sedimentree_core::id::SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) {
+        self.core.notify_remote_heads(id, peer, heads);
+    }
+}
+
+impl RemoteHeadsNotifier for CliHandlerNoKeyhive {
     fn notify_remote_heads(
         &self,
         id: sedimentree_core::id::SedimentreeId,
@@ -102,25 +194,12 @@ impl Handler<Sendable, CliConn> for CliHandler {
     ) -> BoxFuture<'a, Result<(), Self::HandlerError>> {
         Box::pin(async move {
             match message {
-                CliWireMessage::Sync(sync_msg) => {
-                    Handler::<Sendable, CliConn>::handle(self.sync.as_ref(), conn, *sync_msg)
-                        .await
-                        .map_err(convert_sync_listen_error)
-                }
-
+                CliWireMessage::Sync(sync_msg) => self.core.handle_sync(conn, *sync_msg).await,
                 CliWireMessage::Ephemeral(eph_msg) => {
-                    if let Err(e) =
-                        Handler::<Sendable, CliConn>::handle(&self.ephemeral, conn, eph_msg).await
-                    {
-                        tracing::error!(error = %e, "ephemeral handler error (non-fatal)");
-                    }
+                    self.core.handle_ephemeral(conn, eph_msg).await;
                     Ok(())
                 }
-
                 CliWireMessage::Keyhive(keyhive_msg) => {
-                    if !self.keyhive_enabled {
-                        return Ok(());
-                    }
                     if let Err(e) =
                         Handler::<Sendable, CliConn>::handle(&self.keyhive, conn, keyhive_msg).await
                     {
@@ -134,9 +213,37 @@ impl Handler<Sendable, CliConn> for CliHandler {
 
     fn on_peer_disconnect(&self, peer: PeerId) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            Handler::<Sendable, CliConn>::on_peer_disconnect(self.sync.as_ref(), peer).await;
-            Handler::<Sendable, CliConn>::on_peer_disconnect(&self.ephemeral, peer).await;
+            self.core.disconnect_core(peer).await;
             Handler::<Sendable, CliConn>::on_peer_disconnect(&self.keyhive, peer).await;
+        })
+    }
+}
+
+impl Handler<Sendable, CliConn> for CliHandlerNoKeyhive {
+    type Message = CliWireMessage;
+    type HandlerError = CliListenError;
+
+    fn handle<'a>(
+        &'a self,
+        conn: &'a Authenticated<CliConn, Sendable>,
+        message: CliWireMessage,
+    ) -> BoxFuture<'a, Result<(), Self::HandlerError>> {
+        Box::pin(async move {
+            match message {
+                CliWireMessage::Sync(sync_msg) => self.handle_sync(conn, *sync_msg).await,
+                CliWireMessage::Ephemeral(eph_msg) => {
+                    self.handle_ephemeral(conn, eph_msg).await;
+                    Ok(())
+                }
+                // Keyhive disabled: drop inbound SUK messages.
+                CliWireMessage::Keyhive(_keyhive_msg) => Ok(()),
+            }
+        })
+    }
+
+    fn on_peer_disconnect(&self, peer: PeerId) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.disconnect_core(peer).await;
         })
     }
 }
