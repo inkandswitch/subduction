@@ -385,10 +385,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                             break Err(RunError::ChanSend(Box::new(e)));
                         }
 
-                        tracing::debug!(
-                            "forwarded inbound message to channel {}",
-                            self.chan_id
-                        );
+                        tracing::debug!("forwarded inbound message to channel {}", self.chan_id);
                     }
                     Ok(tungstenite::Message::Text(text)) => {
                         tracing::warn!("unexpected text message: {}", text);
@@ -555,9 +552,9 @@ impl ReadErrorKind {
         match e {
             Error::ConnectionClosed
             | Error::AlreadyClosed
-            | Error::Protocol(
-                tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
-            ) => Self::ExpectedDisconnect,
+            | Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake) => {
+                Self::ExpectedDisconnect
+            }
 
             // An over-cap inbound message is peer-induced, not our fault.
             Error::Capacity(CapacityError::MessageTooLong { .. }) => Self::OverCapacity,
@@ -721,11 +718,7 @@ mod tests {
     /// learns precisely why.
     #[test]
     fn classify_over_cap_originates_close_size() {
-        use tungstenite::{
-            Error,
-            error::CapacityError,
-            protocol::frame::coding::CloseCode,
-        };
+        use tungstenite::{Error, error::CapacityError, protocol::frame::coding::CloseCode};
 
         let err = Error::Capacity(CapacityError::MessageTooLong {
             size: 100,
@@ -770,11 +763,7 @@ mod tests {
     /// (1011 Internal Error).
     #[test]
     fn classify_unexpected_originates_close_error() {
-        use tungstenite::{
-            Error,
-            error::ProtocolError,
-            protocol::frame::coding::CloseCode,
-        };
+        use tungstenite::{Error, error::ProtocolError, protocol::frame::coding::CloseCode};
 
         // A protocol error other than the benign reset is unexpected.
         let err = Error::Protocol(ProtocolError::UnmaskedFrameFromClient);

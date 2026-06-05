@@ -8,6 +8,7 @@
 
 #![allow(
     clippy::expect_used,
+    clippy::panic,
     clippy::unwrap_used,
     missing_docs,
     unreachable_pub
@@ -55,9 +56,8 @@ async fn over_cap_frame_tears_down_and_closes_1009() -> TestResult {
 
         // Park a consumer on the inbound channel, as `Subduction::listen` would.
         let recv_transport = transport.clone();
-        let recv_join = tokio::spawn(async move {
-            Transport::<Sendable>::recv_bytes(&recv_transport).await
-        });
+        let recv_join =
+            tokio::spawn(async move { Transport::<Sendable>::recv_bytes(&recv_transport).await });
 
         let listen_result = listener_task(transport, recv).await;
         (server_ep, conn, recv_join, listen_result)
@@ -102,11 +102,14 @@ async fn over_cap_frame_tears_down_and_closes_1009() -> TestResult {
     let reason = tokio::time::timeout(Duration::from_secs(5), conn.closed())
         .await
         .expect("client should observe the connection close");
-    let code = match reason {
-        iroh::endpoint::ConnectionError::ApplicationClosed(ref app) => u64::from(app.error_code),
-        other => panic!("expected ApplicationClosed, got {other:?}"),
+    let iroh::endpoint::ConnectionError::ApplicationClosed(app) = &reason else {
+        panic!("expected ApplicationClosed, got {reason:?}");
     };
-    assert_eq!(code, 1009, "over-cap should close with code 1009");
+    assert_eq!(
+        u64::from(app.error_code),
+        1009,
+        "over-cap should close with code 1009"
+    );
 
     Ok(())
 }

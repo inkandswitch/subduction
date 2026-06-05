@@ -41,12 +41,8 @@ const MARKER: u8 = 0x5A;
 async fn connected_pair(
     recv_cap: usize,
 ) -> (
-    async_tungstenite::WebSocketStream<
-        async_tungstenite::tokio::TokioAdapter<TcpStream>,
-    >,
-    async_tungstenite::WebSocketStream<
-        async_tungstenite::tokio::TokioAdapter<TcpStream>,
-    >,
+    async_tungstenite::WebSocketStream<async_tungstenite::tokio::TokioAdapter<TcpStream>>,
+    async_tungstenite::WebSocketStream<async_tungstenite::tokio::TokioAdapter<TcpStream>>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr");
@@ -64,10 +60,9 @@ async fn connected_pair(
 
     let tcp = TcpStream::connect(addr).await.expect("connect tcp");
     let uri = format!("ws://{addr}/");
-    let (client_ws, _resp) =
-        async_tungstenite::tokio::client_async_with_config(uri, tcp, None)
-            .await
-            .expect("ws client");
+    let (client_ws, _resp) = async_tungstenite::tokio::client_async_with_config(uri, tcp, None)
+        .await
+        .expect("ws client");
 
     let server_ws = server_join.await.expect("server task");
     (client_ws, server_ws)
@@ -115,9 +110,7 @@ async fn oversized_frame_poisons_receiver_stream() {
     assert!(
         matches!(
             err,
-            tungstenite::Error::Capacity(
-                tungstenite::error::CapacityError::MessageTooLong { .. }
-            )
+            tungstenite::Error::Capacity(tungstenite::error::CapacityError::MessageTooLong { .. })
         ),
         "expected Capacity(MessageTooLong), got {err:?}"
     );
@@ -255,7 +248,9 @@ async fn listen_error_tears_down_connection_promptly() {
         "recv_bytes should be notified promptly after listen() errors out, \
          instead of waiting ~80 s for keepalive"
     );
-    let recv_result = recv_outcome.expect("recv resolved within budget").expect("recv task joined");
+    let recv_result = recv_outcome
+        .expect("recv resolved within budget")
+        .expect("recv task joined");
     assert!(
         recv_result.is_err(),
         "the prompt recv result should be an Err (disconnect), got Ok"
