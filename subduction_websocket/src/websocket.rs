@@ -247,7 +247,11 @@ impl<T, Async: FutureForm> Transport<Async> for WebSocket<T, Async> {
 
         Async::from_future(async move {
             let bytes = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel closed unexpectedly");
+                // The inbound channel closes when the listener tears the
+                // connection down (peer close, EOF, over-cap, fatal, or
+                // keepalive timeout). This is the expected disconnect signal,
+                // not an error.
+                tracing::debug!("inbound channel closed; connection torn down");
                 RecvError
             })?;
 

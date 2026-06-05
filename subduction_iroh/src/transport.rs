@@ -155,7 +155,10 @@ impl Transport<Sendable> for IrohTransport {
 
         async move {
             let bytes = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel closed unexpectedly");
+                // The inbound channel closes when the listener tears the
+                // connection down. This is the expected disconnect signal, not
+                // an error.
+                tracing::debug!("inbound channel closed; connection torn down");
                 RecvError
             })?;
 
