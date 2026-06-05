@@ -1,29 +1,22 @@
-//! Characterization tests for the over-cap WebSocket frame failure mode.
+//! Tests for the over-cap WebSocket frame failure mode.
 //!
-//! These tests pin down the *current* (buggy) behavior so that any fix can be
-//! evaluated against a concrete reproduction rather than against a reading of
-//! the `tungstenite` source. They encode two load-bearing facts:
+//! Two properties are covered:
 //!
-//! 1. [`oversized_frame_poisons_receiver_stream`] — an inbound frame whose
-//!    declared length exceeds the receiver's `max_frame_size` returns
-//!    `Err(Capacity(MessageTooLong))` and leaves the `tungstenite` stream
-//!    **unrecoverable**: a small, valid follow-up message sent on the same
-//!    connection is *not* cleanly delivered. This is why a "skip the offending
-//!    message and keep reading" strategy is impossible at the transport layer,
-//!    and why prevention (chunking) — not recovery — is the durable fix.
+//! 1. An inbound frame whose declared length exceeds the receiver's
+//!    `max_frame_size` returns `Err(Capacity(MessageTooLong))` and leaves the
+//!    `tungstenite` stream unrecoverable: a small, valid follow-up message on
+//!    the same connection is not delivered. A "skip the offending message and
+//!    keep reading" strategy is therefore impossible at the transport layer.
 //!
-//! 2. [`listen_does_not_close_inbound_channel_on_over_cap`] — the current
-//!    [`WebSocket::listen`] returns `Err` on an over-cap inbound frame but does
-//!    **not** close the inbound channel. A concurrent `recv_bytes` is therefore
-//!    left parked instead of promptly observing the disconnect; the rest of the
-//!    stack only learns the peer is gone via keepalive (~80 s with
-//!    [`KeepAlive::balanced`]). This is the "bail badly" behavior we intend to
-//!    change.
+//! 2. When [`WebSocket::listen`] exits on an over-cap or otherwise fatal read
+//!    error, it closes the inbound channel so a parked `recv_bytes` is notified
+//!    immediately rather than stranding until keepalive reaps the peer (~80 s
+//!    with [`KeepAlive::balanced`]), and it sends the peer a graceful Close
+//!    frame.
 //!
-//! If a future change makes either fact no longer hold (e.g. `tungstenite`
-//! learns to drain-and-discard an over-cap frame, or `listen` is changed to
-//! cascade a close), these tests should be updated deliberately — they are the
-//! canary for the assumptions the fix design rests on.
+//! Property 1 is a fact about `tungstenite`. If a future version drains and
+//! discards an over-cap frame, [`oversized_frame_poisons_receiver_stream`]
+//! should be revisited.
 
 #![allow(clippy::expect_used, reason = "test-only assertions")]
 #![allow(clippy::unwrap_used, reason = "test-only assertions")]
@@ -80,30 +73,18 @@ async fn connected_pair(
     (client_ws, server_ws)
 }
 
-/// LOAD-BEARING CLAIM: an over-cap frame poisons the receiver stream.
+/// An over-cap frame leaves the receiver stream unrecoverable.
 ///
 /// The sender writes one binary frame larger than the receiver's cap, then a
-/// small valid binary frame tagged with a distinctive byte. The receiver must
-/// (a) see `MessageTooLong` and (b) be **unable** to then read that small
-/// follow-up on any subsequent poll — proving the stream cannot be
-/// resynchronized after the offending frame.
+/// small valid binary frame tagged with a distinctive byte. The receiver sees
+/// `MessageTooLong` on the over-cap frame and cannot read the small follow-up
+/// on any subsequent poll.
 ///
-/// ## Why "poisoned" — the mechanism
-///
-/// In `tungstenite::protocol::frame::FrameSocket::read_frame`
-/// (`frame/mod.rs:170-210`):
-///
-/// - The frame header is parsed and consumed off the internal `in_buffer`
-///   (`advance`, line 175), and stashed in `self.header`.
-/// - If the declared length exceeds `max_frame_size`, it returns
-///   `Err(MessageTooLong)` at line 182 — *before* the payload bytes are read or
-///   discarded, and *before* `self.header.take()` at line 210.
-///
-/// So after the error: (1) the oversized payload bytes are still unread in the
-/// socket, and (2) `self.header` is still `Some(<oversized>)`. The next
-/// `read_frame` re-enters with that stuck header and tries forever to assemble
-/// a frame it will never admit — or misreads leftover payload as a new header.
-/// There is no drain-and-skip path. The follow-up message is unreachable.
+/// `tungstenite` returns `MessageTooLong` after parsing the over-cap frame's
+/// header but before consuming its payload, and without discarding the stuck
+/// header. The unread payload bytes remain in the socket and the next read
+/// re-encounters the same header, so there is no way to resynchronize and
+/// reach the follow-up message.
 #[tokio::test]
 async fn oversized_frame_poisons_receiver_stream() {
     let (mut client_ws, mut server_ws) = connected_pair(RECV_CAP).await;
@@ -185,36 +166,27 @@ async fn oversized_frame_poisons_receiver_stream() {
     let report = transcript.join("\n  ");
     assert!(
         !recovered_followup,
-        "stream unexpectedly recovered: the small follow-up message was \
-         delivered cleanly after the over-cap frame. If this is now reachable, \
-         tungstenite gained a drain-and-skip path and the 'skip-and-continue' \
-         design becomes viable — revisit the fix plan.\n  Transcript:\n  {report}"
+        "the small follow-up message was delivered cleanly after the over-cap \
+         frame, so the stream resynchronized. If tungstenite now drains and \
+         discards over-cap frames, revisit this test.\n  Transcript:\n  {report}"
     );
 
-    // Surface the transcript on success too, so the mechanism is inspectable
-    // with `--nocapture`.
-    eprintln!("post-error read transcript (no clean follow-up):\n  {report}");
+    // Surface the transcript with `--nocapture`.
+    eprintln!("post-error read transcript:\n  {report}");
 
     let _client_ws = sender.await.expect("sender task");
 }
 
-/// REGRESSION: a fatal/peer-induced `listen()` error tears the connection down
-/// promptly.
+/// A fatal/peer-induced `listen()` error tears the connection down promptly.
 ///
-/// When `listen()` exits on an over-cap inbound frame (peer-induced) or any
-/// other fatal read error, the connection must tear itself down so the rest of
-/// the stack learns the peer is gone *now*, not ~80 s later when keepalive
-/// reaps it. Concretely: a `recv_bytes()` parked on the inbound channel resolves
-/// with `Err` shortly after `listen()` returns its error.
+/// When `listen()` exits on an over-cap inbound frame (or any other fatal read
+/// error), it closes the inbound channel so a `recv_bytes()` parked on it
+/// resolves with `Err` immediately, rather than stranding until keepalive reaps
+/// the peer (~80 s). It also sends the peer a graceful Close frame.
 ///
-/// Before the fix, `listen()` returned `Err` but left the inbound channel open,
-/// so the parked `recv_bytes()` hung until keepalive. The fix classifies the
-/// read error (`ReadErrorKind`) and, for `OverCapacity`/`Fatal`, calls
-/// `close_channels()` before returning — which is what this test pins down.
-///
-/// We drive a real `subduction_websocket::WebSocket` receiver against a raw
-/// `async-tungstenite` sender, run `listen()` and a concurrent `recv_bytes()`
-/// together, and require the recv to resolve within a short budget.
+/// Drives a real `subduction_websocket::WebSocket` receiver against a raw
+/// `async-tungstenite` sender, runs `listen()` and a concurrent `recv_bytes()`
+/// together, and requires the recv to resolve within a short budget.
 #[tokio::test]
 async fn listen_error_tears_down_connection_promptly() {
     use future_form::Sendable;
@@ -232,8 +204,8 @@ async fn listen_error_tears_down_connection_promptly() {
     // operational, matching production wiring.
     let sender_join = tokio::spawn(sender_task);
 
-    // A consumer parked on the inbound channel, exactly as `Subduction::listen`
-    // would be. After the fix it must observe the disconnect promptly.
+    // A consumer parked on the inbound channel, as `Subduction::listen` would
+    // be. It must observe the disconnect promptly.
     let ws_for_recv = ws.clone();
     let recv_join = tokio::spawn(async move {
         subduction_core::transport::Transport::<Sendable>::recv_bytes(&ws_for_recv).await
@@ -264,7 +236,7 @@ async fn listen_error_tears_down_connection_promptly() {
         close_code
     });
 
-    // `listen()` should observe the over-cap frame and return an error.
+    // `listen()` observes the over-cap frame and returns an error.
     let listen_result = tokio::time::timeout(Duration::from_secs(5), ws.listen())
         .await
         .expect("listen should resolve (not hang) on an over-cap frame");
@@ -274,16 +246,14 @@ async fn listen_error_tears_down_connection_promptly() {
         "listen() should return Err on an over-cap inbound frame, got {listen_result:?}"
     );
 
-    // DESIRED: the parked recv resolves (with Err) promptly because the
-    // connection tore itself down. FAILS today: recv stays parked, so the
-    // timeout elapses.
+    // The parked recv resolves (with Err) because the connection tore itself
+    // down.
     let recv_outcome = tokio::time::timeout(Duration::from_millis(500), recv_join).await;
 
     assert!(
         recv_outcome.is_ok(),
-        "recv_bytes should be notified promptly after listen() errors out \
-         (connection tears itself down instead of waiting ~80 s for keepalive). \
-         If this times out, the teardown-on-fatal-error path has regressed."
+        "recv_bytes should be notified promptly after listen() errors out, \
+         instead of waiting ~80 s for keepalive"
     );
     let recv_result = recv_outcome.expect("recv resolved within budget").expect("recv task joined");
     assert!(
@@ -291,9 +261,8 @@ async fn listen_error_tears_down_connection_promptly() {
         "the prompt recv result should be an Err (disconnect), got Ok"
     );
 
-    // WIRE-LEVEL PROOF: the receiver originated a graceful Close frame, and the
-    // peer (this raw client) actually received it with code 1009 (Size /
-    // "Message Too Big") — not just an abrupt TCP drop.
+    // The peer receives a graceful Close(Size) frame (1009 Message Too Big),
+    // not an abrupt TCP drop.
     let close_code = client_join.await.expect("client task");
     assert_eq!(
         close_code,
@@ -301,26 +270,23 @@ async fn listen_error_tears_down_connection_promptly() {
         "peer should receive a graceful Close(Size) frame on over-cap, got {close_code:?}"
     );
 
-    // Cleanup.
     ws.close_channels();
     drop(sender_join.await);
 }
 
-/// REGRESSION: a clean peer-initiated disconnect also notifies a parked
-/// `recv_bytes` promptly — and does NOT make us originate a duplicate Close.
+/// A clean peer-initiated disconnect notifies a parked `recv_bytes` promptly
+/// and does not originate a duplicate Close.
 ///
 /// When the peer sends a `Message::Close`, `tungstenite` auto-echoes the Close
-/// reply, so our listener must only tear down its channels (notifying
-/// `recv_bytes`) without enqueuing a second Close of its own. Before folding the
-/// clean-close/EOF paths into the uniform teardown, this `recv_bytes` would have
-/// hung until keepalive.
+/// reply, so the listener only tears down its channels (notifying `recv_bytes`)
+/// without enqueuing a second Close of its own.
 #[tokio::test]
 async fn clean_close_tears_down_promptly_without_double_close() {
     use future_form::Sendable;
     use subduction_core::peer::id::PeerId;
     use subduction_websocket::websocket::WebSocket;
 
-    // Equal, generous cap: nothing here is over-cap; we exercise the clean path.
+    // Nothing here is over-cap; this exercises the clean-close path.
     let (mut client_ws, server_ws) = connected_pair(RECV_CAP).await;
 
     let (ws, sender_task): (
@@ -369,7 +335,7 @@ async fn clean_close_tears_down_promptly_without_double_close() {
         "clean remote close should be Ok(()), got {listen_result:?}"
     );
 
-    // The parked recv must be notified promptly (the newly-closed gap).
+    // The parked recv is notified promptly.
     let recv_outcome = tokio::time::timeout(Duration::from_millis(500), recv_join).await;
     assert!(
         recv_outcome.is_ok(),

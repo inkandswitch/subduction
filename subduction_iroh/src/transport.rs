@@ -98,12 +98,23 @@ impl IrohTransport {
         self.inner.inbound_writer.send(bytes).await
     }
 
-    /// Close the connection's channels and the underlying QUIC connection.
+    /// Close the connection's channels and the underlying QUIC connection
+    /// with the default (normal) application error code.
     pub fn close(&self) {
+        self.close_with_code(0u32.into(), b"subduction close");
+    }
+
+    /// Close the connection's channels and the underlying QUIC connection
+    /// with an explicit application error code and reason.
+    ///
+    /// Closing the channels notifies any parked `recv_bytes` immediately; the
+    /// QUIC `close` is the graceful, peer-visible signal (with `code`/`reason`)
+    /// analogous to a WebSocket Close frame. Idempotent.
+    pub fn close_with_code(&self, code: iroh::endpoint::VarInt, reason: &[u8]) {
         self.inner.inbound_writer.close();
         self.inner.outbound_tx.close();
         self.inner.inbound_reader.close();
-        self.inner.quic_conn.close(0u32.into(), b"subduction close");
+        self.inner.quic_conn.close(code, reason);
     }
 
     /// Access the underlying iroh QUIC connection.
