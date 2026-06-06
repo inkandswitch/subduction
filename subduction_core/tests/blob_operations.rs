@@ -78,6 +78,7 @@ fn new_dispatch_subduction() -> (
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
             InstantTimeout,
+            TokioSpawn,
             CountLeadingZeroBytes,
         >,
     >,
@@ -101,7 +102,7 @@ fn new_dispatch_subduction() -> (
         CountLeadingZeroBytes,
     ));
 
-    Subduction::<'_, Sendable, _, ChannelMockConnection<SyncMessage>, _, _, _, InstantTimeout>::new(
+    Subduction::<'_, Sendable, _, ChannelMockConnection<SyncMessage>, _, _, _, InstantTimeout, _>::new(
         handler,
         None,
         test_signer(),

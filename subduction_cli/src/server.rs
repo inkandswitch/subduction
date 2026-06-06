@@ -68,6 +68,7 @@ type CliSubduction<H> = Arc<
         CliKeyhivePolicyHandle,
         MemorySigner,
         FuturesTimerTimeout,
+        TokioSpawn,
         CountLeadingZeroBytes,
     >,
 >;

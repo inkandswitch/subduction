@@ -20,6 +20,7 @@ use alloc::{sync::Arc, vec::Vec};
 use async_channel::Sender;
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
+use futures::{StreamExt, stream::FuturesUnordered};
 use nonempty::NonEmpty;
 use sedimentree_core::collections::{Map, Set};
 use subduction_core::{
@@ -235,10 +236,17 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
                 .collect()
         };
 
-        for conn in &targets {
-            if let Err(e) = conn.send(&msg).await {
+        // Fan out concurrently so one backpressured peer can't head-of-line
+        // block delivery to the others.
+        let msg_ref = &msg;
+        let mut sends: FuturesUnordered<_> = targets
+            .iter()
+            .map(|conn| async move { (conn.peer_id(), conn.send(msg_ref).await) })
+            .collect();
+        while let Some((peer, result)) = sends.next().await {
+            if let Err(e) = result {
                 debug!(
-                    peer = %conn.peer_id(),
+                    %peer,
                     error = %e,
                     "ephemeral fan-out send failed"
                 );
@@ -313,10 +321,15 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
                 .collect()
         };
 
-        for conn in &targets {
-            if let Err(e) = conn.send(&msg).await {
+        let msg_ref = &msg;
+        let mut sends: FuturesUnordered<_> = targets
+            .iter()
+            .map(|conn| async move { (conn.peer_id(), conn.send(msg_ref).await) })
+            .collect();
+        while let Some((peer, result)) = sends.next().await {
+            if let Err(e) = result {
                 debug!(
-                    peer = %conn.peer_id(),
+                    %peer,
                     error = %e,
                     "ephemeral subscribe_peer send failed"
                 );
@@ -336,10 +349,14 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
                 .collect()
         };
 
-        for conn in &targets {
-            if let Err(e) = conn.send(msg).await {
+        let mut sends: FuturesUnordered<_> = targets
+            .iter()
+            .map(|conn| async move { (conn.peer_id(), conn.send(msg).await) })
+            .collect();
+        while let Some((peer, result)) = sends.next().await {
+            if let Err(e) = result {
                 debug!(
-                    peer = %conn.peer_id(),
+                    %peer,
                     error = %e,
                     "ephemeral send failed"
                 );

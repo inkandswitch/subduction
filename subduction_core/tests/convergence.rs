@@ -47,6 +47,7 @@ type TestSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         InstantTimeout,
+        TokioSpawn,
     >,
 >;
 
@@ -409,6 +410,7 @@ type DeepSubduction = Arc<
         OpenPolicy,
         MemorySigner,
         InstantTimeout,
+        TokioSpawn,
         AlwaysDeep,
     >,
 >;
@@ -585,4 +587,108 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
     );
 
     Ok(())
+}
+
+/// `full_sync_with_peer` must sync documents that have been evicted from the
+/// resident (LRU) cache, not just the ones currently in RAM.
+///
+/// A single-peer full sync enumerates from storage (complete across evictions)
+/// and pushes every document to Bob, including cold documents that are durable
+/// but no longer resident.
+///
+/// To make the cold-tree condition deterministic regardless of shard/hash
+/// distribution, the target documents are *explicitly* evicted from Alice's
+/// resident cache (`sedimentrees().remove`) — they remain in durable storage —
+/// before syncing.
+#[tokio::test]
+async fn full_sync_with_peer_includes_evicted_documents() -> TestResult {
+    // Total documents stored on Alice; the first `EVICT_BELOW` are explicitly
+    // evicted from her resident cache to model cold trees.
+    const DOC_COUNT: u32 = 8;
+    const EVICT_BELOW: u32 = 4; // docs 0..4 are evicted; 4..8 stay resident
+
+    let alice_signer = make_signer(40);
+    let bob_signer = make_signer(41);
+    let bob_peer = PeerId::from(bob_signer.verifying_key());
+
+    let alice = make_node(alice_signer.clone());
+    let bob = make_node(bob_signer.clone());
+
+    // Store several distinct single-commit documents on Alice (no connection
+    // yet).
+    let mut doc_ids = Vec::with_capacity(DOC_COUNT as usize);
+    for n in 0..DOC_COUNT {
+        let mut id_bytes = [0u8; 32];
+        id_bytes[..4].copy_from_slice(&n.to_le_bytes());
+        let sed_id = SedimentreeId::new(id_bytes);
+
+        let mut commit_bytes = [0u8; 32];
+        commit_bytes[..4].copy_from_slice(&n.to_le_bytes());
+        commit_bytes[4] = 0x01;
+        alice
+            .add_commit(
+                sed_id,
+                CommitId::new(commit_bytes),
+                BTreeSet::new(),
+                make_blob(u8::try_from(n).unwrap_or(0)),
+            )
+            .await?;
+        doc_ids.push(sed_id);
+    }
+
+    // Deterministically evict the first `EVICT_BELOW` documents from the
+    // resident cache (they stay in storage), creating the cold-tree condition
+    // a resident-only enumeration would skip.
+    for sed_id in &doc_ids[..EVICT_BELOW as usize] {
+        alice.sedimentrees().remove(sed_id).await;
+        assert!(
+            alice.sedimentrees().get_cloned(sed_id).await.is_none(),
+            "target document must be non-resident after explicit eviction"
+        );
+    }
+
+    // Storage enumeration must still see all documents (resident + evicted).
+    assert_eq!(
+        alice.sedimentree_ids().await.len(),
+        DOC_COUNT as usize,
+        "sedimentree_ids must remain storage-complete after eviction"
+    );
+
+    connect_pair(&alice, &alice_signer, &bob, &bob_signer).await?;
+
+    // Drive sync to convergence (the mock channel pair has finite throughput
+    // under the parallel fan-out, so allow a few rounds).
+    let synced_all = {
+        let mut done = false;
+        for _ in 0..8 {
+            let (_had_success, _stats, _call_errs, io_errs) = alice
+                .full_sync_with_peer(&bob_peer, true, Some(Duration::from_secs(2)))
+                .await;
+            assert!(io_errs.is_empty(), "no per-document IO errors: {io_errs:?}");
+
+            done = bob_has_all(&bob, &doc_ids).await;
+            if done {
+                break;
+            }
+        }
+        done
+    };
+
+    assert!(
+        synced_all,
+        "Bob is missing at least one document Alice held; evicted (cold) trees \
+         were skipped by full_sync_with_peer"
+    );
+
+    Ok(())
+}
+
+/// Whether `bob` holds at least one commit for every id in `ids`.
+async fn bob_has_all(bob: &TestSubduction, ids: &[SedimentreeId]) -> bool {
+    for sed_id in ids {
+        if bob.get_commits(*sed_id).await.is_none_or(|c| c.is_empty()) {
+            return false;
+        }
+    }
+    true
 }

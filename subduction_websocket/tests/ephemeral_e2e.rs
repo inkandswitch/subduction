@@ -28,11 +28,12 @@ use subduction_ephemeral::{
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
-        TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
-        unified::UnifiedWebSocket,
+        TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient,
+        server::TokioWebSocketServer, unified::UnifiedWebSocket,
     },
 };
 use testresult::TestResult;
+use tokio_util::task::TaskTracker;
 
 static TRACING: OnceLock<()> = OnceLock::new();
 
@@ -63,7 +64,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
     let (sd, _, listener, manager) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
+        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
         .roundtrip_timeout(Duration::from_secs(5))
         .build::<Sendable, ServerConn>();
@@ -146,7 +147,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
     let (sd, _, listener, manager) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
+        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
         .roundtrip_timeout(Duration::from_secs(5))
         .build::<Sendable, ServerConn>();

@@ -3,7 +3,9 @@
 use std::collections::BTreeSet;
 
 use sedimentree_core::{blob::Blob, id::SedimentreeId, loose_commit::id::CommitId};
-use subduction_core::{connection::test_utils::new_test_subduction, subduction::FragmentBatchItem};
+use subduction_core::{
+    connection::test_utils::new_test_subduction, subduction::fragment_batch_item::FragmentBatchItem,
+};
 use testresult::TestResult;
 
 fn make_blob(seed: u8) -> Blob {

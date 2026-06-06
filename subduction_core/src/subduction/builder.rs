@@ -88,8 +88,9 @@ use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    ListenerFuture, StartListener, Subduction, SubductionFutureForm,
+    StartListener, Subduction, SubductionFutureForm,
     error::ListenError,
+    listener_future::ListenerFuture,
     pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
 };
 
@@ -439,9 +440,9 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     pub fn build<'a, Async, Conn>(
         self,
     ) -> (
-        Arc<Subduction<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Metric, SHARDS>>,
+        Arc<Subduction<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
         Arc<SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>>,
-        ListenerFuture<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Metric, SHARDS>,
+        ListenerFuture<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
@@ -452,7 +453,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Async> + Send + Sync + 'static,
+        Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        'a: 'static,
         Metric: Clone,
         SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
         <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
@@ -545,8 +547,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         self,
         handler: Arc<Hdl>,
     ) -> (
-        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
-        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
+        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
@@ -558,7 +560,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Async> + Send + Sync + 'static,
+        Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
@@ -632,8 +635,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         self,
         compose: impl FnOnce(Arc<SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>>) -> (Arc<Hdl>, X),
     ) -> (
-        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>>,
-        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
+        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
         X,
     )
@@ -645,7 +648,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Async> + Send + Sync + 'static,
+        Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
