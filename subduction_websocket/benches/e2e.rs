@@ -54,6 +54,7 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
+use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     connection::message::SyncMessage,
     handler::sync::SyncHandler,
@@ -71,6 +72,7 @@ use subduction_websocket::{
         TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
     },
 };
+use tempfile::TempDir;
 use tokio_util::task::TaskTracker;
 
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
@@ -137,6 +139,64 @@ async fn fresh_server(seed: u8) -> (ServerGuard, PeerId, SocketAddr) {
         peer_id,
         bound,
     )
+}
+
+/// Like [`fresh_server`] but backed by [`FsStorage`] in a temp dir — the
+/// production server storage. Lets the concurrent bench compare FS contention
+/// against the in-memory backend.
+async fn fresh_server_fs(seed: u8) -> (FsServerGuard, PeerId, SocketAddr) {
+    let sig = signer(seed);
+    let peer_id = PeerId::from(sig.verifying_key());
+    let addr: SocketAddr = "127.0.0.1:0".parse().expect("valid addr");
+
+    let dir = TempDir::new().expect("temp dir");
+    let storage = FsStorage::new(dir.path().to_path_buf()).expect("fs storage");
+
+    let server = TokioWebSocketServer::setup(
+        addr,
+        TimeoutTokio,
+        HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        sig,
+        None,
+        storage,
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+    )
+    .await
+    .expect("fs server setup");
+
+    let bound = server.address();
+    (
+        FsServerGuard {
+            server,
+            _dir: dir,
+            rt: tokio::runtime::Handle::current(),
+        },
+        peer_id,
+        bound,
+    )
+}
+
+/// `fresh_server`'s [`FsStorage`] counterpart guard. Holds the `TempDir` so the
+/// on-disk store outlives the server.
+struct FsServerGuard {
+    server: TokioWebSocketServer<
+        FsStorage,
+        OpenPolicy,
+        MemorySigner,
+        CountLeadingZeroBytes,
+        TimeoutTokio,
+    >,
+    _dir: TempDir,
+    rt: tokio::runtime::Handle,
+}
+
+impl Drop for FsServerGuard {
+    fn drop(&mut self) {
+        self.rt.block_on(self.server.stop_and_drain());
+    }
 }
 
 type ClientSubduction = Arc<
@@ -337,6 +397,42 @@ fn assert_full_sync(
         "full_sync encountered IO errors: {io_errs:?}"
     );
     assert!(had_success, "full_sync reported no successful syncs");
+}
+
+/// Per-connection call errors returned by `sync_with_peer`.
+type SyncCallErrs = Vec<(
+    subduction_core::authenticated::Authenticated<TokioWebSocketClient<MemorySigner>, Sendable>,
+    subduction_core::connection::managed::CallError<subduction_websocket::error::SendError>,
+)>;
+
+/// The `Result` type of [`Subduction::sync_with_peer`] for these benches.
+type SyncWithPeerResult<S> = Result<
+    (
+        bool,
+        subduction_core::connection::stats::SyncStats,
+        SyncCallErrs,
+    ),
+    subduction_core::subduction::error::IoError<
+        Sendable,
+        S,
+        TokioWebSocketClient<MemorySigner>,
+        SyncMessage,
+    >,
+>;
+
+/// Assert a single-document, single-peer [`sync_with_peer`] succeeded with no
+/// call errors. This is the path the concurrent bench exercises (the verb
+/// production actually uses per document) rather than `full_sync_with_all_peers`.
+fn assert_sync<S>(result: SyncWithPeerResult<S>)
+where
+    S: subduction_core::storage::traits::Storage<Sendable> + std::fmt::Debug,
+{
+    let (had_success, _stats, call_errs) = result.expect("sync_with_peer IO error");
+    assert!(
+        call_errs.is_empty(),
+        "sync_with_peer encountered call errors: {call_errs:?}"
+    );
+    assert!(had_success, "sync_with_peer reported no success");
 }
 
 /// Create a `Subduction` client, connect to the server, start background
@@ -732,17 +828,99 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                                 clients.push(client);
                             }
 
-                            (server, clients)
+                            (server, server_peer_id, sed_id, clients)
                         })
                     },
-                    |(_server, clients)| {
+                    |(_server, server_peer_id, sed_id, clients)| {
+                        rt.block_on(async {
+                            // Each client syncs the shared document with the
+                            // server via `sync_with_peer` — the per-document
+                            // verb production actually uses.
+                            let mut handles = Vec::new();
+                            for client in &clients {
+                                let c = client.inner();
+                                handles.push(tokio::spawn(async move {
+                                    assert_sync(
+                                        c.sync_with_peer(
+                                            &server_peer_id,
+                                            sed_id,
+                                            true,
+                                            Some(TIMEOUT),
+                                        )
+                                        .await,
+                                    );
+                                }));
+                            }
+
+                            for h in handles {
+                                h.await.expect("sync task");
+                            }
+                        });
+                    },
+                    BatchSize::PerIteration,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// [`bench_concurrent_clients`] against the production [`FsStorage`] backend
+/// instead of `MemoryStorage`. Lets us confirm whether the same-document
+/// read-contention that `MemoryStorage` can exhibit also affects the on-disk
+/// store the server actually uses.
+fn bench_concurrent_clients_fs(c: &mut Criterion) {
+    let rt = runtime();
+    let mut group = c.benchmark_group("sync/concurrent_clients_fs");
+
+    let counts: &[u64] = if ci_slim() { &[1, 2] } else { &[1, 2, 4, 8] };
+    for &num_clients in counts {
+        group.throughput(Throughput::Elements(num_clients));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(num_clients),
+            &num_clients,
+            |b, &num_clients| {
+                b.iter_batched(
+                    || {
+                        rt.block_on(async {
+                            let (server, server_peer_id, bound) = fresh_server_fs(0).await;
+
+                            let sed_id = SedimentreeId::new([0u8; 32]);
+                            let mut clients = Vec::new();
+
+                            for i in 0..num_clients {
+                                let seed = u8::try_from(i + 10).expect("client seed fits u8");
+                                let client = connected_client(seed, server_peer_id, bound).await;
+
+                                let mut rng = StdRng::seed_from_u64(i);
+                                let head = commit_id_from_rng(&mut rng);
+                                let blob = blob_from_seed(&mut rng, 64);
+                                client
+                                    .add_commit(sed_id, head, BTreeSet::new(), blob)
+                                    .await
+                                    .expect("add commit");
+
+                                clients.push(client);
+                            }
+
+                            (server, server_peer_id, sed_id, clients)
+                        })
+                    },
+                    |(_server, server_peer_id, sed_id, clients)| {
                         rt.block_on(async {
                             let mut handles = Vec::new();
                             for client in &clients {
                                 let c = client.inner();
                                 handles.push(tokio::spawn(async move {
-                                    assert_full_sync(
-                                        c.full_sync_with_all_peers(Some(TIMEOUT)).await,
+                                    assert_sync(
+                                        c.sync_with_peer(
+                                            &server_peer_id,
+                                            sed_id,
+                                            true,
+                                            Some(TIMEOUT),
+                                        )
+                                        .await,
                                     );
                                 }));
                             }
@@ -795,6 +973,7 @@ criterion_group! {
         bench_bidirectional_sync,
         bench_incremental_sync,
         bench_concurrent_clients,
+        bench_concurrent_clients_fs,
 }
 
 criterion_main!(benches);

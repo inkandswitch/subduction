@@ -42,9 +42,11 @@ eyre = { workspace = true }
 nonempty = { workspace = true, features = ["std"] }
 rand = { workspace = true, features = ["std_rng"] }
 sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
+sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["test_utils"] }
 subduction_crypto = { workspace = true }
 subduction_ephemeral = { workspace = true, features = ["std"] }
+tempfile = { workspace = true }
 testresult = { workspace = true }
 tokio = { workspace = true }
 tokio-test = { workspace = true }

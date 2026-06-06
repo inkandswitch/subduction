@@ -2048,19 +2048,23 @@ where
                 .collect()
         };
 
-        for peer in to_propagate {
-            tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
+        let mut propagations: FuturesUnordered<_> = to_propagate
+            .into_iter()
+            .map(|peer| async move {
+                tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
 
-            // Only `Ok((true, ..))` established (and tracked) the
-            // subscription; roll the claim back on any other outcome.
-            let established = match self.sync_with_peer(&peer, id, true, None).await {
-                Ok((had_success, _, _)) => had_success,
-                Err(e) => {
-                    tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
-                    false
-                }
-            };
+                let established = match self.sync_with_peer(&peer, id, true, None).await {
+                    Ok((had_success, _, _)) => had_success,
+                    Err(e) => {
+                        tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
+                        false
+                    }
+                };
+                (peer, established)
+            })
+            .collect();
 
+        while let Some((peer, established)) = propagations.next().await {
             if !established {
                 let mut subs = self.outgoing_subscriptions.lock().await;
                 if let Some(set) = subs.get_mut(&peer) {
