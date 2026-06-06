@@ -63,6 +63,7 @@ pub mod request;
 
 pub(crate) mod ingest;
 pub(crate) mod peers;
+pub(crate) mod spawn_guard;
 
 use crate::{
     authenticated::Authenticated,
@@ -122,6 +123,7 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintResolver, Sedimentree, minimized::MinimizedSedimentree},
 };
+use spawn_guard::AbortOnDrop;
 use subduction_crypto::{
     signed::Signed, signer::Signer, verified_author::VerifiedAuthor, verified_meta::VerifiedMeta,
 };
@@ -3194,6 +3196,11 @@ where
         ) = async_channel::unbounded();
         let mut outstanding: usize = 0;
 
+        // Abort any in-flight dispatch task if this future is dropped before the
+        // shutdown drain completes, restoring structured concurrency for the
+        // detached `spawn`'d handlers.
+        let mut guard = AbortOnDrop::new();
+
         loop {
             futures::select_biased! {
                 // 1st priority: drain completed handler tasks. On error, the
@@ -3201,6 +3208,12 @@ where
                 done = done_rx.recv().fuse() => {
                     if let Ok((conn, dispatch_result)) = done {
                         outstanding = outstanding.saturating_sub(1);
+                        // Quiescent: no tracked task is still running, so the
+                        // retained abort handles are all dead. Drop them to keep
+                        // the guard bounded across this unbounded task stream.
+                        if outstanding == 0 {
+                            guard.clear();
+                        }
                         if let Err(e) = dispatch_result {
                             let peer_id = conn.peer_id();
                             tracing::error!(
@@ -3318,14 +3331,14 @@ where
                             .try_as_subscribe_request()
                             .map(|sed_id| (sed_id, peer_id));
 
-                        self.spawner.spawn(Async::dispatch_task(
+                        guard.push(self.spawner.spawn(Async::dispatch_task(
                             Arc::clone(&self),
                             handler.clone(),
                             conn.clone(),
                             msg,
                             propagate,
                             done_tx.clone(),
-                        ));
+                        )));
                         outstanding += 1;
                     } else {
                         tracing::info!("SyncMessage queue closed");
@@ -3372,6 +3385,9 @@ where
                  reporting during shutdown (likely panicked)"
             );
         }
+
+        // Drain completed normally; every tracked task has finished, so disarm.
+        drop(guard);
 
         Ok(())
     }
@@ -3431,16 +3447,21 @@ where
         let mut call_errs = Vec::new();
         let mut io_errs = Vec::new();
 
+        // Abort any still-running per-document task if this future is dropped
+        // before the drain below completes (e.g. a cancelled caller). Without
+        // this, `spawn`'d tasks would detach and run to self-termination,
+        // holding an `Arc` clone of the node, breaking structured concurrency.
+        let mut guard = AbortOnDrop::new();
         let mut outstanding = 0usize;
         for id in tree_ids {
-            self.spawner.spawn(Async::doc_sync_task(
+            guard.push(self.spawner.spawn(Async::doc_sync_task(
                 Arc::clone(self),
                 *peer_id,
                 id,
                 subscribe,
                 timeout,
                 tx.clone(),
-            ));
+            )));
             outstanding += 1;
         }
 
@@ -3477,6 +3498,10 @@ where
                  finished without reporting a result (likely panicked)"
             );
         }
+
+        // The drain completed normally, so every tracked task has finished;
+        // disarm the guard (aborting finished tasks would be a no-op anyway).
+        drop(guard);
 
         (had_success, stats, call_errs, io_errs)
     }

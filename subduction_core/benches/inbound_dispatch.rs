@@ -257,15 +257,17 @@ fn one_cold_start(
                 .expect("B stores document");
         }
 
-        // For the spawned full-sync path, A must locally know which documents to
-        // sync. Seed A with one commit per doc (a subset of B's commits) so
-        // `full_sync_with_peer` enumerates and delta-pulls each.
-        if matches!(driver, Driver::SpawnedFullSync) {
-            for doc in 0..documents {
-                a.store_commits_batch(doc_id(doc), alloc_seed_commit(doc))
-                    .await
-                    .expect("A seeds document");
-            }
+        // Seed A with one commit per doc (a subset of B's commits) on *both*
+        // drivers. `SpawnedFullSync` requires it so `full_sync_with_peer` can
+        // enumerate A's documents and delta-pull each. `SerialFanout` doesn't
+        // need it (it names each doc explicitly), but seeding it identically
+        // keeps the transferred delta — `commits_per_doc - 1` per doc — equal
+        // across both arms, so the A/B isolates the dispatch strategy rather
+        // than confounding it with a different ingest volume.
+        for doc in 0..documents {
+            a.store_commits_batch(doc_id(doc), alloc_seed_commit(doc))
+                .await
+                .expect("A seeds document");
         }
 
         connect(&a, &a_signer, &b, &b_signer).await;
