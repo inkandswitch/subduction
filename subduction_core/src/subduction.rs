@@ -3183,12 +3183,6 @@ where
 
         let handler = &self.handler;
 
-        // Each inbound message is dispatched as its own spawned task (via the
-        // configured `Spawn`), so independent handlers verify/ingest in parallel
-        // across worker threads on `Sendable` (and run concurrently on `Local`,
-        // unchanged). The task reports `(conn, result)` back through this
-        // channel; `outstanding` tracks how many are in flight so shutdown can
-        // drain them. `Spawn` discards task output, hence the channel.
         #[allow(clippy::type_complexity)]
         let (done_tx, done_rx): (
             async_channel::Sender<(Authenticated<Conn, Async>, Result<(), Hdl::HandlerError>)>,
@@ -3316,20 +3310,10 @@ where
                             continue;
                         }
 
-                        // For an inbound subscribing `BatchSyncRequest`,
-                        // propagate it upstream once the handler has run.
-                        // Gate on `authorize_fetch`, not handler success:
-                        // `recv_batch_sync_request` returns `Ok(())` even
-                        // after answering `Unauthorized`, so an
-                        // unauthorized peer would otherwise make us enrol
-                        // in upstream subscriptions we'd only filter-drop.
                         let propagate = msg
                             .try_as_subscribe_request()
                             .map(|sed_id| (sed_id, peer_id));
 
-                        // Spawn the handler onto the runtime so its CPU-bound
-                        // work (verify/ingest) can run on any worker thread,
-                        // rather than serialising on this listener task.
                         self.spawner.spawn(Async::dispatch_task(
                             Arc::clone(&self),
                             handler.clone(),
