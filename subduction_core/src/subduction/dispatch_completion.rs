@@ -103,7 +103,7 @@ impl<Conn: Clone, Async: FutureForm, HandlerError> Drop
 }
 
 #[cfg(all(test, feature = "test_utils"))]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use future_form::Sendable;
 

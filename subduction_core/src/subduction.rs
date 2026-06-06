@@ -3338,7 +3338,8 @@ where
                 }
             }
         }
-        drop(done_tx)
+
+        drop(done_tx);
 
         while let Ok(outcome) = done_rx.recv().await {
             outstanding -= 1;
