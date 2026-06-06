@@ -20,7 +20,7 @@ use alloc::{sync::Arc, vec::Vec};
 use async_channel::Sender;
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 use nonempty::NonEmpty;
 use sedimentree_core::collections::{Map, Set};
 use subduction_core::{
@@ -417,11 +417,11 @@ impl<Async: FutureForm, Conn, E, Clk> Handler<Async, Conn>
 }
 
 impl<
-        Async: FutureForm,
-        Conn: Connection<Async, EphemeralMessage> + Clone + 'static,
-        E: EphemeralPolicy<Async>,
-        Clk: Clock,
-    > EphemeralHandler<Async, Conn, E, Clk>
+    Async: FutureForm,
+    Conn: Connection<Async, EphemeralMessage> + Clone + 'static,
+    E: EphemeralPolicy<Async>,
+    Clk: Clock,
+> EphemeralHandler<Async, Conn, E, Clk>
 {
     async fn dispatch(
         &self,
