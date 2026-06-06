@@ -93,7 +93,7 @@ use crate::{
 };
 use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
-use async_lock::Mutex;
+use async_lock::{Mutex, Semaphore, SemaphoreGuardArc};
 use core::{marker::PhantomData, time::Duration};
 use dispatch_completion::{DispatchCompletion, DispatchOutcome};
 use error::{
@@ -3196,31 +3196,23 @@ where
             async_channel::Sender<DispatchOutcome<Conn, Async, Hdl::HandlerError>>,
             async_channel::Receiver<DispatchOutcome<Conn, Async, Hdl::HandlerError>>,
         ) = async_channel::unbounded();
-        let mut outstanding: usize = 0;
 
-        let mut guard = AbortOnDrop::new();
+        let dispatch_permits = Arc::new(Semaphore::new(MAX_INFLIGHT_DISPATCH));
 
         loop {
             futures::select_biased! {
                 done = done_rx.recv().fuse() => {
-                    if let Ok(outcome) = done {
-                        outstanding = outstanding.saturating_sub(1);
-                        if outstanding == 0 {
-                            guard.clear();
-                        }
+                    if let Ok(DispatchOutcome::Completed { conn, result: Err(e) }) = done {
+                        let peer_id = conn.peer_id();
+                        tracing::error!(
+                            peer = %peer_id,
+                            "error dispatching message: {e}"
+                        );
 
-                        if let DispatchOutcome::Completed { conn, result: Err(e) } = outcome {
-                            let peer_id = conn.peer_id();
-                            tracing::error!(
-                                peer = %peer_id,
-                                "error dispatching message: {e}"
-                            );
-                            // Connection is broken — remove from conns map.
-                            if self.remove_connection(&conn).await == Some(true) {
-                                handler.on_peer_disconnect(peer_id).await;
-                            }
-                            tracing::warn!("removed failed connection from peer {}", peer_id);
+                        if self.remove_connection(&conn).await == Some(true) {
+                            handler.on_peer_disconnect(peer_id).await;
                         }
+                        tracing::warn!("removed failed connection from peer {}", peer_id);
                     }
                 }
 
@@ -3264,13 +3256,12 @@ where
                     }
                 }
 
-                msg_result = async {
-                    if outstanding >= MAX_INFLIGHT_DISPATCH {
-                        futures::future::pending::<_>().await
-                    } else {
-                        self.msg_queue.recv().await
-                    }
+                permitted = async {
+                    let permit = dispatch_permits.acquire_arc().await;
+                    let received = self.msg_queue.recv().await;
+                    (permit, received)
                 }.fuse() => {
+                    let (permit, msg_result) = permitted;
                     if let Ok((conn, msg)) = msg_result {
                         let peer_id = conn.peer_id();
                         tracing::debug!(
@@ -3303,6 +3294,7 @@ where
                                      had no pending caller"
                                 );
                             }
+                            // Not a dispatch — `permit` drops here, releasing the slot.
                             continue;
                         }
 
@@ -3310,15 +3302,15 @@ where
                             .try_as_subscribe_request()
                             .map(|sed_id| (sed_id, peer_id));
 
-                        guard.push(self.spawner.spawn(Async::dispatch_task(
+                        self.spawner.spawn(Async::dispatch_task(
                             Arc::clone(&self),
                             handler.clone(),
                             conn.clone(),
                             msg,
                             propagate,
                             done_tx.clone(),
-                        )));
-                        outstanding += 1;
+                            permit,
+                        ));
                     } else {
                         tracing::info!("SyncMessage queue closed");
                         break;
@@ -3342,7 +3334,6 @@ where
         drop(done_tx);
 
         while let Ok(outcome) = done_rx.recv().await {
-            outstanding -= 1;
             if let DispatchOutcome::Completed {
                 conn,
                 result: Err(e),
@@ -3354,15 +3345,7 @@ where
                 );
             }
         }
-        if outstanding != 0 {
-            tracing::warn!(
-                "{outstanding} inbound dispatch task(s) finished without \
-                 reporting during shutdown"
-            );
-        }
 
-        // `guard` drops here with every tracked task already finished, so it
-        // aborts nothing; it only fires if this future is dropped mid-drain.
         Ok(())
     }
 
@@ -3865,6 +3848,7 @@ pub trait SpawnDocSync<
         msg: WireMsg,
         propagate: Option<(SedimentreeId, PeerId)>,
         sender: async_channel::Sender<DispatchOutcomeFor<Conn, Self, Hdl>>,
+        permit: SemaphoreGuardArc,
     ) -> Self::Future<'static, ()>;
 }
 
@@ -3943,8 +3927,11 @@ where
         msg: WireMsg,
         propagate: Option<(SedimentreeId, PeerId)>,
         sender: async_channel::Sender<DispatchOutcomeFor<Conn, Self, Hdl>>,
+        permit: SemaphoreGuardArc,
     ) -> Self::Future<'static, ()> {
         Async::from_future(async move {
+            let _permit = permit;
+
             let mut completion = DispatchCompletion::new(sender);
 
             let result = handler.handle(&conn, msg).await;

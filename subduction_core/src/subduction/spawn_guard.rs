@@ -41,17 +41,6 @@ impl AbortOnDrop {
     pub(crate) fn push(&mut self, handle: AbortHandle) {
         self.handles.push(handle);
     }
-
-    /// Drop the handles of tasks already known to have completed.
-    ///
-    /// An [`AbortHandle`] does not expose task completion, so a long-lived
-    /// caller must prune at a point where it knows no tracked task is still
-    /// running — typically when its outstanding count returns to zero. Calling
-    /// this keeps the handle vector bounded across an unbounded task stream
-    /// (e.g. the listen loop) without aborting anything still in flight.
-    pub(crate) fn clear(&mut self) {
-        self.handles.clear();
-    }
 }
 
 impl Drop for AbortOnDrop {
@@ -71,10 +60,7 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use futures::{
-        FutureExt,
-        future::{self, Abortable},
-    };
+    use futures::{FutureExt, future::Abortable};
 
     use super::*;
 
@@ -121,29 +107,6 @@ mod tests {
         assert!(
             !done.load(Ordering::SeqCst),
             "guard drop must abort the pending task, not let it complete"
-        );
-    }
-
-    /// `clear()` disarms the guard: a task it previously tracked is *not*
-    /// aborted on drop and runs to completion.
-    #[tokio::test]
-    async fn clear_disarms_so_task_completes() {
-        let done = Arc::new(AtomicBool::new(false));
-
-        // A task that completes immediately once polled.
-        let (handle, join) = spawn_tracked(future::ready(()), Arc::clone(&done));
-
-        let mut guard = AbortOnDrop::new();
-        guard.push(handle);
-
-        // Caller observed quiescence and pruned the (finished) handle.
-        guard.clear();
-        drop(guard);
-
-        join.await.expect("task joins");
-        assert!(
-            done.load(Ordering::SeqCst),
-            "cleared handle must not be aborted; the task completes"
         );
     }
 
