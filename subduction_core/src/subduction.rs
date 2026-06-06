@@ -61,6 +61,7 @@ pub mod pending_blob_requests;
 pub mod per_peer_sync;
 pub mod request;
 
+pub mod dispatch_completion;
 pub(crate) mod ingest;
 pub(crate) mod peers;
 pub(crate) mod spawn_guard;
@@ -94,6 +95,7 @@ use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::Mutex;
 use core::{marker::PhantomData, time::Duration};
+use dispatch_completion::{DispatchCompletion, DispatchOutcome};
 use error::{
     AddConnectionError, IoError, ListenError, SendRequestedDataError, Unauthorized, WriteError,
 };
@@ -3191,30 +3193,23 @@ where
 
         #[allow(clippy::type_complexity)]
         let (done_tx, done_rx): (
-            async_channel::Sender<(Authenticated<Conn, Async>, Result<(), Hdl::HandlerError>)>,
-            async_channel::Receiver<(Authenticated<Conn, Async>, Result<(), Hdl::HandlerError>)>,
+            async_channel::Sender<DispatchOutcome<Conn, Async, Hdl::HandlerError>>,
+            async_channel::Receiver<DispatchOutcome<Conn, Async, Hdl::HandlerError>>,
         ) = async_channel::unbounded();
         let mut outstanding: usize = 0;
 
-        // Abort any in-flight dispatch task if this future is dropped before the
-        // shutdown drain completes, restoring structured concurrency for the
-        // detached `spawn`'d handlers.
         let mut guard = AbortOnDrop::new();
 
         loop {
             futures::select_biased! {
-                // 1st priority: drain completed handler tasks. On error, the
-                // connection is broken — remove it and notify the handler.
                 done = done_rx.recv().fuse() => {
-                    if let Ok((conn, dispatch_result)) = done {
+                    if let Ok(outcome) = done {
                         outstanding = outstanding.saturating_sub(1);
-                        // Quiescent: no tracked task is still running, so the
-                        // retained abort handles are all dead. Drop them to keep
-                        // the guard bounded across this unbounded task stream.
                         if outstanding == 0 {
                             guard.clear();
                         }
-                        if let Err(e) = dispatch_result {
+
+                        if let DispatchOutcome::Completed { conn, result: Err(e) } = outcome {
                             let peer_id = conn.peer_id();
                             tracing::error!(
                                 peer = %peer_id,
@@ -3229,10 +3224,6 @@ where
                     }
                 }
 
-                // 2nd priority: route responses to complete our pending sync
-                // calls. Prioritized over incoming requests because completing
-                // round trips frees resources and unblocks callers. Response
-                // volume is self-limiting (bounded by our in-flight request count).
                 resp_result = self.response_queue.recv().fuse() => {
                     if let Ok((conn, msg)) = resp_result {
                         let peer_id = conn.peer_id();
@@ -3273,15 +3264,6 @@ where
                     }
                 }
 
-                // 3rd priority: accept new requests from peers. Lower priority
-                // than responses because incoming requests can wait (bounded by
-                // msg_queue backpressure) while our callers are actively blocked
-                // on response routing.
-                //
-                // While at the in-flight cap, this arm is disabled (its future
-                // never resolves) so the listener stops pulling from msg_queue
-                // and the biased select drains completions (`done`) first —
-                // re-applying queue backpressure to the senders.
                 msg_result = async {
                     if outstanding >= MAX_INFLIGHT_DISPATCH {
                         futures::future::pending::<_>().await
@@ -3297,9 +3279,6 @@ where
                             msg
                         );
 
-                        // Safety net: if a BatchSyncResponse ended up in the
-                        // request queue (should go through response_queue),
-                        // route it to the multiplexer rather than the handler.
                         if let Some(resp) = msg.try_as_batch_sync_response() {
                             tracing::debug!(
                                 "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
@@ -3346,7 +3325,6 @@ where
                     }
                 }
 
-                // 4th priority: handle closed connections
                 closed_result = self.connection_closed.recv().fuse() => {
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
@@ -3360,19 +3338,15 @@ where
                 }
             }
         }
+        drop(done_tx)
 
-        // Shutdown drain. Reached however the loop exited (msg_queue *or*
-        // response_queue closed), so outstanding spawned dispatch tasks are
-        // always drained rather than abandoned. Drop our retained sender so the
-        // channel closes once every spawned task's clone is gone (no more
-        // dispatches happen post-loop), then drain to channel-close rather than
-        // to `outstanding == 0` so a task that exits without reporting (e.g. a
-        // panic before `done_tx.send`) cannot wedge shutdown; the discrepancy
-        // is surfaced afterward.
-        drop(done_tx);
-        while let Ok((conn, result)) = done_rx.recv().await {
+        while let Ok(outcome) = done_rx.recv().await {
             outstanding -= 1;
-            if let Err(e) = result {
+            if let DispatchOutcome::Completed {
+                conn,
+                result: Err(e),
+            } = outcome
+            {
                 tracing::error!(
                     peer = %conn.peer_id(),
                     "error dispatching message during shutdown: {e}"
@@ -3382,7 +3356,7 @@ where
         if outstanding != 0 {
             tracing::warn!(
                 "{outstanding} inbound dispatch task(s) finished without \
-                 reporting during shutdown (likely panicked)"
+                 reporting during shutdown"
             );
         }
 
@@ -3827,6 +3801,12 @@ pub type DocSyncResult<Async, Store, Conn, WireMsg> = (
     >,
 );
 
+/// The completion outcome a spawned dispatch task reports to the listener,
+/// specialized for a handler `Hdl`. A module-local alias (like [`DocSyncResult`])
+/// so the `#[future_form]` macro can name it in the generated signatures.
+pub type DispatchOutcomeFor<Conn, Async, Hdl> =
+    DispatchOutcome<Conn, Async, <Hdl as Handler<Async, Conn>>::HandlerError>;
+
 /// Builds the `'static` future that syncs one document and reports the result
 /// back through a channel — the per-task unit of the cold-start fan-out in
 /// [`Subduction::full_sync_with_peer`].
@@ -3883,7 +3863,7 @@ pub trait SpawnDocSync<
         conn: Authenticated<Conn, Self>,
         msg: WireMsg,
         propagate: Option<(SedimentreeId, PeerId)>,
-        sender: async_channel::Sender<(Authenticated<Conn, Self>, Result<(), Hdl::HandlerError>)>,
+        sender: async_channel::Sender<DispatchOutcomeFor<Conn, Self, Hdl>>,
     ) -> Self::Future<'static, ()>;
 }
 
@@ -3961,9 +3941,11 @@ where
         conn: Authenticated<Conn, Self>,
         msg: WireMsg,
         propagate: Option<(SedimentreeId, PeerId)>,
-        sender: async_channel::Sender<(Authenticated<Conn, Self>, Result<(), Hdl::HandlerError>)>,
+        sender: async_channel::Sender<DispatchOutcomeFor<Conn, Self, Hdl>>,
     ) -> Self::Future<'static, ()> {
         Async::from_future(async move {
+            let mut completion = DispatchCompletion::new(sender);
+
             let result = handler.handle(&conn, msg).await;
             if result.is_ok()
                 && let Some((sed_id, originator)) = propagate
@@ -3976,9 +3958,8 @@ where
             {
                 subduction.propagate_subscription(sed_id, originator).await;
             }
-            // Report completion so the listener can tear down on error. If the
-            // listener is gone (shutting down), there's nothing to report to.
-            sender.send((conn, result)).await.ok();
+
+            completion.complete(conn, result);
         })
     }
 }
