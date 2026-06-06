@@ -3953,8 +3953,7 @@ where
         msg: WireMsg,
         propagate: Option<(SedimentreeId, PeerId)>,
         sender: async_channel::Sender<(Authenticated<Conn, Self>, Result<(), Hdl::HandlerError>)>,
-    ) -> Self::Future<'static, ()>
-    {
+    ) -> Self::Future<'static, ()> {
         Async::from_future(async move {
             let result = handler.handle(&conn, msg).await;
             if result.is_ok()
