@@ -9,7 +9,7 @@ use alloc::{
 };
 use async_lock::Mutex;
 use core::{fmt::Debug, time::Duration};
-use sedimentree_core::collections::Map;
+use sedimentree_core::collections::{Map, Set};
 
 use from_js_ref::FromJsRef;
 use future_form::Local;
@@ -26,6 +26,7 @@ use sedimentree_core::{
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::id::CommitId,
+    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_core::{
     collections::bounded_sharded_map::BoundedShardedMap,
@@ -37,6 +38,7 @@ use subduction_core::{
     storage::powerbox::StoragePowerbox,
     subduction::{
         Subduction,
+        error::HydrationError,
         pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
         per_peer_sync::PerPeerSync,
     },
@@ -58,7 +60,7 @@ use crate::{
     batch_input::{WasmCommitInput, WasmFragmentInput},
     error::{
         WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHandshakeError,
-        WasmIoError, WasmLongPollConnectError, WasmWriteError,
+        WasmHydrationError, WasmIoError, WasmLongPollConnectError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -274,7 +276,7 @@ impl WasmSubduction {
             send_counter,
             NonceCache::default(),
             JsTimeout,
-            Duration::from_secs(30),
+            subduction_core::multiplexer::DEFAULT_IDLE_TIMEOUT,
             depth_metric,
             WasmSpawn,
         );
@@ -314,6 +316,218 @@ impl WasmSubduction {
             ephemeral_handler: ephemeral_for_wasm,
             keyhive_handler,
         }
+    }
+
+    /// Hydrate a [`Subduction`] instance from external storage.
+    ///
+    /// Loads all sedimentree data from storage and reconstructs the in-memory
+    /// state before initializing the sync engine.
+    ///
+    /// # Arguments
+    ///
+    /// * `signer` - The cryptographic signer for this node's identity
+    /// * `storage` - Storage backend for persisting data
+    /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
+    ///   When set, clients can connect without knowing the server's peer ID.
+    /// * `hash_metric_override` - Optional custom depth metric function
+    /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `max_resident_trees` - Optional cap on the number of sedimentrees kept
+    ///   resident in memory (default: 1024). See [`new`](Self::new) for details.
+    /// * `policy` - Optional connection/storage authorization policy.
+    ///   Defaults to allow-all.
+    /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
+    ///   Defaults to allow-all.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `hash_metric_override` is `Some` but the underlying JS value
+    /// cannot be cast to a `Function`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmHydrationError`] if hydration fails.
+    #[wasm_bindgen]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub async fn hydrate(
+        signer: JsSigner,
+        storage: JsStorage,
+        service_name: Option<String>,
+        hash_metric_override: Option<JsToDepth>,
+        max_pending_blob_requests: Option<usize>,
+        max_resident_trees: Option<usize>,
+        policy: Option<JsPolicy>,
+        ephemeral_policy: Option<JsEphemeralPolicy>,
+        on_remote_heads: Option<js_sys::Function>,
+        on_ephemeral: Option<js_sys::Function>,
+    ) -> Result<Self, WasmHydrationError> {
+        use subduction_core::storage::traits::Storage as _;
+
+        tracing::debug!("hydrating new Subduction node");
+        let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
+        #[allow(clippy::expect_used)]
+        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(|h| {
+            JsValue::from(h)
+                .dyn_into()
+                .expect("hash_metric_override is not a Function")
+        });
+        let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
+        let depth_metric = WasmHashMetric(raw_fn);
+        let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
+        // `None` or an explicit `0` falls back to the default cap.
+        let max_resident = match max_resident_trees {
+            Some(n) if n > 0 => n,
+            _ => WASM_DEFAULT_MAX_RESIDENT_TREES,
+        };
+
+        // Load sedimentree IDs from raw storage before wrapping in powerbox
+        let ids: Set<SedimentreeId> = storage
+            .load_all_sedimentree_ids()
+            .await
+            .map_err(HydrationError::LoadAllIdsError)?;
+
+        // Hydrate sedimentrees from storage.
+        //
+        // Each sedimentree is loaded concurrently — commits and fragments
+        // for each ID are independent and can overlap their IndexedDB reads.
+        // Within each sedimentree, commits and fragments are loaded in
+        // parallel via `try_join`.
+        let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
+        let loaded: Vec<_> = futures::future::try_join_all(ids.iter().map(|&id| {
+            let storage = &storage;
+            async move {
+                let (commits, fragments) = futures::future::try_join(
+                    async {
+                        storage
+                            .load_loose_commits(id)
+                            .await
+                            .map_err(HydrationError::LoadLooseCommitsError)
+                    },
+                    async {
+                        storage
+                            .load_fragments(id)
+                            .await
+                            .map_err(HydrationError::LoadFragmentsError)
+                    },
+                )
+                .await?;
+
+                let loose_commits: Vec<_> =
+                    commits.into_iter().map(|v| v.payload().clone()).collect();
+                let fragments: Vec<_> =
+                    fragments.into_iter().map(|v| v.payload().clone()).collect();
+
+                Ok::<_, HydrationError<Local, JsStorage>>((
+                    id,
+                    Sedimentree::new(fragments, loose_commits),
+                ))
+            }
+        }))
+        .await?;
+
+        // Merge + minimize sequentially (per-entry access is &mut).
+        for (id, sedimentree) in loaded {
+            sedimentrees
+                .with_entry_or_default(id, |tree: &mut MinimizedSedimentree| {
+                    tree.merge(sedimentree);
+                })
+                .await;
+            sedimentrees
+                .with_entry(&id, |tree| {
+                    tree.ensure_minimized(&depth_metric);
+                })
+                .await;
+        }
+
+        let policy = policy.unwrap_or_else(make_open_policy);
+
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+        let powerbox = StoragePowerbox::new(storage, Arc::new(policy));
+
+        let observer = match on_remote_heads {
+            Some(f) => crate::remote_heads::JsRemoteHeadsObserver::with_callback(f),
+            None => crate::remote_heads::JsRemoteHeadsObserver::new(),
+        };
+        let sync_handler = SyncHandler::with_remote_heads_observer(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            powerbox.clone(),
+            pending_blob_requests.clone(),
+            depth_metric.clone(),
+            observer.clone(),
+        );
+
+        let eph_policy = ephemeral_policy.unwrap_or_else(make_open_ephemeral_policy);
+        let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
+            connections.clone(),
+            eph_policy,
+            EphemeralConfig::default(),
+            JsClock,
+        );
+        let ephemeral_for_wasm = ephemeral_handler.clone();
+
+        let send_counter = sync_handler.send_counter().clone();
+        let keyhive_handler = Arc::new(Mutex::new(None));
+        let handler = Arc::new(WasmComposedHandler::new(
+            sync_handler,
+            ephemeral_handler,
+            WasmKeyhiveHandler::new(keyhive_handler.clone()),
+        ));
+
+        let (core, listener_fut, manager_fut) = Subduction::new(
+            handler,
+            discovery_id,
+            signer,
+            sedimentrees,
+            connections,
+            subscriptions,
+            powerbox,
+            pending_blob_requests,
+            send_counter,
+            NonceCache::default(),
+            JsTimeout,
+            subduction_core::multiplexer::DEFAULT_IDLE_TIMEOUT,
+            depth_metric,
+            WasmSpawn,
+        );
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let manager = manager_fut.fuse();
+            let listener = listener_fut.fuse();
+
+            match select(manager, listener).await {
+                Either::Left((manager_result, _pin)) => {
+                    if let Err(Aborted) = manager_result {
+                        tracing::error!("Subduction manager aborted");
+                    }
+                }
+                Either::Right((listener_result, _pin)) => {
+                    if let Err(Aborted) = listener_result {
+                        tracing::error!("Subduction listener aborted");
+                    }
+                }
+            }
+        });
+
+        // Always drain the ephemeral channel to prevent "channel full" warnings
+        // in EphemeralHandler when no JS callback is registered.
+        let observer = on_ephemeral.map(crate::ephemeral::JsEphemeralObserver::new);
+        wasm_bindgen_futures::spawn_local(async move {
+            while let Ok(event) = ephemeral_rx.recv().await {
+                if let Some(ref obs) = observer {
+                    obs.on_event(event.id, event.sender, &event.payload);
+                }
+            }
+        });
+
+        Ok(Self {
+            core,
+            js_storage,
+            ephemeral_handler: ephemeral_for_wasm,
+            keyhive_handler,
+        })
     }
 
     /// Persist a whole [`Sedimentree`](sedimentree_wasm::WasmSedimentree)
@@ -356,7 +570,7 @@ impl WasmSubduction {
     ///
     /// Returns the per-peer broadcast outcome as a
     /// [`PeerResultMap`](WasmPeerResultMap). This **awaits the broadcast**, so
-    /// an unresponsive peer can stall the call for up to `timeout_milliseconds`
+    /// an unresponsive peer can stall the call for up to `idle_timeout_milliseconds`
     /// (or the configured default when omitted); callers wanting a
     /// non-blocking durable write should use
     /// [`storeSedimentree`](Self::store_sedimentree) instead.
@@ -374,9 +588,9 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         sedimentree: &WasmSedimentree,
         blobs: Vec<Uint8Array>,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
         let per_peer = self
             .core
             .add_sedimentree(
@@ -446,7 +660,7 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `address` - The WebSocket URL to connect to
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (defaults to 30000)
+    /// * `idle_timeout_milliseconds` - Idle timeout in milliseconds: max gap between completions before giving up (defaults to 30000)
     /// * `service_name` - The service name for discovery (defaults to URL host)
     ///
     /// # Errors
@@ -484,7 +698,7 @@ impl WasmSubduction {
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
+    /// * `idle_timeout_milliseconds` - Idle timeout in milliseconds: max gap between completions before giving up (default: 30000)
     ///
     /// # Errors
     ///
@@ -518,7 +732,7 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
+    /// * `idle_timeout_milliseconds` - Idle timeout in milliseconds: max gap between completions before giving up (default: 30000)
     /// * `service_name` - The service name for discovery (defaults to `base_url`)
     ///
     /// # Errors
@@ -781,9 +995,9 @@ impl WasmSubduction {
     pub async fn fetch_blobs(
         &self,
         id: &WasmSedimentreeId,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> Result<Option<Vec<Uint8Array>>, WasmIoError> {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
         if let Some(blobs) = self
             .core
             .fetch_blobs(id.clone().into(), timeout)
@@ -1027,7 +1241,7 @@ impl WasmSubduction {
     ///
     /// Returns the per-peer broadcast outcome as a
     /// [`PeerResultMap`](WasmPeerResultMap). This **awaits the broadcast**, so
-    /// an unresponsive peer can stall the call for up to `timeout_milliseconds`
+    /// an unresponsive peer can stall the call for up to `idle_timeout_milliseconds`
     /// (or the configured default when omitted); callers wanting a
     /// non-blocking durable write should use
     /// [`storeBuiltBatch`](Self::store_built_batch) instead.
@@ -1050,7 +1264,7 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
         fragments: Vec<WasmFragmentInput>,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
         let core_commits = commits
@@ -1061,7 +1275,7 @@ impl WasmSubduction {
             .into_iter()
             .map(WasmFragmentInput::into_core)
             .collect();
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
 
         let per_peer = self
             .core
@@ -1110,7 +1324,7 @@ impl WasmSubduction {
     /// Like [`addBatch`](Self::add_batch) for the commits half only. Returns
     /// the per-peer broadcast outcome as a
     /// [`PeerResultMap`](WasmPeerResultMap) and **awaits the broadcast** (an
-    /// unresponsive peer can stall the call for up to `timeout_milliseconds`).
+    /// unresponsive peer can stall the call for up to `idle_timeout_milliseconds`).
     /// An empty list is a no-op and yields an empty map.
     ///
     /// # Errors
@@ -1124,14 +1338,14 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
         let core_commits = commits
             .into_iter()
             .map(WasmCommitInput::into_core)
             .collect();
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
 
         let per_peer = self
             .core
@@ -1180,7 +1394,7 @@ impl WasmSubduction {
     /// Like [`addBatch`](Self::add_batch) for the fragments half only. Returns
     /// the per-peer broadcast outcome as a
     /// [`PeerResultMap`](WasmPeerResultMap) and **awaits the broadcast** (an
-    /// unresponsive peer can stall the call for up to `timeout_milliseconds`).
+    /// unresponsive peer can stall the call for up to `idle_timeout_milliseconds`).
     /// An empty list is a no-op and yields an empty map.
     ///
     /// # Errors
@@ -1194,14 +1408,14 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         fragments: Vec<WasmFragmentInput>,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
         let core_fragments = fragments
             .into_iter()
             .map(WasmFragmentInput::into_core)
             .collect();
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
 
         let per_peer = self
             .core
@@ -1240,7 +1454,7 @@ impl WasmSubduction {
     /// * `to_ask` - The peer ID to sync with
     /// * `id` - The sedimentree ID to sync
     /// * `subscribe` - Whether to subscribe for incremental updates
-    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    /// * `idle_timeout_milliseconds` - Optional idle timeout in milliseconds (max gap between completions)
     ///
     /// # Errors
     ///
@@ -1251,9 +1465,9 @@ impl WasmSubduction {
         to_ask: &WasmPeerId,
         id: &WasmSedimentreeId,
         subscribe: bool,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
         let (success, stats, transport_errors) = self
             .core
             .sync_with_peer(
@@ -1281,7 +1495,7 @@ impl WasmSubduction {
     ///
     /// * `id` - The sedimentree ID to sync
     /// * `subscribe` - Whether to subscribe for incremental updates
-    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    /// * `idle_timeout_milliseconds` - Optional idle timeout in milliseconds (max gap between completions)
     ///
     /// # Errors
     ///
@@ -1291,10 +1505,10 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         subscribe: bool,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
         tracing::debug!("WasmSubduction::sync_with_all_peers");
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
         let peer_map = self
             .core
             .sync_with_all_peers(id.clone().into(), subscribe, timeout)
@@ -1309,16 +1523,16 @@ impl WasmSubduction {
     ///
     /// * `peer_id` - The peer to sync with
     /// * `subscribe` - Whether to subscribe to future updates (default: `true`)
-    /// * `timeout_milliseconds` - Per-call timeout in milliseconds
+    /// * `idle_timeout_milliseconds` - Per-call idle timeout in milliseconds
     #[wasm_bindgen(js_name = fullSyncWithPeer)]
     pub async fn full_sync_with_peer(
         &self,
         peer_id: &WasmPeerId,
         subscribe: Option<bool>,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> PeerBatchSyncResult {
         let subscribe = subscribe.unwrap_or(true);
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
         let (success, stats, conn_errs, io_errs) = self
             .core
             .full_sync_with_peer(&peer_id.clone().into(), subscribe, timeout)
@@ -1346,9 +1560,9 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = fullSyncWithAllPeers)]
     pub async fn full_sync_with_all_peers(
         &self,
-        timeout_milliseconds: Option<u64>,
+        idle_timeout_milliseconds: Option<u64>,
     ) -> PeerBatchSyncResult {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = idle_timeout_milliseconds.map(Duration::from_millis);
         let (success, stats, conn_errs, io_errs) =
             self.core.full_sync_with_all_peers(timeout).await;
 

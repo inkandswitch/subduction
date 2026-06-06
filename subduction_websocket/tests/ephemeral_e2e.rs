@@ -66,7 +66,7 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
-        .roundtrip_timeout(Duration::from_secs(5))
+        .idle_timeout(Duration::from_secs(5))
         .build::<Sendable, ServerConn>();
 
     tokio::spawn(async move {
@@ -149,7 +149,7 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
-        .roundtrip_timeout(Duration::from_secs(5))
+        .idle_timeout(Duration::from_secs(5))
         .build::<Sendable, ServerConn>();
 
     tokio::spawn(async move {

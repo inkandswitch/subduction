@@ -260,6 +260,24 @@ impl<H> HttpLongPollClient<H> {
 
 /// Background task that continuously polls `POST /lp/recv` and pushes
 /// raw bytes into the connection's inbound channel.
+/// Consecutive poll failures (transport errors or unexpected statuses)
+/// tolerated before the poll loop concludes the peer is gone, closes the
+/// connection, and exits.
+///
+/// Closing the transport surfaces a benign disconnect to
+/// [`Subduction`](subduction_core::subduction::Subduction)'s listen loop —
+/// which in turn cancels any in-flight roundtrip calls via
+/// [`Multiplexer::cancel_all_pending`](subduction_core::multiplexer::Multiplexer::cancel_all_pending).
+/// Without this, a long-poll client whose server has died (but whose
+/// `POST /lp/recv` keeps erroring) would re-poll forever and a blocking
+/// `sync_with_peer` would rely solely on its caller-side deadline. This
+/// gives the transport its own eventual-disconnect guarantee, matching
+/// WebSocket keepalive and Iroh/QUIC idle timeouts.
+const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 5;
+
+/// Backoff between failed poll attempts.
+const POLL_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
+
 async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
     http: H,
     url: String,
@@ -267,6 +285,7 @@ async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
     conn: HttpLongPollTransport,
     cancel: async_channel::Receiver<()>,
 ) {
+    let mut consecutive_failures: u32 = 0;
     loop {
         let recv_fut = http.post(
             &url,
@@ -285,26 +304,47 @@ async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
             Either::Left((result, _)) => match result {
                 Ok(resp) => match resp.status {
                     200 => {
+                        consecutive_failures = 0;
                         if conn.push_inbound(resp.body).await.is_err() {
                             tracing::error!("inbound channel closed");
                             break;
                         }
                     }
                     204 => {
-                        // Poll timeout — immediately re-poll
+                        // Poll timeout — a healthy idle cycle. Re-poll.
+                        consecutive_failures = 0;
                     }
                     410 => {
                         tracing::info!("session closed by server (410 Gone)");
+                        conn.close();
                         break;
                     }
                     status => {
                         tracing::error!("unexpected recv status: {status}");
-                        futures_timer::Delay::new(Duration::from_secs(1)).await;
+                        consecutive_failures += 1;
+                        if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES {
+                            tracing::warn!(
+                                "long-poll recv failed {consecutive_failures} times \
+                                 consecutively (last status {status}); closing connection"
+                            );
+                            conn.close();
+                            break;
+                        }
+                        futures_timer::Delay::new(POLL_FAILURE_BACKOFF).await;
                     }
                 },
                 Err(e) => {
                     tracing::error!("recv request error: {e}");
-                    futures_timer::Delay::new(Duration::from_secs(1)).await;
+                    consecutive_failures += 1;
+                    if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES {
+                        tracing::warn!(
+                            "long-poll recv errored {consecutive_failures} times \
+                             consecutively; closing connection"
+                        );
+                        conn.close();
+                        break;
+                    }
+                    futures_timer::Delay::new(POLL_FAILURE_BACKOFF).await;
                 }
             },
         }
@@ -431,5 +471,82 @@ impl<Async: FutureForm, H: HttpClient<Async>> handshake::Handshake<Async>
                 )
             })
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod poll_loop_tests {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    use future_form::Sendable;
+
+    use super::*;
+    use crate::{http_client::HttpResponse, session::SessionId, transport::HttpLongPollTransport};
+
+    /// An `HttpClient` whose `POST /lp/recv` always fails, counting calls.
+    #[derive(Clone)]
+    struct AlwaysFailHttp {
+        calls: Arc<AtomicU32>,
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("mock http failure")]
+    struct MockHttpError;
+
+    impl HttpClient<Sendable> for AlwaysFailHttp {
+        type Error = MockHttpError;
+
+        fn post(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+        ) -> <Sendable as FutureForm>::Future<'_, Result<HttpResponse, Self::Error>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(MockHttpError) })
+        }
+    }
+
+    /// After `MAX_CONSECUTIVE_POLL_FAILURES` consecutive recv failures, the
+    /// poll loop closes the transport and exits — giving the long-poll
+    /// transport its own eventual-disconnect guarantee so a parked
+    /// `recv_bytes` (and thus the Subduction listen loop) is notified.
+    ///
+    /// Runs in ~real time: `MAX_CONSECUTIVE_POLL_FAILURES - 1` backoffs of
+    /// `POLL_FAILURE_BACKOFF` (the final failure closes without backing off).
+    #[tokio::test]
+    async fn poll_loop_closes_transport_after_sustained_failures() {
+        let peer_id = PeerId::new([3u8; 32]);
+        let conn = HttpLongPollTransport::new(peer_id);
+        let calls = Arc::new(AtomicU32::new(0));
+        let http = AlwaysFailHttp {
+            calls: calls.clone(),
+        };
+        let (_cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+
+        poll_loop::<Sendable, AlwaysFailHttp>(
+            http,
+            "http://example.invalid/lp/recv".into(),
+            SessionId::random(),
+            conn.clone(),
+            cancel_rx,
+        )
+        .await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            MAX_CONSECUTIVE_POLL_FAILURES,
+            "loop must stop after exactly the failure threshold"
+        );
+
+        // The transport is closed: a recv now errors (channel closed) rather
+        // than parking forever.
+        let recv = <HttpLongPollTransport as subduction_core::transport::Transport<Sendable>>::recv_bytes(&conn).await;
+        assert!(
+            recv.is_err(),
+            "transport must be closed after the poll loop gives up"
+        );
     }
 }

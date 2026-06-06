@@ -201,8 +201,11 @@ pub struct Subduction<
     /// also need `connections` must take `connections` first.
     multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
 
-    /// Default timeout for roundtrip calls (`BatchSyncRequest` → `BatchSyncResponse`).
-    default_call_timeout: Duration,
+    /// Default per-call deadline for roundtrip calls (`BatchSyncRequest` →
+    /// `BatchSyncResponse`) when a caller passes `timeout: None`. This is
+    /// caller-side policy applied over a cancel-safe wait; the multiplexer
+    /// holds no clock. See [`DEFAULT_IDLE_TIMEOUT`](crate::multiplexer::DEFAULT_IDLE_TIMEOUT).
+    default_idle_timeout: Duration,
 
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
@@ -323,7 +326,7 @@ where
         send_counter: PeerCounter,
         nonce_cache: NonceCache,
         timer: Timer,
-        default_call_timeout: Duration,
+        default_idle_timeout: Duration,
         depth_metric: Metric,
         spawner: Sp,
     ) -> (
@@ -361,7 +364,7 @@ where
             discovery_id,
             signer,
             timer,
-            default_call_timeout,
+            default_idle_timeout,
             depth_metric,
             sedimentrees,
             connections,
@@ -738,7 +741,7 @@ where
                 }
             }
 
-            let mux = Arc::new(Multiplexer::new(peer_id, self.default_call_timeout));
+            let mux = Arc::new(Multiplexer::new(peer_id, self.default_idle_timeout));
             let mut multiplexers = self.multiplexers.lock().await;
             match multiplexers.get_mut(&peer_id) {
                 Some(muxes) => muxes.push(mux),
@@ -1811,7 +1814,7 @@ where
     ///
     /// Awaits the broadcast and returns its per-peer outcome
     /// ([`PerPeerSync`]); a wedged peer can stall this for up to `timeout`
-    /// (`None` = configured `default_call_timeout`). For a durable write
+    /// (`None` = configured `default_idle_timeout`). For a durable write
     /// that does not wait on peers, use
     /// [`store_sedimentree`](Self::store_sedimentree) and drive sync
     /// separately.
@@ -1854,7 +1857,7 @@ where
     /// This **awaits the broadcast** and returns its per-peer outcome
     /// ([`PerPeerSync`]). A byte-connected but protocol-unresponsive peer
     /// can therefore stall this call for up to `timeout` (or the configured
-    /// `default_call_timeout` when `timeout` is `None`). Callers that need
+    /// `default_idle_timeout` when `timeout` is `None`). Callers that need
     /// the durable write to return *without* waiting on peers should call
     /// [`store_built_batch`](Self::store_built_batch) and drive
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately (or let
@@ -1919,7 +1922,7 @@ where
     /// This **awaits the broadcast** and returns its per-peer outcome
     /// ([`PerPeerSync`]); a byte-connected but protocol-unresponsive peer can
     /// stall the call for up to `timeout` (or the configured
-    /// `default_call_timeout` when `timeout` is `None`). Callers that want the
+    /// `default_idle_timeout` when `timeout` is `None`). Callers that want the
     /// durable write to return *without* waiting on peers should call
     /// [`store_commits_batch`](Self::store_commits_batch) and drive
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately. An empty
@@ -1968,7 +1971,7 @@ where
     /// This **awaits the broadcast** and returns its per-peer outcome
     /// ([`PerPeerSync`]); a byte-connected but protocol-unresponsive peer can
     /// stall the call for up to `timeout` (or the configured
-    /// `default_call_timeout` when `timeout` is `None`). Callers that want the
+    /// `default_idle_timeout` when `timeout` is `None`). Callers that want the
     /// durable write to return *without* waiting on peers should call
     /// [`store_fragments_batch`](Self::store_fragments_batch) and drive
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately. An empty
