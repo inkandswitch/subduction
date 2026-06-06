@@ -38,6 +38,7 @@ use subduction_core::{
     subduction::{
         Subduction,
         pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+        per_peer_sync::PerPeerSync,
     },
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
@@ -1624,22 +1625,8 @@ pub struct WasmPeerResultMap(
     >,
 );
 
-impl
-    From<
-        subduction_core::subduction::per_peer_sync::PerPeerSync<
-            WasmConn,
-            Local,
-            crate::transport::JsTransportError,
-        >,
-    > for WasmPeerResultMap
-{
-    fn from(
-        per_peer: subduction_core::subduction::per_peer_sync::PerPeerSync<
-            WasmConn,
-            Local,
-            crate::transport::JsTransportError,
-        >,
-    ) -> Self {
+impl From<PerPeerSync<WasmConn, Local, crate::transport::JsTransportError>> for WasmPeerResultMap {
+    fn from(per_peer: PerPeerSync<WasmConn, Local, crate::transport::JsTransportError>) -> Self {
         Self(
             per_peer
                 .into_iter()

@@ -19,7 +19,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder, listener_future::ListenerFuture},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -32,6 +32,7 @@ use subduction_websocket::{
     websocket::KeepAlive,
 };
 use testresult::TestResult;
+use tokio_util::task::TaskTracker;
 use tungstenite::http::Uri;
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -150,7 +151,7 @@ fn setup_client_subduction(
 ) -> (
     TestSubduction,
     TestHandler,
-    subduction_core::subduction::listener_future::ListenerFuture<
+    ListenerFuture<
         'static,
         Sendable,
         MemoryStorage,
@@ -178,7 +179,7 @@ fn setup_server_subduction(
 ) -> (
     ServerSubduction,
     ServerHandler,
-    subduction_core::subduction::listener_future::ListenerFuture<
+    ListenerFuture<
         'static,
         Sendable,
         MemoryStorage,
@@ -195,7 +196,7 @@ fn setup_server_subduction(
     SubductionBuilder::new()
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(tokio_util::task::TaskTracker::new()))
+        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
         .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>()
 }
@@ -308,7 +309,7 @@ async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
         DEFAULT_MAX_MESSAGE_SIZE,
         aggressive,
         server_subduction.clone(),
-        tokio_util::task::TaskTracker::new(),
+        TaskTracker::new(),
     )
     .await?;
     let bound = server.address();

@@ -3942,11 +3942,11 @@ where
     }
 
     fn dispatch_task<
-        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Timer: Timeout<Self> + Clone + Send + Sync + 'static,
         Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         subduction: Arc<
-            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+            Subduction<'static, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
         >,
         handler: Arc<Hdl>,
         conn: Authenticated<Conn, Self>,
@@ -3954,8 +3954,6 @@ where
         propagate: Option<(SedimentreeId, PeerId)>,
         sender: async_channel::Sender<(Authenticated<Conn, Self>, Result<(), Hdl::HandlerError>)>,
     ) -> Self::Future<'static, ()>
-    where
-        'a: 'static,
     {
         Async::from_future(async move {
             let result = handler.handle(&conn, msg).await;

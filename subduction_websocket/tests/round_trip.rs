@@ -20,7 +20,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder, listener_future::ListenerFuture},
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -32,6 +32,7 @@ use subduction_websocket::{
     },
     websocket::KeepAlive,
 };
+use tokio_util::task::TaskTracker;
 
 static TRACING: OnceLock<()> = OnceLock::new();
 
@@ -97,7 +98,7 @@ fn setup_client_subduction(
 ) -> (
     TestSubduction,
     TestHandler,
-    subduction_core::subduction::listener_future::ListenerFuture<
+    ListenerFuture<
         'static,
         Sendable,
         MemoryStorage,
@@ -151,7 +152,7 @@ async fn batch_sync() -> TestResult {
     let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(tokio_util::task::TaskTracker::new()))
+        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
         .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
@@ -305,7 +306,7 @@ async fn second_sync_round_is_empty() -> TestResult {
     let (server, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(tokio_util::task::TaskTracker::new()))
+        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
         .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
@@ -450,7 +451,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
     let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(tokio_util::task::TaskTracker::new()))
+        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
         .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
@@ -468,7 +469,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         DEFAULT_MAX_MESSAGE_SIZE,
         aggressive_keepalive,
         server_subduction.clone(),
-        tokio_util::task::TaskTracker::new(),
+        TaskTracker::new(),
     )
     .await?;
     let bound = server.address();
@@ -556,7 +557,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
     let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(tokio_util::task::TaskTracker::new()))
+        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
         .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
@@ -574,7 +575,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
         DEFAULT_MAX_MESSAGE_SIZE,
         aggressive,
         server_subduction.clone(),
-        tokio_util::task::TaskTracker::new(),
+        TaskTracker::new(),
     )
     .await?;
     let bound = server.address();
