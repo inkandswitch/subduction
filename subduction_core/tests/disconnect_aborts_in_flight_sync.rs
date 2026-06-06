@@ -10,14 +10,25 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use future_form::Sendable;
-use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
+use futures::future::{AbortHandle, Abortable, BoxFuture};
+use sedimentree_core::{
+    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
         managed::CallError,
+        manager::Spawn,
         test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
     },
     handler::sync::SyncHandler,
@@ -608,4 +619,182 @@ async fn remove_non_last_connection_does_not_cancel_pending_calls() -> TestResul
     );
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Future-drop cancellation: dropping a `full_sync_with_peer` future must abort
+// the per-document tasks it spawned, rather than leaving them detached against
+// a wedged peer until the per-call timeout fires.
+// ---------------------------------------------------------------------------
+
+/// A spawner that counts tasks currently alive: incremented when a task is
+/// spawned, decremented when its future is dropped (whether it completed or was
+/// aborted). A live count that falls promptly after the driving future is
+/// dropped is the observable signal that the spawned tasks were aborted, not
+/// left running.
+#[derive(Clone)]
+struct CountingSpawn {
+    live: Arc<AtomicUsize>,
+}
+
+/// Decrements the shared counter when dropped, so the count tracks tasks whose
+/// futures are still alive regardless of how they end.
+struct LiveGuard(Arc<AtomicUsize>);
+
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl Spawn<Sendable> for CountingSpawn {
+    fn spawn(&self, fut: BoxFuture<'static, ()>) -> AbortHandle {
+        self.live.fetch_add(1, Ordering::SeqCst);
+        let guard = LiveGuard(Arc::clone(&self.live));
+        let counted = async move {
+            let _guard = guard;
+            fut.await;
+        };
+
+        let (handle, reg) = AbortHandle::new_pair();
+        tokio::spawn(Abortable::new(Box::pin(counted), reg));
+        handle
+    }
+}
+
+type CountingConn = MessageTransport<PausableChannelTransport>;
+
+type CountingSubduction = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        MemoryStorage,
+        CountingConn,
+        SyncHandler<Sendable, MemoryStorage, CountingConn, OpenPolicy, CountLeadingZeroBytes>,
+        OpenPolicy,
+        MemorySigner,
+        TokioTimeout,
+        CountingSpawn,
+    >,
+>;
+
+fn make_counting_node(signer: MemorySigner, live: Arc<AtomicUsize>) -> CountingSubduction {
+    let (sd, _h, listener, manager) = SubductionBuilder::new()
+        .signer(signer)
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(CountingSpawn { live })
+        .timer(TokioTimeout)
+        .build::<Sendable, CountingConn>();
+    tokio::spawn(listener);
+    tokio::spawn(manager);
+    sd
+}
+
+/// Dropping the `full_sync_with_peer` future while its per-document tasks are
+/// in flight against a wedged peer must abort those tasks promptly — the
+/// `AbortOnDrop` guard restores structured concurrency. Without it, the spawned
+/// tasks would stay detached, blocked on the wedged round trip until the (long)
+/// per-call timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_full_sync_aborts_spawned_per_document_tasks() -> TestResult {
+    const DOC_COUNT: u8 = 12;
+
+    let a_signer = make_signer(70);
+    let b_signer = make_signer(71);
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    // Only A needs the counting spawner; the per-document tasks under test run
+    // on A. B uses the same node type for transport compatibility.
+    let live = Arc::new(AtomicUsize::new(0));
+    let a = make_counting_node(a_signer.clone(), Arc::clone(&live));
+    let b = make_counting_node(b_signer.clone(), Arc::new(AtomicUsize::new(0)));
+
+    // Store several distinct documents on A so `full_sync_with_peer` fans out
+    // into several per-document tasks.
+    for n in 0..DOC_COUNT {
+        let mut id_bytes = [0u8; 32];
+        id_bytes[0] = n;
+        let mut commit_bytes = [0u8; 32];
+        commit_bytes[0] = n;
+        commit_bytes[1] = 0x01;
+        a.add_commit(
+            SedimentreeId::new(id_bytes),
+            CommitId::new(commit_bytes),
+            BTreeSet::new(),
+            Blob::new(vec![n; 8]),
+        )
+        .await?;
+    }
+
+    let (t_a, t_b) = PausableChannelTransport::pair();
+    let conn_a: Authenticated<CountingConn, Sendable> =
+        Authenticated::new_for_test(MessageTransport::new(t_a), b_peer);
+    let conn_b: Authenticated<CountingConn, Sendable> = Authenticated::new_for_test(
+        MessageTransport::new(t_b.clone()),
+        PeerId::from(a_signer.verifying_key()),
+    );
+    a.add_connection(conn_a).await?;
+    b.add_connection(conn_b).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    // Wedge B so every per-document round trip blocks indefinitely.
+    t_b.pause();
+
+    // Let any connection-setup dispatch tasks settle, then record the baseline.
+    // The counter also sees A's listen-dispatch tasks, so the fan-out is
+    // measured as a delta over whatever is already live here.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let baseline = live.load(Ordering::SeqCst);
+
+    // Drive `full_sync_with_peer` in a task we can drop on demand. The long
+    // per-call timeout means the spawned tasks cannot self-terminate within the
+    // assertion window — only an abort can clear them.
+    let a_clone = Arc::clone(&a);
+    let sync_handle = tokio::spawn(async move {
+        a_clone
+            .full_sync_with_peer(&b_peer, true, Some(LONG_PER_CALL_TIMEOUT))
+            .await;
+    });
+
+    // Wait until the fan-out is in flight: every document has spawned its task.
+    let spun_up = wait_for(Duration::from_secs(3), || {
+        live.load(Ordering::SeqCst) >= baseline + usize::from(DOC_COUNT)
+    })
+    .await;
+    assert!(
+        spun_up,
+        "per-document tasks never reached the in-flight count; live = {}, \
+         expected >= {}",
+        live.load(Ordering::SeqCst),
+        baseline + usize::from(DOC_COUNT)
+    );
+
+    // Drop the driving future. The guard must abort the spawned per-document
+    // tasks, returning the live count to its pre-fan-out baseline.
+    sync_handle.abort();
+
+    let drained = wait_for(BOUND, || live.load(Ordering::SeqCst) <= baseline).await;
+    assert!(
+        drained,
+        "spawned per-document tasks were not aborted within {BOUND:?} after the \
+         driving future was dropped (live = {}, baseline = {baseline}); they were \
+         left detached against the wedged peer",
+        live.load(Ordering::SeqCst)
+    );
+
+    Ok(())
+}
+
+/// Poll `cond` until it holds or `limit` elapses. Returns whether it held.
+async fn wait_for(limit: Duration, mut cond: impl FnMut() -> bool) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < limit {
+        if cond() {
+            return true;
+        }
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    cond()
 }

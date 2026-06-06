@@ -297,15 +297,12 @@ async fn connect_pair(
 // The test
 // ---------------------------------------------------------------------------
 
-/// Regression test: verify that `full_sync_with_peer` processes multiple
-/// sedimentrees concurrently, not sequentially.
+/// `full_sync_with_peer` processes multiple sedimentrees concurrently, not
+/// sequentially.
 ///
-/// This test was added because the original implementation used a sequential
-/// `for id in tree_ids { sync_with_peer(..).await }` loop, causing
-/// head-of-line blocking where each document waited for the previous one's
-/// round trip to complete. `full_sync_with_peer` now spawns each document's
-/// sync onto the runtime so they proceed concurrently (and, on a
-/// multi-threaded runtime, in parallel).
+/// `full_sync_with_peer` spawns each document's sync onto the runtime so they
+/// proceed concurrently (and, on a multi-threaded runtime, in parallel) rather
+/// than head-of-line blocking on each document's round trip in turn.
 ///
 /// The test creates two nodes, adds one commit to each of N different
 /// sedimentree IDs on Alice, then syncs with Bob. The storage on Bob's

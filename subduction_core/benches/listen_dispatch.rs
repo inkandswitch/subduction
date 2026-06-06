@@ -1,20 +1,19 @@
 //! Isolated A/B for the server-side `listen()` dispatch strategy.
 //!
-//! ## Why this is a separate, synthetic bench
+//! ## A separate, synthetic bench
 //!
 //! The `inbound_dispatch.rs` `server_fan_in` scenario runs the server *and*
-//! all client nodes on one shared runtime, so its thread-scaling can't tell us
+//! all client nodes on one shared runtime, so its thread-scaling can't isolate
 //! whether the server's `listen()` dispatch is the bottleneck — the clients get
 //! the extra cores too. This bench reproduces the *dispatch mechanism* in
 //! isolation, with representative per-message work, and A/Bs the two strategies
-//! directly so the win attributable to dispatch alone is unconfounded:
+//! directly so the result attributable to dispatch alone is unconfounded:
 //!
-//! - **`FuturesUnordered`** — the pre-change dispatch: every handler future
-//!   pushed into one `FuturesUnordered` drained by a single task (concurrency,
-//!   no parallelism). This is no longer what production `listen()` does.
+//! - **`FuturesUnordered`** — every handler future pushed into one
+//!   `FuturesUnordered` drained by a single task (concurrency, no parallelism).
 //! - **`spawn`** — each handler future `tokio::spawn`-ed onto the worker pool,
-//!   completion reported via a channel. This is what production `listen()` now
-//!   does after this change.
+//!   completion reported via a channel. This is the strategy production
+//!   `listen()` uses.
 //!
 //!
 //! ## Representative work

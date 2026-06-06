@@ -1,19 +1,17 @@
-//! Phase 0 measurement harness: where does the server spend CPU on a
-//! many-document cold start?
+//! Measures server CPU cost on a many-document cold start, and how spawning
+//! the per-document fan-out across worker threads affects it.
 //!
-//! ## What this measures (and why)
+//! ## What this measures
 //!
-//! The real workload that motivates this work is a client cold-starting and
-//! requesting **300+ documents** at once (keyhive disabled / `OpenPolicy`).
-//! Observed symptom: bursty/"bumpy" multi-core utilisation, not a flat single
-//! core. This bench quantifies the cold-start cost and the effect of spawning
-//! the per-document fan-out across worker threads.
+//! The target workload is a client cold-starting and requesting **300+
+//! documents** at once (keyhive disabled / `OpenPolicy`), where multi-core
+//! utilisation is bursty rather than flat. This bench quantifies the cold-start
+//! cost under that load.
 //!
 //! ## Harness shape
 //!
 //! Two in-process `Subduction` nodes connected over an in-memory
-//! `ChannelTransport` (mocks are sufficient for first-pass signal; a real
-//! WebSocket variant is a deliberate follow-up):
+//! `ChannelTransport`:
 //!
 //! ```text
 //!   server (B): pre-populated with `documents` sedimentrees,
@@ -28,14 +26,14 @@
 //! The timed region is **A's cold sync to convergence**. The bench is an A/B
 //! between two drivers (see [`Driver`]):
 //!
-//! - `SerialFanout` — the historical shape: every document's `sync_with_peer`
-//!   collected into one `FuturesUnordered` drained by a single caller task
-//!   (concurrency, no parallelism).
-//! - `SpawnedFullSync` — `full_sync_with_peer`, which now spawns each
-//!   document's sync onto the runtime (via the `Spawn` trait) so independent
-//!   documents verify/ingest/minimize in parallel across worker threads.
+//! - `SerialFanout` — every document's `sync_with_peer` collected into one
+//!   `FuturesUnordered` drained by a single caller task (concurrency, no
+//!   parallelism).
+//! - `SpawnedFullSync` — `full_sync_with_peer`, which spawns each document's
+//!   sync onto the runtime (via the `Spawn` trait) so independent documents
+//!   verify/ingest/minimize in parallel across worker threads.
 //!
-//! Comparing the two isolates the win from spawning the per-document fan-out.
+//! Comparing the two isolates the effect of spawning the per-document fan-out.
 //!
 //! ## Sweeps
 //!

@@ -61,3 +61,116 @@ impl Drop for AbortOnDrop {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use alloc::sync::Arc;
+    use core::{
+        future::pending,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
+    use futures::{
+        FutureExt,
+        future::{self, Abortable},
+    };
+
+    use super::*;
+
+    /// Spawn an abortable task that runs `fut` to completion and flips `done`
+    /// when (and only when) it finishes without being aborted. Returns the
+    /// guard-trackable [`AbortHandle`] and a join handle to drive it.
+    fn spawn_tracked<F>(fut: F, done: Arc<AtomicBool>) -> (AbortHandle, tokio::task::JoinHandle<()>)
+    where
+        F: core::future::Future<Output = ()> + Send + 'static,
+    {
+        let (handle, reg) = AbortHandle::new_pair();
+        let task = Abortable::new(fut, reg).map(move |outcome| {
+            // `Ok(())` means the inner future completed; `Err(Aborted)` means
+            // the handle fired first.
+            if outcome.is_ok() {
+                done.store(true, Ordering::SeqCst);
+            }
+        });
+
+        (handle, tokio::spawn(task))
+    }
+
+    /// Dropping the guard aborts a tracked task that is still running: it never
+    /// reaches completion.
+    #[tokio::test]
+    async fn drop_aborts_pending_task() {
+        let done = Arc::new(AtomicBool::new(false));
+
+        // A task that never completes on its own, so the only way it can finish
+        // is via the guard's abort.
+        let (handle, join) = spawn_tracked(pending::<()>(), Arc::clone(&done));
+
+        let mut guard = AbortOnDrop::new();
+        guard.push(handle);
+
+        // Let the task reach its pending await point, then drop the guard.
+        tokio::task::yield_now().await;
+        drop(guard);
+
+        // The join resolves because the abort drove the task to its (aborted)
+        // end; `done` must remain false because the inner future never
+        // completed.
+        join.await.expect("aborted task joins");
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "guard drop must abort the pending task, not let it complete"
+        );
+    }
+
+    /// `clear()` disarms the guard: a task it previously tracked is *not*
+    /// aborted on drop and runs to completion.
+    #[tokio::test]
+    async fn clear_disarms_so_task_completes() {
+        let done = Arc::new(AtomicBool::new(false));
+
+        // A task that completes immediately once polled.
+        let (handle, join) = spawn_tracked(future::ready(()), Arc::clone(&done));
+
+        let mut guard = AbortOnDrop::new();
+        guard.push(handle);
+
+        // Caller observed quiescence and pruned the (finished) handle.
+        guard.clear();
+        drop(guard);
+
+        join.await.expect("task joins");
+        assert!(
+            done.load(Ordering::SeqCst),
+            "cleared handle must not be aborted; the task completes"
+        );
+    }
+
+    /// A guard with many tracked tasks aborts every one of them on drop.
+    #[tokio::test]
+    async fn drop_aborts_all_tracked_tasks() {
+        const N: usize = 16;
+
+        let mut guard = AbortOnDrop::new();
+        let mut joins = alloc::vec::Vec::new();
+        let dones: alloc::vec::Vec<_> = (0..N).map(|_| Arc::new(AtomicBool::new(false))).collect();
+
+        for done in &dones {
+            let (handle, join) = spawn_tracked(pending::<()>(), Arc::clone(done));
+            guard.push(handle);
+            joins.push(join);
+        }
+
+        tokio::task::yield_now().await;
+        drop(guard);
+
+        for join in joins {
+            join.await.expect("aborted task joins");
+        }
+        assert!(
+            dones.iter().all(|d| !d.load(Ordering::SeqCst)),
+            "every tracked task must be aborted on guard drop"
+        );
+    }
+}

@@ -523,4 +523,220 @@ mod tests {
             "deleted id must no longer be contained"
         );
     }
+
+    /// Property tests for the `SedimentreeId`-sharded commit/fragment stores.
+    ///
+    /// These exercise shard selection (`Sharded::shard`), the
+    /// decode-outside-lock load path, and the single-lock `save_batch`. The
+    /// properties hold *regardless of how ids distribute across shards*, which
+    /// is exactly the invariant a shard-keying or hashing bug would break.
+    #[cfg(feature = "bolero")]
+    mod proptests {
+        use alloc::{
+            collections::{BTreeMap, BTreeSet},
+            vec,
+        };
+
+        use sedimentree_core::{blob::BlobMeta, collections::Set};
+        use subduction_crypto::signer::memory::MemorySigner;
+
+        use super::*;
+
+        /// One commit to store, generated from arbitrary bytes. `id_seed`
+        /// selects the document (and thus, via hashing, the shard); `data_seed`
+        /// makes the commit content — and therefore its content-addressed digest
+        /// and `CommitId` — distinct.
+        #[derive(Debug, Clone, arbitrary::Arbitrary)]
+        struct CommitSpec {
+            id_seed: u16,
+            data_seed: u16,
+        }
+
+        fn sed_id_from(seed: u16) -> SedimentreeId {
+            let mut bytes = [0u8; 32];
+            bytes[..2].copy_from_slice(&seed.to_le_bytes());
+            SedimentreeId::new(bytes)
+        }
+
+        /// Build a verified commit whose identity is a function of `data_seed`
+        /// alone, so two specs with the same `data_seed` produce byte-identical
+        /// commits (exercising content-addressed deduplication).
+        async fn make_commit(
+            signer: &MemorySigner,
+            sed_id: SedimentreeId,
+            data_seed: u16,
+        ) -> VerifiedMeta<LooseCommit> {
+            let blob = Blob::new(data_seed.to_le_bytes().to_vec());
+            let blob_meta = BlobMeta::new(&blob);
+            let mut head_bytes = [0u8; 32];
+            head_bytes[..2].copy_from_slice(&data_seed.to_le_bytes());
+            let head = CommitId::new(head_bytes);
+            let commit = LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta);
+            let sealed = Signed::seal::<Sendable, _>(signer, commit).await;
+            let verified = sealed
+                .into_signed()
+                .try_verify()
+                .expect("freshly sealed commit verifies");
+            VerifiedMeta::new(verified, blob).expect("blob matches commit meta")
+        }
+
+        /// The set of commit identities currently stored under `sed_id`.
+        async fn loaded_ids(store: &MemoryStorage, sed_id: SedimentreeId) -> Set<CommitId> {
+            Storage::<Sendable>::load_loose_commits(store, sed_id)
+                .await
+                .expect("load")
+                .iter()
+                .map(|v| v.payload().head())
+                .collect()
+        }
+
+        fn runtime() -> tokio::runtime::Runtime {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("current-thread runtime")
+        }
+
+        /// Roundtrip + grouping: after saving a batch of commits one-by-one,
+        /// loading each document returns exactly the commits stored under it —
+        /// no loss, no leakage between documents that hash to the same or
+        /// different shards.
+        #[test]
+        fn prop_save_load_roundtrip_groups_by_document() {
+            let rt = runtime();
+            let signer = MemorySigner::from_bytes(&[7u8; 32]);
+
+            bolero::check!()
+                .with_arbitrary::<vec::Vec<CommitSpec>>()
+                .for_each(|specs| {
+                    rt.block_on(async {
+                        let store = MemoryStorage::new();
+
+                        // Expected: per-document set of commit identities. A
+                        // document accumulates the distinct `data_seed`s saved
+                        // under it (content-addressing dedups equal commits).
+                        let mut expected: BTreeMap<SedimentreeId, Set<CommitId>> = BTreeMap::new();
+                        for spec in specs {
+                            let sed_id = sed_id_from(spec.id_seed);
+                            let commit = make_commit(&signer, sed_id, spec.data_seed).await;
+                            let head = commit.payload().head();
+                            Storage::<Sendable>::save_loose_commit(&store, sed_id, commit)
+                                .await
+                                .expect("save");
+                            expected.entry(sed_id).or_default().insert(head);
+                        }
+
+                        for (sed_id, want) in &expected {
+                            assert_eq!(
+                                &loaded_ids(&store, *sed_id).await,
+                                want,
+                                "loaded commits for {sed_id:?} must equal what was stored"
+                            );
+                        }
+                    });
+                });
+        }
+
+        /// Cross-document isolation: a commit stored under document A is never
+        /// visible under a distinct document B, even when A and B land in the
+        /// same shard.
+        #[test]
+        fn prop_documents_are_isolated() {
+            let rt = runtime();
+            let signer = MemorySigner::from_bytes(&[9u8; 32]);
+
+            bolero::check!()
+                .with_arbitrary::<(u16, u16, u16)>()
+                .for_each(|(a_seed, b_seed, data_seed)| {
+                    if a_seed == b_seed {
+                        return;
+                    }
+
+                    rt.block_on(async {
+                        let store = MemoryStorage::new();
+                        let a = sed_id_from(*a_seed);
+                        let b = sed_id_from(*b_seed);
+
+                        let commit = make_commit(&signer, a, *data_seed).await;
+                        Storage::<Sendable>::save_loose_commit(&store, a, commit)
+                            .await
+                            .expect("save");
+
+                        assert!(
+                            loaded_ids(&store, b).await.is_empty(),
+                            "document {b:?} must not see commits saved under {a:?}"
+                        );
+                    });
+                });
+        }
+
+        /// Oracle: `save_batch` and a sequence of `save_loose_commit` calls
+        /// produce the same observable per-document load state. This pins the
+        /// single-lock batch path to the per-item path it optimizes.
+        #[test]
+        fn prop_save_batch_matches_sequential_saves() {
+            let rt = runtime();
+            let signer = MemorySigner::from_bytes(&[11u8; 32]);
+
+            bolero::check!()
+                .with_arbitrary::<(u16, vec::Vec<u16>)>()
+                .for_each(|(id_seed, data_seeds)| {
+                    rt.block_on(async {
+                        let sed_id = sed_id_from(*id_seed);
+
+                        let sequential = MemoryStorage::new();
+                        for &data_seed in data_seeds {
+                            let commit = make_commit(&signer, sed_id, data_seed).await;
+                            Storage::<Sendable>::save_loose_commit(&sequential, sed_id, commit)
+                                .await
+                                .expect("save");
+                        }
+
+                        let batched = MemoryStorage::new();
+                        let mut commits = vec::Vec::new();
+                        for &data_seed in data_seeds {
+                            commits.push(make_commit(&signer, sed_id, data_seed).await);
+                        }
+                        Storage::<Sendable>::save_batch(&batched, sed_id, commits, vec::Vec::new())
+                            .await
+                            .expect("batch");
+
+                        assert_eq!(
+                            loaded_ids(&sequential, sed_id).await,
+                            loaded_ids(&batched, sed_id).await,
+                            "save_batch must agree with sequential saves for {sed_id:?}"
+                        );
+                    });
+                });
+        }
+
+        /// CAS idempotence: saving the same content-addressed commit twice
+        /// leaves exactly one entry.
+        #[test]
+        fn prop_duplicate_save_is_idempotent() {
+            let rt = runtime();
+            let signer = MemorySigner::from_bytes(&[13u8; 32]);
+
+            bolero::check!()
+                .with_arbitrary::<(u16, u16)>()
+                .for_each(|(id_seed, data_seed)| {
+                    rt.block_on(async {
+                        let store = MemoryStorage::new();
+                        let sed_id = sed_id_from(*id_seed);
+
+                        for _ in 0..2 {
+                            let commit = make_commit(&signer, sed_id, *data_seed).await;
+                            Storage::<Sendable>::save_loose_commit(&store, sed_id, commit)
+                                .await
+                                .expect("save");
+                        }
+
+                        assert_eq!(
+                            loaded_ids(&store, sed_id).await.len(),
+                            1,
+                            "saving identical commit twice must not duplicate"
+                        );
+                    });
+                });
+        }
+    }
 }

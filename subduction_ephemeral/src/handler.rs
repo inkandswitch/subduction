@@ -236,7 +236,8 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
                 .collect()
         };
 
-        // Fan out concurrently to avoid HOL blocking
+        // Fan out concurrently so one backpressured peer can't head-of-line
+        // block delivery to the others.
         let msg_ref = &msg;
         let mut sends: FuturesUnordered<_> = targets
             .iter()

@@ -589,13 +589,12 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
     Ok(())
 }
 
-/// Regression: `full_sync_with_peer` must sync documents that have been evicted
-/// from the resident (LRU) cache, not just the ones currently in RAM.
+/// `full_sync_with_peer` must sync documents that have been evicted from the
+/// resident (LRU) cache, not just the ones currently in RAM.
 ///
-/// A single-peer full sync must enumerate from storage (complete across
-/// evictions) and push every document to Bob. Before the fix,
-/// `full_sync_with_peer` enumerated `self.sedimentrees.into_keys()` (resident
-/// only) and silently skipped cold documents.
+/// A single-peer full sync enumerates from storage (complete across evictions)
+/// and pushes every document to Bob, including cold documents that are durable
+/// but no longer resident.
 ///
 /// To make the cold-tree condition deterministic regardless of shard/hash
 /// distribution, the target documents are *explicitly* evicted from Alice's
@@ -638,8 +637,8 @@ async fn full_sync_with_peer_includes_evicted_documents() -> TestResult {
     }
 
     // Deterministically evict the first `EVICT_BELOW` documents from the
-    // resident cache (they stay in storage). This is the cold-tree condition
-    // the resident-only bug would skip.
+    // resident cache (they stay in storage), creating the cold-tree condition
+    // a resident-only enumeration would skip.
     for sed_id in &doc_ids[..EVICT_BELOW as usize] {
         alice.sedimentrees().remove(sed_id).await;
         assert!(

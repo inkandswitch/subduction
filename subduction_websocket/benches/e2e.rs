@@ -421,8 +421,8 @@ type SyncWithPeerResult<S> = Result<
 >;
 
 /// Assert a single-document, single-peer [`sync_with_peer`] succeeded with no
-/// call errors. This is the path the concurrent bench exercises (the verb
-/// production actually uses per document) rather than `full_sync_with_all_peers`.
+/// call errors. This is the path the concurrent bench exercises (the per-document
+/// verb production uses) rather than `full_sync_with_all_peers`.
 fn assert_sync<S>(result: SyncWithPeerResult<S>)
 where
     S: subduction_core::storage::traits::Storage<Sendable> + std::fmt::Debug,
@@ -835,7 +835,7 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                         rt.block_on(async {
                             // Each client syncs the shared document with the
                             // server via `sync_with_peer` — the per-document
-                            // verb production actually uses.
+                            // verb production uses.
                             let mut handles = Vec::new();
                             for client in &clients {
                                 let c = client.inner();
@@ -867,9 +867,9 @@ fn bench_concurrent_clients(c: &mut Criterion) {
 }
 
 /// [`bench_concurrent_clients`] against the production [`FsStorage`] backend
-/// instead of `MemoryStorage`. Lets us confirm whether the same-document
+/// instead of `MemoryStorage`. Confirms whether the same-document
 /// read-contention that `MemoryStorage` can exhibit also affects the on-disk
-/// store the server actually uses.
+/// store the server uses.
 fn bench_concurrent_clients_fs(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("sync/concurrent_clients_fs");

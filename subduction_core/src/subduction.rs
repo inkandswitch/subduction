@@ -3386,9 +3386,8 @@ where
             );
         }
 
-        // Drain completed normally; every tracked task has finished, so disarm.
-        drop(guard);
-
+        // `guard` drops here with every tracked task already finished, so it
+        // aborts nothing; it only fires if this future is dropped mid-drain.
         Ok(())
     }
 
@@ -3436,9 +3435,8 @@ where
 
         // Shared results channel. Each spawned per-document task reports its
         // outcome here; the channel is the join mechanism (`Spawn` discards task
-        // output). Unbounded so the fan-out concurrency level is unbounded (one
-        // in-flight task per document), matching the single-task
-        // `FuturesUnordered` fan-out it replaces.
+        // output). Unbounded so the fan-out concurrency level is unbounded: one
+        // in-flight task per document.
         let (tx, rx) =
             async_channel::unbounded::<DocSyncResult<Async, Store, Conn, Hdl::Message>>();
 
@@ -3499,10 +3497,8 @@ where
             );
         }
 
-        // The drain completed normally, so every tracked task has finished;
-        // disarm the guard (aborting finished tasks would be a no-op anyway).
-        drop(guard);
-
+        // `guard` drops here with every tracked task already finished, so it
+        // aborts nothing; it only fires if this future is dropped mid-drain.
         (had_success, stats, call_errs, io_errs)
     }
 }
