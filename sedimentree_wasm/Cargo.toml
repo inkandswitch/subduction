@@ -43,15 +43,7 @@ features = []
 wasm-bindgen-test = "0.3"
 
 [features]
-default = ["wasm-log-control"]
-# Emit the JS-callable runtime log controls (`setSubductionLogLevel`,
-# `set_subduction_logger`, `clear_subduction_logger`). Default-on so the
-# standalone `@automerge/sedimentree` bundle exports them. The umbrella
-# (`automerge_subduction_wasm`) disables it via `default-features = false` to
-# avoid a duplicate `#[wasm_bindgen]` export collision — there the controls are
-# inherited from `subduction_wasm`. Does NOT affect console logging or the
-# startup level, which are installed unconditionally in the `start` function.
-wasm-log-control = []
+default = []
 # IndexedDB storage backend
 idb = [
   "web-sys/DomException",

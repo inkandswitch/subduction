@@ -19,32 +19,14 @@ pub fn start_subduction_wasm() {
     subduction_wasm_bootstrap::init_rich_from_env();
 }
 
-/// Set the log level at runtime. Valid: `"trace"`, `"debug"`, `"info"`,
-/// `"warn"`, `"error"`, `"off"`. Persisted to `localStorage`.
-///
-/// # Errors
-///
-/// Returns an error if the level string is invalid or tracing is uninitialized.
+// The Wasm log controls (`setSubductionLogLevel`, `set_subduction_logger`,
+// `clear_subduction_logger`) are defined once in `sedimentree_wasm` (the lowest
+// cdylib in the dependency chain) and inherited here via `pub use`, so this
+// bundle exports them without a duplicate `#[wasm_bindgen]` definition.
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen(js_name = setSubductionLogLevel)]
-pub fn set_subduction_log_level(level: &str) -> Result<(), wasm_bindgen::JsValue> {
-    subduction_wasm_bootstrap::set_log_level(level).map_err(|e| wasm_bindgen::JsValue::from_str(&e))
-}
-
-/// Forward every tracing event to a JavaScript callback
-/// `(level, target, message, fields)`.
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn set_subduction_logger(callback: js_sys::Function) {
-    subduction_wasm_bootstrap::set_subduction_logger(callback);
-}
-
-/// Clear the JavaScript logger callback registered via [`set_subduction_logger`].
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn clear_subduction_logger() {
-    subduction_wasm_bootstrap::clear_subduction_logger();
-}
+pub use sedimentree_wasm::{
+    clear_subduction_logger, set_subduction_log_level, set_subduction_logger,
+};
 
 pub mod batch_input;
 pub mod clock;

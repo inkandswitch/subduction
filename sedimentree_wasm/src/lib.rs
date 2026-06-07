@@ -23,36 +23,31 @@ pub fn start_sedimentree_wasm() {
 /// Set the log level at runtime. Valid: `"trace"`, `"debug"`, `"info"`,
 /// `"warn"`, `"error"`, `"off"`. Persisted to `localStorage`.
 ///
-/// Gated by the `wasm-log-control` feature (default-on). The standalone
-/// `@automerge/sedimentree` bundle builds with default features, so it exports
-/// these. The umbrella `automerge_subduction_wasm` depends on this crate with
-/// `default-features = false`, so the identical export is *not* emitted here
-/// (it is inherited from `subduction_wasm`'s re-export instead) — which avoids
-/// a duplicate `#[wasm_bindgen]` symbol at link time. Console logging and the
-/// env/`localStorage` startup level are unaffected: those come from the
-/// always-installed subscriber in `start_sedimentree_wasm`.
+/// This crate is the single definition site for the workspace's Wasm log
+/// controls. Crates that depend on it (`subduction_wasm`, and transitively the
+/// umbrella) re-export these via `pub use` rather than redefining them, so the
+/// JS export appears exactly once per bundle with no duplicate-symbol clash.
 ///
 /// # Errors
 ///
 /// Returns an error if the level string is invalid or tracing is uninitialized.
-#[cfg(all(target_arch = "wasm32", feature = "wasm-log-control"))]
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = setSubductionLogLevel)]
 pub fn set_subduction_log_level(level: &str) -> Result<(), wasm_bindgen::JsValue> {
     subduction_wasm_bootstrap::set_log_level(level).map_err(|e| wasm_bindgen::JsValue::from_str(&e))
 }
 
 /// Forward every tracing event to a JavaScript callback
-/// `(level, target, message, fields)`. Gated by `wasm-log-control` (see
-/// [`set_subduction_log_level`]).
-#[cfg(all(target_arch = "wasm32", feature = "wasm-log-control"))]
+/// `(level, target, message, fields)`. See [`set_subduction_log_level`].
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn set_subduction_logger(callback: js_sys::Function) {
     subduction_wasm_bootstrap::set_subduction_logger(callback);
 }
 
 /// Clear the JavaScript logger callback registered via [`set_subduction_logger`].
-/// Gated by `wasm-log-control` (see [`set_subduction_log_level`]).
-#[cfg(all(target_arch = "wasm32", feature = "wasm-log-control"))]
+/// See [`set_subduction_log_level`].
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn clear_subduction_logger() {
     subduction_wasm_bootstrap::clear_subduction_logger();
