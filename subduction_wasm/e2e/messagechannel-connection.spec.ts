@@ -76,8 +76,8 @@ test.describe("MessageChannel Connection Tests", () => {
           AuthenticatedTransport.accept(makeMessagePortTransport(channel.port2), signerB),
         ]);
 
-        const syncerA = new Subduction(signerA, new MemoryStorage());
-        const syncerB = new Subduction(signerB, new MemoryStorage());
+        const syncerA = new Subduction({ signer: signerA, storage: new MemoryStorage() });
+        const syncerB = new Subduction({ signer: signerB, storage: new MemoryStorage() });
 
         const [isNewA, isNewB] = await Promise.all([
           syncerA.addConnection(authA),

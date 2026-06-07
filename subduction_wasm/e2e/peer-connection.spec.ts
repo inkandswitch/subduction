@@ -177,7 +177,7 @@ test.describe("Peer Connection Tests", () => {
       try {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const url = new URL(wsUrl);
         const authenticated = await SubductionWebSocket.tryDiscover(
@@ -219,7 +219,7 @@ test.describe("Peer Connection Tests", () => {
       try {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const url = new URL(wsUrl);
         const peerId = await syncer.connectDiscover(
@@ -258,7 +258,7 @@ test.describe("Peer Connection Tests", () => {
       try {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const url = new URL(wsUrl);
         await syncer.connectDiscover(
@@ -299,7 +299,7 @@ test.describe("Peer Connection Tests", () => {
       try {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const url = new URL(wsUrl);
         await syncer.connectDiscover(
@@ -337,8 +337,8 @@ test.describe("Peer Connection Tests", () => {
         const signer1 = await WebCryptoSigner.setup();
         const signer2 = await WebCryptoSigner.setup();
 
-        const syncer1 = new Subduction(signer1, new MemoryStorage());
-        const syncer2 = new Subduction(signer2, new MemoryStorage());
+        const syncer1 = new Subduction({ signer: signer1, storage: new MemoryStorage() });
+        const syncer2 = new Subduction({ signer: signer2, storage: new MemoryStorage() });
 
         const url = new URL(wsUrl);
         const serviceName = wsUrl.replace("ws://", "");
@@ -391,7 +391,7 @@ test.describe("Known Peer ID Connection", () => {
 
         // Now connect with a different signer using the known peer ID
         const signer2 = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer2, new MemoryStorage());
+        const syncer = new Subduction({ signer: signer2, storage: new MemoryStorage() });
 
         const knownAuth = await SubductionWebSocket.tryConnect(url, signer2, serverPeerId);
         const isNew = await syncer.addConnection(knownAuth.toTransport());
@@ -429,7 +429,7 @@ test.describe("onDisconnect Callback", () => {
       try {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
         const url = new URL(wsUrl);
         const serviceName = wsUrl.replace("ws://", "");
 

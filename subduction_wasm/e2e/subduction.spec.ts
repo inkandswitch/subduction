@@ -14,7 +14,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
         return {
           hasSyncer: !!syncer,
           hasStorage: !!storage,
@@ -31,10 +31,10 @@ test.describe("Subduction", () => {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
 
-        const syncer1 = new Subduction(signer, storage);
+        const syncer1 = new Subduction({ signer, storage });
         const ids1 = await syncer1.sedimentreeIds();
 
-        const syncer2 = new Subduction(signer, storage);
+        const syncer2 = new Subduction({ signer, storage });
         const ids2 = await syncer2.sedimentreeIds();
 
         return {
@@ -73,7 +73,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const ids = await syncer.sedimentreeIds();
 
@@ -114,7 +114,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const peerIds = await syncer.getConnectedPeerIds();
 
@@ -134,7 +134,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         await syncer.disconnectAll();
         const peerIds = await syncer.getConnectedPeerIds();
@@ -156,7 +156,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const testId = new Uint8Array(32);
         testId[0] = 1;
@@ -178,7 +178,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const testId = new Uint8Array(32);
         testId[0] = 1;
@@ -200,7 +200,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, Digest, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const testDigest = new Uint8Array(32);
@@ -223,7 +223,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, Digest, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const testDigest = new Uint8Array(32);
@@ -252,8 +252,8 @@ test.describe("Subduction", () => {
         const storage1 = new MemoryStorage();
         const storage2 = new MemoryStorage();
 
-        const syncer1 = new Subduction(signer1, storage1);
-        const syncer2 = new Subduction(signer2, storage2);
+        const syncer1 = new Subduction({ signer: signer1, storage: storage1 });
+        const syncer2 = new Subduction({ signer: signer2, storage: storage2 });
 
         const ids1 = await syncer1.sedimentreeIds();
         const ids2 = await syncer2.sedimentreeIds();
@@ -488,7 +488,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, PeerId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const peerBytes = new Uint8Array(32);
         peerBytes[0] = 1;
@@ -510,7 +510,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(1));
         const blob = new Uint8Array([10, 20, 30, 40, 50]);
@@ -536,7 +536,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(2));
         const blobData = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -565,7 +565,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(3));
 
@@ -598,7 +598,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(4));
 
@@ -631,7 +631,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(5));
         const head = new CommitId(new Uint8Array(32).fill(1));
@@ -655,7 +655,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId1 = SedimentreeId.fromBytes(new Uint8Array(32).fill(10));
         const sedId2 = SedimentreeId.fromBytes(new Uint8Array(32).fill(20));
@@ -683,7 +683,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         return {
           hasStorage: syncer.storage !== undefined && syncer.storage !== null,
@@ -699,7 +699,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(50));
         const blobData = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]);
@@ -732,7 +732,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(51));
         const blob1 = new Uint8Array([1, 2, 3]);
@@ -766,7 +766,7 @@ test.describe("Subduction", () => {
         const storage = new MemoryStorage();
 
         // Create instance, add data
-        const syncer1 = new Subduction(signer, storage);
+        const syncer1 = new Subduction({ signer, storage });
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(60));
         const head = new CommitId(new Uint8Array(32).fill(1));
         await syncer1.addCommit(sedId, head, [], new Uint8Array([11, 22, 33]));
@@ -776,7 +776,7 @@ test.describe("Subduction", () => {
         const blobMetaSizeBefore = commitsBefore ? Number(commitsBefore[0].blobMeta.sizeBytes) : 0;
 
         // A new instance over the same storage hydrates on demand.
-        const syncer2 = new Subduction(signer, storage);
+        const syncer2 = new Subduction({ signer, storage });
         const idsAfter = await syncer2.sedimentreeIds();
         const commitsAfter = await syncer2.getCommits(sedId);
         const commitCountAfter = commitsAfter ? commitsAfter.length : 0;
@@ -807,7 +807,7 @@ test.describe("Subduction", () => {
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
 
-        const syncer1 = new Subduction(signer, storage);
+        const syncer1 = new Subduction({ signer, storage });
 
         // Create 3 sedimentrees with 2 commits each
         const ids = [
@@ -828,7 +828,7 @@ test.describe("Subduction", () => {
         const idsBefore = await syncer1.sedimentreeIds();
 
         // A new instance over the same storage hydrates on demand.
-        const syncer2 = new Subduction(signer, storage);
+        const syncer2 = new Subduction({ signer, storage });
         const idsAfter = await syncer2.sedimentreeIds();
 
         // Verify all 3 sedimentrees loaded with correct commit counts
@@ -858,7 +858,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(70));
 
@@ -890,7 +890,7 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(80));
         const blobData = new Uint8Array([99, 98, 97]);
@@ -928,7 +928,7 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage, Digest, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(signer, storage);
+        const syncer = new Subduction({ signer, storage });
 
         const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const digest1 = new Digest(new Uint8Array(32));

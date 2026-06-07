@@ -19,13 +19,31 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;
 
+#[wasm_bindgen(typescript_custom_section)]
+const TS_SIGNER: &str = r#"
+/**
+ * Cryptographic signer interface.
+ *
+ * Allows JavaScript code to provide signing implementations (e.g. hardware
+ * keys or remote signing services).
+ */
+export interface Signer {
+    /** Sign a message; returns the 64-byte Ed25519 signature (sync or async). */
+    sign(message: Uint8Array): Uint8Array | Promise<Uint8Array>;
+    /** The 32-byte Ed25519 verifying (public) key. */
+    verifyingKey(): Uint8Array;
+}
+"#;
+
 #[wasm_bindgen]
 extern "C" {
     /// Cryptographic signer interface.
     ///
     /// This allows JavaScript code to provide signing implementations
     /// (e.g., hardware keys or remote signing services).
-    #[wasm_bindgen(js_name = Signer)]
+    ///
+    /// Must match the `Signer` TypeScript interface emitted by this module.
+    #[wasm_bindgen(js_name = Signer, typescript_type = "Signer")]
     pub type JsSigner;
 
     /// Sign a message and return the 64-byte Ed25519 signature.

@@ -38,6 +38,30 @@ impl From<WasmHydrationError> for JsValue {
     }
 }
 
+/// Error constructing a `Subduction` node from a `SubductionOptions` object.
+///
+/// Raised when a required field is missing. The TypeScript interface marks
+/// these fields as required, so this guards JavaScript callers (or any
+/// dynamically-built options object) that bypass the type checker.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
+pub enum WasmInitError {
+    /// The required `signer` field was missing (`undefined` or `null`).
+    #[error("`signer` is required in the Subduction options")]
+    MissingSigner,
+
+    /// The required `storage` field was missing (`undefined` or `null`).
+    #[error("`storage` is required in the Subduction options")]
+    MissingStorage,
+}
+
+impl From<WasmInitError> for JsValue {
+    fn from(err: WasmInitError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("InitError");
+        js_err.into()
+    }
+}
+
 /// A Wasm wrapper around the [`IoError`] type.
 ///
 /// This includes errors related to I/O operations,
