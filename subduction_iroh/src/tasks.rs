@@ -138,7 +138,7 @@ impl StreamReadErrorKind {
 /// Returns an error if reading from the stream or dispatching fails.
 pub async fn listener_task(conn: IrohTransport, mut recv: RecvStream) -> Result<(), RunError> {
     let peer_id = conn.quic_connection().remote_id();
-    tracing::info!("starting iroh listener task for peer {peer_id}");
+    tracing::info!(peer = %peer_id, "starting iroh listener task");
 
     let outcome = read_loop(&conn, &mut recv, peer_id).await;
 
@@ -161,7 +161,7 @@ pub async fn listener_task(conn: IrohTransport, mut recv: RecvStream) -> Result<
     };
     conn.close_with_code(code, reason);
 
-    tracing::info!("iroh listener task for peer {peer_id}: exiting");
+    tracing::info!(peer = %peer_id, "iroh listener task exiting");
     outcome
 }
 
@@ -178,23 +178,25 @@ async fn read_loop(
             Err(e) => {
                 match StreamReadErrorKind::classify(&e) {
                     StreamReadErrorKind::ExpectedDisconnect => {
-                        tracing::debug!("iroh connection closed for peer {peer_id}: {e}");
+                        tracing::debug!(peer = %peer_id, error = %e, "iroh connection closed");
                         return Ok(());
                     }
                     StreamReadErrorKind::OverCapacity => {
                         tracing::warn!(
-                            "peer {peer_id} sent an over-capacity frame; closing connection: {e}"
+                            peer = %peer_id,
+                            error = %e,
+                            "peer sent an over-capacity frame; closing connection"
                         );
                     }
                     StreamReadErrorKind::Fatal => {
-                        tracing::error!("iroh read error for peer {peer_id}: {e}");
+                        tracing::error!(peer = %peer_id, error = %e, "iroh read error");
                     }
                 }
                 return Err(e.into());
             }
         };
 
-        tracing::debug!("received {} inbound bytes from peer {peer_id}", bytes.len());
+        tracing::debug!(peer = %peer_id, bytes = bytes.len(), "received inbound bytes");
 
         conn.push_inbound(bytes)
             .await

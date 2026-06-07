@@ -96,7 +96,7 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
     /// dropped rather than forwarded unfiltered.
     pub fn notify(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         let Some(mut counters) = self.recv_counter.try_lock() else {
-            tracing::debug!("recv_counter contended, dropping heads update for peer {peer}");
+            tracing::debug!(peer = %peer, "recv_counter contended, dropping heads update");
             return;
         };
 

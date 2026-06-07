@@ -78,6 +78,28 @@ in {
         description = "Request timeout in seconds.";
       };
 
+      logFormat = lib.mkOption {
+        type = lib.types.enum ["text" "json"];
+        default = "json";
+        description = ''
+          Log output format (passes `--log-format <fmt>`). `json` emits
+          structured lines with span fields; `text` is human-readable.
+
+          Note: defaults to `json` (differs from the `subduction_cli` binary's
+          own `text` default); the module always passes `--log-format`
+          explicitly, so the effective format is unambiguous.
+        '';
+      };
+
+      logLevel = lib.mkOption {
+        type = lib.types.str;
+        default = "info";
+        description = ''
+          Log level filter, set via the `RUST_LOG` environment variable.
+          Accepts standard `tracing` `EnvFilter` syntax. Defaults to `info`.
+        '';
+      };
+
       maxMessageSize = lib.mkOption {
         type = lib.types.int;
         default = 52428800; # 50 MiB
@@ -234,6 +256,7 @@ in {
       ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
       ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
       ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
+      ++ ["--log-format" cfg.server.logFormat]
       ++ ["--auth" cfg.server.auth]
       ++ lib.optionals (cfg.server.auth == "keyhive") [
         "--keyhive-cache-refresh"
@@ -279,6 +302,7 @@ in {
             Service = {
               Type = "simple";
               ExecStart = lib.escapeShellArgs serverArgs;
+              Environment = ["RUST_LOG=${cfg.server.logLevel}"];
               Restart = "on-failure";
               RestartSec = 5;
             };

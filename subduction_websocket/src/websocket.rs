@@ -1,6 +1,6 @@
 //! # Generic WebSocket transport for Subduction
 
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{
     fmt::Debug,
     future::{Future, IntoFuture},
@@ -243,7 +243,7 @@ impl<T, Async: FutureForm> Transport<Async> for WebSocket<T, Async> {
 
     fn recv_bytes(&self) -> Async::Future<'_, Result<Vec<u8>, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
-        tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
+        tracing::trace!(conn = %self.chan_id, peer = %self.peer_id, "waiting on recv");
 
         Async::from_future(async move {
             let bytes = chan.recv().await.map_err(|_| {
@@ -255,7 +255,7 @@ impl<T, Async: FutureForm> Transport<Async> for WebSocket<T, Async> {
                 RecvError
             })?;
 
-            tracing::debug!("recv: inbound {} bytes", bytes.len());
+            tracing::trace!(bytes = bytes.len(), "recv: inbound");
             Ok(bytes)
         })
     }
@@ -277,7 +277,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         Self,
         impl Future<Output = Result<(), RunError>> + use<T, Async>,
     ) {
-        tracing::info!("new WebSocket connection for peer {peer_id:?} (keepalive: false)");
+        tracing::info!(peer = %peer_id, keepalive = false, "new WebSocket connection");
         Self::new_inner(ws, peer_id)
     }
 
@@ -302,16 +302,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         let sender_task = {
             let ws_sender = ws_sender.clone();
             async move {
-                tracing::info!("starting WebSocket sender task for peer {peer_id:?}");
+                tracing::debug!(peer = %peer_id, "starting WebSocket sender task");
 
                 let mut ws_sender = ws_sender.lock().await;
 
                 while let Ok(msg) = outbound_rx.recv().await {
-                    tracing::debug!("sender task: sending message to WebSocket");
+                    tracing::trace!("sender task: sending message to WebSocket");
                     ws_sender.send(msg).await?;
                 }
 
-                tracing::info!("sender task: outbound channel closed, shutting down");
+                tracing::debug!("sender task: outbound channel closed, shutting down");
                 Ok(())
             }
         };
@@ -361,7 +361,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
     /// If there is an error reading from the WebSocket or processing messages.
     #[allow(clippy::too_many_lines)]
     pub async fn listen(&self) -> Result<(), RunError> {
-        tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
+        tracing::debug!(peer = %self.peer_id, "starting WebSocket listener");
 
         // Outcome to return once the loop ends. Teardown (closing the inbound
         // channel so a parked `recv_bytes` is notified) happens uniformly after
@@ -374,50 +374,52 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                 let Some(ws_msg) = in_chan.next().await else {
                     // Stream ended (EOF). The write half is already gone, so
                     // there is nothing to gracefully close — just tear down.
-                    tracing::debug!(peer_id = ?self.peer_id, "websocket stream ended (EOF)");
+                    tracing::debug!(peer = %self.peer_id, "websocket stream ended (EOF)");
                     break Ok(());
                 };
 
-                tracing::debug!(
-                    "received WebSocket message for peer {} on channel {}",
-                    self.peer_id,
-                    self.chan_id
-                );
+                tracing::trace!(peer = %self.peer_id, conn = %self.chan_id, "received WebSocket message");
 
                 match ws_msg {
                     Ok(tungstenite::Message::Binary(bytes)) => {
                         if let Err(e) = self.inbound_writer.send(bytes.to_vec()).await {
                             tracing::error!(
-                                "failed to send inbound message to channel {}",
-                                self.chan_id,
+                                conn = %self.chan_id,
+                                error = %e,
+                                "failed to forward inbound message to channel"
                             );
                             break Err(RunError::ChanSend(Box::new(e)));
                         }
-
-                        tracing::debug!("forwarded inbound message to channel {}", self.chan_id);
                     }
                     Ok(tungstenite::Message::Text(text)) => {
-                        tracing::warn!("unexpected text message: {}", text);
+                        // Bound the peer-controlled text in the log.
+                        let preview: String = text.chars().take(64).collect();
+                        tracing::warn!(
+                            peer = %self.peer_id,
+                            len = text.len(),
+                            preview = %preview,
+                            "unexpected text message"
+                        );
                     }
                     Ok(tungstenite::Message::Ping(p)) => {
-                        tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received ping");
+                        tracing::trace!(size = p.len(), peer = %self.peer_id, "received ping");
                         // Non-blocking so a saturated outbound queue can't
                         // stall the listener. A dropped pong may cost one
                         // keepalive cycle on the remote side.
                         if let Err(e) = self.outbound_tx.try_send(tungstenite::Message::Pong(p)) {
                             tracing::warn!(
                                 error = ?e,
-                                peer_id = ?self.peer_id,
+                                peer = %self.peer_id,
                                 "dropped pong reply (outbound full or closed)"
                             );
                         }
                     }
                     Ok(tungstenite::Message::Pong(p)) => {
-                        tracing::trace!(size = p.len(), peer_id = ?self.peer_id, "received pong");
+                        tracing::trace!(size = p.len(), peer = %self.peer_id, "received pong");
                         self.pong_received.store(true, Ordering::Relaxed);
                     }
                     Ok(tungstenite::Message::Frame(f)) => {
-                        tracing::warn!("unexpected frame: {:x?}", f);
+                        tracing::warn!(peer = %self.peer_id, frame = ?f, "unexpected frame");
                     }
                     Ok(tungstenite::Message::Close(_)) => {
                         // The peer initiated the close; `tungstenite` has
@@ -425,7 +427,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                         // originate our own (it would be a redundant
                         // double-close). Just stop reading.
                         tracing::info!(
-                            peer_id = ?self.peer_id,
+                            peer = %self.peer_id,
                             "received close message, shutting down listener"
                         );
                         break Ok(());
@@ -436,21 +438,23 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                         let kind = ReadErrorKind::classify(&e);
                         match kind {
                             ReadErrorKind::ExpectedDisconnect => {
-                                tracing::debug!(peer_id = ?self.peer_id, "connection closed: {e}");
+                                tracing::debug!(peer = %self.peer_id, error = %e, "connection closed");
                             }
                             ReadErrorKind::OverCapacity => {
                                 // Peer-induced (they sent a message exceeding
                                 // our cap). Not a server fault — warn, don't
                                 // error.
                                 tracing::warn!(
-                                    peer_id = ?self.peer_id,
-                                    "peer sent an over-capacity message; closing connection: {e}"
+                                    peer = %self.peer_id,
+                                    error = %e,
+                                    "peer sent an over-capacity message; closing connection"
                                 );
                             }
                             ReadErrorKind::Fatal => {
                                 tracing::error!(
-                                    peer_id = ?self.peer_id,
-                                    "error reading from websocket: {e}"
+                                    peer = %self.peer_id,
+                                    error = %e,
+                                    "error reading from websocket"
                                 );
                             }
                         }
@@ -506,7 +510,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
         impl Future<Output = Result<(), RunError>> + use<T, S>,
         KeepAliveTask<Sendable>,
     ) {
-        tracing::info!("new WebSocket connection for peer {peer_id:?} (keepalive: true)");
+        tracing::info!(peer = %peer_id, keepalive = true, "new WebSocket connection");
         let (this, sender_task) = Self::new_inner(ws, peer_id);
 
         let body = keepalive_loop::<S, Sendable>(
@@ -632,16 +636,16 @@ where
         // specific Ping, so a unique payload would just be overhead.
         let ping = tungstenite::Message::Ping(Vec::new().into());
         if outbound_tx.send(ping).await.is_err() {
-            tracing::debug!(?peer_id, "keepalive: outbound closed; exiting");
+            tracing::debug!(peer = %peer_id, "keepalive: outbound closed; exiting");
             return KeepAliveOutcome::ConnectionClosed;
         }
-        tracing::trace!(?peer_id, "keepalive: sent ping");
+        tracing::trace!(peer = %peer_id, "keepalive: sent ping");
 
         sleeper.sleep(config.pong_timeout).await;
 
         if pong_received.load(Ordering::Relaxed) {
             if consecutive_misses > 0 {
-                tracing::debug!(?peer_id, "keepalive: pong recovered after misses");
+                tracing::debug!(peer = %peer_id, "keepalive: pong recovered after misses");
             }
             consecutive_misses = 0;
             continue;
@@ -649,7 +653,7 @@ where
 
         consecutive_misses += 1;
         tracing::warn!(
-            ?peer_id,
+            peer = %peer_id,
             misses = consecutive_misses,
             threshold,
             "keepalive: pong missed"
@@ -657,7 +661,7 @@ where
 
         if consecutive_misses >= threshold {
             tracing::warn!(
-                ?peer_id,
+                peer = %peer_id,
                 misses = consecutive_misses,
                 "keepalive: threshold reached; closing connection"
             );

@@ -131,9 +131,9 @@ impl Transport<Sendable> for IrohTransport {
 
     fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
-            "iroh: sending {} outbound bytes to peer {}",
-            bytes.len(),
-            self.inner.peer_id
+            bytes = bytes.len(),
+            peer = %self.inner.peer_id,
+            "iroh: sending outbound bytes"
         );
 
         let data = bytes.to_vec();
@@ -149,8 +149,8 @@ impl Transport<Sendable> for IrohTransport {
         let chan = self.inner.inbound_reader.clone();
         tracing::debug!(
             chan_id = self.inner.chan_id,
-            "waiting on recv {:?}",
-            self.inner.peer_id
+            peer = %self.inner.peer_id,
+            "waiting on recv"
         );
 
         async move {
@@ -162,7 +162,7 @@ impl Transport<Sendable> for IrohTransport {
                 RecvError
             })?;
 
-            tracing::debug!("recv: inbound {} bytes", bytes.len());
+            tracing::debug!(bytes = bytes.len(), "recv: inbound bytes");
             Ok(bytes)
         }
         .boxed()

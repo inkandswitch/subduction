@@ -261,14 +261,14 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
 /// Run the server with keyhive-based access control and sync enabled.
 async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<()> {
-    tracing::warn!("Subduction server v{}", env!("CARGO_PKG_VERSION"));
+    tracing::warn!(version = env!("CARGO_PKG_VERSION"), "Subduction server");
 
     let common = SetupCommon::init(&args, &token).await?;
 
     // Initialize the full keyhive stack: storage, identity, protocol, ingest.
     let keyhive_signer = key::keyhive_signer_from_seed(&common.seed);
     let keyhive_root = common.data_dir.join(".keyhive");
-    tracing::info!("Initializing keyhive storage at {:?}", keyhive_root);
+    tracing::info!(root = ?keyhive_root, "Initializing keyhive storage");
     let fs_keyhive_storage = FsKeyhiveStorage::new(keyhive_root)?;
 
     let (keyhive_instance, kh_peer_id, contact_card) = init_sendable_keyhive(keyhive_signer)
@@ -285,7 +285,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
     ));
 
     if let Err(e) = keyhive_protocol.ingest_from_storage().await {
-        tracing::warn!("keyhive ingest_from_storage failed: {e}");
+        tracing::warn!(error = %e, "keyhive ingest_from_storage failed");
     }
 
     // Keyhive-backed authorization.
@@ -330,7 +330,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
 /// Run the server with keyhive disabled: an allow-all storage policy and no
 /// keyhive storage, identity, protocol, ingest, refresh, or peer registration.
 async fn run_open(args: ServerArgs, token: CancellationToken) -> Result<()> {
-    tracing::warn!("Subduction server v{}", env!("CARGO_PKG_VERSION"));
+    tracing::warn!(version = env!("CARGO_PKG_VERSION"), "Subduction server");
     tracing::info!("Keyhive disabled (--auth=open); using open (allow-all) storage policy");
 
     let common = SetupCommon::init(&args, &token).await?;
@@ -378,7 +378,7 @@ impl SetupCommon {
             metrics::start_metrics_server(metrics_addr, metrics_handle).await?;
         }
 
-        tracing::info!("Initializing filesystem storage at {:?}", data_dir);
+        tracing::info!(dir = ?data_dir, "Initializing filesystem storage");
         let fs_storage = FsStorage::new(data_dir.clone())?;
         let storage = MetricsStorage::new(fs_storage);
 
@@ -397,7 +397,7 @@ impl SetupCommon {
                     tokio::select! {
                         _ = interval.tick() => {
                             if let Err(e) = metrics_storage.refresh_metrics().await {
-                                tracing::warn!("Failed to refresh storage metrics: {e}");
+                                tracing::warn!(error = %e, "Failed to refresh storage metrics");
                             }
                         }
                         () = metrics_token.cancelled() => {
@@ -474,7 +474,10 @@ where
         .timer(FuturesTimerTimeout);
 
     let builder = if let Some(max) = args.max_resident_trees {
-        tracing::info!("bounding in-memory sedimentree cache to {max} resident trees");
+        tracing::info!(
+            max_resident_trees = max,
+            "bounding in-memory sedimentree cache"
+        );
         builder.max_resident_trees(max)
     } else {
         builder
@@ -539,20 +542,22 @@ where
         eyre::bail!("At least one transport must be enabled (--websocket, --longpoll, or --iroh)");
     }
 
-    let transports: Vec<&str> = [
-        ws_enabled.then_some("WebSocket"),
-        lp_enabled.then_some("HTTP long-poll"),
-        iroh_enabled.then_some("Iroh (QUIC)"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
+    // Build the transport list inside the macro so it is only computed when
+    // the `info` level is enabled.
     tracing::info!(
-        "Server started on {assigned_address} ({})",
-        transports.join(" + ")
+        addr = %assigned_address,
+        transports = %[
+            ws_enabled.then_some("WebSocket"),
+            lp_enabled.then_some("HTTP long-poll"),
+            iroh_enabled.then_some("Iroh (QUIC)"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<&str>>()
+        .join(" + "),
+        "Server started"
     );
-    tracing::info!("Peer ID: {peer_id}");
+    tracing::info!(peer = %peer_id, "Peer ID");
 
     // Spawn background tasks
     let actor_cancel = token.clone();
@@ -625,9 +630,9 @@ where
         let iroh_addr = iroh_endpoint.addr();
         iroh_node_id = Some(iroh_addr.id.to_string());
         iroh_addrs = iroh_addr.ip_addrs().copied().collect();
-        tracing::info!("Iroh endpoint bound: node ID = {}", iroh_addr.id);
+        tracing::info!(node_id = %iroh_addr.id, "Iroh endpoint bound");
         for addr in &iroh_addr.addrs {
-            tracing::info!("  transport address: {addr:?}");
+            tracing::info!(addr = ?addr, "transport address");
         }
 
         // Spawn iroh accept loop
@@ -669,15 +674,15 @@ where
                                             iroh_ephemeral.subscribe_peer(remote).await;
                                             notify_peer_connect(iroh_keyhive_proto.as_ref(), auth_for_keyhive).await;
                                             iroh_subduction.full_sync_with_peer(&remote, true, CallTimeout::Default).await;
-                                            tracing::info!("iroh: added peer {remote}");
+                                            tracing::info!(peer = %remote, "iroh: added peer");
                                         }
                                         Err(e) => {
-                                            tracing::error!("failed to add iroh connection: {e}");
+                                            tracing::error!(error = %e, "failed to add iroh connection");
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::warn!("iroh accept error: {e}");
+                                    tracing::warn!(error = %e, "iroh accept error");
                                 }
                             }
                         }
@@ -691,7 +696,7 @@ where
             let node_id: iroh::PublicKey = match iroh_peer_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::error!("invalid iroh peer node ID '{iroh_peer_str}': {e}");
+                    tracing::error!(node_id = %iroh_peer_str, error = %e, "invalid iroh peer node ID");
                     continue;
                 }
             };
@@ -723,11 +728,13 @@ where
                 {
                     Ok(remote_id) => {
                         tracing::info!(
-                            "iroh: connected to peer {node_id} (subduction ID: {remote_id})"
+                            node_id = %node_id,
+                            peer = %remote_id,
+                            "iroh: connected to peer"
                         );
                     }
                     Err(e) => {
-                        tracing::error!("iroh: failed to connect to peer {node_id}: {e}");
+                        tracing::error!(node_id = %node_id, error = %e, "iroh: failed to connect to peer");
                     }
                 }
             });
@@ -767,10 +774,10 @@ where
                             tracing::debug!("iroh: background full_sync completed");
                         }
                         for e in &call_errs {
-                            tracing::warn!("iroh: background sync call error: {e:?}");
+                            tracing::warn!(error = ?e, "iroh: background sync call error");
                         }
                         for e in &io_errs {
-                            tracing::warn!("iroh: background sync io error: {e:?}");
+                            tracing::warn!(error = ?e, "iroh: background sync io error");
                         }
                     }
                 }
@@ -787,7 +794,7 @@ where
         let uri: Uri = match peer_url.parse() {
             Ok(uri) => uri,
             Err(e) => {
-                tracing::error!("Invalid peer URL '{peer_url}': {e}");
+                tracing::error!(url = %peer_url, error = %e, "Invalid peer URL");
                 continue;
             }
         };
@@ -818,10 +825,10 @@ where
             .await
             {
                 Ok(remote_id) => {
-                    tracing::info!("Connected to peer at {uri} (peer ID: {remote_id})");
+                    tracing::info!(uri = %uri, peer = %remote_id, "Connected to peer");
                 }
                 Err(e) => {
-                    tracing::error!("Failed to connect to peer at {uri}: {e}");
+                    tracing::error!(uri = %uri, error = %e, "Failed to connect to peer");
                 }
             }
         });
@@ -845,7 +852,7 @@ where
         );
         std::fs::write(ready_path, content)
             .map_err(|e| eyre::eyre!("failed to write ready file: {e}"))?;
-        tracing::info!("Ready file written to {}", ready_path.display());
+        tracing::info!(path = %ready_path.display(), "Ready file written");
     }
 
     // Wait for cancellation signal
@@ -888,7 +895,7 @@ async fn accept_loop<H: CliWireHandler>(
             res = tcp_listener.accept() => {
                 match res {
                     Ok((tcp, addr)) => {
-                        tracing::info!("new TCP connection from {addr}");
+                        tracing::info!(addr = %addr, "new TCP connection");
 
                         let task_subduction = subduction.clone();
                         let task_ephemeral = ephemeral.clone();
@@ -905,7 +912,7 @@ async fn accept_loop<H: CliWireHandler>(
                             match tcp.peek(&mut peek_buf).await {
                                 Ok(n) if n >= 3 => {}
                                 Ok(_) | Err(_) => {
-                                    tracing::warn!("failed to peek TCP stream from {addr}");
+                                    tracing::warn!(addr = %addr, "failed to peek TCP stream");
                                     return;
                                 }
                             }
@@ -939,18 +946,19 @@ async fn accept_loop<H: CliWireHandler>(
                                 )
                                 .await;
                             } else if peek_buf.starts_with(b"GET") {
-                                tracing::warn!("WebSocket connection from {addr} rejected (transport disabled)");
+                                tracing::warn!(addr = %addr, "WebSocket connection rejected (transport disabled)");
                             } else if is_http {
-                                tracing::warn!("HTTP long-poll connection from {addr} rejected (transport disabled)");
+                                tracing::warn!(addr = %addr, "HTTP long-poll connection rejected (transport disabled)");
                             } else {
                                 tracing::warn!(
-                                    "unknown protocol from {addr}: {:02x?}",
-                                    &peek_buf
+                                    addr = %addr,
+                                    peek = ?&peek_buf,
+                                    "unknown protocol"
                                 );
                             }
                         });
                     }
-                    Err(e) => tracing::error!("Accept error: {e}"),
+                    Err(e) => tracing::error!(error = %e, "Accept error"),
                 }
             }
         }
@@ -987,12 +995,12 @@ async fn handle_websocket<H: CliWireHandler>(
     {
         Ok(ws) => ws,
         Err(e) => {
-            tracing::error!("WebSocket upgrade error from {addr}: {e}");
+            tracing::error!(addr = %addr, error = %e, "WebSocket upgrade error");
             return;
         }
     };
 
-    tracing::debug!("WebSocket upgrade complete for {addr}");
+    tracing::debug!(addr = %addr, "WebSocket upgrade complete");
 
     let now = TimestampSeconds::now();
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
@@ -1008,13 +1016,13 @@ async fn handle_websocket<H: CliWireHandler>(
             let listen_ws = ws.clone();
             tokio::spawn(async move {
                 if let Err(e) = listen_ws.listen().await {
-                    tracing::info!("WebSocket listener disconnected: {e}");
+                    tracing::info!(error = %e, "WebSocket listener disconnected");
                 }
             });
 
             tokio::spawn(async move {
                 if let Err(e) = sender_fut.await {
-                    tracing::info!("WebSocket sender disconnected: {e}");
+                    tracing::info!(error = %e, "WebSocket sender disconnected");
                 }
             });
 
@@ -1041,13 +1049,14 @@ async fn handle_websocket<H: CliWireHandler>(
     let authenticated = match result {
         Ok((auth, ())) => {
             tracing::info!(
-                "WebSocket handshake complete: client {} from {addr}",
-                auth.peer_id()
+                peer = %auth.peer_id(),
+                addr = %addr,
+                "WebSocket handshake complete"
             );
             auth
         }
         Err(e) => {
-            tracing::warn!("WebSocket handshake failed from {addr}: {e}");
+            tracing::warn!(addr = %addr, error = %e, "WebSocket handshake failed");
             return;
         }
     };
@@ -1055,7 +1064,7 @@ async fn handle_websocket<H: CliWireHandler>(
     let peer_id = authenticated.peer_id();
     let auth_for_keyhive = authenticated.clone();
     if let Err(e) = subduction.add_connection(authenticated).await {
-        tracing::error!("Failed to add WebSocket connection: {e}");
+        tracing::error!(error = %e, "Failed to add WebSocket connection");
     } else {
         ephemeral.subscribe_peer(peer_id).await;
         notify_peer_connect(keyhive_proto.as_ref(), auth_for_keyhive).await;
@@ -1115,7 +1124,7 @@ async fn handle_http_longpoll<H: CliWireHandler>(
             let resp = match handler.handle(req).await {
                 Ok(resp) => resp,
                 Err(e) => {
-                    tracing::error!("fatal handler error: {e}");
+                    tracing::error!(error = %e, "fatal handler error");
                     hyper::Response::new(Full::new(Bytes::from(e.to_string())))
                 }
             };
@@ -1134,7 +1143,7 @@ async fn handle_http_longpoll<H: CliWireHandler>(
                     auth.map(|lp| MessageTransport::new(UnifiedTransport::HttpLongPoll(lp)));
                 let auth_for_keyhive = unified_auth.clone();
                 if let Err(e) = subduction.add_connection(unified_auth).await {
-                    tracing::error!("Failed to add HTTP long-poll connection: {e}");
+                    tracing::error!(error = %e, "Failed to add HTTP long-poll connection");
                 } else {
                     ephemeral.subscribe_peer(peer_id).await;
                     notify_peer_connect(keyhive_proto.as_ref(), auth_for_keyhive).await;
@@ -1169,7 +1178,7 @@ async fn handle_http_longpoll<H: CliWireHandler>(
     let conn = builder.serve_connection(io, service);
 
     if let Err(e) = conn.await {
-        tracing::debug!("HTTP connection from {addr} ended: {e}");
+        tracing::debug!(addr = %addr, error = %e, "HTTP connection ended");
     }
 }
 
@@ -1203,7 +1212,7 @@ async fn try_connect_ws<H: CliWireHandler>(
     keepalive: KeepAlive,
 ) -> Result<PeerId, eyre::Error> {
     let uri_str = uri.to_string();
-    tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
+    tracing::info!(uri = %uri_str, service_name = %service_name, "Connecting to peer via discovery");
 
     let mut ws_config = WebSocketConfig::default();
     ws_config.max_message_size = Some(max_message_size);
@@ -1237,11 +1246,11 @@ async fn try_connect_ws<H: CliWireHandler>(
             tokio::spawn(async move {
                 tokio::select! {
                     () = listen_cancel.cancelled() => {
-                        tracing::debug!("Shutting down listener for peer {listen_uri}");
+                        tracing::debug!(uri = %listen_uri, "Shutting down listener for peer");
                     }
                     result = listen_ws.listen() => {
                         if let Err(e) = result {
-                            tracing::info!("WebSocket listener disconnected for {listen_uri}: {e}");
+                            tracing::info!(uri = %listen_uri, error = %e, "WebSocket listener disconnected");
                         }
                     }
                 }
@@ -1251,11 +1260,11 @@ async fn try_connect_ws<H: CliWireHandler>(
             tokio::spawn(async move {
                 tokio::select! {
                     () = sender_cancel.cancelled() => {
-                        tracing::debug!("Shutting down sender for peer {sender_uri}");
+                        tracing::debug!(uri = %sender_uri, "Shutting down sender for peer");
                     }
                     result = sender_fut => {
                         if let Err(e) = result {
-                            tracing::info!("WebSocket sender disconnected for {sender_uri}: {e}");
+                            tracing::info!(uri = %sender_uri, error = %e, "WebSocket sender disconnected");
                         }
                     }
                 }
@@ -1265,10 +1274,10 @@ async fn try_connect_ws<H: CliWireHandler>(
             tokio::spawn(async move {
                 tokio::select! {
                     () = keepalive_cancel.cancelled() => {
-                        tracing::debug!("Shutting down keepalive for peer {keepalive_uri}");
+                        tracing::debug!(uri = %keepalive_uri, "Shutting down keepalive for peer");
                     }
                     outcome = keepalive_fut => {
-                        tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri} exited");
+                        tracing::debug!(uri = %keepalive_uri, ?outcome, "keepalive task for peer exited");
                     }
                 }
             });
@@ -1286,13 +1295,13 @@ async fn try_connect_ws<H: CliWireHandler>(
     .await?;
 
     let remote_id = authenticated.peer_id();
-    tracing::info!("Handshake complete: connected to {remote_id}");
+    tracing::info!(peer = %remote_id, "Handshake complete: connected to peer");
 
     let auth_for_keyhive = authenticated.clone();
     subduction.add_connection(authenticated).await?;
     ephemeral.subscribe_peer(remote_id).await;
     notify_peer_connect(keyhive_proto, auth_for_keyhive).await;
-    tracing::info!("Connected to peer at {uri_str}");
+    tracing::info!(uri = %uri_str, "Connected to peer");
 
     Ok(remote_id)
 }
@@ -1310,7 +1319,7 @@ async fn try_connect_iroh<H: CliWireHandler>(
     cancel: CancellationToken,
 ) -> Result<PeerId, eyre::Error> {
     let node_id = addr.id;
-    tracing::info!("iroh: connecting to {node_id} via discovery ({service_name})");
+    tracing::info!(node_id = %node_id, service_name = %service_name, "iroh: connecting via discovery");
 
     let audience = Audience::discover(service_name.as_bytes());
 
@@ -1326,11 +1335,11 @@ async fn try_connect_iroh<H: CliWireHandler>(
     tokio::spawn(async move {
         tokio::select! {
             () = listener_cancel.cancelled() => {
-                tracing::debug!("iroh: shutting down listener for peer {node_id}");
+                tracing::debug!(node_id = %node_id, "iroh: shutting down listener for peer");
             }
             result = listener_task => {
                 if let Err(e) = result {
-                    tracing::info!("iroh: listener disconnected for {node_id}: {e}");
+                    tracing::info!(node_id = %node_id, error = %e, "iroh: listener disconnected");
                 }
             }
         }
@@ -1339,11 +1348,11 @@ async fn try_connect_iroh<H: CliWireHandler>(
     tokio::spawn(async move {
         tokio::select! {
             () = sender_cancel.cancelled() => {
-                tracing::debug!("iroh: shutting down sender for peer {node_id}");
+                tracing::debug!(node_id = %node_id, "iroh: shutting down sender for peer");
             }
             result = sender_task => {
                 if let Err(e) = result {
-                    tracing::info!("iroh: sender disconnected for {node_id}: {e}");
+                    tracing::info!(node_id = %node_id, error = %e, "iroh: sender disconnected");
                 }
             }
         }
@@ -1359,7 +1368,7 @@ async fn try_connect_iroh<H: CliWireHandler>(
         .full_sync_with_peer(&remote_id, true, CallTimeout::Default)
         .await;
 
-    tracing::info!("iroh: added peer {node_id} (subduction ID: {remote_id})");
+    tracing::info!(node_id = %node_id, peer = %remote_id, "iroh: added peer");
     Ok(remote_id)
 }
 

@@ -34,7 +34,7 @@ serde = { workspace = true, optional = true, features = ["derive"] }
 serde_bytes = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["attributes"] }
 
 [features]
 default = []

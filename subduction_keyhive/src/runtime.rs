@@ -154,7 +154,7 @@ where
                 Ok(rt) => rt,
                 Err(e) => {
                     let msg = format!("failed to build keyhive runtime: {e}");
-                    tracing::error!("{msg}");
+                    tracing::error!(error = %e, "failed to build keyhive runtime");
                     drop(init_tx.send(Err(msg)));
                     return;
                 }
@@ -210,7 +210,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
         Ok(kh) => kh,
         Err(e) => {
             let msg = format!("failed to generate keyhive: {e}");
-            tracing::error!("{msg}");
+            tracing::error!(error = %e, "failed to generate keyhive");
             drop(init_tx.send(Err(msg)));
             return;
         }
@@ -220,7 +220,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
         Ok(cc) => cc,
         Err(e) => {
             let msg = format!("failed to generate keyhive contact card: {e}");
-            tracing::error!("{msg}");
+            tracing::error!(error = %e, "failed to generate keyhive contact card");
             drop(init_tx.send(Err(msg)));
             return;
         }
@@ -244,7 +244,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     let protocol = Arc::new(protocol);
 
     if let Err(e) = protocol.ingest_from_storage().await {
-        tracing::warn!("keyhive ingest_from_storage failed: {e}");
+        tracing::warn!(error = %e, "keyhive ingest_from_storage failed");
     }
 
     drop(init_tx.send(Ok(())));

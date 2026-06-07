@@ -91,7 +91,7 @@ use crate::{
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::{Timeout, call::CallTimeout},
 };
-use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::{Mutex, Semaphore, SemaphoreGuardArc};
 use core::{marker::PhantomData, time::Duration};
@@ -569,7 +569,7 @@ where
         conn: &Authenticated<Conn, Async>,
     ) -> Result<bool, Conn::DisconnectionError> {
         let peer_id = conn.peer_id();
-        tracing::info!("Disconnecting connection from peer {}", peer_id);
+        tracing::info!(peer = %peer_id, "disconnecting connection from peer");
 
         // Detach the muxes inside the same critical section that removes
         // the connection, so a concurrent `add_connection` can't have its
@@ -682,7 +682,7 @@ where
 
             for conn in conns {
                 if let Err(e) = conn.disconnect().await {
-                    tracing::error!("{e}");
+                    tracing::error!(peer = %peer_id, error = %e, "failed to disconnect connection");
                     return Err(e);
                 }
             }
@@ -710,7 +710,7 @@ where
         conn: Authenticated<Conn, Async>,
     ) -> Result<bool, AddConnectionError<Auth::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
-        tracing::info!("adding connection from peer {}", peer_id);
+        tracing::info!(peer = %peer_id, "adding connection from peer");
 
         self.storage
             .policy()
@@ -973,7 +973,7 @@ where
         &self,
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, Store::Error> {
-        tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
+        tracing::debug!(tree = ?id, "getting local blobs for sedimentree");
 
         // Read blobs straight from durable storage. Storage is the source of
         // truth, so we do not gate on in-RAM cache residency (an evicted tree
@@ -1018,7 +1018,7 @@ where
         // Resolve caller policy to the low-level deadline (`None` = uncapped).
         let timeout = timeout.resolve(self.default_roundtrip_timeout);
 
-        tracing::debug!("Fetching blobs for sedimentree with id {:?}", id);
+        tracing::debug!(tree = ?id, "fetching blobs for sedimentree");
         if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
@@ -1039,9 +1039,7 @@ where
                         let muxes = self.multiplexers.lock().await;
                         muxes.get(&peer_id).and_then(|v| v.first()).cloned()
                     }) else {
-                        tracing::debug!(
-                            "multiplexer for peer {peer_id:?} gone (concurrent teardown); skipping"
-                        );
+                        tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
                         continue;
                     };
                     let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
@@ -1069,17 +1067,11 @@ where
                     let diff = match result {
                         SyncResult::Ok(diff) => diff,
                         SyncResult::NotFound => {
-                            tracing::debug!(
-                                "peer {:?} reports sedimentree {id:?} not found",
-                                conn.peer_id()
-                            );
+                            tracing::debug!(peer = %conn.peer_id(), tree = ?id, "peer reports sedimentree not found");
                             continue;
                         }
                         SyncResult::Unauthorized => {
-                            tracing::debug!(
-                                "peer {:?} reports we are unauthorized for sedimentree {id:?}",
-                                conn.peer_id()
-                            );
+                            tracing::debug!(peer = %conn.peer_id(), tree = ?id, "peer reports we are unauthorized for sedimentree");
                             continue;
                         }
                     };
@@ -1095,14 +1087,16 @@ where
                                 SyncMessage::from(DataRequestRejected { id }).into();
                             if let Err(send_err) = conn.send(&msg).await {
                                 tracing::info!(
-                                    "peer {} disconnected while sending DataRequestRejected: {send_err}",
-                                    conn.peer_id()
+                                    peer = %conn.peer_id(),
+                                    error = %send_err,
+                                    "peer disconnected while sending DataRequestRejected"
                                 );
                             }
                         }
                         tracing::warn!(
-                            "failed to send requested data to peer {:?}: {e}",
-                            conn.peer_id()
+                            peer = %conn.peer_id(),
+                            error = %e,
+                            "failed to send requested data to peer"
                         );
                     }
 
@@ -1111,9 +1105,9 @@ where
                         .await
                     {
                         tracing::error!(
-                            "error handling batch sync response from peer {:?}: {}",
-                            conn.peer_id(),
-                            e
+                            peer = %conn.peer_id(),
+                            error = %e,
+                            "error handling batch sync response from peer"
                         );
                     }
                 }
@@ -1256,7 +1250,7 @@ where
             VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob).await;
 
         let commit_head = verified_meta.payload().head();
-        tracing::debug!("adding commit {:?} to sedimentree {:?}", commit_head, id);
+        tracing::debug!(commit = ?commit_head, tree = ?id, "adding commit to sedimentree");
 
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
@@ -1279,10 +1273,7 @@ where
             let conns = {
                 let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
                 if subscriber_conns.is_empty() {
-                    tracing::debug!(
-                        "No subscribers for sedimentree {:?}, broadcasting to all connections",
-                        id
-                    );
+                    tracing::debug!(tree = ?id, "no subscribers for sedimentree, broadcasting to all connections");
                     self.all_connections().await
                 } else {
                     subscriber_conns
@@ -1291,7 +1282,7 @@ where
 
             for conn in conns {
                 let peer_id = conn.peer_id();
-                tracing::debug!("Propagating commit for sedimentree {:?} to {}", id, peer_id);
+                tracing::debug!(tree = ?id, peer = %peer_id, "propagating commit for sedimentree");
 
                 let msg: Hdl::Message = SyncMessage::LooseCommit {
                     id,
@@ -1306,9 +1297,9 @@ where
 
                 if let Err(e) = conn.send(&msg).await {
                     tracing::warn!(
-                        "peer {} disconnected: {}",
-                        peer_id,
-                        IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
+                        peer = %peer_id,
+                        error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
+                        "peer disconnected"
                     );
                     // `remove_connection` runs the full teardown on the last connection.
                     self.remove_connection(&conn).await;
@@ -1403,11 +1394,7 @@ where
         .await;
         let fragment_digest = Digest::hash(verified_meta.payload());
 
-        tracing::debug!(
-            "Adding fragment {:?} to sedimentree {:?}",
-            fragment_digest,
-            id
-        );
+        tracing::debug!(digest = ?fragment_digest, tree = ?id, "adding fragment to sedimentree");
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 
@@ -1429,10 +1416,7 @@ where
         let conns = {
             let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
             if subscriber_conns.is_empty() {
-                tracing::debug!(
-                    "No subscribers for sedimentree {:?}, broadcasting fragment to all connections",
-                    id
-                );
+                tracing::debug!(tree = ?id, "no subscribers for sedimentree, broadcasting fragment to all connections");
                 self.all_connections().await
             } else {
                 subscriber_conns
@@ -1441,12 +1425,7 @@ where
 
         for conn in conns {
             let peer_id = conn.peer_id();
-            tracing::debug!(
-                "Propagating fragment {:?} for sedimentree {:?} to {}",
-                fragment_digest,
-                id,
-                peer_id
-            );
+            tracing::debug!(digest = ?fragment_digest, tree = ?id, peer = %peer_id, "propagating fragment for sedimentree");
 
             let msg: Hdl::Message = SyncMessage::Fragment {
                 id,
@@ -1461,9 +1440,9 @@ where
 
             if let Err(e) = conn.send(&msg).await {
                 tracing::warn!(
-                    "peer {} disconnected: {}",
-                    peer_id,
-                    IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e)
+                    peer = %peer_id,
+                    error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
+                    "peer disconnected"
                 );
                 // `remove_connection` runs the full teardown on the last connection.
                 self.remove_connection(&conn).await;
@@ -1506,7 +1485,7 @@ where
 
         let putter = self.storage.local_putter::<Async>(id);
         let count = commits.len();
-        tracing::info!("bulk-inserting {count} commits into sedimentree {id:?}");
+        tracing::info!(count, tree = ?id, "bulk-inserting commits into sedimentree");
 
         // Sign first; defer storage I/O so we can flush via a single
         // `save_batch` call instead of N `save_commit` round trips.
@@ -1535,7 +1514,7 @@ where
         .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
 
-        tracing::info!("bulk-insert of {count} commits complete, tree minimized");
+        tracing::info!(count, "bulk-insert of commits complete, tree minimized");
         Ok(())
     }
 
@@ -1569,7 +1548,7 @@ where
 
         let putter = self.storage.local_putter::<Async>(id);
         let count = fragments.len();
-        tracing::info!("bulk-inserting {count} fragments into sedimentree {id:?}");
+        tracing::info!(count, tree = ?id, "bulk-inserting fragments into sedimentree");
 
         // Sign first; defer storage I/O so we can flush via a single
         // `save_batch` call instead of N `save_fragment` round trips.
@@ -1606,7 +1585,7 @@ where
         .await
         .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
-        tracing::info!("bulk-insert of {count} fragments complete, tree minimized");
+        tracing::info!(count, "bulk-insert of fragments complete, tree minimized");
         Ok(())
     }
 
@@ -1652,8 +1631,10 @@ where
         let commit_count = commits.len();
         let fragment_count = fragments.len();
         tracing::info!(
-            "bulk-inserting {commit_count} commits and {fragment_count} fragments \
-             into sedimentree {id:?} (no broadcast)"
+            commit_count,
+            fragment_count,
+            tree = ?id,
+            "bulk-inserting commits and fragments into sedimentree (no broadcast)"
         );
 
         // Sign every commit and fragment first; defer all storage I/O so we
@@ -1697,8 +1678,9 @@ where
         self.minimize_tree(id).await;
 
         tracing::info!(
-            "bulk-insert of {commit_count} commits and {fragment_count} fragments \
-             complete, tree minimized"
+            commit_count,
+            fragment_count,
+            "bulk-insert of commits and fragments complete, tree minimized"
         );
         Ok(())
     }
@@ -1736,7 +1718,7 @@ where
         for conn in conns {
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
-                tracing::warn!("peer {peer_id} disconnected: {e}");
+                tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
                 // `remove_connection` runs the full teardown on the last connection.
                 self.remove_connection(&conn).await;
             }
@@ -2060,7 +2042,7 @@ where
         let mut propagations: FuturesUnordered<_> = to_propagate
             .into_iter()
             .map(|peer| async move {
-                tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
+                tracing::debug!(tree = ?id, peer = %peer, "propagating subscription upstream to peer");
 
                 let established = match self
                     .sync_with_peer(&peer, id, true, CallTimeout::Default)
@@ -2068,7 +2050,7 @@ where
                 {
                     Ok((had_success, _, _)) => had_success,
                     Err(e) => {
-                        tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
+                        tracing::debug!(peer = %peer, tree = ?id, error = %e, "subscribe propagation failed");
                         false
                     }
                 };
@@ -2108,7 +2090,13 @@ where
     ///
     /// Panics if a connected peer has no corresponding multiplexer
     /// (internal invariant: `add_connection` always creates one).
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    #[tracing::instrument(
+        name = "sync_with_peer",
+        level = "debug",
+        skip_all,
+        fields(peer = %to_ask, tree = ?id, subscribe)
+    )]
     pub async fn sync_with_peer(
         &self,
         to_ask: &PeerId,
@@ -2129,11 +2117,7 @@ where
         // Resolve caller policy to the low-level deadline (`None` = uncapped).
         let timeout = timeout.resolve(self.default_roundtrip_timeout);
 
-        tracing::info!(
-            "Requesting batch sync for sedimentree {:?} from peer {:?}",
-            id,
-            to_ask
-        );
+        tracing::info!(tree = ?id, peer = %to_ask, "requesting batch sync for sedimentree");
 
         let mut stats = SyncStats::new();
         let mut had_success = false;
@@ -2150,7 +2134,7 @@ where
         let mut conn_errs = Vec::new();
 
         for conn in peer_conns {
-            tracing::info!("Using connection to peer {}", to_ask);
+            tracing::info!(peer = %to_ask, "using connection to peer");
             let seed = FingerprintSeed::random();
             // A nonexistent tree syncs as empty: we advertise nothing and the
             // peer sends us everything it has. The hydrated tree is already
@@ -2159,10 +2143,10 @@ where
             let resolver = tree.fingerprint_resolver(&seed);
 
             tracing::debug!(
-                "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
-                id,
-                resolver.summary().commit_fingerprints().len(),
-                resolver.summary().fragment_fingerprints().len()
+                tree = ?id,
+                commit_fps = resolver.summary().commit_fingerprints().len(),
+                fragment_fps = resolver.summary().fragment_fingerprints().len(),
+                "sending fingerprint summary"
             );
 
             // Mux missing means the peer was torn down between the
@@ -2171,9 +2155,7 @@ where
                 let muxes = self.multiplexers.lock().await;
                 muxes.get(to_ask).and_then(|v| v.first()).cloned()
             }) else {
-                tracing::debug!(
-                    "multiplexer for peer {to_ask:?} gone (concurrent teardown); skipping"
-                );
+                tracing::debug!(peer = %to_ask, "multiplexer for peer gone (concurrent teardown); skipping");
                 conn_errs.push((conn.clone(), CallError::ResponseDropped));
                 continue;
             };
@@ -2209,13 +2191,11 @@ where
                     } = match result {
                         SyncResult::Ok(diff) => diff,
                         SyncResult::NotFound => {
-                            tracing::debug!("peer {to_ask:?} reports sedimentree {id:?} not found");
+                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports sedimentree not found");
                             continue;
                         }
                         SyncResult::Unauthorized => {
-                            tracing::debug!(
-                                "peer {to_ask:?} reports we are unauthorized for sedimentree {id:?}"
-                            );
+                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports we are unauthorized for sedimentree");
                             continue;
                         }
                     };
@@ -2231,14 +2211,14 @@ where
                         let verified = match signed_commit.try_verify() {
                             Ok(v) => v,
                             Err(e) => {
-                                tracing::warn!("sync commit signature verification failed: {e}");
+                                tracing::warn!(error = %e, "sync commit signature verification failed");
                                 continue;
                             }
                         };
                         let verified_meta = match VerifiedMeta::new(verified, blob) {
                             Ok(vm) => vm,
                             Err(e) => {
-                                tracing::warn!("sync commit blob mismatch: {e}");
+                                tracing::warn!(error = %e, "sync commit blob mismatch");
                                 continue;
                             }
                         };
@@ -2251,10 +2231,11 @@ where
                                     Ok(p) => e.insert(p),
                                     Err(err) => {
                                         tracing::warn!(
-                                            "policy rejected sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
-                                            to_ask,
-                                            author,
-                                            id
+                                            peer = %to_ask,
+                                            author = ?author,
+                                            tree = ?id,
+                                            error = %err,
+                                            "policy rejected sync commit"
                                         );
                                         continue;
                                     }
@@ -2270,14 +2251,14 @@ where
                         let verified = match signed_fragment.try_verify() {
                             Ok(v) => v,
                             Err(e) => {
-                                tracing::warn!("sync fragment signature verification failed: {e}");
+                                tracing::warn!(error = %e, "sync fragment signature verification failed");
                                 continue;
                             }
                         };
                         let verified_meta = match VerifiedMeta::new(verified, blob) {
                             Ok(vm) => vm,
                             Err(e) => {
-                                tracing::warn!("sync fragment blob mismatch: {e}");
+                                tracing::warn!(error = %e, "sync fragment blob mismatch");
                                 continue;
                             }
                         };
@@ -2290,10 +2271,11 @@ where
                                     Ok(p) => e.insert(p),
                                     Err(err) => {
                                         tracing::warn!(
-                                            "policy rejected sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
-                                            to_ask,
-                                            author,
-                                            id
+                                            peer = %to_ask,
+                                            author = ?author,
+                                            tree = ?id,
+                                            error = %err,
+                                            "policy rejected sync fragment"
                                         );
                                         continue;
                                     }
@@ -2312,34 +2294,31 @@ where
                     stats.fragments_received += fragments_to_receive;
 
                     tracing::debug!(
-                        "Received response for {:?}: {} commits received, peer requesting {} commits and {} fragments",
-                        id,
-                        commits_to_receive,
-                        requesting.commit_fingerprints.len(),
-                        requesting.fragment_fingerprints.len()
+                        tree = ?id,
+                        commits_received = commits_to_receive,
+                        requesting_commits = requesting.commit_fingerprints.len(),
+                        requesting_fragments = requesting.fragment_fingerprints.len(),
+                        "received response"
                     );
 
                     // Send back data the responder requested (bidirectional sync)
                     if !requesting.is_empty() {
-                        tracing::debug!("Calling send_requested_data for {:?}", id);
+                        tracing::debug!(tree = ?id, "calling send_requested_data");
                         match self
                             .send_requested_data(&conn, id, &resolver, &requesting)
                             .await
                         {
                             Ok(sent) => {
                                 tracing::debug!(
-                                    "send_requested_data returned: {} commits, {} fragments",
-                                    sent.commits,
-                                    sent.fragments
+                                    commits = sent.commits,
+                                    fragments = sent.fragments,
+                                    "send_requested_data returned"
                                 );
                                 stats.commits_sent += sent.commits;
                                 stats.fragments_sent += sent.fragments;
                             }
                             Err(e) => {
-                                tracing::warn!(
-                                    "failed to send requested data to peer {:?}: {e}",
-                                    to_ask
-                                );
+                                tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
                             }
                         }
                     }
@@ -2349,9 +2328,7 @@ where
                     if subscribe {
                         self.track_outgoing_subscription(*to_ask, id).await;
                         self.add_subscription(*to_ask, id).await;
-                        tracing::debug!(
-                            "mutual subscription: added peer {to_ask} to our subscriptions for {id:?}"
-                        );
+                        tracing::debug!(peer = %to_ask, tree = ?id, "mutual subscription: added peer to our subscriptions");
                     }
 
                     had_success = true;
@@ -2382,7 +2359,13 @@ where
     ///
     /// Panics if a connected peer has no corresponding multiplexer
     /// (internal invariant: `add_connection` always creates one).
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    #[tracing::instrument(
+        name = "sync_with_all_peers",
+        level = "debug",
+        skip_all,
+        fields(tree = ?id, subscribe)
+    )]
     pub async fn sync_with_all_peers(
         &self,
         id: SedimentreeId,
@@ -2395,10 +2378,7 @@ where
         // Resolve caller policy to the low-level deadline (`None` = uncapped).
         let timeout = timeout.resolve(self.default_roundtrip_timeout);
 
-        tracing::info!(
-            "Requesting batch sync for sedimentree {:?} from all peers",
-            id
-        );
+        tracing::info!(tree = ?id, "requesting batch sync for sedimentree from all peers");
         let peers: Map<PeerId, Vec<Authenticated<Conn, Async>>> = {
             self.connections
                 .lock()
@@ -2407,7 +2387,7 @@ where
                 .map(|(peer_id, conns)| (*peer_id, conns.iter().cloned().collect()))
                 .collect()
         };
-        tracing::debug!("Found {} peer(s)", peers.len());
+        tracing::debug!(count = peers.len(), "found peer(s)");
 
         // Hydrate the tree once (from the LRU cache or storage) and share it
         // across all per-peer tasks, rather than re-reading it per peer. A
@@ -2420,9 +2400,9 @@ where
                 let shared_tree = shared_tree.clone();
                 async move {
                     tracing::debug!(
-                        "Requesting batch sync for sedimentree {:?} from {} connections",
-                        id,
-                        peer_conns.len(),
+                        tree = ?id,
+                        connections = peer_conns.len(),
+                        "requesting batch sync for sedimentree"
                     );
 
                     let mut had_success = false;
@@ -2430,7 +2410,7 @@ where
                     let mut stats = SyncStats::new();
 
                     for conn in peer_conns {
-                        tracing::debug!("Using connection to peer {}", conn.peer_id());
+                        tracing::debug!(peer = %conn.peer_id(), "using connection to peer");
                         let seed = FingerprintSeed::random();
                         let resolver = shared_tree.fingerprint_resolver(&seed);
 
@@ -2441,9 +2421,7 @@ where
                             let muxes = self.multiplexers.lock().await;
                             muxes.get(peer_id).and_then(|v| v.first()).cloned()
                         }) else {
-                            tracing::debug!(
-                                "multiplexer for peer {peer_id:?} gone (concurrent teardown); skipping"
-                            );
+                            tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
                             conn_errs.push((
                                 conn.clone(),
                                 CallError::ResponseDropped,
@@ -2485,15 +2463,11 @@ where
                                 } = match result {
                                     SyncResult::Ok(diff) => diff,
                                     SyncResult::NotFound => {
-                                        tracing::debug!(
-                                            "peer {peer_id:?} reports sedimentree {id:?} not found"
-                                        );
+                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports sedimentree not found");
                                         continue;
                                     }
                                     SyncResult::Unauthorized => {
-                                        tracing::debug!(
-                                            "peer {peer_id:?} reports we are unauthorized for sedimentree {id:?}"
-                                        );
+                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports we are unauthorized for sedimentree");
                                         continue;
                                     }
                                 };
@@ -2518,16 +2492,14 @@ where
                                     let verified = match signed_commit.try_verify() {
                                         Ok(v) => v,
                                         Err(e) => {
-                                            tracing::warn!(
-                                                "full sync commit signature verification failed: {e}"
-                                            );
+                                            tracing::warn!(error = %e, "full sync commit signature verification failed");
                                             continue;
                                         }
                                     };
                                     let verified_meta = match VerifiedMeta::new(verified, blob) {
                                         Ok(vm) => vm,
                                         Err(e) => {
-                                            tracing::warn!("full sync commit blob mismatch: {e}");
+                                            tracing::warn!(error = %e, "full sync commit blob mismatch");
                                             continue;
                                         }
                                     };
@@ -2540,8 +2512,11 @@ where
                                                 Ok(p) => e.insert(p),
                                                 Err(err) => {
                                                     tracing::warn!(
-                                                        "policy rejected full sync commit from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
-                                                        peer_id, author, id
+                                                        peer = %peer_id,
+                                                        author = ?author,
+                                                        tree = ?id,
+                                                        error = %err,
+                                                        "policy rejected full sync commit"
                                                     );
                                                     continue;
                                                 }
@@ -2557,16 +2532,14 @@ where
                                     let verified = match signed_fragment.try_verify() {
                                         Ok(v) => v,
                                         Err(e) => {
-                                            tracing::warn!(
-                                                "full sync fragment signature verification failed: {e}"
-                                            );
+                                            tracing::warn!(error = %e, "full sync fragment signature verification failed");
                                             continue;
                                         }
                                     };
                                     let verified_meta = match VerifiedMeta::new(verified, blob) {
                                         Ok(vm) => vm,
                                         Err(e) => {
-                                            tracing::warn!("full sync fragment blob mismatch: {e}");
+                                            tracing::warn!(error = %e, "full sync fragment blob mismatch");
                                             continue;
                                         }
                                     };
@@ -2579,8 +2552,11 @@ where
                                                 Ok(p) => e.insert(p),
                                                 Err(err) => {
                                                     tracing::warn!(
-                                                        "policy rejected full sync fragment from peer {:?} (author {:?}) for sedimentree {:?}: {err}",
-                                                        peer_id, author, id
+                                                        peer = %peer_id,
+                                                        author = ?author,
+                                                        tree = ?id,
+                                                        error = %err,
+                                                        "policy rejected full sync fragment"
                                                     );
                                                     continue;
                                                 }
@@ -2608,18 +2584,12 @@ where
                                         Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
                                             let msg: Hdl::Message = SyncMessage::from(DataRequestRejected { id }).into();
                                             if let Err(send_err) = conn.send(&msg).await {
-                                                tracing::warn!("peer {peer_id} disconnected while sending DataRequestRejected: {send_err}");
+                                                tracing::warn!(peer = %peer_id, error = %send_err, "peer disconnected while sending DataRequestRejected");
                                             }
-                                            tracing::warn!(
-                                                "failed to send requested data to peer {:?}: {e}",
-                                                peer_id
-                                            );
+                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
                                         }
                                         Err(e) => {
-                                            tracing::warn!(
-                                                "failed to send requested data to peer {:?}: {e}",
-                                                peer_id
-                                            );
+                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
                                         }
                                     }
                                 }
@@ -2629,9 +2599,7 @@ where
                                 if subscribe {
                                     self.track_outgoing_subscription(*peer_id, id).await;
                                     self.add_subscription(*peer_id, id).await;
-                                    tracing::debug!(
-                                        "mutual subscription: added peer {peer_id} to our subscriptions for {id:?}"
-                                    );
+                                    tracing::debug!(peer = %peer_id, tree = ?id, "mutual subscription: added peer to our subscriptions");
                                 }
 
                                 had_success = true;
@@ -2654,7 +2622,7 @@ where
         while let Some(result) = set.next().await {
             match result {
                 Err(e) => {
-                    tracing::error!("{e}");
+                    tracing::error!(error = %e, "per-peer sync task failed");
                 }
                 Ok((peer_id, success, stats, errs)) => {
                     out.insert(peer_id, (success, stats, errs));
@@ -2685,7 +2653,7 @@ where
         let mut sync_futures: FuturesUnordered<_> = tree_ids
             .into_iter()
             .map(|id| async move {
-                tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
+                tracing::debug!(tree = ?id, "requesting batch sync for sedimentree");
                 let result = self.sync_with_all_peers(id, true, timeout).await;
                 (id, result)
             })
@@ -2715,7 +2683,7 @@ where
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to sync sedimentree {:?}: {}", id, e);
+                    tracing::error!(tree = ?id, error = %e, "failed to sync sedimentree");
                     io_errs.push((id, e));
                 }
             }
@@ -2742,9 +2710,7 @@ where
         {
             Ok(ids) => ids.into_iter().collect(),
             Err(e) => {
-                tracing::warn!(
-                    "sedimentree_ids: storage enumeration failed: {e}; falling back to resident set"
-                );
+                tracing::warn!(error = %e, "sedimentree_ids: storage enumeration failed; falling back to resident set");
                 self.sedimentrees.into_keys().await
             }
         }
@@ -2777,7 +2743,7 @@ where
         match self.get_or_hydrate(id).await {
             Ok(maybe_tree) => maybe_tree,
             Err(e) => {
-                tracing::warn!("hydration failed for sedimentree {id:?}: {e}");
+                tracing::warn!(tree = ?id, error = %e, "hydration failed for sedimentree");
                 None
             }
         }
@@ -2807,7 +2773,7 @@ where
                 // Transient hydration failure: keep the id (it was just
                 // enumerated from storage) with empty, advisory heads.
                 Err(e) => {
-                    tracing::warn!("get_all_heads: hydration failed for {id:?}: {e}");
+                    tracing::warn!(tree = ?id, error = %e, "get_all_heads: hydration failed");
                     out.push((id, Vec::new()));
                 }
             }
@@ -2831,7 +2797,7 @@ where
         verified_fragments: Vec<VerifiedMeta<Fragment>>,
     ) -> Result<(), Store::Error> {
         let id = putter.sedimentree_id();
-        tracing::debug!("adding sedimentree with id {:?}", id);
+        tracing::debug!(tree = ?id, "adding sedimentree");
 
         // ID registration happens inside `save_batch` per the
         // `Storage::save_batch` contract — no explicit
@@ -2894,10 +2860,10 @@ where
 
         let peer_id = conn.peer_id();
         tracing::debug!(
-            "sending {} requested commits and {} requested fragments to peer {:?}",
-            requesting.commit_fingerprints.len(),
-            requesting.fragment_fingerprints.len(),
-            peer_id
+            commits = requesting.commit_fingerprints.len(),
+            fragments = requesting.fragment_fingerprints.len(),
+            peer = %peer_id,
+            "sending requested commits and fragments to peer"
         );
 
         let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
@@ -2936,7 +2902,7 @@ where
                     // Coverage-only fingerprints (fragment head/boundary) are in
                     // the summary but intentionally not in the resolver. The remote
                     // echoing them back is expected when it doesn't have that CommitId.
-                    tracing::debug!("requested commit fingerprint {fp} not found in resolver");
+                    tracing::debug!(fingerprint = %fp, "requested commit fingerprint not found in resolver");
                 }
                 id
             })
@@ -2962,7 +2928,7 @@ where
             .filter_map(|fp| {
                 let id = resolver.resolve_fragment(fp);
                 if id.is_none() {
-                    tracing::warn!("requested fragment fingerprint {fp} not found in resolver");
+                    tracing::warn!(fingerprint = %fp, "requested fragment fingerprint not found in resolver");
                 }
                 id
             })
@@ -3059,7 +3025,7 @@ where
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("failed to send requested data: {}", e);
+                    tracing::warn!(error = %e, "failed to send requested data");
                 }
             }
         }
@@ -3198,6 +3164,7 @@ where
     ///
     /// * Returns `ListenError` if a handler error signals a broken connection.
     #[allow(clippy::too_many_lines)]
+    #[tracing::instrument(name = "listen", level = "info", skip_all)]
     pub async fn listen(
         self: Arc<Self>,
     ) -> Result<(), ListenError<Async, Store, Conn, Hdl::Message>> {
@@ -3220,13 +3187,14 @@ where
                         let peer_id = conn.peer_id();
                         tracing::error!(
                             peer = %peer_id,
-                            "error dispatching message: {e}"
+                            error = %e,
+                            "error dispatching message"
                         );
 
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
                         }
-                        tracing::warn!("removed failed connection from peer {}", peer_id);
+                        tracing::debug!(peer = %peer_id, "removed failed connection");
                     }
                 }
 
@@ -3243,10 +3211,7 @@ where
                             if let Some(muxes) = muxes_for_peer {
                                 for mux in &muxes {
                                     if mux.resolve_pending(resp).await {
-                                        tracing::debug!(
-                                            "routed BatchSyncResponse to pending caller for peer {}",
-                                            peer_id
-                                        );
+                                        tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
                                         consumed = true;
                                         break;
                                     }
@@ -3255,13 +3220,14 @@ where
 
                             if !consumed {
                                 tracing::warn!(
-                                    "BatchSyncResponse from peer {peer_id} had no pending caller"
+                                    peer = %peer_id,
+                                    "BatchSyncResponse had no pending caller"
                                 );
                             }
                         } else {
                             tracing::warn!(
-                                "non-BatchSyncResponse message from peer {peer_id} \
-                                 arrived on response_queue — dropping"
+                                peer = %peer_id,
+                                "non-BatchSyncResponse message arrived on response_queue — dropping"
                             );
                         }
                     } else {
@@ -3278,16 +3244,13 @@ where
                     let (permit, msg_result) = permitted;
                     if let Ok((conn, msg)) = msg_result {
                         let peer_id = conn.peer_id();
-                        tracing::debug!(
-                            "Subduction listener received message from peer {}: {:?}",
-                            peer_id,
-                            msg
-                        );
+                        // Don't Debug-format `msg` — it can embed commit/blob bytes.
+                        tracing::trace!(peer = %peer_id, "listener received message");
 
                         if let Some(resp) = msg.try_as_batch_sync_response() {
                             tracing::debug!(
-                                "BatchSyncResponse from peer {peer_id} arrived via msg_queue \
-                                 (expected response_queue) — routing to multiplexer"
+                                peer = %peer_id,
+                                "BatchSyncResponse arrived via msg_queue (expected response_queue) — routing to multiplexer"
                             );
                             let muxes_for_peer = {
                                 let multiplexers = self.multiplexers.lock().await;
@@ -3304,8 +3267,8 @@ where
                             }
                             if !consumed {
                                 tracing::warn!(
-                                    "BatchSyncResponse from peer {peer_id} via safety net \
-                                     had no pending caller"
+                                    peer = %peer_id,
+                                    "BatchSyncResponse via safety net had no pending caller"
                                 );
                             }
                             // Not a dispatch — `permit` drops here, releasing the slot.
@@ -3334,9 +3297,7 @@ where
                 closed_result = self.connection_closed.recv().fuse() => {
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
-                        tracing::warn!(
-                            "Connection {conn_id} from peer {peer_id} closed, removing"
-                        );
+                        tracing::warn!(conn = %conn_id, peer = %peer_id, "connection closed, removing");
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
                         }
@@ -3355,7 +3316,8 @@ where
             {
                 tracing::error!(
                     peer = %conn.peer_id(),
-                    "error dispatching message during shutdown: {e}"
+                    error = %e,
+                    "error dispatching message during shutdown"
                 );
             }
         }
@@ -3380,6 +3342,13 @@ where
     ///
     /// Errors are collected rather than short-circuiting, so a failure on one
     /// sedimentree does not prevent the rest from syncing.
+    #[allow(clippy::type_complexity)]
+    #[tracing::instrument(
+        name = "full_sync_with_peer",
+        level = "debug",
+        skip_all,
+        fields(peer = %peer_id, subscribe)
+    )]
     pub async fn full_sync_with_peer(
         self: &Arc<Self>,
         peer_id: &PeerId,
@@ -3394,10 +3363,7 @@ where
         )>,
         Vec<(SedimentreeId, IoError<Async, Store, Conn, Hdl::Message>)>,
     ) {
-        tracing::info!(
-            "Requesting batch sync for all sedimentrees with peer {}",
-            peer_id
-        );
+        tracing::info!(peer = %peer_id, "requesting batch sync for all sedimentrees with peer");
         // Enumerate from storage (complete across evictions), mirroring
         // `full_sync_with_all_peers`. Using the resident (LRU) set here would
         // silently skip cold/evicted documents, contradicting "all known".
@@ -3454,9 +3420,7 @@ where
                     call_errs.extend(step_errs);
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to sync sedimentree {done_id:?} with peer {peer_id}: {e}"
-                    );
+                    tracing::error!(tree = ?done_id, peer = %peer_id, error = %e, "failed to sync sedimentree with peer");
                     io_errs.push((done_id, e));
                 }
             }
@@ -3464,8 +3428,8 @@ where
 
         if outstanding != 0 {
             tracing::warn!(
-                "full_sync_with_peer: {outstanding} per-document sync task(s) \
-                 finished without reporting a result (likely panicked)"
+                outstanding,
+                "full_sync_with_peer: per-document sync task(s) finished without reporting a result (likely panicked)"
             );
         }
 
@@ -3773,7 +3737,7 @@ where
         Abortable::new(
             Async::from_future(async move {
                 if let Err(e) = subduction.listen().await {
-                    tracing::info!("Subduction listener disconnected: {}", e.to_string());
+                    tracing::info!(error = %e, "subduction listener disconnected");
                 }
             }),
             abort_reg,

@@ -176,13 +176,13 @@ fn load_signer(args: &Args) -> Result<MemorySigner> {
         let trimmed = trimmed.trim();
         if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
             let seed = parse_32_bytes(trimmed, "key file")?;
-            tracing::info!("loaded signing key from {}", path.display());
+            tracing::info!(path = %path.display(), "loaded signing key");
             return Ok(MemorySigner::from_bytes(&seed));
         }
         if contents.len() == 32 {
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&contents);
-            tracing::info!("loaded signing key from {}", path.display());
+            tracing::info!(path = %path.display(), "loaded signing key");
             return Ok(MemorySigner::from_bytes(&seed));
         }
         eyre::bail!(
@@ -324,12 +324,12 @@ async fn main() -> Result<()> {
 
     tokio::spawn(async move {
         if let Err(e) = listener_fut.await {
-            tracing::error!("listener task failed: {e}");
+            tracing::error!(error = %e, "listener task failed");
         }
     });
     tokio::spawn(async move {
         if let Err(e) = manager_fut.await {
-            tracing::error!("manager task failed: {e}");
+            tracing::error!(error = %e, "manager task failed");
         }
     });
 

@@ -30,7 +30,7 @@ siphasher = { workspace = true }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"], optional = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["attributes"] }
 
 [dev-dependencies]
 bolero = { workspace = true, features = ["arbitrary"] }

@@ -283,20 +283,20 @@ where
                 Ok(Ok(resp)) => {
                     // Entry already removed by `resolve_pending`.
                     guard.disarm();
-                    tracing::debug!("request {req_id:?} completed");
+                    tracing::debug!(req = ?req_id, "request completed");
                     Ok(resp)
                 }
                 Ok(Err(_)) => {
                     // Sender dropped (e.g. `cancel_all_pending` on disconnect)
                     // already removed the entry.
                     guard.disarm();
-                    tracing::debug!("request {req_id:?} response channel dropped");
+                    tracing::debug!(req = ?req_id, "request response channel dropped");
                     Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
                     // Deadline elapsed with the entry still registered; let
                     // the armed guard remove it on drop.
-                    tracing::warn!("request {req_id:?} timed out after {timeout:?}");
+                    tracing::warn!(req = ?req_id, timeout = ?timeout, "request timed out");
                     Err(CallError::Timeout)
                 }
             }
@@ -365,16 +365,16 @@ where
             match waited {
                 Ok(Ok(resp)) => {
                     guard.disarm();
-                    tracing::debug!("request {req_id:?} completed");
+                    tracing::debug!(req = ?req_id, "request completed");
                     Ok(resp)
                 }
                 Ok(Err(_)) => {
                     guard.disarm();
-                    tracing::debug!("request {req_id:?} response channel dropped");
+                    tracing::debug!(req = ?req_id, "request response channel dropped");
                     Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
-                    tracing::warn!("request {req_id:?} timed out after {timeout:?}");
+                    tracing::warn!(req = ?req_id, timeout = ?timeout, "request timed out");
                     Err(CallError::Timeout)
                 }
             }

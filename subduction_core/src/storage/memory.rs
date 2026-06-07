@@ -124,7 +124,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::save_sedimentree_id");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::save_sedimentree_id");
             self.ids.lock().await.insert(sedimentree_id);
             Ok(())
         })
@@ -135,7 +135,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::delete_sedimentree_id");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::delete_sedimentree_id");
             self.ids.lock().await.remove(&sedimentree_id);
             Ok(())
         })
@@ -145,7 +145,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         &self,
     ) -> Async::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!("MemoryStorage::load_all_sedimentree_ids");
+            tracing::trace!("MemoryStorage::load_all_sedimentree_ids");
             Ok(self.ids.lock().await.iter().copied().collect())
         })
     }
@@ -155,7 +155,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<bool, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::contains_sedimentree_id");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::contains_sedimentree_id");
             Ok(self.ids.lock().await.contains(&sedimentree_id))
         })
     }
@@ -170,7 +170,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         Async::from_future(async move {
             let commit_id = verified.payload().head();
             let digest = Digest::hash(verified.payload());
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
+            tracing::trace!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
 
             let (signed, _payload, blob) = verified.into_full_parts();
             self.commits
@@ -190,7 +190,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::list_commit_ids");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::list_commit_ids");
             let shard = self.commits.shard(&sedimentree_id).read().await;
             Ok(shard
                 .get(&sedimentree_id)
@@ -204,7 +204,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::load_loose_commits");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::load_loose_commits");
             // Snapshot the raw stored entries under the read lock, then release
             // it before decoding — decode never serializes other readers.
             let raw: Vec<(Signed<LooseCommit>, Blob)> = {
@@ -228,7 +228,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         commit_id: CommitId,
     ) -> Async::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?commit_id,
                 "MemoryStorage::load_loose_commit"
@@ -254,7 +254,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         commit_id: CommitId,
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?commit_id,
                 "MemoryStorage::delete_loose_commit"
@@ -277,7 +277,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::delete_loose_commits");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::delete_loose_commits");
             self.commits
                 .shard(&sedimentree_id)
                 .write()
@@ -297,7 +297,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         Async::from_future(async move {
             let fragment_head = verified.payload().head();
             let digest = Digest::hash(verified.payload());
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
+            tracing::trace!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
 
             let (signed, _payload, blob) = verified.into_full_parts();
             self.fragments
@@ -318,7 +318,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         fragment_head: CommitId,
     ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?fragment_head,
                 "MemoryStorage::load_fragment"
@@ -342,7 +342,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::list_fragment_ids");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::list_fragment_ids");
             let shard = self.fragments.shard(&sedimentree_id).read().await;
             Ok(shard
                 .get(&sedimentree_id)
@@ -356,7 +356,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::load_fragments");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::load_fragments");
             // Snapshot under the read lock; decode after releasing it.
             let raw: Vec<(Signed<Fragment>, Blob)> = {
                 let shard = self.fragments.shard(&sedimentree_id).read().await;
@@ -379,7 +379,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         fragment_head: CommitId,
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?fragment_head,
                 "MemoryStorage::delete_fragment"
@@ -402,7 +402,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::delete_fragments");
+            tracing::trace!(?sedimentree_id, "MemoryStorage::delete_fragments");
             self.fragments
                 .shard(&sedimentree_id)
                 .write()
@@ -423,7 +423,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         Async::from_future(async move {
             let num_commits = commits.len();
             let num_fragments = fragments.len();
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 num_commits,
                 num_fragments,

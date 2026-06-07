@@ -14,8 +14,15 @@ rust-version.workspace = true
 
 # Pure rlib — never built as a cdylib itself. Linked into each of the
 # three cdylib crates (`subduction_wasm`, `sedimentree_wasm`,
-# `automerge_subduction_wasm`), where its `init_basic()` is invoked from
-# each cdylib's `#[wasm_bindgen(start)]`.
+# `automerge_subduction_wasm`), where its `init_rich_from_env()` is invoked
+# from each cdylib's `#[wasm_bindgen(start)]`.
+
+[features]
+default = ["wasm-tracing"]
+# Route events to the browser console via `wasm_tracing::WasmLayer`. When
+# disabled, the JS-callback layer + reloadable filter still install (events
+# reach `set_subduction_logger` callbacks but not the console).
+wasm-tracing = ["dep:wasm-tracing"]
 
 [dependencies]
 console_error_panic_hook = { workspace = true }
@@ -23,7 +30,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-tracing = { workspace = true }
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-tracing = { workspace = true, optional = true }
 
 [lints]
 workspace = true

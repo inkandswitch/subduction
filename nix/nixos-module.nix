@@ -95,6 +95,31 @@ in {
         description = "Request timeout in seconds.";
       };
 
+      logFormat = lib.mkOption {
+        type = lib.types.enum ["text" "json"];
+        default = "json";
+        description = ''
+          Log output format (passes `--log-format <fmt>`). `json` emits
+          structured lines with span fields (recommended for log aggregation
+          and `journald`'s structured fields); `text` is human-readable.
+
+          Note: this defaults to `json` (server deployments want structured
+          logs), which intentionally differs from the `subduction_cli` binary's
+          own default of `text`. The module always passes `--log-format`
+          explicitly, so the effective format is unambiguous.
+        '';
+      };
+
+      logLevel = lib.mkOption {
+        type = lib.types.str;
+        default = "info";
+        description = ''
+          Log level filter, set via the `RUST_LOG` environment variable.
+          Accepts standard `tracing` `EnvFilter` syntax, e.g.
+          `"subduction_core=debug,info"`. Defaults to `info`.
+        '';
+      };
+
       maxMessageSize = lib.mkOption {
         type = lib.types.int;
         default = 52428800; # 50 MiB
@@ -335,6 +360,7 @@ in {
                 ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
                 ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
                 ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
+                ++ ["--log-format" cfg.server.logFormat]
                 ++ ["--auth" cfg.server.auth]
                 ++ lib.optionals (cfg.server.auth == "keyhive") [
                   "--keyhive-cache-refresh"
@@ -348,6 +374,7 @@ in {
                 ++ lib.concatMap (addr: ["--iroh-peer-addr" addr]) cfg.server.iroh.peerAddrs;
             in
               lib.escapeShellArgs args;
+            Environment = ["RUST_LOG=${cfg.server.logLevel}"];
             Restart = "on-failure";
             RestartSec = 5;
 

@@ -54,11 +54,11 @@ pub(crate) async fn recv_batch_sync_response<
     diff: SyncDiff,
 ) -> Result<(), IoError<Async, Store, Conn, WireMsg>> {
     tracing::info!(
-        "received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
-        id,
-        from,
-        diff.missing_commits.len(),
-        diff.missing_fragments.len()
+        tree = ?id,
+        peer = %from,
+        missing_commits = diff.missing_commits.len(),
+        missing_fragments = diff.missing_fragments.len(),
+        "received batch sync response"
     );
 
     let mut putter_cache: Map<PeerId, Putter<Async, Store>> = Map::new();
@@ -72,7 +72,7 @@ pub(crate) async fn recv_batch_sync_response<
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("batch sync commit signature verification failed: {e}");
+                tracing::warn!(error = %e, "batch sync commit signature verification failed");
                 continue;
             }
         };
@@ -80,7 +80,7 @@ pub(crate) async fn recv_batch_sync_response<
         let verified_meta = match VerifiedMeta::new(verified, blob) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!("batch sync commit blob mismatch: {e}");
+                tracing::warn!(error = %e, "batch sync commit blob mismatch");
                 continue;
             }
         };
@@ -96,7 +96,11 @@ pub(crate) async fn recv_batch_sync_response<
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "policy rejected commit from {from:?} (author {author:?}) for {id:?}: {e}"
+                        peer = %from,
+                        author = ?author,
+                        tree = ?id,
+                        error = %e,
+                        "policy rejected commit"
                     );
                     continue;
                 }
@@ -116,7 +120,7 @@ pub(crate) async fn recv_batch_sync_response<
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("batch sync fragment signature verification failed: {e}");
+                tracing::warn!(error = %e, "batch sync fragment signature verification failed");
                 continue;
             }
         };
@@ -124,7 +128,7 @@ pub(crate) async fn recv_batch_sync_response<
         let verified_meta = match VerifiedMeta::new(verified, blob) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!("batch sync fragment blob mismatch: {e}");
+                tracing::warn!(error = %e, "batch sync fragment blob mismatch");
                 continue;
             }
         };
@@ -140,7 +144,11 @@ pub(crate) async fn recv_batch_sync_response<
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "policy rejected fragment from {from:?} (author {author:?}) for {id:?}: {e}"
+                        peer = %from,
+                        author = ?author,
+                        tree = ?id,
+                        error = %e,
+                        "policy rejected fragment"
                     );
                     continue;
                 }
@@ -166,7 +174,7 @@ pub(crate) async fn recv_batch_sync_response<
 
     for author_id in all_authors {
         let Some(putter) = putter_cache.get(&author_id) else {
-            tracing::warn!("putter for author {author_id} unexpectedly missing from cache");
+            tracing::warn!(author = %author_id, "putter for author unexpectedly missing from cache");
             continue;
         };
         let commits = commits_by_author.remove(&author_id).unwrap_or_default();
@@ -231,7 +239,7 @@ pub(crate) async fn insert_commit_locally<
     let commit = verified_meta.payload().clone();
     let head = commit.head();
 
-    tracing::debug!("inserting commit {:?} locally", Digest::hash(&commit));
+    tracing::debug!(digest = ?Digest::hash(&commit), "inserting commit locally");
 
     putter.save_sedimentree_id().await?;
 
@@ -378,12 +386,12 @@ pub(crate) async fn get_or_hydrate<
         .with_entry(&id, |tree| tree.minimized(depth_metric).clone())
         .await
     {
-        tracing::trace!("sedimentree {id:?} cache hit");
+        tracing::trace!(tree = ?id, "sedimentree cache hit");
         return Ok(Some(tree));
     }
 
     // Miss: load full history from storage with NO shard lock held.
-    tracing::debug!("sedimentree {id:?} cache miss; hydrating from storage");
+    tracing::debug!(tree = ?id, "sedimentree cache miss; hydrating from storage");
     let local_access = storage.hydration_access();
     let loose_commits: Vec<LooseCommit> = local_access
         .load_loose_commits::<Async>(id)
@@ -405,7 +413,7 @@ pub(crate) async fn get_or_hydrate<
     // "nonexistent" — O(1), without enumerating every id.
     if loose_commits.is_empty() && fragments.is_empty() {
         if local_access.contains_sedimentree_id::<Async>(id).await? {
-            tracing::trace!("sedimentree {id:?} registered but empty");
+            tracing::trace!(tree = ?id, "sedimentree registered but empty");
             // Cache the empty tree so repeat reads are resident hits rather
             // than repeated storage lookups. Safe to install here (unlike the
             // sync-request path) because the id is confirmed in the index, so
@@ -417,7 +425,7 @@ pub(crate) async fn get_or_hydrate<
                 .await;
             return Ok(Some(Sedimentree::default()));
         }
-        tracing::trace!("sedimentree {id:?} not found in storage");
+        tracing::trace!(tree = ?id, "sedimentree not found in storage");
         return Ok(None);
     }
 

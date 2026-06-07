@@ -81,13 +81,15 @@ impl WasmIndexedDbStorage {
     #[wasm_bindgen]
     #[allow(clippy::too_many_lines)]
     pub async fn setup(factory: &IdbFactory, name: Option<String>) -> Result<Self, JsValue> {
+        use tracing::Instrument as _;
+
         let name = name.as_deref().unwrap_or(DB_NAME);
         let span = tracing::debug_span!("IndexedDbStorage::setup");
-        let _enter = span.enter();
 
-        tracing::debug!("opening IndexedDB database '{name}'");
-
-        let open_req: IdbOpenDbRequest = factory.open_with_u32(name, DB_VERSION)?;
+        let open_req: IdbOpenDbRequest = span.in_scope(|| {
+            tracing::debug!(db = %name, "opening IndexedDB database");
+            factory.open_with_u32(name, DB_VERSION)
+        })?;
 
         // Create object stores on first open
         {
@@ -188,7 +190,9 @@ impl WasmIndexedDbStorage {
             onupgradeneeded.forget();
         }
 
-        let db_val = await_idb(&open_req.dyn_into::<IdbRequest>()?).await?;
+        let db_val = await_idb(&open_req.dyn_into::<IdbRequest>()?)
+            .instrument(span)
+            .await?;
         let db = db_val.dyn_into::<IdbDatabase>().map_err(|_| {
             JsValue::from(js_sys::TypeError::new(
                 "Open returned something other than an `IdbDatabase`",

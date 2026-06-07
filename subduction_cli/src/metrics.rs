@@ -43,11 +43,11 @@ pub async fn start_metrics_server(addr: SocketAddr, handle: PrometheusHandle) ->
     );
 
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!("Metrics server listening on {}", addr);
+    tracing::info!(addr = %addr, "Metrics server listening");
 
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
-            tracing::error!("Metrics server error: {}", e);
+            tracing::error!(error = %e, "Metrics server error");
         }
     });
 
