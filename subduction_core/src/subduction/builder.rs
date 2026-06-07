@@ -60,8 +60,7 @@ use async_lock::Mutex;
 use core::time::Duration;
 use sedimentree_core::{
     collections::{Map, Set},
-    depth::CountLeadingZeroBytes,
-    depth::DepthMetric,
+    depth::{CountLeadingZeroBytes, DepthMetric},
     id::SedimentreeId,
     sedimentree::minimized::MinimizedSedimentree,
 };

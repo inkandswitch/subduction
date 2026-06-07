@@ -15,7 +15,7 @@ use core::{
 };
 
 use futures::stream::{Abortable, Aborted};
-use sedimentree_core::{depth::CountLeadingZeroBytes, depth::DepthMetric};
+use sedimentree_core::depth::{CountLeadingZeroBytes, DepthMetric};
 use subduction_crypto::signer::Signer;
 
 use super::SubductionFutureForm;

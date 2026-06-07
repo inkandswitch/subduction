@@ -22,8 +22,7 @@ use js_sys::Uint8Array;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
-    depth::CountLeadingZeroBytes,
-    depth::{Depth, DepthMetric},
+    depth::{CountLeadingZeroBytes, Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::id::CommitId,
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},

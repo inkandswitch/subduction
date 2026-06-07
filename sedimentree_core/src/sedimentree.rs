@@ -3152,8 +3152,8 @@ mod tests {
         use alloc::{collections::BTreeSet, vec};
 
         use crate::{
-            depth::CountLeadingZeroBytes,
             crypto::fingerprint::{Fingerprint, FingerprintSeed},
+            depth::CountLeadingZeroBytes,
             fragment::Fragment,
             loose_commit::LooseCommit,
             sedimentree::Sedimentree,

@@ -82,43 +82,96 @@ impl From<Option<u64>> for CallTimeout {
 mod tests {
     use super::*;
 
+    /// One concrete anchor per variant: documents the mapping at a glance and
+    /// fails loudly if a variant's arm is swapped. The exhaustive coverage over
+    /// all inputs lives in the `proptests` below.
     #[test]
-    fn resolve_default_uses_configured() {
+    fn resolve_maps_each_variant() {
         let default = Duration::from_secs(30);
         assert_eq!(CallTimeout::Default.resolve(default), Some(default));
-    }
-
-    #[test]
-    fn resolve_uncapped_is_none() {
-        assert_eq!(CallTimeout::Uncapped.resolve(Duration::from_secs(30)), None);
-    }
-
-    #[test]
-    fn resolve_explicit_uses_millis_ignoring_default() {
+        assert_eq!(CallTimeout::Uncapped.resolve(default), None);
         assert_eq!(
-            CallTimeout::TimeoutMillis(5_000).resolve(Duration::from_secs(30)),
+            CallTimeout::TimeoutMillis(5_000).resolve(default),
             Some(Duration::from_millis(5_000))
         );
     }
 
+    /// Anchors for the JS-shape conversion (`undefined`/`number`).
     #[test]
-    fn from_option_millis_maps_none_to_default() {
+    fn from_option_millis_anchors() {
         assert_eq!(CallTimeout::from(None), CallTimeout::Default);
-    }
-
-    #[test]
-    fn from_option_millis_maps_some_to_explicit() {
         assert_eq!(
             CallTimeout::from(Some(1_234)),
             CallTimeout::TimeoutMillis(1_234)
         );
     }
 
-    #[test]
-    fn from_never_produces_uncapped() {
-        // The Wasm/JS shape cannot express `Uncapped`.
-        for millis in [None, Some(0), Some(1), Some(u64::MAX)] {
-            assert_ne!(CallTimeout::from(millis), CallTimeout::Uncapped);
+    #[cfg(feature = "bolero")]
+    mod proptests {
+        use super::*;
+
+        /// Test-only generator for `CallTimeout` (we don't derive `Arbitrary`
+        /// on the production type). A tagged choice keeps all three variants —
+        /// including `Uncapped`, which `From<Option<u64>>` cannot produce —
+        /// reachable.
+        #[derive(Debug, Clone, Copy, arbitrary::Arbitrary)]
+        enum AnyCallTimeout {
+            Default,
+            Uncapped,
+            TimeoutMillis(u64),
+        }
+
+        impl From<AnyCallTimeout> for CallTimeout {
+            fn from(any: AnyCallTimeout) -> Self {
+                match any {
+                    AnyCallTimeout::Default => Self::Default,
+                    AnyCallTimeout::Uncapped => Self::Uncapped,
+                    AnyCallTimeout::TimeoutMillis(n) => Self::TimeoutMillis(n),
+                }
+            }
+        }
+
+        /// `resolve` is a total mapping: each variant resolves to its defined
+        /// deadline, and `Uncapped` is the *only* variant that erases the
+        /// deadline (yields `None`). Holds for every variant and every default.
+        #[test]
+        fn prop_resolve_is_total_and_only_uncapped_is_none() {
+            bolero::check!()
+                .with_arbitrary::<(AnyCallTimeout, u64)>()
+                .for_each(|(any, default_ms)| {
+                    let ct = CallTimeout::from(*any);
+                    let default = Duration::from_millis(*default_ms);
+                    let got = ct.resolve(default);
+
+                    match ct {
+                        CallTimeout::Default => assert_eq!(got, Some(default)),
+                        CallTimeout::Uncapped => assert_eq!(got, None),
+                        CallTimeout::TimeoutMillis(n) => {
+                            assert_eq!(got, Some(Duration::from_millis(n)));
+                        }
+                    }
+
+                    // The deadline is erased iff the policy is `Uncapped`.
+                    assert_eq!(got.is_none(), matches!(ct, CallTimeout::Uncapped));
+                });
+        }
+
+        /// `From<Option<u64>>` maps the JS shape exactly, and — over the WHOLE
+        /// `Option<u64>` domain — never yields `Uncapped` (JS cannot express
+        /// "no timeout"). Subsumes the deleted example-based
+        /// `from_never_produces_uncapped`.
+        #[test]
+        fn prop_from_option_millis_maps_js_shape_and_never_uncapped() {
+            bolero::check!()
+                .with_arbitrary::<Option<u64>>()
+                .for_each(|opt| {
+                    let ct = CallTimeout::from(*opt);
+                    match opt {
+                        None => assert_eq!(ct, CallTimeout::Default),
+                        Some(n) => assert_eq!(ct, CallTimeout::TimeoutMillis(*n)),
+                    }
+                    assert_ne!(ct, CallTimeout::Uncapped);
+                });
         }
     }
 }

@@ -40,9 +40,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use sedimentree_core::{
-    depth::CountLeadingZeroBytes,
     crypto::fingerprint::FingerprintSeed,
-    depth::DepthMetric,
+    depth::{CountLeadingZeroBytes, DepthMetric},
     fragment::{Fragment, checkpoint::Checkpoint},
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,

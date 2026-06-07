@@ -786,6 +786,72 @@ async fn dropping_full_sync_aborts_spawned_per_document_tasks() -> TestResult {
     Ok(())
 }
 
+/// An **uncapped** ([`CallTimeout::Uncapped`]) sync against a wedged peer must
+/// NOT self-terminate (it has no deadline) — it stays pending until the peer
+/// disconnects, at which point it resolves as `ResponseDropped` via
+/// `cancel_all_pending`. This pins the real-world `Uncapped` contract: "no
+/// deadline; the only non-success exit is disconnect (or an outer drop)."
+#[tokio::test(flavor = "current_thread")]
+async fn uncapped_sync_stays_pending_then_resolves_on_disconnect() -> TestResult {
+    let a_signer = make_signer(40);
+    let b_signer = make_signer(41);
+    let a = make_node(a_signer.clone());
+    let b = make_node(b_signer.clone());
+
+    let (_t_a, t_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    // Wedge B: byte-connected but never answers.
+    t_b.pause();
+
+    let sed_id = SedimentreeId::new([7u8; 32]);
+    let done = Arc::new(AtomicUsize::new(0));
+    let done_clone = done.clone();
+    let a_clone = a.clone();
+    let sync_handle = tokio::spawn(async move {
+        let r = a_clone
+            .sync_with_all_peers(sed_id, true, CallTimeout::Uncapped)
+            .await;
+        done_clone.store(1, Ordering::SeqCst);
+        r
+    });
+
+    // The uncapped call must still be pending after a window that would have
+    // tripped any sane default deadline. If `Uncapped` (wrongly) resolved to a
+    // bound, `done` would flip to 1 here.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        done.load(Ordering::SeqCst),
+        0,
+        "an uncapped sync must NOT self-terminate while the peer is wedged"
+    );
+
+    // Disconnect: the dropped mux sender must resolve the uncapped call.
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    a.disconnect_from_peer(&b_peer).await?;
+
+    let result = tokio::time::timeout(BOUND, sync_handle).await;
+    assert!(
+        result.is_ok(),
+        "uncapped sync did not resolve within {BOUND:?} after disconnect; \
+         disconnect must drop the pending mux sender"
+    );
+    let result = result.expect("join error").expect("task panicked")?;
+
+    let (success, _stats, conn_errs) = result
+        .get(&b_peer)
+        .expect("wedged peer must be present in the result map");
+    assert!(!success, "peer should not have succeeded");
+    assert!(
+        matches!(conn_errs[0].1, CallError::ResponseDropped),
+        "uncapped call must resolve as ResponseDropped on disconnect, \
+         never Timeout; got {:?}",
+        conn_errs[0].1
+    );
+
+    Ok(())
+}
+
 /// Poll `cond` until it holds or `limit` elapses. Returns whether it held.
 async fn wait_for(limit: Duration, mut cond: impl FnMut() -> bool) -> bool {
     let start = std::time::Instant::now();

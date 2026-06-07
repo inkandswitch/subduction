@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    depth::CountLeadingZeroBytes,
     crypto::fingerprint::FingerprintSeed,
+    depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,

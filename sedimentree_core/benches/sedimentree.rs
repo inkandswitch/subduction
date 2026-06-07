@@ -240,7 +240,7 @@ mod digest {
     use std::hint::black_box;
 
     use criterion::{BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{depth::CountLeadingZeroBytes, depth::DepthMetric};
+    use sedimentree_core::depth::{CountLeadingZeroBytes, DepthMetric};
 
     use super::generators::{commit_id_from_seed, commit_id_with_leading_zeros};
 

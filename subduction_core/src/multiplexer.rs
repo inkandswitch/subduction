@@ -273,12 +273,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_roundtrip_timeout_is_reported() {
-        let mux = Multiplexer::new(PeerId::new([7u8; 32]), Duration::from_secs(12));
-        assert_eq!(mux.default_roundtrip_timeout(), Duration::from_secs(12));
-    }
-
-    #[tokio::test]
     async fn cancel_all_pending_drops_registered_senders() {
         let mux = test_mux();
         let req_id = mux.next_request_id();

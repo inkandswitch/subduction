@@ -11,7 +11,7 @@ use testresult::TestResult;
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::Blob, depth::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
+    blob::Blob, crypto::digest::Digest, depth::CountLeadingZeroBytes, id::SedimentreeId,
     loose_commit::id::CommitId,
 };
 use subduction_core::{

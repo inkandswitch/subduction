@@ -687,8 +687,8 @@ mod tests {
                 decode::DecodeFields,
                 encode::{Encode, EncodeFields},
             },
-            depth::CountLeadingZeroBytes,
             crypto::digest::Digest,
+            depth::CountLeadingZeroBytes,
             fragment::Fragment,
         };
 

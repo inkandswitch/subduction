@@ -540,3 +540,151 @@ mod call_deadline {
         );
     }
 }
+
+// ── Local (Wasm) path: deadline + cancel-safety ─────────────────────────
+//
+// The `Local` `call_inner` is a structurally-separate copy of the `Sendable`
+// one (the `#[future_form]`-generated twin) and underpins the entire JS
+// surface, so it needs its own coverage rather than relying on the `Sendable`
+// tests. These mirror the key `call_deadline` cases on the `Local` future form.
+
+mod call_deadline_local {
+    use std::sync::Arc;
+
+    use future_form::Local;
+    use futures::future::LocalBoxFuture;
+    use subduction_core::{
+        authenticated::Authenticated,
+        connection::{
+            managed::{CallError, ManagedCall, ManagedConnection},
+            message::BatchSyncRequest,
+            test_utils::ChannelMockConnection,
+        },
+        multiplexer::Multiplexer,
+        timeout::{TimedOut, Timeout},
+    };
+
+    use super::*;
+
+    fn req(id: RequestId) -> BatchSyncRequest {
+        BatchSyncRequest {
+            req_id: id,
+            id: SedimentreeId::new([0xCE; 32]),
+            fingerprint_summary: empty_fingerprint_summary(),
+            subscribe: false,
+        }
+    }
+
+    /// A `Local` timeout that always fires immediately.
+    #[derive(Clone, Copy)]
+    struct AlwaysTimeoutLocal;
+
+    impl Timeout<Local> for AlwaysTimeoutLocal {
+        fn timeout<'a, T: 'a>(
+            &'a self,
+            _dur: Duration,
+            _fut: LocalBoxFuture<'a, T>,
+        ) -> LocalBoxFuture<'a, Result<T, TimedOut>> {
+            Box::pin(async { Err(TimedOut) })
+        }
+    }
+
+    /// A `Local` timeout that never fires: it just awaits the inner future.
+    #[derive(Clone, Copy)]
+    struct NeverTimeoutLocal;
+
+    impl Timeout<Local> for NeverTimeoutLocal {
+        fn timeout<'a, T: 'a>(
+            &'a self,
+            _dur: Duration,
+            fut: LocalBoxFuture<'a, T>,
+        ) -> LocalBoxFuture<'a, Result<T, TimedOut>> {
+            Box::pin(async move { Ok(fut.await) })
+        }
+    }
+
+    type MockHandle =
+        subduction_core::connection::test_utils::ChannelMockConnectionHandle<SyncMessage>;
+
+    fn managed_with<O: Timeout<Local>>(
+        mux: Arc<Multiplexer>,
+        timer: O,
+    ) -> (
+        ManagedConnection<ChannelMockConnection<SyncMessage>, Local, O>,
+        MockHandle,
+    ) {
+        let peer_id = mux.peer_id();
+        let (conn, handle) = ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
+        let auth = Authenticated::new_for_test(conn, peer_id);
+        (ManagedConnection::new(auth, mux, timer), handle)
+    }
+
+    type LocalManaged =
+        ManagedConnection<ChannelMockConnection<SyncMessage>, Local, AlwaysTimeoutLocal>;
+    type LocalManagedNever =
+        ManagedConnection<ChannelMockConnection<SyncMessage>, Local, NeverTimeoutLocal>;
+
+    /// `Some(deadline)` on the `Local` path yields `Timeout` and leaves no
+    /// pending entry (the drop guard fires on the still-registered sender).
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_some_deadline_times_out_and_leaves_no_pending_entry() {
+        let mux = Arc::new(Multiplexer::new(test_peer_id(), Duration::from_secs(30)));
+        let (managed, _handle) = managed_with(mux.clone(), AlwaysTimeoutLocal);
+        let id = managed.next_request_id();
+
+        let result = <LocalManaged as ManagedCall<Local, SyncMessage>>::call(
+            &managed,
+            req(id),
+            Some(Duration::from_millis(1)),
+        )
+        .await;
+        assert!(matches!(result, Err(CallError::Timeout)), "got {result:?}");
+
+        assert_eq!(
+            mux.pending_len().await,
+            0,
+            "a timed-out Local call must leave no pending entry"
+        );
+        assert!(
+            !mux.resolve_pending(&test_batch_sync_response(id)).await,
+            "a late response must find no pending caller"
+        );
+    }
+
+    /// **Cancel-safety on the `Local` path**: dropping the call future before it
+    /// resolves removes the pending entry. `NeverTimeoutLocal` parks the call on
+    /// its receiver; we drop the future and assert the map is empty.
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_dropping_call_future_midflight_leaves_no_pending_entry() {
+        let mux = Arc::new(Multiplexer::new(test_peer_id(), Duration::from_secs(30)));
+        let (managed, _handle) = managed_with(mux.clone(), NeverTimeoutLocal);
+        let id = managed.next_request_id();
+
+        {
+            let call = <LocalManagedNever as ManagedCall<Local, SyncMessage>>::call(
+                &managed,
+                req(id),
+                None,
+            );
+            futures::pin_mut!(call);
+
+            let polled = futures::poll!(&mut call);
+            assert!(
+                polled.is_pending(),
+                "call should be parked awaiting response"
+            );
+            assert_eq!(
+                mux.pending_len().await,
+                1,
+                "call must have registered a pending entry"
+            );
+            // `call` dropped here.
+        }
+
+        assert_eq!(
+            mux.pending_len().await,
+            0,
+            "dropping the Local call future mid-flight must leave no pending entry"
+        );
+    }
+}
