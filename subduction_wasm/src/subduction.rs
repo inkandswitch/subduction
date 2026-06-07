@@ -182,7 +182,8 @@ impl WasmSubduction {
     /// cannot be cast to a `Function`.
     #[must_use]
     #[wasm_bindgen(constructor)]
-    pub fn new(opts: JsSubductionOptions) -> Self {
+    #[allow(clippy::too_many_lines)]
+    pub fn new(opts: &JsSubductionOptions) -> Self {
         tracing::debug!("new Subduction node");
 
         let default_roundtrip_timeout = opts
