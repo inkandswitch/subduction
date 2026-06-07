@@ -346,6 +346,11 @@ impl WasmSubduction {
     ///   Defaults to allow-all.
     /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
     ///   Defaults to allow-all.
+    /// * `on_remote_heads` - Optional callback fired when a peer's heads change.
+    /// * `on_ephemeral` - Optional callback fired on inbound ephemeral messages.
+    /// * `default_timeout_milliseconds` - Optional default per-call total
+    ///   deadline (milliseconds) for roundtrip syncs when a call omits its own
+    ///   `timeout_milliseconds`. Omit for the built-in default (30000).
     ///
     /// # Panics
     ///
@@ -672,7 +677,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `address` - The WebSocket URL to connect to
-    /// * `timeout_milliseconds` - Per-call total deadline in milliseconds; omit to use the configured default (30000)
     /// * `service_name` - The service name for discovery (defaults to URL host)
     ///
     /// # Errors
@@ -710,7 +714,6 @@ impl WasmSubduction {
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Per-call total deadline in milliseconds; omit to use the configured default (30000)
     ///
     /// # Errors
     ///
@@ -744,7 +747,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `timeout_milliseconds` - Per-call total deadline in milliseconds; omit to use the configured default (30000)
     /// * `service_name` - The service name for discovery (defaults to `base_url`)
     ///
     /// # Errors
