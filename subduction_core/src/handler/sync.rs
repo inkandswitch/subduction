@@ -662,9 +662,9 @@ impl<
         req_id: RequestId,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
-        tracing::info!(tree = ?id, "recv_batch_sync_request");
-
         let peer_id = conn.peer_id();
+        tracing::info!(peer = %peer_id, tree = ?id, "recv_batch_sync_request");
+
         let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {

@@ -393,7 +393,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                         }
                     }
                     Ok(tungstenite::Message::Text(text)) => {
-                        tracing::warn!(peer = %self.peer_id, text = %text, "unexpected text message");
+                        // Peer-controlled content: log only the length and a
+                        // bounded, char-boundary-safe prefix so a peer can't
+                        // drive arbitrary WARN-level log content.
+                        let preview: alloc::string::String = text.chars().take(64).collect();
+                        tracing::warn!(
+                            peer = %self.peer_id,
+                            len = text.len(),
+                            preview = %preview,
+                            "unexpected text message"
+                        );
                     }
                     Ok(tungstenite::Message::Ping(p)) => {
                         tracing::trace!(size = p.len(), peer = %self.peer_id, "received ping");

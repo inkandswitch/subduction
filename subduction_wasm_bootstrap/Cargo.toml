@@ -14,8 +14,8 @@ rust-version.workspace = true
 
 # Pure rlib — never built as a cdylib itself. Linked into each of the
 # three cdylib crates (`subduction_wasm`, `sedimentree_wasm`,
-# `automerge_subduction_wasm`), where its `init_basic()` is invoked from
-# each cdylib's `#[wasm_bindgen(start)]`.
+# `automerge_subduction_wasm`), where its `init_rich_from_env()` is invoked
+# from each cdylib's `#[wasm_bindgen(start)]`.
 
 [features]
 default = ["wasm-tracing"]

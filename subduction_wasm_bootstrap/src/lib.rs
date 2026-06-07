@@ -1,15 +1,11 @@
-//! Shared Wasm cdylib bootstrap: install [`console_error_panic_hook`] and a
-//! `tracing` subscriber stack shared by every Wasm cdylib in this workspace.
+//! Shared Wasm cdylib bootstrap: install [`console_error_panic_hook`] and the
+//! shared `tracing` subscriber stack used by every Wasm cdylib in this workspace.
 //!
-//! Two installation paths are provided:
-//!
-//! - [`init_basic`] — panic hook + a fixed-WARN console subscriber. Minimal;
-//!   retained for compatibility.
-//! - [`init_rich`] / [`init_rich_from_env`] — panic hook + a **reloadable**
-//!   level filter, the browser-console [`wasm_tracing::WasmLayer`], and a
-//!   JS-callback layer ([`set_subduction_logger`]). This is the recommended
-//!   path so every bundle exposes the same runtime-controllable logging
-//!   (`setSubductionLogLevel`, `set_subduction_logger`).
+//! Each cdylib's `#[wasm_bindgen(start)]` calls [`init_rich_from_env`], which
+//! installs the panic hook plus a **reloadable** level filter, the
+//! browser-console [`wasm_tracing::WasmLayer`], and a JS-callback layer
+//! ([`set_subduction_logger`]) — so every bundle exposes the same
+//! runtime-controllable logging (`setSubductionLogLevel`, `set_subduction_logger`).
 //!
 //! All functions are idempotent and safe to call from chained
 //! `#[wasm_bindgen(start)]` functions; the first to install a subscriber wins.
@@ -21,15 +17,6 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 pub mod js_logger;
 
-// Only the basic console stack (`install_basic_tracing`) uses these at the
-// crate root, and it is itself gated on `wasm-tracing`. The rich stack has its
-// own imports in `rich.rs`.
-#[cfg(all(target_arch = "wasm32", feature = "wasm-tracing"))]
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-#[cfg(all(target_arch = "wasm32", feature = "wasm-tracing"))]
-use wasm_tracing::{WasmLayer, WasmLayerConfig};
-
 /// The key used for reading/writing the log level in `localStorage` (browser)
 /// or `process.env` (Node.js).
 pub const LOG_LEVEL_KEY: &str = "SUBDUCTION_LOG_LEVEL";
@@ -38,39 +25,6 @@ pub const LOG_LEVEL_KEY: &str = "SUBDUCTION_LOG_LEVEL";
 /// `console.error` output. Idempotent.
 pub fn install_panic_hook() {
     console_error_panic_hook::set_once();
-}
-
-// ---------------------------------------------------------------------------
-// Basic stack (panic hook + fixed-WARN console subscriber)
-// ---------------------------------------------------------------------------
-
-/// Install a baseline `tracing` subscriber routing events to the browser
-/// console at WARN. No-op on non-wasm32. No-op if a subscriber is already set.
-#[cfg(all(target_arch = "wasm32", feature = "wasm-tracing"))]
-pub fn install_basic_tracing() {
-    if tracing::dispatcher::has_been_set() {
-        return;
-    }
-
-    let mut config = WasmLayerConfig::new().with_max_level(tracing::Level::WARN);
-    config.use_console_methods = true;
-    let wasm_layer = WasmLayer::new(config);
-
-    let _result = tracing_subscriber::registry().with(wasm_layer).try_init();
-}
-
-/// Stub when the console layer is compiled out.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm-tracing")))]
-pub fn install_basic_tracing() {}
-
-/// Stub for non-wasm32 targets so callers can reference this unconditionally.
-#[cfg(not(target_arch = "wasm32"))]
-pub const fn install_basic_tracing() {}
-
-/// Install the panic hook and the baseline tracing subscriber.
-pub fn init_basic() {
-    install_panic_hook();
-    install_basic_tracing();
 }
 
 // ---------------------------------------------------------------------------

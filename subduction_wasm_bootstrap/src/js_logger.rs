@@ -11,7 +11,7 @@ use alloc::{
 };
 use core::fmt;
 use js_sys::Function;
-use std::sync::RwLock;
+use std::sync::{PoisonError, RwLock};
 use tracing::Level;
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 use wasm_bindgen::prelude::*;
@@ -38,10 +38,10 @@ static JS_LOGGER: RwLock<Option<Function>> = RwLock::new(None);
 /// - Heavy processing in the callback may impact performance; collect quickly
 ///   and process later.
 pub fn set_logger(callback: Function) {
-    match JS_LOGGER.write() {
-        Ok(mut guard) => *guard = Some(callback),
-        Err(poisoned) => tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}"),
-    }
+    // Recover from a poisoned lock rather than logging about it (logging from
+    // the logger is circular). The inner `Option` is always safe to overwrite.
+    let mut guard = JS_LOGGER.write().unwrap_or_else(PoisonError::into_inner);
+    *guard = Some(callback);
 }
 
 /// Clear the JavaScript logger callback.
@@ -49,10 +49,8 @@ pub fn set_logger(callback: Function) {
 /// After this, tracing events are no longer forwarded to JavaScript. The layer
 /// remains active but becomes a no-op until a new callback is registered.
 pub fn clear_logger() {
-    match JS_LOGGER.write() {
-        Ok(mut guard) => *guard = None,
-        Err(poisoned) => tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}"),
-    }
+    let mut guard = JS_LOGGER.write().unwrap_or_else(PoisonError::into_inner);
+    *guard = None;
 }
 
 /// Custom tracing layer that forwards events to JavaScript.
@@ -68,13 +66,14 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        let callback_opt = match JS_LOGGER.read() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => {
-                tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}");
-                return;
-            }
-        };
+        // This runs for every event, so it must NOT emit a tracing event on the
+        // error path — doing so would re-enter `on_event`, read the lock again,
+        // and recurse to a stack overflow. Recover a poisoned lock instead
+        // (poison is only possible if a writer panicked mid-assignment, which
+        // the setters never do); the inner `Option` is always safe to read.
+        let guard = JS_LOGGER.read().unwrap_or_else(PoisonError::into_inner);
+        let callback_opt = guard.clone();
+        drop(guard);
 
         if let Some(callback) = callback_opt {
             let metadata = event.metadata();
