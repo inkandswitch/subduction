@@ -147,6 +147,48 @@ type WasmSubductionCore = Subduction<
     WASM_SHARD_COUNT,
 >;
 
+#[wasm_bindgen]
+extern "C" {
+    /// Options for constructing a [`Subduction`](subduction_core::Subduction)
+    /// node. Passed as a single object literal: `new Subduction({ signer,
+    /// storage, ... })`.
+    #[wasm_bindgen(js_name = SubductionOptions)]
+    pub type SubductionOptions;
+
+    #[wasm_bindgen(method, getter)]
+    fn signer(this: &SubductionOptions) -> JsSigner;
+
+    #[wasm_bindgen(method, getter)]
+    fn storage(this: &SubductionOptions) -> JsStorage;
+
+    #[wasm_bindgen(method, getter, js_name = serviceName)]
+    fn service_name(this: &SubductionOptions) -> Option<String>;
+
+    #[wasm_bindgen(method, getter, js_name = hashMetricOverride)]
+    fn hash_metric_override(this: &SubductionOptions) -> Option<JsToDepth>;
+
+    #[wasm_bindgen(method, getter, js_name = maxPendingBlobRequests)]
+    fn max_pending_blob_requests(this: &SubductionOptions) -> Option<u32>;
+
+    #[wasm_bindgen(method, getter, js_name = maxResidentTrees)]
+    fn max_resident_trees(this: &SubductionOptions) -> Option<u32>;
+
+    #[wasm_bindgen(method, getter)]
+    fn policy(this: &SubductionOptions) -> Option<JsPolicy>;
+
+    #[wasm_bindgen(method, getter, js_name = ephemeralPolicy)]
+    fn ephemeral_policy(this: &SubductionOptions) -> Option<JsEphemeralPolicy>;
+
+    #[wasm_bindgen(method, getter, js_name = onRemoteHeads)]
+    fn on_remote_heads(this: &SubductionOptions) -> Option<js_sys::Function>;
+
+    #[wasm_bindgen(method, getter, js_name = onEphemeral)]
+    fn on_ephemeral(this: &SubductionOptions) -> Option<js_sys::Function>;
+
+    #[wasm_bindgen(method, getter, js_name = defaultTimeoutMilliseconds)]
+    fn default_timeout_milliseconds(this: &SubductionOptions) -> Option<u32>;
+}
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 pub struct WasmSubduction {
@@ -166,53 +208,36 @@ impl core::fmt::Debug for WasmSubduction {
 
 #[wasm_bindgen(js_class = Subduction)]
 impl WasmSubduction {
-    /// Create a new [`Subduction`] instance.
+    /// Create a new [`Subduction`] instance from an options object.
     ///
-    /// # Arguments
+    /// ```js
+    /// new Subduction({ signer, storage, serviceName: "sync.example.com" });
+    /// ```
     ///
-    /// * `signer` - The cryptographic signer for this node's identity
-    /// * `storage` - Storage backend for persisting data
-    /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
-    ///   When set, clients can connect without knowing the server's peer ID.
-    /// * `hash_metric_override` - Optional custom depth metric function
-    /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
-    /// * `max_resident_trees` - Optional cap on the number of sedimentrees kept
-    ///   resident in memory (default: 1024). The in-memory map is an LRU cache
-    ///   over `IndexedDB`; cold trees are evicted and re-hydrated on demand. The
-    ///   cap is per-shard-approximate, with an effective floor of
-    ///   `WASM_SHARD_COUNT` (4). `0` or omitted uses the default. Grouped with
-    ///   `max_pending_blob_requests` as the capacity/tuning knobs.
-    /// * `policy` - Optional connection/storage authorization policy.
-    ///   Defaults to allow-all.
-    /// * `ephemeral_policy` - Optional ephemeral message authorization policy.
-    ///   Defaults to allow-all.
-    /// * `on_remote_heads` - Optional callback fired when a peer's heads change.
-    /// * `on_ephemeral` - Optional callback fired on inbound ephemeral messages.
-    /// * `default_timeout_milliseconds` - Optional default per-call total
-    ///   deadline (milliseconds) for roundtrip syncs when a call omits its own
-    ///   `timeout_milliseconds`. Omit for the built-in default (30000).
+    /// `signer` and `storage` are required; all other fields are optional.
+    /// See [`SubductionOptions`] for the full field list and defaults.
     ///
     /// # Panics
     ///
-    /// Panics if `hash_metric_override` is `Some` but the underlying JS value
+    /// Panics if `hashMetricOverride` is provided but the underlying JS value
     /// cannot be cast to a `Function`.
     #[must_use]
     #[wasm_bindgen(constructor)]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        signer: JsSigner,
-        storage: JsStorage,
-        service_name: Option<String>,
-        hash_metric_override: Option<JsToDepth>,
-        max_pending_blob_requests: Option<usize>,
-        max_resident_trees: Option<usize>,
-        policy: Option<JsPolicy>,
-        ephemeral_policy: Option<JsEphemeralPolicy>,
-        on_remote_heads: Option<js_sys::Function>,
-        on_ephemeral: Option<js_sys::Function>,
-        default_timeout_milliseconds: Option<u32>,
-    ) -> Self {
+    pub fn new(options: SubductionOptions) -> Self {
         tracing::debug!("new Subduction node");
+
+        let signer = options.signer();
+        let storage = options.storage();
+        let service_name = options.service_name();
+        let hash_metric_override = options.hash_metric_override();
+        let max_pending_blob_requests = options.max_pending_blob_requests();
+        let max_resident_trees = options.max_resident_trees();
+        let policy = options.policy();
+        let ephemeral_policy = options.ephemeral_policy();
+        let on_remote_heads = options.on_remote_heads();
+        let on_ephemeral = options.on_ephemeral();
+        let default_timeout_milliseconds = options.default_timeout_milliseconds();
+
         let default_roundtrip_timeout = default_timeout_milliseconds
             .map_or(DEFAULT_ROUNDTRIP_TIMEOUT, |ms| {
                 Duration::from_millis(u64::from(ms))
