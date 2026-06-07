@@ -14,6 +14,8 @@
 
 extern crate alloc;
 
+use alloc::string::String;
+
 #[cfg(target_arch = "wasm32")]
 pub mod js_logger;
 
@@ -74,14 +76,12 @@ pub fn init_rich_from_env() {
 /// # Errors
 ///
 /// Returns an error string only if `level` is not a recognized level name.
-/// A missing reloadable filter (e.g. the basic stack installed first) is *not*
-/// an error: the level is persisted and applies on the next startup.
+/// A missing reloadable filter (e.g. another subscriber won the install race)
+/// is *not* an error: the level is persisted and applies on the next startup.
 #[cfg(target_arch = "wasm32")]
-pub fn set_log_level(level: &str) -> Result<(), alloc::string::String> {
+pub fn set_log_level(level: &str) -> Result<(), String> {
     let level_filter = parse_level_filter(level).ok_or_else(|| {
-        alloc::string::String::from(
-            "invalid log level: expected one of trace, debug, info, warn, error, off",
-        )
+        String::from("invalid log level: expected one of trace, debug, info, warn, error, off")
     })?;
 
     // Persist regardless, so the choice survives reloads even when the live
@@ -97,10 +97,10 @@ pub fn set_log_level(level: &str) -> Result<(), alloc::string::String> {
 ///
 /// Returns an error string if `level` is not a recognized level name.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn set_log_level(level: &str) -> Result<(), alloc::string::String> {
+pub fn set_log_level(level: &str) -> Result<(), String> {
     parse_level_filter(level)
         .map(|_| ())
-        .ok_or_else(|| alloc::string::String::from("invalid log level"))
+        .ok_or_else(|| String::from("invalid log level"))
 }
 
 /// Set a JavaScript callback to receive every tracing event. See
@@ -163,19 +163,19 @@ pub fn level_filter_name(level: tracing_subscriber::filter::LevelFilter) -> &'st
 /// 2. `globalThis.process.env.SUBDUCTION_LOG_LEVEL` (Node.js)
 #[cfg(target_arch = "wasm32")]
 #[must_use]
-pub fn read_log_level_from_env() -> Option<alloc::string::String> {
+pub fn read_log_level_from_env() -> Option<String> {
     read_from_local_storage().or_else(read_from_process_env)
 }
 
 /// Non-wasm32 stub (no ambient JS environment).
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]
-pub const fn read_log_level_from_env() -> Option<alloc::string::String> {
+pub const fn read_log_level_from_env() -> Option<String> {
     None
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_from_local_storage() -> Option<alloc::string::String> {
+fn read_from_local_storage() -> Option<String> {
     use wasm_bindgen::{JsCast, JsValue};
 
     let global = js_sys::global();
@@ -219,7 +219,7 @@ fn write_to_local_storage(level: &str) {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_from_process_env() -> Option<alloc::string::String> {
+fn read_from_process_env() -> Option<String> {
     use wasm_bindgen::JsValue;
 
     let global = js_sys::global();

@@ -41,9 +41,9 @@ pub(crate) fn init(initial_level: LevelFilter) {
 /// Update the live reloadable filter, if the rich stack installed it.
 ///
 /// Returns `true` if the level was applied to the running subscriber, or
-/// `false` if no reloadable filter is installed (e.g. a different subscriber —
-/// such as the basic stack — won the install race). In the `false` case the
-/// caller should still persist the choice so it takes effect on next startup.
+/// `false` if no reloadable filter is installed (e.g. another subscriber won
+/// the install race). In the `false` case the caller should still persist the
+/// choice so it takes effect on next startup.
 pub(crate) fn set_level(level: LevelFilter) -> bool {
     match RELOAD_HANDLE.get() {
         Some(handle) => handle.modify(|filter| *filter = level).is_ok(),

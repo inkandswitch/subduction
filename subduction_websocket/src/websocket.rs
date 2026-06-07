@@ -1,6 +1,6 @@
 //! # Generic WebSocket transport for Subduction
 
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{
     fmt::Debug,
     future::{Future, IntoFuture},
@@ -393,7 +393,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                     }
                     Ok(tungstenite::Message::Text(text)) => {
                         // Bound the peer-controlled text in the log.
-                        let preview: alloc::string::String = text.chars().take(64).collect();
+                        let preview: String = text.chars().take(64).collect();
                         tracing::warn!(
                             peer = %self.peer_id,
                             len = text.len(),
