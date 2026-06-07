@@ -203,7 +203,7 @@ test.describe("Long-Poll Connection Tests", () => {
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(99));
         const head = new CommitId(new Uint8Array(32).fill(1));
         await syncerA.addCommit(sedId, head, [], new Uint8Array([1, 2, 3, 4, 5]));
-        await syncerA.syncWithPeer(serverPeerId, sedId, true, 5000n);
+        await syncerA.syncWithPeer(serverPeerId, sedId, true, 5000);
 
         // Peer B: connect, sync from server, verify data arrived
         const signerB = await WebCryptoSigner.setup();
@@ -212,7 +212,7 @@ test.describe("Long-Poll Connection Tests", () => {
         const authB = await SubductionLongPoll.tryDiscover(baseUrl, signerB, serviceName);
         const serverPeerIdB = authB.peerId;
         await syncerB.addConnection(authB.toTransport());
-        await syncerB.syncWithPeer(serverPeerIdB, sedId, true, 5000n);
+        await syncerB.syncWithPeer(serverPeerIdB, sedId, true, 5000);
 
         const idsB = await syncerB.sedimentreeIds();
 
