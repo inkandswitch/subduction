@@ -76,7 +76,7 @@ fn load_key_file_bytes(path: &Path) -> Result<[u8; 32]> {
         fs::read(path).wrap_err_with(|| format!("Failed to read key file: {}", path.display()))?;
 
     let seed_bytes = parse_key_file_contents(&contents, path)?;
-    tracing::info!("Loaded signing key from {}", path.display());
+    tracing::info!(path = %path.display(), "Loaded signing key");
     Ok(seed_bytes)
 }
 

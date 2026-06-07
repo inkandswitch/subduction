@@ -156,10 +156,10 @@ impl<
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(_, _, _, c)| c == conn) {
             let (conn_id, task_id, handle, _) = tasks.swap_remove(pos);
-            tracing::debug!("ConnectionManager: removing connection {conn_id} (task {task_id})");
+            tracing::debug!(conn = %conn_id, task = %task_id, "removing connection");
             handle.abort();
         } else {
-            tracing::debug!("ConnectionManager: connection not found for removal");
+            tracing::debug!("connection not found for removal");
         }
     }
 
@@ -167,10 +167,10 @@ impl<
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(id, _, _, _)| *id == conn_id) {
             let (conn_id, task_id, handle, _) = tasks.swap_remove(pos);
-            tracing::debug!("ConnectionManager: removing connection {conn_id} (task {task_id})");
+            tracing::debug!(conn = %conn_id, task = %task_id, "removing connection");
             handle.abort();
         } else {
-            tracing::debug!("ConnectionManager: connection {conn_id} not found for removal");
+            tracing::debug!(conn = %conn_id, "connection not found for removal");
         }
     }
 }
@@ -221,9 +221,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                         let conn_id = ConnectionId::new(
                             manager.next_connection_id.fetch_add(1, Ordering::Relaxed),
                         );
-                        tracing::debug!(
-                            "ConnectionManager: adding connection {conn_id} for peer {peer_id}"
-                        );
+                        tracing::debug!(conn = %conn_id, peer = %peer_id, "adding connection");
 
                         let task_id = manager.next_task_id.fetch_add(1, Ordering::Relaxed);
                         let tasks = manager.tasks.clone();
@@ -254,9 +252,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                                 tasks_guard.swap_remove(pos);
                             }
                             drop(closed.send((conn_id, conn_clone)).await);
-                            tracing::debug!(
-                                "connection {conn_id} for peer {peer_id}: closed normally"
-                            );
+                            tracing::debug!(conn = %conn_id, peer = %peer_id, "connection closed normally");
                         });
 
                         let handle = manager.spawner.spawn(fut);
@@ -267,9 +263,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                             .push((conn_id, task_id, handle, conn));
                     }
                     Command::ReAdd(conn_id, conn, peer_id) => {
-                        tracing::debug!(
-                            "ConnectionManager: re-adding connection {conn_id} for peer {peer_id}"
-                        );
+                        tracing::debug!(conn = %conn_id, peer = %peer_id, "re-adding connection");
 
                         let task_id = manager.next_task_id.fetch_add(1, Ordering::Relaxed);
                         let tasks = manager.tasks.clone();
@@ -300,9 +294,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                                 tasks_guard.swap_remove(pos);
                             }
                             drop(closed.send((conn_id, conn_clone)).await);
-                            tracing::debug!(
-                                "connection {conn_id} for peer {peer_id}: closed normally"
-                            );
+                            tracing::debug!(conn = %conn_id, peer = %peer_id, "connection closed normally");
                         });
 
                         let handle = manager.spawner.spawn(fut);
@@ -320,7 +312,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                     }
                 }
             }
-            tracing::debug!("ConnectionManager: command channel closed, shutting down");
+            tracing::debug!("command channel closed, shutting down");
 
             // Abort outstanding `connection_loop`s and drop our `Conn` clones
             // so transports with `Clone`d channel senders (e.g. WebSocket)
@@ -328,7 +320,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
             let mut tasks_guard = manager.tasks.lock().await;
             let n = tasks_guard.len();
             if n > 0 {
-                tracing::debug!("ConnectionManager: aborting {n} connection_loop tasks");
+                tracing::debug!(count = n, "aborting connection_loop tasks");
                 for (_, _, handle, _) in tasks_guard.iter() {
                     handle.abort();
                 }
@@ -352,19 +344,19 @@ async fn connection_loop<
     loop {
         match conn.recv().await {
             Ok(msg) => {
-                tracing::debug!("connection for peer {peer_id}: received message");
+                tracing::trace!(peer = %peer_id, "connection received message");
                 let sender = if is_response(&msg) {
                     &responses
                 } else {
                     &messages
                 };
                 if sender.send((conn.clone(), msg)).await.is_err() {
-                    tracing::warn!("connection for peer {peer_id}: message channel closed");
+                    tracing::warn!(peer = %peer_id, "connection message channel closed");
                     break;
                 }
             }
             Err(e) => {
-                tracing::debug!("connection for peer {peer_id}: recv error: {e}");
+                tracing::debug!(peer = %peer_id, error = %e, "connection recv error");
                 break;
             }
         }

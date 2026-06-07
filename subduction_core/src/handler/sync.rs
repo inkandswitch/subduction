@@ -18,6 +18,7 @@
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
+use tracing::Instrument;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -312,12 +313,18 @@ impl<
         message: SyncMessage,
     ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
         let from = conn.peer_id();
-        tracing::debug!(
-            from = %from,
-            message_type = message.variant_name(),
-            sedimentree_id = ?message.sedimentree_id(),
-            request_id = ?message.request_id(),
-            "dispatch"
+
+        // Per-message correlation span (DEBUG; off at the prod default of INFO).
+        // Instrumenting the dispatch future threads `peer`/`msg`/`tree`/`req`
+        // onto every event emitted by the `recv_*` handlers below without
+        // re-passing them, and stays correct across `.await` points (unlike an
+        // entered guard). See `design/logging.md`.
+        let span = tracing::debug_span!(
+            "dispatch",
+            peer = %from,
+            msg = message.variant_name(),
+            tree = ?message.sedimentree_id(),
+            req = ?message.request_id(),
         );
 
         #[cfg(feature = "metrics")]
@@ -326,6 +333,16 @@ impl<
         #[cfg(feature = "metrics")]
         let _timer = crate::metrics::DispatchTimer::new();
 
+        self.dispatch_inner(from, message, conn).instrument(span).await
+    }
+
+    /// Inner dispatch body, run inside the per-message correlation span.
+    async fn dispatch_inner(
+        &self,
+        from: PeerId,
+        message: SyncMessage,
+        conn: &Authenticated<Conn, Async>,
+    ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
         // Note: remote heads arrive via three paths:
         //
         // 1. `responder_heads` in `BatchSyncResponse` — handled by
@@ -366,7 +383,7 @@ impl<
 
                 if subscribe {
                     self.add_subscription(from, id).await;
-                    tracing::debug!("added subscription for peer {from} to sedimentree {id:?}");
+                    tracing::debug!(peer = %from, tree = ?id, "added subscription");
                 }
 
                 self.recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
@@ -381,27 +398,24 @@ impl<
                         self.recv_batch_sync_response(&from, id, diff).await?;
                     }
                     SyncResult::NotFound => {
-                        tracing::info!("peer {from} reports sedimentree {id:?} not found");
+                        // Routine sync outcome, not an anomaly → DEBUG.
+                        tracing::debug!(peer = %from, tree = ?id, "peer reports sedimentree not found");
                     }
                     SyncResult::Unauthorized => {
-                        tracing::info!(
-                            "peer {from} reports we are unauthorized to access sedimentree {id:?}"
-                        );
+                        // Routine sync outcome (we lack access) → DEBUG.
+                        tracing::debug!(peer = %from, tree = ?id, "peer reports we are unauthorized for sedimentree");
                     }
                 }
             }
             SyncMessage::BlobsRequest { id, digests } => {
                 match self.recv_blob_request(conn, id, &digests).await {
                     Ok(()) => {
-                        tracing::info!("successfully handled blob request from peer {:?}", from);
+                        // Happy path of every blob request → DEBUG.
+                        tracing::debug!(peer = %from, tree = ?id, "handled blob request");
                     }
                     Err(BlobRequestErr::IoError(e)) => Err(e)?,
                     Err(BlobRequestErr::MissingBlobs(missing)) => {
-                        tracing::warn!(
-                            "missing blobs for request from peer {:?}: {:?}",
-                            from,
-                            missing
-                        );
+                        tracing::warn!(peer = %from, tree = ?id, missing = ?missing, "missing blobs for request");
                     }
                 }
             }
@@ -419,26 +433,26 @@ impl<
                 };
 
                 tracing::debug!(
-                    "blob response from peer {from} for {id:?}: {accepted_count}/{} blobs acknowledged (compound storage - blobs stored with commits)",
-                    blobs.len()
+                    peer = %from,
+                    tree = ?id,
+                    accepted = accepted_count,
+                    total = blobs.len(),
+                    "blob response acknowledged (compound storage)"
                 );
             }
             SyncMessage::RemoveSubscriptions(crate::connection::message::RemoveSubscriptions {
                 ids,
             }) => {
                 self.remove_subscriptions(from, &ids).await;
-                tracing::debug!("removed subscriptions for peer {from}: {ids:?}");
+                tracing::debug!(peer = %from, trees = ?ids, "removed subscriptions");
             }
             SyncMessage::DataRequestRejected(crate::connection::message::DataRequestRejected {
                 id,
             }) => {
-                tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
+                tracing::debug!(peer = %from, tree = ?id, "peer rejected our data request");
             }
             SyncMessage::HeadsUpdate { id, heads } => {
-                tracing::debug!(
-                    "peer {from} reports heads for sedimentree {id:?}: {} heads",
-                    heads.heads.len()
-                );
+                tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
                 self.heads_notifier.notify(id, from, heads);
             }
         }
@@ -461,31 +475,29 @@ impl<
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(
-                    "commit signature verification failed from peer {:?}: {e}",
-                    from
-                );
+                tracing::warn!(peer = %from, error = %e, "commit signature verification failed");
                 return Ok(false);
             }
         };
 
         let author = verified.verified_author();
         tracing::debug!(
-            "receiving commit {:?} for sedimentree {:?} from peer {:?} (author {:?})",
-            Digest::hash(verified.payload()),
-            id,
-            from,
-            author
+            digest = ?Digest::hash(verified.payload()),
+            tree = ?id,
+            peer = %from,
+            author = ?author,
+            "receiving commit"
         );
 
         let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
-                    "policy rejected commit from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                    from,
-                    author,
-                    id
+                    peer = %from,
+                    author = ?author,
+                    tree = ?id,
+                    error = %e,
+                    "policy rejected commit"
                 );
                 return Ok(false);
             }
@@ -496,7 +508,7 @@ impl<
         let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
+                tracing::warn!(peer = %from, error = %e, "blob mismatch");
                 return Err(IoError::BlobMismatch(e));
             }
         };
@@ -520,7 +532,7 @@ impl<
                 },
             };
             if let Err(e) = conn.send(&heads_msg).await {
-                tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+                tracing::warn!(peer = %from, error = %e, "peer disconnected while sending HeadsUpdate");
             }
 
             // Broadcast to subscribers (excluding sender)
@@ -537,7 +549,7 @@ impl<
                     },
                 };
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::warn!("peer {peer_id} disconnected: {e}");
+                    tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
                     self.remove_connection(&conn).await;
                 }
             }
@@ -557,31 +569,29 @@ impl<
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(
-                    "fragment signature verification failed from peer {:?}: {e}",
-                    from
-                );
+                tracing::warn!(peer = %from, error = %e, "fragment signature verification failed");
                 return Ok(false);
             }
         };
 
         let author = verified.verified_author();
         tracing::debug!(
-            "receiving fragment {:?} for sedimentree {:?} from peer {:?} (author {:?})",
-            Digest::hash(verified.payload()),
-            id,
-            from,
-            author
+            digest = ?Digest::hash(verified.payload()),
+            tree = ?id,
+            peer = %from,
+            author = ?author,
+            "receiving fragment"
         );
 
         let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
-                    "policy rejected fragment from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                    from,
-                    author,
-                    id
+                    peer = %from,
+                    author = ?author,
+                    tree = ?id,
+                    error = %e,
+                    "policy rejected fragment"
                 );
                 return Ok(false);
             }
@@ -592,7 +602,7 @@ impl<
         let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
+                tracing::warn!(peer = %from, error = %e, "blob mismatch");
                 return Err(IoError::BlobMismatch(e));
             }
         };
@@ -616,7 +626,7 @@ impl<
                 },
             };
             if let Err(e) = conn.send(&heads_msg).await {
-                tracing::warn!("peer {} disconnected while sending HeadsUpdate: {e}", from);
+                tracing::warn!(peer = %from, error = %e, "peer disconnected while sending HeadsUpdate");
             }
 
             // Broadcast to subscribers (excluding sender)
@@ -633,7 +643,7 @@ impl<
                     },
                 };
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::warn!("peer {peer_id} disconnected: {e}");
+                    tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
                     self.remove_connection(&conn).await;
                 }
             }
@@ -650,7 +660,7 @@ impl<
         req_id: RequestId,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
-        tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
+        tracing::info!(tree = ?id, "recv_batch_sync_request");
 
         let peer_id = conn.peer_id();
         let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
@@ -671,8 +681,9 @@ impl<
                 .into();
                 if let Err(e) = conn.send(&msg).await {
                     tracing::info!(
-                        "peer {} disconnected while sending unauthorized response: {e}",
-                        conn.peer_id()
+                        peer = %conn.peer_id(),
+                        error = %e,
+                        "peer disconnected while sending unauthorized response"
                     );
                 }
                 return Ok(());
@@ -731,9 +742,11 @@ impl<
         };
 
         tracing::debug!(
-            "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commit fps and {} fragment fps",
-            their_fingerprints.commit_fingerprints().len(),
-            their_fingerprints.fragment_fingerprints().len()
+            tree = ?id,
+            req = ?req_id,
+            commit_fps = their_fingerprints.commit_fingerprints().len(),
+            fragment_fps = their_fingerprints.fragment_fingerprints().len(),
+            "received batch sync request"
         );
 
         // The wire diff requires the minimal form. A freshly built value is
@@ -769,11 +782,13 @@ impl<
         }
 
         tracing::info!(
-            "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments, requesting {} commits and {} fragments",
-            their_missing_commits.len(),
-            their_missing_fragments.len(),
-            our_missing_commit_fingerprints.len(),
-            our_missing_fragment_fingerprints.len(),
+            tree = ?id,
+            req = ?req_id,
+            missing_commits = their_missing_commits.len(),
+            missing_fragments = their_missing_fragments.len(),
+            requesting_commits = our_missing_commit_fingerprints.len(),
+            requesting_fragments = our_missing_fragment_fingerprints.len(),
+            "sending batch sync response"
         );
 
         let sync_diff = SyncDiff {
@@ -793,7 +808,7 @@ impl<
         }
         .into();
         if let Err(e) = conn.send(&msg).await {
-            tracing::warn!("peer {} disconnected: {e}", conn.peer_id());
+            tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
         }
 
         Ok(())
@@ -887,7 +902,7 @@ impl<
             Ok(Some(tree)) => tree.heads(&self.depth_metric),
             Ok(None) => Vec::new(),
             Err(e) => {
-                tracing::warn!("heads_for({id:?}): hydration failed: {e}");
+                tracing::warn!(tree = ?id, error = %e, "heads_for: hydration failed");
                 Vec::new()
             }
         }

@@ -406,6 +406,7 @@ where
     ///
     /// Returns [`ProtocolError`] if peer ID conversion, message signing, or
     /// sending fails.
+    #[tracing::instrument(name = "keyhive_sync", level = "info", skip_all, fields(target = ?target))]
     pub async fn sync_keyhive(
         &self,
         target: Option<&KeyhivePeerId>,
@@ -542,6 +543,7 @@ where
     ///
     /// Returns [`ProtocolError`] if signature verification, contact card
     /// ingestion, or message handling fails.
+    #[tracing::instrument(name = "keyhive_handle_message", level = "debug", skip_all, fields(peer = %from))]
     pub async fn handle_message(
         &self,
         from: &KeyhivePeerId,
@@ -1245,6 +1247,7 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if the protocol call fails.
+    #[tracing::instrument(name = "keyhive_initiate_sync", level = "info", skip_all, fields(peer = %peer))]
     pub async fn initiate_sync_with_peer(
         &self,
         peer: &KeyhivePeerId,

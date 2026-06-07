@@ -13,6 +13,7 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
+use tracing::Instrument;
 use sedimentree_core::depth::DepthMetric;
 use subduction_core::{
     authenticated::Authenticated,
@@ -246,7 +247,7 @@ where
                     res = tcp_listener.accept() => {
                         match res {
                             Ok((tcp, addr)) => {
-                                tracing::info!("new TCP connection from {addr}");
+                                tracing::info!(client = %addr, "new TCP connection");
 
                                 let task_subduction = inner_subduction.clone();
                                 let task_discovery_audience = discovery_audience;
@@ -255,6 +256,9 @@ where
                                 let task_cancel = child_cancellation_token.clone();
                                 let task_tracker = accept_loop_tracker.clone();
                                 let outer_cancel = task_cancel.clone();
+                                // Per-connection span: every event from the upgrade,
+                                // handshake, and listener for this client inherits `client`.
+                                let conn_span = tracing::info_span!("ws_connection", client = %addr);
                                 conns.spawn(async move {
                                     // `accept_hdr_async_with_config` and `handshake::respond`
                                     // are not cancellation-aware; race against the token so
@@ -268,12 +272,12 @@ where
                                         let ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
                                             Ok(ws) => ws,
                                             Err(e) => {
-                                                tracing::error!("WebSocket upgrade error from {addr}: {e}");
+                                                tracing::error!(error = %e, "WebSocket upgrade error");
                                                 return;
                                             }
                                         };
 
-                                        tracing::debug!("WebSocket upgrade complete for {addr}");
+                                        tracing::debug!("WebSocket upgrade complete");
 
                                         // Step 2: Subduction handshake and connection setup
                                         // Accepts either Audience::Known(peer_id) or discovery audience
@@ -347,14 +351,11 @@ where
 
                                         let authenticated = match result {
                                             Ok((auth, ())) => {
-                                                tracing::info!(
-                                                    "Handshake complete: client {} from {addr}",
-                                                    auth.peer_id()
-                                                );
+                                                tracing::info!(peer = %auth.peer_id(), "handshake complete");
                                                 auth
                                             }
                                             Err(e) => {
-                                                tracing::warn!("Handshake failed from {addr}: {e}");
+                                                tracing::warn!(error = %e, "handshake failed");
                                                 return;
                                             }
                                         };
@@ -362,7 +363,7 @@ where
                                         // Step 3: Add connection to Subduction
                                         let auth_mt = authenticated.map(MessageTransport::new);
                                         if let Err(e) = task_subduction.add_connection(auth_mt).await {
-                                            tracing::error!("Failed to add connection: {e}");
+                                            tracing::error!(error = %e, "failed to add connection");
                                         }
                                     };
 
@@ -372,9 +373,9 @@ where
                                         }
                                         () = handshake_fut => {}
                                     }
-                                });
+                                }.instrument(conn_span));
                             }
-                            Err(e) => tracing::error!("Accept error: {e}"),
+                            Err(e) => tracing::error!(error = %e, "accept error"),
                         }
                     }
                 }

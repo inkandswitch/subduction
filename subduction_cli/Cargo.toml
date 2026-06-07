@@ -54,7 +54,7 @@ tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true, default-features = true }
 tracing-loki = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, default-features = true, features = ["env-filter"] }
+tracing-subscriber = { workspace = true, default-features = true, features = ["env-filter", "json"] }
 tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
 

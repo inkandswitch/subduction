@@ -118,7 +118,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         let method = req.method().clone();
         let path = req.uri().path();
 
-        tracing::debug!("HTTP long-poll: {method} {path}");
+        tracing::debug!(method = %method, path = path, "HTTP long-poll request");
 
         let response = match (&method, path) {
             (&Method::POST, "/lp/handshake") => self.handle_handshake(req).await,
@@ -134,7 +134,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         match response {
             Ok(resp) => Ok(resp),
             Err(e) => {
-                tracing::error!("handler error: {e}");
+                tracing::error!(error = %e, "handler error");
                 Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)?)
             }
         }
@@ -182,7 +182,9 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
                 let session_id = SessionId::random();
 
                 tracing::info!(
-                    "HTTP long-poll handshake complete: peer {peer_id}, session {session_id}"
+                    peer = %peer_id,
+                    session = %session_id,
+                    "HTTP long-poll handshake complete"
                 );
 
                 self.sessions
@@ -205,7 +207,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
                     .body(Full::new(Bytes::from(response_bytes)))?)
             }
             Err(e) => {
-                tracing::warn!("handshake failed: {e}");
+                tracing::warn!(error = %e, "handshake failed");
 
                 if let Some(response_bytes) = response_bytes {
                     Ok(Response::builder()
@@ -238,9 +240,9 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         let body = read_body(req, self.max_body_size).await?;
 
         tracing::debug!(
-            "POST /lp/send: peer {} ({} bytes)",
-            entry.peer_id,
-            body.len()
+            peer = %entry.peer_id,
+            bytes = body.len(),
+            "POST /lp/send"
         );
 
         entry
@@ -268,13 +270,13 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
             .await
             .ok_or(ServerError::SessionNotFound)?;
 
-        tracing::debug!("POST /lp/recv: peer {} waiting...", entry.peer_id);
+        tracing::debug!(peer = %entry.peer_id, "POST /lp/recv: waiting");
 
         let pull_fut = Sendable::from_future(async move { entry.connection.pull_outbound().await });
 
         match self.timeout.timeout(self.poll_timeout, pull_fut).await {
             Ok(Ok(bytes)) => {
-                tracing::debug!("POST /lp/recv: delivering {} bytes", bytes.len());
+                tracing::debug!(bytes = bytes.len(), "POST /lp/recv: delivering");
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("content-type", "application/octet-stream")
@@ -304,8 +306,9 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
         if let Some(entry) = self.sessions.remove(&session_id).await {
             tracing::info!(
-                "POST /lp/disconnect: peer {} session {session_id}",
-                entry.peer_id
+                peer = %entry.peer_id,
+                session = %session_id,
+                "POST /lp/disconnect"
             );
             entry.connection.close();
         }

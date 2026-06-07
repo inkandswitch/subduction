@@ -330,7 +330,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::save_sedimentree_id");
+            tracing::trace!(?sedimentree_id, "FsStorage::save_sedimentree_id");
 
             self.ids_cache.lock().await.insert(sedimentree_id);
 
@@ -348,7 +348,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::delete_sedimentree_id");
+            tracing::trace!(?sedimentree_id, "FsStorage::delete_sedimentree_id");
 
             self.ids_cache.lock().await.remove(&sedimentree_id);
 
@@ -367,7 +367,7 @@ impl Storage<Sendable> for FsStorage {
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!("FsStorage::load_all_sedimentree_ids");
+            tracing::trace!("FsStorage::load_all_sedimentree_ids");
             Ok(self.ids_cache.lock().await.clone())
         })
     }
@@ -377,7 +377,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<bool, Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::contains_sedimentree_id");
+            tracing::trace!(?sedimentree_id, "FsStorage::contains_sedimentree_id");
             // Single-key check against the in-memory id cache (no directory scan).
             Ok(self.ids_cache.lock().await.contains(&sedimentree_id))
         })
@@ -393,7 +393,7 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             let commit_id = verified.payload().head();
             let digest = Digest::hash(verified.payload());
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?commit_id,
                 ?digest,
@@ -449,7 +449,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::list_commit_ids");
+            tracing::trace!(?sedimentree_id, "FsStorage::list_commit_ids");
 
             let commits_dir = self.commits_dir(sedimentree_id);
             let mut ids = Set::new();
@@ -479,7 +479,7 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>
     {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?commit_id, "FsStorage::load_loose_commit");
+            tracing::trace!(?sedimentree_id, ?commit_id, "FsStorage::load_loose_commit");
 
             let id_dir = self.commit_id_dir(sedimentree_id, commit_id);
 
@@ -500,7 +500,7 @@ impl Storage<Sendable> for FsStorage {
         commit_id: CommitId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?commit_id,
                 "FsStorage::delete_loose_commit"
@@ -523,7 +523,7 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>
     {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::load_loose_commits");
+            tracing::trace!(?sedimentree_id, "FsStorage::load_loose_commits");
 
             let commits_dir = self.commits_dir(sedimentree_id);
             let mut results = Vec::new();
@@ -586,7 +586,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::delete_loose_commits");
+            tracing::trace!(?sedimentree_id, "FsStorage::delete_loose_commits");
 
             let commits_dir = self.commits_dir(sedimentree_id);
             if let Err(e) = tokio::fs::remove_dir_all(&commits_dir).await
@@ -612,7 +612,7 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             let fragment_head = verified.payload().head();
             let digest = Digest::hash(verified.payload());
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?fragment_head,
                 ?digest,
@@ -670,7 +670,7 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>
     {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?fragment_head, "FsStorage::load_fragment");
+            tracing::trace!(?sedimentree_id, ?fragment_head, "FsStorage::load_fragment");
 
             let id_dir = self.fragment_id_dir(sedimentree_id, fragment_head);
 
@@ -700,7 +700,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::list_fragment_ids");
+            tracing::trace!(?sedimentree_id, "FsStorage::list_fragment_ids");
 
             let fragments_dir = self.fragments_dir(sedimentree_id);
             let mut ids = Set::new();
@@ -729,7 +729,7 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>
     {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::load_fragments");
+            tracing::trace!(?sedimentree_id, "FsStorage::load_fragments");
 
             let fragments_dir = self.fragments_dir(sedimentree_id);
             let mut results = Vec::new();
@@ -771,7 +771,7 @@ impl Storage<Sendable> for FsStorage {
         fragment_head: CommitId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 ?fragment_head,
                 "FsStorage::delete_fragment"
@@ -793,7 +793,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, "FsStorage::delete_fragments");
+            tracing::trace!(?sedimentree_id, "FsStorage::delete_fragments");
 
             let fragments_dir = self.fragments_dir(sedimentree_id);
             if let Err(e) = tokio::fs::remove_dir_all(&fragments_dir).await
@@ -820,7 +820,7 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             let num_commits = commits.len();
             let num_fragments = fragments.len();
-            tracing::debug!(
+            tracing::trace!(
                 ?sedimentree_id,
                 num_commits,
                 num_fragments,

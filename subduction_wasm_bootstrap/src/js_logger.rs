@@ -2,7 +2,8 @@
 //!
 //! This module provides a custom `tracing::Layer` that forwards tracing events
 //! to JavaScript callbacks, allowing programmatic capture and analysis of logs
-//! from Wasm code.
+//! from Wasm code. It is installed once at module startup by [`crate::init_rich`]
+//! and shared by every cdylib bundle.
 
 use alloc::{
     string::{String, ToString},
@@ -23,45 +24,31 @@ use wasm_bindgen::prelude::*;
 /// checked on each tracing event.
 static JS_LOGGER: RwLock<Option<Function>> = RwLock::new(None);
 
-/// Sets a JavaScript callback to receive all tracing output.
+/// Set a JavaScript callback to receive all tracing output.
 ///
-/// The callback will be invoked with four arguments:
-/// - `level`: string - One of "trace", "debug", "info", "warn", "error"
-/// - `target`: string - The Rust module path (e.g., `automerge_subduction::protocol`)
-/// - `message`: string - The log message
-/// - `fields`: object - Additional structured fields as key-value pairs
-///
-/// # Example (JavaScript)
-///
-/// ```javascript
-/// import { set_subduction_logger } from "@automerge/automerge-subduction"
-///
-/// set_subduction_logger((level, target, message, fields) => {
-///   console.log(`[${level}] ${target}: ${message}`, fields)
-/// })
-/// ```
+/// The callback is invoked with four arguments:
+/// - `level`: string — one of `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`
+/// - `target`: string — the Rust module path (e.g. `subduction_core::handler::sync`)
+/// - `message`: string — the log message
+/// - `fields`: object — additional structured fields as key-value pairs
 ///
 /// # Notes
 ///
-/// - The callback runs synchronously on each tracing event
-/// - Heavy processing in the callback may impact performance
-/// - For async processing, collect logs quickly and process them later
-#[wasm_bindgen]
-#[allow(clippy::expect_used)]
-pub fn set_subduction_logger(callback: Function) {
+/// - The callback runs synchronously on each tracing event.
+/// - Heavy processing in the callback may impact performance; collect quickly
+///   and process later.
+pub fn set_logger(callback: Function) {
     match JS_LOGGER.write() {
         Ok(mut guard) => *guard = Some(callback),
         Err(poisoned) => tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}"),
     }
 }
 
-/// Clears the JavaScript logger callback.
+/// Clear the JavaScript logger callback.
 ///
-/// After calling this, tracing events will no longer be forwarded to JavaScript.
-/// The tracing layer remains active but becomes a no-op until a new callback
-/// is registered.
-#[wasm_bindgen]
-pub fn clear_subduction_logger() {
+/// After this, tracing events are no longer forwarded to JavaScript. The layer
+/// remains active but becomes a no-op until a new callback is registered.
+pub fn clear_logger() {
     match JS_LOGGER.write() {
         Ok(mut guard) => *guard = None,
         Err(poisoned) => tracing::error!("JS_LOGGER RwLock poisoned: {poisoned}"),
@@ -70,9 +57,10 @@ pub fn clear_subduction_logger() {
 
 /// Custom tracing layer that forwards events to JavaScript.
 ///
-/// This layer is installed once at module initialization and remains active
-/// throughout the lifetime of the Wasm module. It checks for a registered
-/// callback on each event and forwards the event if one is present.
+/// Installed once at module initialization and active for the lifetime of the
+/// Wasm module. It checks for a registered callback on each event and forwards
+/// the event only if one is present — so with no callback registered this is a
+/// cheap early-out.
 pub(crate) struct JsCallbackLayer;
 
 impl<S> Layer<S> for JsCallbackLayer
@@ -80,7 +68,6 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        // Check if a JavaScript callback is registered
         let callback_opt = match JS_LOGGER.read() {
             Ok(guard) => guard.clone(),
             Err(poisoned) => {
@@ -91,35 +78,28 @@ where
 
         if let Some(callback) = callback_opt {
             let metadata = event.metadata();
-
-            // Convert tracing level to string
             let level = level_to_str(metadata.level());
-
-            // Get the target (Rust module path)
             let target = metadata.target();
 
-            // Extract message and fields using a visitor
             let mut visitor = FieldVisitor::default();
             event.record(&mut visitor);
 
-            // Call the JavaScript function
-            // Signature: callback(level, target, message, fields)
+            // callback(level, target, message, fields). Ignore JS errors — a
+            // broken callback must not crash Rust.
             let this = JsValue::NULL;
             let level_js = JsValue::from_str(level);
             let target_js = JsValue::from_str(target);
             let message_js = JsValue::from_str(&visitor.message);
             let fields_js = visitor.to_js_object();
 
-            // Ignore any errors from calling JavaScript - we don't want
-            // a broken callback to crash the Rust code
             drop(callback.call4(&this, &level_js, &target_js, &message_js, &fields_js));
         }
     }
 }
 
-/// Converts a tracing level to its string representation.
+/// Convert a tracing level to its string representation.
 #[allow(clippy::trivially_copy_pass_by_ref)]
-fn level_to_str(level: &Level) -> &'static str {
+const fn level_to_str(level: &Level) -> &'static str {
     match *level {
         Level::TRACE => "trace",
         Level::DEBUG => "debug",
@@ -129,11 +109,7 @@ fn level_to_str(level: &Level) -> &'static str {
     }
 }
 
-/// Visitor to extract fields from tracing events.
-///
-/// Tracing events contain structured fields beyond just the message.
-/// This visitor collects the message field separately and puts all
-/// other fields into a vector for conversion to a JavaScript object.
+/// Visitor to extract the message and fields from a tracing event.
 #[derive(Default)]
 struct FieldVisitor {
     message: String,
@@ -159,7 +135,6 @@ impl tracing::field::Visit for FieldVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
         let value_str = alloc::format!("{value:?}");
 
-        // The "message" field gets special handling
         if field.name() == "message" {
             self.message = value_str.trim_matches('"').to_string();
         } else {

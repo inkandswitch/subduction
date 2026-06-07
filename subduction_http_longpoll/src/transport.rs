@@ -151,9 +151,9 @@ impl<Async: FutureForm> Transport<Async> for HttpLongPollTransport {
 
     fn send_bytes(&self, bytes: &[u8]) -> Async::Future<'_, Result<(), Self::SendError>> {
         tracing::debug!(
-            "http-lp: sending {} outbound bytes to peer {}",
-            bytes.len(),
-            self.inner.peer_id
+            bytes = bytes.len(),
+            peer = %self.inner.peer_id,
+            "http-lp: sending outbound bytes"
         );
 
         let data = bytes.to_vec();
@@ -168,8 +168,8 @@ impl<Async: FutureForm> Transport<Async> for HttpLongPollTransport {
         let chan = self.inner.inbound_reader.clone();
         tracing::debug!(
             chan_id = self.inner.chan_id,
-            "waiting on recv {:?}",
-            self.inner.peer_id
+            peer = %self.inner.peer_id,
+            "waiting on recv"
         );
 
         Async::from_future(async move {
@@ -178,7 +178,7 @@ impl<Async: FutureForm> Transport<Async> for HttpLongPollTransport {
                 RecvError
             })?;
 
-            tracing::debug!("recv: inbound {} bytes", bytes.len());
+            tracing::debug!(bytes = bytes.len(), "recv: inbound bytes");
             Ok(bytes)
         })
     }

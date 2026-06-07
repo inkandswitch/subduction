@@ -19,7 +19,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::{EnvFilter, prelude::*, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, Layer, prelude::*, util::SubscriberInitExt};
 
 #[cfg(feature = "native-tls")]
 use url::Url;
@@ -30,7 +30,7 @@ async fn main() -> eyre::Result<()> {
 
     let args = Arguments::parse();
 
-    setup_tracing();
+    setup_tracing(args.log_format);
     let token = setup_signal_handlers();
 
     match args.command {
@@ -41,12 +41,25 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-fn setup_tracing() {
-    let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+fn setup_tracing(log_format: LogFormat) {
+    // Default to INFO so connection/sync lifecycle landmarks are visible in
+    // production out of the box; `RUST_LOG` overrides. See `design/logging.md`.
+    let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // The fmt layer is either human-readable (journald/TTY) or JSON
+    // (Loki/aggregators). JSON carries span fields so the correlation spans
+    // installed across the core are queryable structurally.
+    let fmt_layer = match log_format {
+        LogFormat::Text => tracing_subscriber::fmt::layer().boxed(),
+        LogFormat::Json => tracing_subscriber::fmt::layer()
+            .json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .boxed(),
+    };
 
     // Build base registry with fmt layer
-    let registry = tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter));
+    let registry = tracing_subscriber::registry().with(fmt_layer.with_filter(fmt_filter));
 
     // Optionally add tokio-console layer (requires `--features tokio-console`).
     #[cfg(feature = "tokio-console")]
@@ -166,8 +179,25 @@ pub(crate) fn parse_32_bytes(s: &str, name: &str) -> eyre::Result<[u8; 32]> {
 #[derive(Debug, Parser)]
 #[command(author = "Ink & Switch", version, about = "CLI for Subduction")]
 struct Arguments {
+    /// Log output format. `text` is human-readable (journald/TTY); `json`
+    /// emits structured lines with span fields for Loki/aggregators.
+    ///
+    /// The log *level* is controlled separately via `RUST_LOG` (default `info`).
+    #[arg(long, value_enum, default_value_t = LogFormat::Text, env = "SUBDUCTION_LOG_FORMAT", global = true)]
+    log_format: LogFormat,
+
     #[command(subcommand)]
     command: Command,
+}
+
+/// Log output format for the fmt subscriber layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum LogFormat {
+    /// Human-readable, for `journald` / interactive terminals (the default).
+    Text,
+
+    /// Structured JSON (with span fields), for Loki / log aggregators.
+    Json,
 }
 
 #[derive(Debug, Subcommand)]

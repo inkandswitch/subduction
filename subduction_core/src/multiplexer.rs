@@ -200,10 +200,7 @@ impl Multiplexer {
         let mut pending = self.pending.lock().await;
         let n = pending.len();
         pending.clear();
-        tracing::debug!(
-            "cancelled {n} pending call(s) on multiplexer for peer {:?}",
-            self.peer_id
-        );
+        tracing::debug!(count = n, peer = %self.peer_id, "cancelled pending call(s) on multiplexer");
     }
 
     /// Try to resolve a pending call with an inbound `BatchSyncResponse`.
@@ -216,7 +213,7 @@ impl Multiplexer {
         let mut pending = self.pending.lock().await;
         if let Some(tx) = pending.remove(&req_id) {
             drop(tx.send(resp.clone()));
-            tracing::debug!("routed BatchSyncResponse for {req_id:?} to pending caller");
+            tracing::debug!(req = ?req_id, "routed BatchSyncResponse to pending caller");
             true
         } else {
             false

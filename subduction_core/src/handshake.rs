@@ -436,6 +436,16 @@ async fn recv_verified_response<K: FutureForm, H: Handshake<K>>(
 ///
 /// Panics if encoding of the challenge message fails (should never happen
 /// with well-formed types).
+// The return tuple is an inherent part of this generic API; `#[instrument]`
+// surfaces it to the `type_complexity` lint, but factoring it into an alias
+// would not improve clarity here.
+#[allow(clippy::type_complexity)]
+#[tracing::instrument(
+    name = "handshake_initiate",
+    level = "info",
+    skip_all,
+    fields(audience = ?audience)
+)]
 pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> (C, E),
@@ -602,6 +612,13 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
 /// Panics if encoding of the response or rejection message fails (should
 /// never happen with well-formed types).
 #[allow(clippy::expect_used, clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+#[tracing::instrument(
+    name = "handshake_respond",
+    level = "info",
+    skip_all,
+    fields(peer = %our_peer_id)
+)]
 pub async fn respond<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> (C, E),

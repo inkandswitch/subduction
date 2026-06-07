@@ -325,12 +325,13 @@ async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
                         break;
                     }
                     status => {
-                        tracing::error!("unexpected recv status: {status}");
+                        tracing::error!(status = status, "unexpected recv status");
                         consecutive_failures += 1;
                         if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES {
                             tracing::warn!(
-                                "long-poll recv failed {consecutive_failures} times \
-                                 consecutively (last status {status}); closing connection"
+                                count = consecutive_failures,
+                                status = status,
+                                "long-poll recv failed repeatedly; closing connection"
                             );
                             conn.close();
                             break;
@@ -339,12 +340,12 @@ async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
                     }
                 },
                 Err(e) => {
-                    tracing::error!("recv request error: {e}");
+                    tracing::error!(error = %e, "recv request error");
                     consecutive_failures += 1;
                     if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES {
                         tracing::warn!(
-                            "long-poll recv errored {consecutive_failures} times \
-                             consecutively; closing connection"
+                            count = consecutive_failures,
+                            "long-poll recv errored repeatedly; closing connection"
                         );
                         conn.close();
                         break;
@@ -390,10 +391,10 @@ async fn send_loop<Async: FutureForm, H: HttpClient<Async>>(
                     {
                         Ok(resp) if resp.status < 300 => {}
                         Ok(resp) => {
-                            tracing::error!("send returned status {}", resp.status);
+                            tracing::error!(status = resp.status, "send returned error status");
                         }
                         Err(e) => {
-                            tracing::error!("send request error: {e}");
+                            tracing::error!(error = %e, "send request error");
                         }
                     }
                 } else {

@@ -345,9 +345,7 @@ dependencies = [
  "subduction_wasm_bootstrap",
  "thiserror 2.0.18",
  "tracing",
- "tracing-subscriber",
  "wasm-bindgen",
- "wasm-tracing",
  "wasm_refgen",
 ]
 
@@ -5350,8 +5348,10 @@ name = "subduction_wasm_bootstrap"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
  "wasm-tracing",
 ]
 
@@ -5969,12 +5969,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
