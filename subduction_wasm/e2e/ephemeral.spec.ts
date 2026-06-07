@@ -162,18 +162,11 @@ async function setupPeer(
           }
         : null;
 
-      window.syncer = new Subduction(
+      window.syncer = new Subduction({
         signer,
-        new MemoryStorage(),
-        null, // service_name
-        null, // hash_metric_override
-        null, // max_pending_blob_requests
-        null, // max_resident_trees
-        null, // policy
-        null, // ephemeral_policy
-        null, // on_remote_heads
-        callback // on_ephemeral
-      );
+        storage: new MemoryStorage(),
+        onEphemeral: callback,
+      });
 
       const url = new URL(wsUrl);
       const serviceName = wsUrl.replace("ws://", "");

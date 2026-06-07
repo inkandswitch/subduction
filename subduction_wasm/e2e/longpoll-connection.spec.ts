@@ -117,7 +117,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
       try {
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new window.subduction.MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new window.subduction.MemoryStorage() });
 
         const peerId = await syncer.connectDiscoverLongPoll(
           baseUrl,
@@ -154,7 +154,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
       try {
         const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const syncer = new Subduction({ signer, storage: new MemoryStorage() });
 
         await syncer.connectDiscoverLongPoll(
           baseUrl,
@@ -194,7 +194,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
         // Peer A: connect, add data, sync to server
         const signerA = await WebCryptoSigner.setup();
-        const syncerA = new Subduction(signerA, new MemoryStorage());
+        const syncerA = new Subduction({ signer: signerA, storage: new MemoryStorage() });
 
         const authA = await SubductionLongPoll.tryDiscover(baseUrl, signerA, serviceName);
         const serverPeerId = authA.peerId;
@@ -207,7 +207,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
         // Peer B: connect, sync from server, verify data arrived
         const signerB = await WebCryptoSigner.setup();
-        const syncerB = new Subduction(signerB, new MemoryStorage());
+        const syncerB = new Subduction({ signer: signerB, storage: new MemoryStorage() });
 
         const authB = await SubductionLongPoll.tryDiscover(baseUrl, signerB, serviceName);
         const serverPeerIdB = authB.peerId;
@@ -315,7 +315,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
         // Now connect with a different signer using the known peer ID
         const signer2 = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer2, new MemoryStorage());
+        const syncer = new Subduction({ signer: signer2, storage: new MemoryStorage() });
 
         const knownAuth = await SubductionLongPoll.tryConnect(
           baseUrl,
@@ -356,8 +356,8 @@ test.describe("Long-Poll Connection Tests", () => {
         const signer1 = await WebCryptoSigner.setup();
         const signer2 = await WebCryptoSigner.setup();
 
-        const syncer1 = new Subduction(signer1, new MemoryStorage());
-        const syncer2 = new Subduction(signer2, new MemoryStorage());
+        const syncer1 = new Subduction({ signer: signer1, storage: new MemoryStorage() });
+        const syncer2 = new Subduction({ signer: signer2, storage: new MemoryStorage() });
 
         const serviceName = baseUrl.replace("http://", "");
 
