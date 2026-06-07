@@ -102,6 +102,11 @@ in {
           Log output format (passes `--log-format <fmt>`). `json` emits
           structured lines with span fields (recommended for log aggregation
           and `journald`'s structured fields); `text` is human-readable.
+
+          Note: this defaults to `json` (server deployments want structured
+          logs), which intentionally differs from the `subduction_cli` binary's
+          own default of `text`. The module always passes `--log-format`
+          explicitly, so the effective format is unambiguous.
         '';
       };
 

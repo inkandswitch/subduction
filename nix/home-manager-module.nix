@@ -84,6 +84,10 @@ in {
         description = ''
           Log output format (passes `--log-format <fmt>`). `json` emits
           structured lines with span fields; `text` is human-readable.
+
+          Note: defaults to `json` (differs from the `subduction_cli` binary's
+          own `text` default); the module always passes `--log-format`
+          explicitly, so the effective format is unambiguous.
         '';
       };
 
