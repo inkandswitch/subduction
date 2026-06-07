@@ -13,8 +13,6 @@
 //!
 //! All functions are idempotent and safe to call from chained
 //! `#[wasm_bindgen(start)]` functions; the first to install a subscriber wins.
-//!
-//! See `design/logging.md` for the level/field conventions these layers serve.
 
 #![forbid(unsafe_code)]
 
@@ -112,14 +110,18 @@ pub fn init_rich_from_env() {
     init_rich(level);
 }
 
-/// Set the log level at runtime. The new level takes effect immediately and is
-/// persisted to `localStorage` (browser) so it survives reloads.
+/// Set the log level. The choice is always persisted to `localStorage`
+/// (browser) so it takes effect on the next load; if the rich stack's
+/// reloadable filter is installed it is *also* applied immediately to the
+/// running subscriber.
 ///
 /// Valid levels: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`, `"off"`.
 ///
 /// # Errors
 ///
-/// Returns an error string if the level is invalid or tracing is not initialized.
+/// Returns an error string only if `level` is not a recognized level name.
+/// A missing reloadable filter (e.g. the basic stack installed first) is *not*
+/// an error: the level is persisted and applies on the next startup.
 #[cfg(target_arch = "wasm32")]
 pub fn set_log_level(level: &str) -> Result<(), alloc::string::String> {
     let level_filter = parse_level_filter(level).ok_or_else(|| {
@@ -128,8 +130,10 @@ pub fn set_log_level(level: &str) -> Result<(), alloc::string::String> {
         )
     })?;
 
-    rich::set_level(level_filter).map_err(|e| alloc::format!("failed to set log level: {e}"))?;
+    // Persist regardless, so the choice survives reloads even when the live
+    // filter is unavailable.
     write_to_local_storage(level_filter_name(level_filter));
+    let _applied_live = rich::set_level(level_filter);
     Ok(())
 }
 

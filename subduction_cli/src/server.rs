@@ -543,7 +543,7 @@ where
     }
 
     // Build the transport list inside the macro so it is only computed when
-    // the `info` level is enabled (see `design/logging.md`).
+    // the `info` level is enabled.
     tracing::info!(
         addr = %assigned_address,
         transports = %[

@@ -24,7 +24,12 @@ blake3 = { workspace = true }
 console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
 sedimentree_core = { workspace = true }
-sedimentree_wasm = { workspace = true }
+# Direct (non-workspace) dep so we can set `default-features = false`, which
+# drops `wasm-log-control` — this crate must NOT re-emit `setSubductionLogLevel`
+# et al. (avoids a duplicate `#[wasm_bindgen]` export; the umbrella inherits
+# them from `subduction_wasm`'s re-export). A `workspace = true` dep cannot
+# override `default-features` under Cargo 1.90.
+sedimentree_wasm = { version = "0.14.0", path = "../sedimentree_wasm", default-features = false }
 subduction_wasm = { workspace = true, features = ["std"] }
 subduction_wasm_bootstrap = { workspace = true }
 thiserror = { workspace = true }

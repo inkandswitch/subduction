@@ -64,13 +64,17 @@ pub fn init() {
 }
 
 /// Module entry point. Runs [`init`] then logs a startup banner.
+///
+/// The banner is `info` so it respects the configured level (it is silent at
+/// the Wasm WARN default; raise to `info` via `SUBDUCTION_LOG_LEVEL` or
+/// `setSubductionLogLevel` to see it).
 #[wasm_bindgen(start, private)]
 pub fn start_automerge_subduction_wasm() {
     init();
 
     tracing::info!(
-        "automerge_subduction_wasm v{} ({})",
-        env!("CARGO_PKG_VERSION"),
-        env!("GIT_HASH")
+        version = env!("CARGO_PKG_VERSION"),
+        git = env!("GIT_HASH"),
+        "automerge_subduction_wasm started"
     );
 }

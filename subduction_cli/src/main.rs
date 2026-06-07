@@ -43,7 +43,7 @@ async fn main() -> eyre::Result<()> {
 
 fn setup_tracing(log_format: LogFormat) {
     // Default to INFO so connection/sync lifecycle landmarks are visible in
-    // production out of the box; `RUST_LOG` overrides. See `design/logging.md`.
+    // production out of the box; `RUST_LOG` overrides.
     let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // The fmt layer is either human-readable (journald/TTY) or JSON

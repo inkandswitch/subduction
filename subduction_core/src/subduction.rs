@@ -2093,7 +2093,7 @@ where
     #[allow(clippy::too_many_lines, clippy::type_complexity)]
     #[tracing::instrument(
         name = "sync_with_peer",
-        level = "info",
+        level = "debug",
         skip_all,
         fields(peer = %to_ask, tree = ?id, subscribe)
     )]
@@ -2362,7 +2362,7 @@ where
     #[allow(clippy::too_many_lines, clippy::type_complexity)]
     #[tracing::instrument(
         name = "sync_with_all_peers",
-        level = "info",
+        level = "debug",
         skip_all,
         fields(tree = ?id, subscribe)
     )]
@@ -3246,7 +3246,7 @@ where
                         let peer_id = conn.peer_id();
                         // Hot path: one TRACE event with the peer only. Never
                         // Debug-format the whole message — it can embed commit
-                        // or blob bytes. See `design/logging.md`.
+                        // or blob bytes.
                         tracing::trace!(peer = %peer_id, "listener received message");
 
                         if let Some(resp) = msg.try_as_batch_sync_response() {
@@ -3347,7 +3347,7 @@ where
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(
         name = "full_sync_with_peer",
-        level = "info",
+        level = "debug",
         skip_all,
         fields(peer = %peer_id, subscribe)
     )]

@@ -308,7 +308,7 @@ where
                                                         }
                                                         result = listen_ws.listen() => {
                                                             if let Err(e) = result {
-                                                                tracing::info!("WebSocket listener disconnected: {e}");
+                                                                tracing::info!(error = %e, "WebSocket listener disconnected");
                                                             }
                                                         }
                                                     }
@@ -321,7 +321,7 @@ where
                                                         }
                                                         result = sender_fut => {
                                                             if let Err(e) = result {
-                                                                tracing::info!("WebSocket sender disconnected: {e}");
+                                                                tracing::info!(error = %e, "WebSocket sender disconnected");
                                                             }
                                                         }
                                                     }
@@ -568,7 +568,7 @@ where
         expected_peer_id: PeerId,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
         let uri_str = uri.to_string();
-        tracing::info!("Connecting to peer at {uri_str}");
+        tracing::info!(uri = %uri_str, "connecting to peer");
 
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(self.max_message_size);
@@ -607,11 +607,11 @@ where
                 listen_tracker.spawn(async move {
                     tokio::select! {
                         () = listener_cancel.cancelled() => {
-                            tracing::debug!("Shutting down listener for peer {listen_uri_str}");
+                            tracing::debug!(uri = %listen_uri_str, "shutting down listener");
                         }
                         result = listen_ws.listen() => {
                             if let Err(e) = result {
-                                tracing::info!("WebSocket listener disconnected for peer {listen_uri_str}: {e}");
+                                tracing::info!(uri = %listen_uri_str, error = %e, "WebSocket listener disconnected");
                             }
                         }
                     }
@@ -621,11 +621,11 @@ where
                 sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
-                            tracing::debug!("Shutting down sender for peer {sender_uri_str}");
+                            tracing::debug!(uri = %sender_uri_str, "shutting down sender");
                         }
                         result = sender_fut => {
                             if let Err(e) = result {
-                                tracing::info!("WebSocket sender disconnected for peer {sender_uri_str}: {e}");
+                                tracing::info!(uri = %sender_uri_str, error = %e, "WebSocket sender disconnected");
                             }
                         }
                     }
@@ -636,10 +636,10 @@ where
                 keepalive_tracker.spawn(async move {
                     tokio::select! {
                         () = keepalive_cancel.cancelled() => {
-                            tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
+                            tracing::debug!(uri = %keepalive_uri_str, "shutting down keepalive");
                         }
                         outcome = keepalive_fut => {
-                            tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
+                            tracing::debug!(uri = %keepalive_uri_str, ?outcome, "keepalive task exited");
                         }
                     }
                 });
@@ -658,9 +658,9 @@ where
         // Verify we connected to the expected peer
         if server_id != expected_peer_id {
             tracing::warn!(
-                "Server identity mismatch: expected {}, got {}",
-                expected_peer_id,
-                server_id
+                expected = %expected_peer_id,
+                actual = %server_id,
+                "server identity mismatch"
             );
             // Continue anyway - the caller specified the expected peer,
             // but the server proved a different identity. This could be
@@ -668,7 +668,7 @@ where
             // Policy can reject if needed.
         }
 
-        tracing::info!("Handshake complete: connected to {server_id}");
+        tracing::info!(peer = %server_id, "handshake complete: connected");
 
         let auth_mt = authenticated.map(MessageTransport::new);
         self.subduction
@@ -676,7 +676,7 @@ where
             .await
             .map_err(TryConnectError::AddConnection)?;
 
-        tracing::info!("Connected to peer at {uri_str}");
+        tracing::info!(uri = %uri_str, "connected to peer");
         Ok(server_id)
     }
 
@@ -701,7 +701,7 @@ where
         service_name: &str,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
         let uri_str = uri.to_string();
-        tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
+        tracing::info!(uri = %uri_str, service = %service_name, "connecting to peer via discovery");
 
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(self.max_message_size);
@@ -740,11 +740,11 @@ where
                 listen_tracker.spawn(async move {
                     tokio::select! {
                         () = listener_cancel.cancelled() => {
-                            tracing::debug!("Shutting down listener for peer {listen_uri_str}");
+                            tracing::debug!(uri = %listen_uri_str, "shutting down listener");
                         }
                         result = listen_ws.listen() => {
                             if let Err(e) = result {
-                                tracing::info!("WebSocket listener disconnected for peer {listen_uri_str}: {e}");
+                                tracing::info!(uri = %listen_uri_str, error = %e, "WebSocket listener disconnected");
                             }
                         }
                     }
@@ -754,11 +754,11 @@ where
                 sender_tracker.spawn(async move {
                     tokio::select! {
                         () = sender_cancel.cancelled() => {
-                            tracing::debug!("Shutting down sender for peer {sender_uri_str}");
+                            tracing::debug!(uri = %sender_uri_str, "shutting down sender");
                         }
                         result = sender_fut => {
                             if let Err(e) = result {
-                                tracing::info!("WebSocket sender disconnected for peer {sender_uri_str}: {e}");
+                                tracing::info!(uri = %sender_uri_str, error = %e, "WebSocket sender disconnected");
                             }
                         }
                     }
@@ -769,10 +769,10 @@ where
                 keepalive_tracker.spawn(async move {
                     tokio::select! {
                         () = keepalive_cancel.cancelled() => {
-                            tracing::debug!("Shutting down keepalive for peer {keepalive_uri_str}");
+                            tracing::debug!(uri = %keepalive_uri_str, "shutting down keepalive");
                         }
                         outcome = keepalive_fut => {
-                            tracing::debug!(?outcome, "keepalive task for peer {keepalive_uri_str} exited");
+                            tracing::debug!(uri = %keepalive_uri_str, ?outcome, "keepalive task exited");
                         }
                     }
                 });
@@ -787,7 +787,7 @@ where
         .await?;
 
         let server_id = authenticated.peer_id();
-        tracing::info!("Handshake complete: connected to {server_id}");
+        tracing::info!(peer = %server_id, "handshake complete: connected");
 
         let auth_mt = authenticated.map(MessageTransport::new);
         self.subduction
@@ -795,7 +795,7 @@ where
             .await
             .map_err(TryConnectError::AddConnection)?;
 
-        tracing::info!("Connected to peer at {uri_str}");
+        tracing::info!(uri = %uri_str, "connected to peer");
         Ok(server_id)
     }
 

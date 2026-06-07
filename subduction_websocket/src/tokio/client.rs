@@ -175,7 +175,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
     where
         R: 'a,
     {
-        tracing::info!("Connecting to WebSocket server at {address} (keepalive: true)");
+        tracing::info!(addr = %address, keepalive = true, "connecting to WebSocket server");
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(max_message_size);
         ws_config.max_frame_size = Some(max_message_size);
@@ -205,7 +205,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
             .await?;
 
         let server_id = authenticated.peer_id();
-        tracing::info!("Handshake complete: connected to {server_id}");
+        tracing::info!(peer = %server_id, "handshake complete: connected");
 
         let socket = authenticated.inner().clone();
         let listener_socket = socket.clone();
@@ -245,7 +245,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> Transport<Sendable> for TokioWeb
     }
 
     fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        tracing::debug!("client sending {} bytes", bytes.len());
+        tracing::trace!(bytes = bytes.len(), "client sending");
         Transport::<Sendable>::send_bytes(&self.socket, bytes)
     }
 
@@ -289,7 +289,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> Connection<Sendable, SyncMessage
                 match SyncMessage::try_decode(&bytes) {
                     Ok(msg) => return Ok(msg),
                     Err(e) => {
-                        tracing::warn!("failed to decode inbound bytes as SyncMessage: {e}");
+                        tracing::warn!(error = %e, "failed to decode inbound bytes as SyncMessage");
                         // Skip non-decodable frames and keep reading
                     }
                 }
@@ -328,12 +328,12 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
             *self = authenticated.into_inner();
             tokio::spawn(async move {
                 if let Err(e) = listener.await {
-                    tracing::info!("WebSocket client listener disconnected after reconnect: {e:?}");
+                    tracing::info!(error = ?e, "WebSocket client listener disconnected after reconnect");
                 }
             });
             tokio::spawn(async move {
                 if let Err(e) = sender.await {
-                    tracing::info!("WebSocket client sender disconnected after reconnect: {e:?}");
+                    tracing::info!(error = ?e, "WebSocket client sender disconnected after reconnect");
                 }
             });
             tokio::spawn(async move {

@@ -31,7 +31,12 @@ js-sys = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true }
-sedimentree_wasm = { workspace = true }
+# Direct dep with `default-features = false` so `sedimentree_wasm` does NOT emit
+# its `wasm-log-control` JS exports here — they would collide with this crate's
+# own `setSubductionLogLevel` et al. `sedimentree_wasm` only exports them when
+# built as the top-level standalone bundle. (`workspace = true` can't override
+# `default-features` under Cargo 1.90.)
+sedimentree_wasm = { version = "0.14.0", path = "../sedimentree_wasm", default-features = false }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
 subduction_ephemeral = { workspace = true }

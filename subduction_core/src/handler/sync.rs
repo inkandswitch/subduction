@@ -318,7 +318,7 @@ impl<
         // Instrumenting the dispatch future threads `peer`/`msg`/`tree`/`req`
         // onto every event emitted by the `recv_*` handlers below without
         // re-passing them, and stays correct across `.await` points (unlike an
-        // entered guard). See `design/logging.md`.
+        // entered guard).
         let span = tracing::debug_span!(
             "dispatch",
             peer = %from,

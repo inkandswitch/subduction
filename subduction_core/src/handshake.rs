@@ -442,7 +442,7 @@ async fn recv_verified_response<K: FutureForm, H: Handshake<K>>(
 #[allow(clippy::type_complexity)]
 #[tracing::instrument(
     name = "handshake_initiate",
-    level = "info",
+    level = "debug",
     skip_all,
     fields(audience = ?audience)
 )]
@@ -615,7 +615,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
 #[allow(clippy::type_complexity)]
 #[tracing::instrument(
     name = "handshake_respond",
-    level = "info",
+    level = "debug",
     skip_all,
     fields(peer = %our_peer_id)
 )]
