@@ -9,7 +9,6 @@ This directory contains protocol design documents for Subduction.
 | [`assumptions`](./assumptions.md) | Protocol assumptions and invariants          |
 | [`ephemeral`](./ephemeral.md)     | Best-effort pub/sub for transient signals (cursors, presence, etc.) |
 | [`handshake`](./handshake.md)     | Mutual authentication via Ed25519 signatures |
-| [`logging`](./logging.md)         | Log levels, structured fields, span correlation, performance model |
 | [`protocol`](./protocol.md)       | Binary format, serialization, cryptographic choices |
 | [`security/`](./security/)        | Threat model and security rationale          |
 | [`sedimentree`](./sedimentree.md) | Depth-based data partitioning scheme         |
