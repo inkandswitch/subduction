@@ -17,7 +17,7 @@
 
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -26,8 +26,8 @@ use sedimentree_core::{
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
-    sedimentree::{minimized::MinimizedSedimentree, FingerprintSummary, Sedimentree},
+    loose_commit::{LooseCommit, id::CommitId},
+    sedimentree::{FingerprintSummary, Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use tracing::Instrument;
@@ -36,11 +36,11 @@ use crate::{
     authenticated::Authenticated,
     collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
+        Connection,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
             SyncResult,
         },
-        Connection,
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
@@ -96,14 +96,14 @@ pub struct SyncHandler<
 }
 
 impl<
-        Async: FutureForm,
-        Store: Storage<Async>,
-        Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-        Auth: StoragePolicy<Async>,
-        Metric: DepthMetric,
-        R: RemoteHeadsObserver,
-        const SHARDS: usize,
-    > core::fmt::Debug for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    R: RemoteHeadsObserver,
+    const SHARDS: usize,
+> core::fmt::Debug for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -111,14 +111,14 @@ impl<
 }
 
 impl<
-        Async: FutureForm,
-        Store: Storage<Async>,
-        Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-        Auth: StoragePolicy<Async>,
-        Metric: DepthMetric + Clone,
-        R: RemoteHeadsObserver + Clone,
-        const SHARDS: usize,
-    > Clone for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric + Clone,
+    R: RemoteHeadsObserver + Clone,
+    const SHARDS: usize,
+> Clone for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -135,13 +135,13 @@ impl<
 }
 
 impl<
-        Async: FutureForm,
-        Store: Storage<Async>,
-        Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-        Auth: StoragePolicy<Async>,
-        Metric: DepthMetric,
-        const SHARDS: usize,
-    > SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, NoRemoteHeadsObserver>
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -173,14 +173,14 @@ impl<
 }
 
 impl<
-        Async: FutureForm,
-        Store: Storage<Async>,
-        Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-        Auth: StoragePolicy<Async>,
-        Metric: DepthMetric,
-        R: RemoteHeadsObserver,
-        const SHARDS: usize,
-    > SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    R: RemoteHeadsObserver,
+    const SHARDS: usize,
+> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
@@ -278,14 +278,14 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, R, const SHARDS: usize> Handl
 // ---------------------------------------------------------------------------
 
 impl<
-        Async: FutureForm,
-        Store: Storage<Async>,
-        Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-        Auth: StoragePolicy<Async>,
-        Metric: DepthMetric,
-        R: RemoteHeadsObserver,
-        const SHARDS: usize,
-    > RemoteHeadsNotifier for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    R: RemoteHeadsObserver,
+    const SHARDS: usize,
+> RemoteHeadsNotifier for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
@@ -297,14 +297,14 @@ impl<
 // ---------------------------------------------------------------------------
 
 impl<
-        Async: FutureForm,
-        Store: Storage<Async>,
-        Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-        Auth: StoragePolicy<Async>,
-        Metric: DepthMetric,
-        R: RemoteHeadsObserver,
-        const SHARDS: usize,
-    > SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    R: RemoteHeadsObserver,
+    const SHARDS: usize,
+> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
