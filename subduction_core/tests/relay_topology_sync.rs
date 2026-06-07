@@ -37,6 +37,7 @@ use subduction_core::{
     remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::{signer::memory::MemorySigner, verified_author::VerifiedAuthor};
@@ -61,7 +62,7 @@ type TestSubduction = Arc<
     >,
 >;
 
-const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_millis(500));
+const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(50);
 
 /// Fail-fast cap for [`wait_until`] polling; tests converge well within it.
@@ -425,7 +426,7 @@ async fn relay_topology_add_built_batch_each_call_is_incremental() -> TestResult
             sed_id,
             vec![make_commit_pair(sed_id, seed)],
             Vec::new(),
-            None,
+            CallTimeout::Default,
         )
         .await?;
         tokio::time::sleep(PROPAGATION_PAUSE).await;
@@ -454,7 +455,7 @@ async fn relay_topology_repeated_add_built_batch_then_sync_is_empty() -> TestRes
             sed_id,
             vec![make_commit_pair(sed_id, seed)],
             Vec::new(),
-            None,
+            CallTimeout::Default,
         )
         .await?;
         tokio::time::sleep(PROPAGATION_PAUSE).await;
@@ -487,11 +488,11 @@ async fn relay_topology_two_clients_add_built_batch_converge_via_relay() -> Test
     for i in 0..total_pairs {
         if i % 2 == 0 {
             let pair = make_commit_pair(sed_id, i + 1);
-            a.add_built_batch(sed_id, vec![pair], Vec::new(), None)
+            a.add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await?;
         } else {
             let pair = make_commit_pair(sed_id, 100 + i);
-            b.add_built_batch(sed_id, vec![pair], Vec::new(), None)
+            b.add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await?;
         }
         tokio::time::sleep(PROPAGATION_PAUSE).await;
@@ -531,7 +532,7 @@ async fn relay_topology_concurrent_add_built_batch_calls_converge() -> TestResul
         let a_clone = a.clone();
         handles.push(tokio::spawn(async move {
             a_clone
-                .add_built_batch(sed_id, vec![pair], Vec::new(), None)
+                .add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await
         }));
     }

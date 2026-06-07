@@ -38,6 +38,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::{memory::MemoryStorage, traits::Storage},
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
@@ -360,7 +361,7 @@ async fn full_sync_with_peer_is_concurrent() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let bob_peer_id = PeerId::from(bob_signer.verifying_key());
-    let sync_timeout = Some(Duration::from_secs(2));
+    let sync_timeout = CallTimeout::TimeoutMillis(2_000);
 
     // Sync all documents with Bob
     let (ok, stats, _call_errs, _io_errs) = alice
@@ -458,7 +459,7 @@ async fn many_independent_sync_with_peer_calls_are_concurrent() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let bob_peer_id = PeerId::from(bob_signer.verifying_key());
-    let sync_timeout = Some(Duration::from_secs(2));
+    let sync_timeout = CallTimeout::TimeoutMillis(2_000);
 
     // Fire N independent sync_with_peer calls concurrently — simulates
     // what JS Promise.all would do from the Wasm bindings.

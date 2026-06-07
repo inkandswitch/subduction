@@ -38,6 +38,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
@@ -48,7 +49,7 @@ use subduction_http_longpoll::{
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 
-const SYNC_TIMEOUT: Duration = Duration::from_secs(10);
+const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(10_000);
 const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -246,7 +247,7 @@ async fn push_commit(client: &TestSubduction, sed_id: SedimentreeId, payload: &[
         .expect("add commit");
 
     let (had_success, _stats, call_errs, io_errs) =
-        client.full_sync_with_all_peers(Some(SYNC_TIMEOUT)).await;
+        client.full_sync_with_all_peers(SYNC_TIMEOUT).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "io errors: {io_errs:?}");
     assert!(had_success, "sync should succeed");
@@ -319,7 +320,7 @@ async fn iroh_sync_between_two_cli_servers() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         let result_a = verify_a
-            .sync_with_all_peers(sed_id, true, Some(SYNC_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, SYNC_TIMEOUT)
             .await;
         if let Err(ref e) = result_a {
             eprintln!("verify_a sync_all error: {e:?}");
@@ -331,7 +332,7 @@ async fn iroh_sync_between_two_cli_servers() {
             .map_or(0, Vec::len);
 
         let result_b = verify_b
-            .sync_with_all_peers(sed_id, true, Some(SYNC_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, SYNC_TIMEOUT)
             .await;
         if let Err(ref e) = result_b {
             eprintln!("verify_b sync_all error: {e:?}");

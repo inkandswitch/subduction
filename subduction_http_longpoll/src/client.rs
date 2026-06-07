@@ -258,8 +258,6 @@ impl<H> HttpLongPollClient<H> {
 // Background tasks (single generic implementation)
 // ---------------------------------------------------------------------------
 
-/// Background task that continuously polls `POST /lp/recv` and pushes
-/// raw bytes into the connection's inbound channel.
 /// Consecutive poll failures (transport errors or unexpected statuses)
 /// tolerated before the poll loop concludes the peer is gone, closes the
 /// connection, and exits.
@@ -278,6 +276,12 @@ const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 5;
 /// Backoff between failed poll attempts.
 const POLL_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 
+/// Background task that continuously polls `POST /lp/recv` and pushes
+/// raw bytes into the connection's inbound channel.
+///
+/// Exits (closing the transport) when cancelled, when the server reports
+/// the session is gone (`410`), or after
+/// [`MAX_CONSECUTIVE_POLL_FAILURES`] consecutive failures.
 async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
     http: H,
     url: String,
@@ -307,6 +311,7 @@ async fn poll_loop<Async: FutureForm, H: HttpClient<Async>>(
                         consecutive_failures = 0;
                         if conn.push_inbound(resp.body).await.is_err() {
                             tracing::error!("inbound channel closed");
+                            conn.close();
                             break;
                         }
                     }
@@ -543,7 +548,11 @@ mod poll_loop_tests {
 
         // The transport is closed: a recv now errors (channel closed) rather
         // than parking forever.
-        let recv = <HttpLongPollTransport as subduction_core::transport::Transport<Sendable>>::recv_bytes(&conn).await;
+        let recv =
+            <HttpLongPollTransport as subduction_core::transport::Transport<Sendable>>::recv_bytes(
+                &conn,
+            )
+            .await;
         assert!(
             recv.is_err(),
             "transport must be closed after the poll loop gives up"

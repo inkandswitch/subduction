@@ -29,20 +29,22 @@ use crate::{
     peer::id::PeerId,
 };
 
-/// Default per-call deadline applied when a caller passes `timeout: None`.
+/// Default per-call **total deadline** resolved by [`CallTimeout::Default`].
 ///
-/// This is a **caller-side** deadline, not a transport-layer fuse: the
-/// multiplexer itself holds no clock. A blocking
-/// [`call`](crate::connection::managed::ManagedConnection::call) wraps its
-/// (cancel-safe) wait in this deadline unless the caller supplies an
-/// explicit one. It exists so that calls are *bounded by default* —
+/// This is a caller-side deadline, not a transport-layer fuse and **not** an
+/// idle/progress timeout: the multiplexer holds no clock. The convenience
+/// layer (the high-level `Subduction` methods, the builder, and the Wasm
+/// bindings) applies this value when a caller does not supply an explicit
+/// per-call timeout. It exists so that calls are *bounded by default* —
 /// matching the Erlang/OTP `GenServer.call` convention — even on transports
 /// (e.g. HTTP long-poll) whose recv loop does not otherwise guarantee an
 /// eventual disconnect on a byte-alive but protocol-silent peer.
 ///
 /// Single source of truth: the builder default and the Wasm bindings both
 /// reference this constant.
-pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// [`CallTimeout::Default`]: crate::timeout::call::CallTimeout::Default
+pub const DEFAULT_ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Generic request-response multiplexer.
 ///
@@ -58,23 +60,20 @@ pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// (because a deadline elapsed, a `select!` lost, or a shutdown token
 /// fired) removes the pending entry. Disconnect resolves any in-flight call
 /// via [`cancel_all_pending`](Self::cancel_all_pending).
+///
+/// # Not `Clone`
+///
+/// `Multiplexer` is deliberately not `Clone`. It is always shared as
+/// `Arc<Multiplexer>` (every concurrent caller path holds the same instance,
+/// so they observe the same pending map). A value-clone would silently drop
+/// every in-flight `oneshot::Sender`, stranding awaiting callers — so the
+/// impl is omitted to make that mistake unrepresentable.
 #[derive(Debug)]
 pub struct Multiplexer {
     peer_id: PeerId,
     req_id_counter: AtomicU64,
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
-    default_idle_timeout: Duration,
-}
-
-impl Clone for Multiplexer {
-    fn clone(&self) -> Self {
-        Self {
-            peer_id: self.peer_id,
-            req_id_counter: AtomicU64::new(self.req_id_counter.load(Ordering::Relaxed)),
-            pending: Mutex::new(Map::new()),
-            default_idle_timeout: self.default_idle_timeout,
-        }
-    }
+    default_roundtrip_timeout: Duration,
 }
 
 /// Error from a multiplexed call.
@@ -101,7 +100,7 @@ impl Multiplexer {
     /// Panics if the platform's random number generator is unavailable.
     #[must_use]
     #[allow(clippy::expect_used)]
-    pub fn new(peer_id: PeerId, default_idle_timeout: Duration) -> Self {
+    pub fn new(peer_id: PeerId, default_roundtrip_timeout: Duration) -> Self {
         Self {
             peer_id,
             req_id_counter: AtomicU64::new({
@@ -110,7 +109,7 @@ impl Multiplexer {
                 u64::from_be_bytes(buf)
             }),
             pending: Mutex::new(Map::new()),
-            default_idle_timeout,
+            default_roundtrip_timeout,
         }
     }
 
@@ -119,10 +118,12 @@ impl Multiplexer {
         self.peer_id
     }
 
-    /// The default per-call deadline applied when a caller passes
-    /// `timeout: None`. See [`DEFAULT_IDLE_TIMEOUT`].
-    pub const fn default_idle_timeout(&self) -> Duration {
-        self.default_idle_timeout
+    /// The default per-call total deadline resolved by
+    /// [`CallTimeout::Default`]. See [`DEFAULT_ROUNDTRIP_TIMEOUT`].
+    ///
+    /// [`CallTimeout::Default`]: crate::timeout::call::CallTimeout::Default
+    pub const fn default_roundtrip_timeout(&self) -> Duration {
+        self.default_roundtrip_timeout
     }
 
     /// Generate the next request ID.
@@ -272,9 +273,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_idle_timeout_is_reported() {
+    async fn default_roundtrip_timeout_is_reported() {
         let mux = Multiplexer::new(PeerId::new([7u8; 32]), Duration::from_secs(12));
-        assert_eq!(mux.default_idle_timeout(), Duration::from_secs(12));
+        assert_eq!(mux.default_roundtrip_timeout(), Duration::from_secs(12));
     }
 
     #[tokio::test]

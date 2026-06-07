@@ -15,7 +15,8 @@ use std::collections::BTreeSet;
 
 use sedimentree_core::{blob::Blob, id::SedimentreeId, loose_commit::id::CommitId};
 use subduction_core::{
-    connection::test_utils::new_test_subduction, subduction::fragment_batch_item::FragmentBatchItem,
+    connection::test_utils::new_test_subduction,
+    subduction::fragment_batch_item::FragmentBatchItem, timeout::call::CallTimeout,
 };
 use testresult::TestResult;
 
@@ -33,7 +34,9 @@ async fn add_commits_batch_empty_is_noop_and_empty_map() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
     let sed_id = SedimentreeId::new([1u8; 32]);
 
-    let per_peer = sd.add_commits_batch(sed_id, Vec::new(), None).await?;
+    let per_peer = sd
+        .add_commits_batch(sed_id, Vec::new(), CallTimeout::Default)
+        .await?;
 
     assert!(
         per_peer.is_empty(),
@@ -59,7 +62,9 @@ async fn add_commits_batch_persists_all_commits() -> TestResult {
     let expected_ids: BTreeSet<CommitId> = inputs.iter().map(|(id, _, _)| *id).collect();
 
     // No peers connected → an empty per-peer map, but the data must persist.
-    let per_peer = sd.add_commits_batch(sed_id, inputs, None).await?;
+    let per_peer = sd
+        .add_commits_batch(sed_id, inputs, CallTimeout::Default)
+        .await?;
     assert!(
         per_peer.is_empty(),
         "no connected peers → empty per-peer map"
@@ -90,7 +95,9 @@ async fn add_fragments_batch_empty_is_noop_and_empty_map() -> TestResult {
     let (sd, _listener, _manager) = new_test_subduction();
     let sed_id = SedimentreeId::new([3u8; 32]);
 
-    let per_peer = sd.add_fragments_batch(sed_id, Vec::new(), None).await?;
+    let per_peer = sd
+        .add_fragments_batch(sed_id, Vec::new(), CallTimeout::Default)
+        .await?;
 
     assert!(
         per_peer.is_empty(),
@@ -119,7 +126,9 @@ async fn add_fragments_batch_persists_all_fragments() -> TestResult {
         .collect();
     let expected_heads: BTreeSet<CommitId> = fragments.iter().map(|f| f.head).collect();
 
-    let per_peer = sd.add_fragments_batch(sed_id, fragments, None).await?;
+    let per_peer = sd
+        .add_fragments_batch(sed_id, fragments, CallTimeout::Default)
+        .await?;
     assert!(
         per_peer.is_empty(),
         "no connected peers → empty per-peer map"

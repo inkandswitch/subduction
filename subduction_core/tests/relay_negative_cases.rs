@@ -18,6 +18,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -42,7 +43,7 @@ type TestSubduction = Arc<
     >,
 >;
 
-const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_millis(500));
+const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(50);
 
 fn make_signer(seed: u8) -> MemorySigner {

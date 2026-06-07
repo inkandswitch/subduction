@@ -17,6 +17,7 @@ use subduction_core::{
     peer::id::PeerId,
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
@@ -667,7 +668,7 @@ where
                                         Ok(_) => {
                                             iroh_ephemeral.subscribe_peer(remote).await;
                                             notify_peer_connect(iroh_keyhive_proto.as_ref(), auth_for_keyhive).await;
-                                            iroh_subduction.full_sync_with_peer(&remote, true, None).await;
+                                            iroh_subduction.full_sync_with_peer(&remote, true, CallTimeout::Default).await;
                                             tracing::info!("iroh: added peer {remote}");
                                         }
                                         Err(e) => {
@@ -745,7 +746,7 @@ where
                         break;
                     }
                     _ = interval.tick() => {
-                        let timeout = Some(Duration::from_secs(10));
+                        let timeout = CallTimeout::TimeoutMillis(10_000);
                         let round_start = std::time::Instant::now();
                         let (had_success, _stats, call_errs, io_errs) =
                             sync_subduction.full_sync_with_all_peers(timeout).await;
@@ -1354,7 +1355,9 @@ async fn try_connect_iroh<H: CliWireHandler>(
     subduction.add_connection(auth).await?;
     ephemeral.subscribe_peer(remote_id).await;
     notify_peer_connect(keyhive_proto, auth_for_keyhive).await;
-    subduction.full_sync_with_peer(&remote_id, true, None).await;
+    subduction
+        .full_sync_with_peer(&remote_id, true, CallTimeout::Default)
+        .await;
 
     tracing::info!("iroh: added peer {node_id} (subduction ID: {remote_id})");
     Ok(remote_id)

@@ -21,6 +21,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder, listener_future::ListenerFuture},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -234,7 +235,7 @@ async fn batch_sync() -> TestResult {
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
     client
-        .full_sync_with_all_peers(Some(Duration::from_millis(100)))
+        .full_sync_with_all_peers(CallTimeout::TimeoutMillis(100))
         .await;
 
     let server_updated = server_subduction
@@ -385,7 +386,7 @@ async fn second_sync_round_is_empty() -> TestResult {
     // --- Round 1: exchange data ---
 
     let (round1_ok, round1_stats, _, _) = client
-        .full_sync_with_all_peers(Some(Duration::from_millis(500)))
+        .full_sync_with_all_peers(CallTimeout::TimeoutMillis(500))
         .await;
     assert!(round1_ok, "first sync round should succeed");
     assert!(
@@ -410,7 +411,7 @@ async fn second_sync_round_is_empty() -> TestResult {
     // --- Round 2: should be a no-op ---
 
     let (round2_ok, round2_stats, _, _) = client
-        .full_sync_with_all_peers(Some(Duration::from_millis(500)))
+        .full_sync_with_all_peers(CallTimeout::TimeoutMillis(500))
         .await;
     assert!(round2_ok, "second sync round should succeed");
     assert!(

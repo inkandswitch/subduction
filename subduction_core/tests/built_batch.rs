@@ -16,6 +16,7 @@ use sedimentree_core::{
 use subduction_core::{
     connection::test_utils::new_test_subduction,
     subduction::error::{IoError, WriteError},
+    timeout::call::CallTimeout,
 };
 use testresult::TestResult;
 
@@ -68,7 +69,7 @@ async fn add_built_batch_empty_is_noop_no_broadcast() -> TestResult {
     let sed_id = SedimentreeId::new([2u8; 32]);
 
     // No connected peers, no work to do — should be a clean no-op.
-    sd.add_built_batch(sed_id, Vec::new(), Vec::new(), None)
+    sd.add_built_batch(sed_id, Vec::new(), Vec::new(), CallTimeout::Default)
         .await?;
 
     assert!(

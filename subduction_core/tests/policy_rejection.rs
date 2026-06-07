@@ -26,6 +26,7 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
+    timeout::call::CallTimeout,
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
 use testresult::TestResult;
@@ -170,7 +171,9 @@ async fn local_add_sedimentree_bypasses_put_policy() {
     let blobs = Vec::new();
 
     // Local operations succeed even with a rejecting put policy
-    let result = subduction.add_sedimentree(id, tree, blobs, None).await;
+    let result = subduction
+        .add_sedimentree(id, tree, blobs, CallTimeout::Default)
+        .await;
     assert!(result.is_ok(), "Local add_sedimentree should bypass policy");
 
     let ids = subduction.sedimentree_ids().await;
@@ -214,12 +217,12 @@ async fn local_adds_bypass_id_specific_policy() -> TestResult {
     // Local operations succeed for both IDs — policy only applies to remote data
     let tree = Sedimentree::default();
     let result = subduction
-        .add_sedimentree(allowed_id, tree.clone(), Vec::new(), None)
+        .add_sedimentree(allowed_id, tree.clone(), Vec::new(), CallTimeout::Default)
         .await;
     assert!(result.is_ok(), "Local add to allowed ID should succeed");
 
     let result = subduction
-        .add_sedimentree(other_id, tree, Vec::new(), None)
+        .add_sedimentree(other_id, tree, Vec::new(), CallTimeout::Default)
         .await;
     assert!(
         result.is_ok(),
@@ -248,7 +251,9 @@ async fn local_add_stores_data_despite_rejecting_policy() {
     let tree = Sedimentree::default();
 
     // Local add succeeds (policy bypassed)
-    let result = subduction.add_sedimentree(id, tree, Vec::new(), None).await;
+    let result = subduction
+        .add_sedimentree(id, tree, Vec::new(), CallTimeout::Default)
+        .await;
     assert!(result.is_ok());
 
     // Data was stored
@@ -327,7 +332,9 @@ async fn multiple_local_adds_succeed_despite_rejecting_policy() {
     for i in 0..5u8 {
         let id = SedimentreeId::new([i; 32]);
         let tree = Sedimentree::default();
-        let result = subduction.add_sedimentree(id, tree, Vec::new(), None).await;
+        let result = subduction
+            .add_sedimentree(id, tree, Vec::new(), CallTimeout::Default)
+            .await;
         assert!(result.is_ok(), "Local add {i} should succeed");
     }
 

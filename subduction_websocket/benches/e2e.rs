@@ -64,6 +64,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
@@ -76,7 +77,7 @@ use tempfile::TempDir;
 use tokio_util::task::TaskTracker;
 
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
-const TIMEOUT: Duration = Duration::from_secs(10);
+const TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(10_000);
 
 /// Whether to run the slim CI sweep. Controlled by the
 /// `SUBDUCTION_BENCH_CI_SLIM` environment variable: empty or unset
@@ -573,7 +574,7 @@ fn bench_single_commit_sync(c: &mut Criterion) {
             |(_server, client, sed_id)| {
                 rt.block_on(async {
                     client
-                        .sync_with_all_peers(sed_id, false, Some(TIMEOUT))
+                        .sync_with_all_peers(sed_id, false, TIMEOUT)
                         .await
                         .expect("sync");
                 });
@@ -622,7 +623,7 @@ fn bench_batch_sync(c: &mut Criterion) {
                 },
                 |(_server, client)| {
                     rt.block_on(async {
-                        assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
+                        assert_full_sync(client.full_sync_with_all_peers(TIMEOUT).await);
                     });
                 },
                 BatchSize::PerIteration,
@@ -675,7 +676,7 @@ fn bench_large_blob_sync(c: &mut Criterion) {
                 },
                 |(_server, client)| {
                     rt.block_on(async {
-                        assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
+                        assert_full_sync(client.full_sync_with_all_peers(TIMEOUT).await);
                     });
                 },
                 BatchSize::PerIteration,
@@ -725,7 +726,7 @@ fn bench_bidirectional_sync(c: &mut Criterion) {
             },
             |(_server, client)| {
                 rt.block_on(async {
-                    assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
+                    assert_full_sync(client.full_sync_with_all_peers(TIMEOUT).await);
                 });
             },
             BatchSize::PerIteration,
@@ -758,7 +759,7 @@ fn bench_incremental_sync(c: &mut Criterion) {
             }
 
             // Sync to get client up to date
-            assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
+            assert_full_sync(client.full_sync_with_all_peers(TIMEOUT).await);
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             (server, client, sed_id)
@@ -779,7 +780,7 @@ fn bench_incremental_sync(c: &mut Criterion) {
                     .expect("add commit");
 
                 client
-                    .sync_with_all_peers(sed_id, false, Some(TIMEOUT))
+                    .sync_with_all_peers(sed_id, false, TIMEOUT)
                     .await
                     .expect("sync");
             });
@@ -841,13 +842,8 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                                 let c = client.inner();
                                 handles.push(tokio::spawn(async move {
                                     assert_sync(
-                                        c.sync_with_peer(
-                                            &server_peer_id,
-                                            sed_id,
-                                            true,
-                                            Some(TIMEOUT),
-                                        )
-                                        .await,
+                                        c.sync_with_peer(&server_peer_id, sed_id, true, TIMEOUT)
+                                            .await,
                                     );
                                 }));
                             }
@@ -914,13 +910,8 @@ fn bench_concurrent_clients_fs(c: &mut Criterion) {
                                 let c = client.inner();
                                 handles.push(tokio::spawn(async move {
                                     assert_sync(
-                                        c.sync_with_peer(
-                                            &server_peer_id,
-                                            sed_id,
-                                            true,
-                                            Some(TIMEOUT),
-                                        )
-                                        .await,
+                                        c.sync_with_peer(&server_peer_id, sed_id, true, TIMEOUT)
+                                            .await,
                                     );
                                 }));
                             }

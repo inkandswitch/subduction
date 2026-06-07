@@ -29,7 +29,8 @@ use sedimentree_core::{
 };
 use subduction_core::{
     handshake::audience::Audience, policy::open::OpenPolicy, storage::memory::MemoryStorage,
-    subduction::builder::SubductionBuilder, transport::message::MessageTransport,
+    subduction::builder::SubductionBuilder, timeout::call::CallTimeout,
+    transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient};
@@ -368,9 +369,17 @@ async fn main() -> Result<()> {
         result.fragment_count, result.loose_count
     );
     let timeout_dur = std::time::Duration::from_secs(args.timeout);
+    // This caller imposes its own outer deadline via `tokio::time::timeout`, so
+    // the inner roundtrip is left uncapped (the cancel-safe future is dropped if
+    // our outer deadline elapses).
     tokio::time::timeout(timeout_dur, async {
         subduction
-            .add_sedimentree(sed_id, result.sedimentree, result.blobs, None)
+            .add_sedimentree(
+                sed_id,
+                result.sedimentree,
+                result.blobs,
+                CallTimeout::Uncapped,
+            )
             .await
             .map(|_per_peer| ())
             .map_err(|e| eyre!("upload failed: {e}"))

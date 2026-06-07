@@ -74,6 +74,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -112,7 +113,7 @@ const COMMITS_PER_DOC: &[usize] = &[50];
 
 /// Generous per-sync-call timeout; we measure convergence wall-clock, not
 /// timeout behaviour.
-const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_secs(30));
+const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(30_000);
 
 fn make_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])

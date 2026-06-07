@@ -36,6 +36,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -110,7 +111,7 @@ async fn connect_pair(
 /// Long enough that the per-call default timeout cannot mask a missing
 /// disconnect-cancellation. If the test passes only thanks to the
 /// timeout firing, it would still take well over [`BOUND`].
-const LONG_PER_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const LONG_PER_CALL_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(60_000);
 const BOUND: Duration = Duration::from_secs(3);
 
 #[tokio::test(flavor = "current_thread")]
@@ -131,7 +132,7 @@ async fn disconnect_from_peer_cancels_in_flight_sync_with_all_peers() -> TestRes
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
 
@@ -194,7 +195,7 @@ async fn disconnect_single_conn_when_last_cancels_in_flight_sync() -> TestResult
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -254,7 +255,7 @@ async fn remove_connection_cancels_in_flight_then_second_removal_is_noop() -> Te
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -506,7 +507,7 @@ async fn disconnect_all_cancels_in_flight_sync_for_every_peer() -> TestResult {
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -580,7 +581,7 @@ async fn remove_non_last_connection_does_not_cancel_pending_calls() -> TestResul
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -752,7 +753,7 @@ async fn dropping_full_sync_aborts_spawned_per_document_tasks() -> TestResult {
     let a_clone = Arc::clone(&a);
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .full_sync_with_peer(&b_peer, true, Some(LONG_PER_CALL_TIMEOUT))
+            .full_sync_with_peer(&b_peer, true, LONG_PER_CALL_TIMEOUT)
             .await;
     });
 

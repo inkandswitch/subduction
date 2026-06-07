@@ -139,14 +139,10 @@ mod multiplexer {
         Ok(())
     }
 
-    #[test]
-    fn clone_preserves_counter_but_clears_pending() {
-        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
-        let id1 = mux.next_request_id();
-        let cloned = mux.clone();
-        let id2 = cloned.next_request_id();
-        assert_eq!(id2.nonce, id1.nonce + 1);
-    }
+    // NOTE: `Multiplexer` is intentionally not `Clone` (it is always shared as
+    // `Arc<Multiplexer>`); a value-clone would silently drop in-flight senders.
+    // The former `clone_preserves_counter_but_clears_pending` test exercised
+    // that removed footgun and no longer compiles, so it was deleted.
 }
 
 // ── MessageTransport ────────────────────────────────────────────────────
@@ -261,7 +257,7 @@ mod managed_connection {
             <ManagedConnection<ChannelMockConnection<SyncMessage>, Sendable, AlwaysTimeout> as ManagedCall<Sendable, SyncMessage>>::call(
                 &managed,
                 req,
-                None,
+                Some(Duration::from_millis(1)),
             )
             .await;
 
@@ -287,7 +283,7 @@ mod managed_connection {
             <ManagedConnection<ChannelMockConnection<SyncMessage>, Sendable, AlwaysTimeout> as ManagedCall<Sendable, SyncMessage>>::call(
                 &managed,
                 req,
-                None,
+                Some(Duration::from_millis(1)),
             )
             .await,
         );
@@ -378,21 +374,26 @@ mod call_deadline {
         (ManagedConnection::new(auth, mux, timer), handle)
     }
 
-    /// With no response, the deadline elapsing yields `Timeout` promptly
-    /// (no spinning).
+    /// With a deadline and no response, the deadline elapsing yields `Timeout`
+    /// promptly (no spinning).
     #[tokio::test]
     async fn times_out_when_no_response() {
         let mux = Arc::new(Multiplexer::new(test_peer_id(), Duration::from_secs(30)));
         let (managed, _handle) = managed_with(mux, AlwaysTimeout);
         let id = managed.next_request_id();
 
+        // `Some(_)` applies the deadline; `None` would be the uncapped path.
         let result = tokio::time::timeout(
             StdDuration::from_secs(2),
             <ManagedConnection<
                 ChannelMockConnection<SyncMessage>,
                 Sendable,
                 AlwaysTimeout,
-            > as ManagedCall<Sendable, SyncMessage>>::call(&managed, req(id), None),
+            > as ManagedCall<Sendable, SyncMessage>>::call(
+                &managed,
+                req(id),
+                Some(Duration::from_millis(1)),
+            ),
         )
         .await
         .expect("call must resolve promptly, not spin");
@@ -415,7 +416,11 @@ mod call_deadline {
             ChannelMockConnection<SyncMessage>,
             Sendable,
             AlwaysTimeout,
-        > as ManagedCall<Sendable, SyncMessage>>::call(&managed, req(id), None)
+        > as ManagedCall<Sendable, SyncMessage>>::call(
+            &managed,
+            req(id),
+            Some(Duration::from_millis(1)),
+        )
         .await;
         assert!(matches!(result, Err(CallError::Timeout)));
 
@@ -445,13 +450,18 @@ mod call_deadline {
                 ChannelMockConnection<SyncMessage>,
                 Sendable,
                 NeverTimeout,
-            > as ManagedCall<Sendable, SyncMessage>>::call(&managed, req(id), None);
+            > as ManagedCall<Sendable, SyncMessage>>::call(
+                &managed, req(id), None
+            );
             futures::pin_mut!(call);
 
             // Poll once so the future registers the pending entry and parks
             // on the (never-resolving) receiver, then abandon it.
             let polled = futures::poll!(&mut call);
-            assert!(polled.is_pending(), "call should be parked awaiting response");
+            assert!(
+                polled.is_pending(),
+                "call should be parked awaiting response"
+            );
             assert_eq!(
                 mux.pending_len().await,
                 1,
@@ -487,5 +497,46 @@ mod call_deadline {
         .await;
 
         assert!(matches!(result, Err(CallError::Timeout)), "got {result:?}");
+    }
+
+    /// **Lower-level abortable API**: with `timeout: None` the call is uncapped
+    /// (no internal deadline) — a *caller* owns the policy. Here the caller
+    /// imposes its own bound via an outer `tokio::time::timeout`; when that
+    /// fires it drops the (uncapped) call future, and the drop guard must leave
+    /// no pending entry. This is the `CallTimeout::Uncapped` use case.
+    #[tokio::test]
+    async fn uncapped_call_is_bounded_by_outer_timeout_without_leaking() {
+        let mux = Arc::new(Multiplexer::new(test_peer_id(), Duration::from_secs(30)));
+        // `NeverTimeout` ensures the *inner* call never self-times-out; only the
+        // outer `tokio::time::timeout` can end the wait.
+        let (managed, _handle) = managed_with(mux.clone(), NeverTimeout);
+        let id = managed.next_request_id();
+
+        let outer = tokio::time::timeout(
+            StdDuration::from_millis(50),
+            <ManagedConnection<
+                ChannelMockConnection<SyncMessage>,
+                Sendable,
+                NeverTimeout,
+            > as ManagedCall<Sendable, SyncMessage>>::call(&managed, req(id), None),
+        )
+        .await;
+
+        assert!(
+            outer.is_err(),
+            "outer deadline should elapse (uncapped inner call never resolves)"
+        );
+
+        // Dropping the uncapped future (because the outer timeout fired) must
+        // have removed the pending entry.
+        assert_eq!(
+            mux.pending_len().await,
+            0,
+            "an uncapped call dropped by an outer deadline must leave no pending entry"
+        );
+        assert!(
+            !mux.resolve_pending(&test_batch_sync_response(id)).await,
+            "a late response must find no pending caller"
+        );
     }
 }

@@ -225,9 +225,30 @@ where
     /// `Connection::send`. The response arrives via the `Multiplexer`'s
     /// pending map, which is resolved by the `Subduction` listen loop.
     ///
+    /// # Deadline (`timeout`)
+    ///
+    /// This is the **low-level** entry point. `timeout` is a *total deadline*,
+    /// **not** a fallback to the configured default:
+    ///
+    /// - `Some(d)` — fail with [`CallError::Timeout`] if no response arrives
+    ///   within `d`.
+    /// - `None` — **no deadline**: the bare cancel-safe wait. The caller owns
+    ///   the cancellation policy (wrap in an outer `select!`/`timeout`/shutdown
+    ///   token; dropping this future removes the pending entry). The call still
+    ///   resolves on disconnect via `cancel_all_pending`.
+    ///
+    /// The configured default ([`DEFAULT_ROUNDTRIP_TIMEOUT`]) is applied by the
+    /// convenience layer (the high-level `Subduction` methods) before reaching
+    /// here, not inside this method.
+    ///
+    /// Either way the wait is **cancel-safe**: dropping the returned future for
+    /// any reason removes the registered pending entry via [`PendingGuard`].
+    ///
     /// # Errors
     ///
     /// Returns [`CallError`] on send failure, dropped response, or timeout.
+    ///
+    /// [`DEFAULT_ROUNDTRIP_TIMEOUT`]: crate::multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT
     pub fn call_inner<WireMsg>(
         &self,
         req: BatchSyncRequest,
@@ -238,7 +259,6 @@ where
         Conn::SendError: Send + 'static,
         WireMsg: Encode + Decode + From<SyncMessage> + Send,
     {
-        let time_limit = timeout.unwrap_or(self.multiplexer.default_idle_timeout());
         async move {
             let req_id = req.req_id;
             let rx = self.multiplexer.register_pending(req_id).await;
@@ -252,7 +272,14 @@ where
                 .await
                 .map_err(CallError::Send)?;
 
-            match self.timer.timeout(time_limit, rx.boxed()).await {
+            // `Some(d)` wraps the wait in a deadline; `None` is the bare
+            // (uncapped) cancel-safe wait.
+            let waited = match timeout {
+                Some(deadline) => self.timer.timeout(deadline, rx.boxed()).await,
+                None => Ok(rx.await),
+            };
+
+            match waited {
                 Ok(Ok(resp)) => {
                     // Entry already removed by `resolve_pending`.
                     guard.disarm();
@@ -269,7 +296,7 @@ where
                 Err(TimedOut) => {
                     // Deadline elapsed with the entry still registered; let
                     // the armed guard remove it on drop.
-                    tracing::warn!("request {req_id:?} timed out after {time_limit:?}");
+                    tracing::warn!("request {req_id:?} timed out after {timeout:?}");
                     Err(CallError::Timeout)
                 }
             }
@@ -317,7 +344,6 @@ where
         Conn: Connection<Local, WireMsg> + PartialEq,
         WireMsg: Encode + Decode + From<SyncMessage>,
     {
-        let time_limit = timeout.unwrap_or(self.multiplexer.default_idle_timeout());
         async move {
             let req_id = req.req_id;
             let rx = self.multiplexer.register_pending(req_id).await;
@@ -329,7 +355,14 @@ where
                 .await
                 .map_err(CallError::Send)?;
 
-            match self.timer.timeout(time_limit, rx.boxed_local()).await {
+            // `Some(d)` wraps the wait in a deadline; `None` is the bare
+            // (uncapped) cancel-safe wait.
+            let waited = match timeout {
+                Some(deadline) => self.timer.timeout(deadline, rx.boxed_local()).await,
+                None => Ok(rx.await),
+            };
+
+            match waited {
                 Ok(Ok(resp)) => {
                     guard.disarm();
                     tracing::debug!("request {req_id:?} completed");
@@ -341,7 +374,7 @@ where
                     Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
-                    tracing::warn!("request {req_id:?} timed out after {time_limit:?}");
+                    tracing::warn!("request {req_id:?} timed out after {timeout:?}");
                     Err(CallError::Timeout)
                 }
             }

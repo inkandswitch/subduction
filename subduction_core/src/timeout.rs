@@ -2,6 +2,12 @@
 //!
 //! This trait allows connections and transports to apply timeouts
 //! without depending on a specific async runtime.
+//!
+//! The [`call`] submodule holds [`CallTimeout`](call::CallTimeout), the
+//! per-call timeout *policy* that resolves into the [`Duration`] deadline this
+//! [`Timeout`] mechanism enforces.
+
+pub mod call;
 
 use core::time::Duration;
 
