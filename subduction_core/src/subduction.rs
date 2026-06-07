@@ -117,7 +117,7 @@ use sedimentree_core::{
         Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     depth::{Depth, DepthMetric},
     fragment::Fragment,
@@ -3989,7 +3989,7 @@ mod tests {
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         collections::Map,
-        commit::CountLeadingZeroBytes,
+        depth::CountLeadingZeroBytes,
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::{LooseCommit, id::CommitId},

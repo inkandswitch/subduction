@@ -29,7 +29,6 @@ use crate::{error::WasmHandshakeError, peer_id::WasmPeerId};
 use self::nonce::WasmNonce;
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
-pub use authenticated::WasmAuthenticatedTransport;
 pub(crate) use on_disconnect::OnDisconnect;
 
 /// Default service name for local (non-network) discovery handshakes.

@@ -490,7 +490,7 @@ mod tests {
         use rand::{Rng, SeedableRng, rngs::SmallRng};
 
         use super::*;
-        use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
+        use crate::{depth::CountLeadingZeroBytes, fragment::Fragment};
 
         /// A randomly-generated valid commit DAG.
         ///

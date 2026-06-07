@@ -40,7 +40,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use sedimentree_core::{
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     crypto::fingerprint::FingerprintSeed,
     depth::DepthMetric,
     fragment::{Fragment, checkpoint::Checkpoint},

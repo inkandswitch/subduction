@@ -14,7 +14,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob,
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},

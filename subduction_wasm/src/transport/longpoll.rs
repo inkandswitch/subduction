@@ -198,13 +198,13 @@ impl WasmAuthenticatedLongPoll {
         self.session_id.to_hex()
     }
 
-    /// Convert to a transport-erased [`AuthenticatedTransport`](super::WasmAuthenticatedTransport).
+    /// Convert to a transport-erased [`AuthenticatedTransport`](super::authenticated::WasmAuthenticatedTransport).
     #[must_use]
     #[wasm_bindgen(js_name = toTransport)]
-    pub fn to_transport(self) -> super::WasmAuthenticatedTransport {
+    pub fn to_transport(self) -> super::authenticated::WasmAuthenticatedTransport {
         let peer_id = self.inner.peer_id();
         let on_disconnect = self.on_disconnect;
-        super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(move |lp| {
+        super::authenticated::WasmAuthenticatedTransport::from_authenticated(self.inner.map(move |lp| {
             let wasm_lp = WasmHttpLongPoll::new(lp);
             if let Some(cb) = on_disconnect {
                 let peer_id: JsValue = WasmPeerId::from(peer_id).into();

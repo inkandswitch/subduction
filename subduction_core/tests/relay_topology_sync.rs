@@ -11,7 +11,7 @@ use core::convert::Infallible;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     crypto::fingerprint::FingerprintSeed,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},

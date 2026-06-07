@@ -64,7 +64,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use future_form::Sendable;
 use futures::StreamExt;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
     authenticated::Authenticated,

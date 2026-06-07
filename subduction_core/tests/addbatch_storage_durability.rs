@@ -25,7 +25,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -62,7 +62,7 @@ type TestSubduction = Arc<
     >,
 >;
 
-/// Wired into the node via [`SubductionBuilder::idle_timeout`] in
+/// Wired into the node via [`SubductionBuilder::roundtrip_timeout`] in
 /// [`make_node`], so it *is* the node's configured per-call timeout (not just
 /// a constant referenced in messages). Long enough that a `store_built_batch`
 /// which (wrongly) waited on the peer would block for the full
@@ -92,7 +92,7 @@ fn make_node(signer: MemorySigner) -> TestSubduction {
         // Make the documented margin real: any (regressed) network roundtrip
         // from store_built_batch would inherit this 60s default and blow past
         // BOUND. The add_* combinator tests override it per-call.
-        .idle_timeout(LONG_PER_CALL_TIMEOUT)
+        .roundtrip_timeout(LONG_PER_CALL_TIMEOUT)
         .build::<Sendable, Conn>();
     tokio::spawn(listener);
     tokio::spawn(manager);

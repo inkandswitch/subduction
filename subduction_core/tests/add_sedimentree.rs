@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     crypto::fingerprint::FingerprintSeed,
     fragment::{Fragment, checkpoint::Checkpoint},
     id::SedimentreeId,

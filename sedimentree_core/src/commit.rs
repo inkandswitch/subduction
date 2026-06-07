@@ -388,9 +388,6 @@ pub trait CommitStore<'a> {
     }
 }
 
-/// Re-export [`CountLeadingZeroBytes`] from the depth module.
-pub use crate::depth::CountLeadingZeroBytes;
-
 /// `Fragment`s are a consistent unit of document history,
 /// which may end before the complete history is covered.
 /// In this way, a document can be broken up into a series

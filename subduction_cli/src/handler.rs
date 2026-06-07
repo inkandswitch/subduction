@@ -18,7 +18,7 @@ use crate::{
 };
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use sedimentree_core::commit::CountLeadingZeroBytes;
+use sedimentree_core::depth::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     authenticated::Authenticated,

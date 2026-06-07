@@ -25,7 +25,7 @@ use futures::future::BoxFuture;
 use sedimentree_core::{
     blob::Blob,
     collections::Set,
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},

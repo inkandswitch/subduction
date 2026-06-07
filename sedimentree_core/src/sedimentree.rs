@@ -1388,7 +1388,7 @@ mod tests {
         use rand::{Rng, SeedableRng, rngs::SmallRng};
 
         use super::*;
-        use crate::{commit::CountLeadingZeroBytes, fragment::FragmentSummary};
+        use crate::{depth::CountLeadingZeroBytes, fragment::FragmentSummary};
 
         static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -2190,7 +2190,7 @@ mod tests {
 
         use super::{make_blob_meta, make_sedimentree_id};
         use crate::{
-            commit::CountLeadingZeroBytes,
+            depth::CountLeadingZeroBytes,
             fragment::Fragment,
             sedimentree::Sedimentree,
             test_utils::{commit_id_with_depth, make_fragment_at_depth},
@@ -2469,7 +2469,7 @@ mod tests {
 
         use crate::{
             blob::{Blob, BlobMeta},
-            commit::CountLeadingZeroBytes,
+            depth::CountLeadingZeroBytes,
             fragment::Fragment,
             id::SedimentreeId,
             loose_commit::{LooseCommit, id::CommitId},
@@ -3152,7 +3152,7 @@ mod tests {
         use alloc::{collections::BTreeSet, vec};
 
         use crate::{
-            commit::CountLeadingZeroBytes,
+            depth::CountLeadingZeroBytes,
             crypto::fingerprint::{Fingerprint, FingerprintSeed},
             fragment::Fragment,
             loose_commit::LooseCommit,
@@ -4345,7 +4345,7 @@ mod tests {
     #[cfg(feature = "bolero")]
     mod fingerprint_resolver_proptests {
         use super::*;
-        use crate::commit::CountLeadingZeroBytes;
+        use crate::depth::CountLeadingZeroBytes;
 
         /// For any tree and seed, the resolver resolves every fingerprint
         /// from its own summary that corresponds to a sendable item.

@@ -34,7 +34,7 @@ use subduction_core::{
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     fragment::{Fragment, FragmentSummary},
     id::SedimentreeId,

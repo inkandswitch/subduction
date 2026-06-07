@@ -52,7 +52,7 @@ use criterion_pprof::criterion::{Output, PProfProfiler};
 use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{

@@ -6,7 +6,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_lock::Mutex;
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, collections::Map, commit::CountLeadingZeroBytes, crypto::digest::Digest,
+    blob::Blob, collections::Map, depth::CountLeadingZeroBytes, crypto::digest::Digest,
     id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{

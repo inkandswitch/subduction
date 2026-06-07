@@ -22,7 +22,7 @@ use std::{
 use future_form::Sendable;
 use futures::future::{AbortHandle, Abortable, BoxFuture};
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
     authenticated::Authenticated,

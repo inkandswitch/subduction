@@ -27,7 +27,7 @@
 //! // Connect to a peer and sync
 //! let peer_id = connection.peer_id();
 //! subduction.add_connection(connection).await?;
-//! subduction.full_sync_with_peer(&peer_id, true, None).await;
+//! subduction.full_sync_with_peer(&peer_id, true, CallTimeout::Default).await;
 //! ```
 //!
 //! ### Optional configuration

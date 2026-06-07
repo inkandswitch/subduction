@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     test_utils::{TestGraph, seeded_rng},
 };

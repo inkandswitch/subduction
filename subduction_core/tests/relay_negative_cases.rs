@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
     authenticated::Authenticated,

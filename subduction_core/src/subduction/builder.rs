@@ -51,7 +51,7 @@
 //! [`.nonce_cache()`]: SubductionBuilder::nonce_cache
 //! [`.max_pending_blob_requests()`]: SubductionBuilder::max_pending_blob_requests
 //! [`.sedimentrees()`]: SubductionBuilder::sedimentrees
-//! [`CountLeadingZeroBytes`]: sedimentree_core::commit::CountLeadingZeroBytes
+//! [`CountLeadingZeroBytes`]: sedimentree_core::depth::CountLeadingZeroBytes
 //! [`NonceCache::default()`]: crate::nonce_cache::NonceCache
 //! [`BoundedShardedMap::new()`]: crate::collections::bounded_sharded_map::BoundedShardedMap::new
 
@@ -60,7 +60,7 @@ use async_lock::Mutex;
 use core::time::Duration;
 use sedimentree_core::{
     collections::{Map, Set},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     depth::DepthMetric,
     id::SedimentreeId,
     sedimentree::minimized::MinimizedSedimentree,
@@ -329,16 +329,6 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     pub const fn roundtrip_timeout(mut self, timeout: Duration) -> Self {
         self.default_roundtrip_timeout = Some(timeout);
         self
-    }
-
-    /// Deprecated alias for [`roundtrip_timeout`](Self::roundtrip_timeout).
-    ///
-    /// The per-call timeout is a *total deadline*, not an idle/progress
-    /// timeout; the name changed to match.
-    #[must_use]
-    #[deprecated(since = "0.16.0", note = "renamed to `roundtrip_timeout`")]
-    pub const fn idle_timeout(self, timeout: Duration) -> Self {
-        self.roundtrip_timeout(timeout)
     }
 
     /// Override the depth metric used to assign commit depths.

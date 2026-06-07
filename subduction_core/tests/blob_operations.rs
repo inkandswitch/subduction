@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_lock::Mutex;
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, collections::Map, commit::CountLeadingZeroBytes, crypto::digest::Digest,
+    blob::Blob, collections::Map, depth::CountLeadingZeroBytes, crypto::digest::Digest,
     id::SedimentreeId,
 };
 use subduction_core::{

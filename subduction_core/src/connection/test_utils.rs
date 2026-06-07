@@ -17,7 +17,7 @@ use futures::{
 };
 use sedimentree_core::{
     codec::{decode::Decode, encode::Encode},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 

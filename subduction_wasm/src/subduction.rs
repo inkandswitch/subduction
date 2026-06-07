@@ -22,7 +22,7 @@ use js_sys::Uint8Array;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::id::CommitId,
@@ -70,7 +70,8 @@ use crate::{
     sync_stats::WasmSyncStats,
     topic::{JsTopic, WasmTopic},
     transport::{
-        DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
+        DEFAULT_LOCAL_SERVICE_NAME, JsTransport,
+        authenticated::WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         websocket::WasmWebSocket,
     },

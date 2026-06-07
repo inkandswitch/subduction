@@ -13,7 +13,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
     connection::test_utils::{MockConnection, TokioSpawn, TokioTimeout},

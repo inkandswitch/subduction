@@ -5,7 +5,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use eyre::Result;
 use future_form::Sendable;
 use iroh::{EndpointAddr, endpoint::presets};
-use sedimentree_core::commit::CountLeadingZeroBytes;
+use sedimentree_core::depth::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     authenticated::Authenticated,
