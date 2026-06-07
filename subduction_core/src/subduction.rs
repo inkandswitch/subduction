@@ -3244,9 +3244,7 @@ where
                     let (permit, msg_result) = permitted;
                     if let Ok((conn, msg)) = msg_result {
                         let peer_id = conn.peer_id();
-                        // Hot path: one TRACE event with the peer only. Never
-                        // Debug-format the whole message — it can embed commit
-                        // or blob bytes.
+                        // Don't Debug-format `msg` — it can embed commit/blob bytes.
                         tracing::trace!(peer = %peer_id, "listener received message");
 
                         if let Some(resp) = msg.try_as_batch_sync_response() {

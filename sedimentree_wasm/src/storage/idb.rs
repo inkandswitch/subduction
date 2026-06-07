@@ -84,10 +84,6 @@ impl WasmIndexedDbStorage {
         use tracing::Instrument as _;
 
         let name = name.as_deref().unwrap_or(DB_NAME);
-        // Group setup events under a span. Don't hold `span.enter()` across the
-        // `.await` below (that would mis-attribute the span to whatever else
-        // runs on this task while suspended); instrument the awaited future
-        // instead, and scope the synchronous part with `in_scope`.
         let span = tracing::debug_span!("IndexedDbStorage::setup");
 
         let open_req: IdbOpenDbRequest = span.in_scope(|| {

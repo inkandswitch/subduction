@@ -66,11 +66,9 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        // This runs for every event, so it must NOT emit a tracing event on the
-        // error path — doing so would re-enter `on_event`, read the lock again,
-        // and recurse to a stack overflow. Recover a poisoned lock instead
-        // (poison is only possible if a writer panicked mid-assignment, which
-        // the setters never do); the inner `Option` is always safe to read.
+        // Must not emit a tracing event on the error path: that would re-enter
+        // `on_event` and recurse. Recover the (practically-impossible) poison
+        // instead of logging about it.
         let guard = JS_LOGGER.read().unwrap_or_else(PoisonError::into_inner);
         let callback_opt = guard.clone();
         drop(guard);

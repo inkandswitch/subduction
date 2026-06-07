@@ -42,13 +42,11 @@ async fn main() -> eyre::Result<()> {
 }
 
 fn setup_tracing(log_format: LogFormat) {
-    // Default to INFO so connection/sync lifecycle landmarks are visible in
-    // production out of the box; `RUST_LOG` overrides.
+    // Default to INFO (not the library-typical WARN) so lifecycle landmarks
+    // show by default; `RUST_LOG` overrides.
     let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // The fmt layer is either human-readable (journald/TTY) or JSON
-    // (Loki/aggregators). JSON carries span fields so the correlation spans
-    // installed across the core are queryable structurally.
+    // JSON carries span fields so correlation spans are queryable structurally.
     let fmt_layer = match log_format {
         LogFormat::Text => tracing_subscriber::fmt::layer().boxed(),
         LogFormat::Json => tracing_subscriber::fmt::layer()
@@ -58,7 +56,6 @@ fn setup_tracing(log_format: LogFormat) {
             .boxed(),
     };
 
-    // Build base registry with fmt layer
     let registry = tracing_subscriber::registry().with(fmt_layer.with_filter(fmt_filter));
 
     // Optionally add tokio-console layer (requires `--features tokio-console`).

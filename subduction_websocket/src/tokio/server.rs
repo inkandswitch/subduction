@@ -256,8 +256,6 @@ where
                                 let task_cancel = child_cancellation_token.clone();
                                 let task_tracker = accept_loop_tracker.clone();
                                 let outer_cancel = task_cancel.clone();
-                                // Per-connection span: every event from the upgrade,
-                                // handshake, and listener for this client inherits `client`.
                                 let conn_span = tracing::info_span!("ws_connection", client = %addr);
                                 conns.spawn(async move {
                                     // `accept_hdr_async_with_config` and `handshake::respond`

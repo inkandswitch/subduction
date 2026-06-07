@@ -46,10 +46,8 @@ extern crate alloc;
 pub mod commit_id;
 pub mod error;
 
-// Re-export everything from subduction_wasm. This includes the shared logging
-// API — `setSubductionLogLevel`, `set_subduction_logger`,
-// `clear_subduction_logger` — so the umbrella exposes the same surface as every
-// other bundle without redefining (and thus duplicating) those exports.
+// Re-export everything from subduction_wasm (including the shared log-control
+// exports, inherited rather than redefined to avoid duplicate symbols).
 pub use subduction_wasm::*;
 
 use wasm_bindgen::prelude::*;

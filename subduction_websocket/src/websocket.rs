@@ -378,7 +378,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                     break Ok(());
                 };
 
-                // Per-frame logging is hot-path → TRACE (one event, not two).
                 tracing::trace!(peer = %self.peer_id, conn = %self.chan_id, "received WebSocket message");
 
                 match ws_msg {
@@ -393,9 +392,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                         }
                     }
                     Ok(tungstenite::Message::Text(text)) => {
-                        // Peer-controlled content: log only the length and a
-                        // bounded, char-boundary-safe prefix so a peer can't
-                        // drive arbitrary WARN-level log content.
+                        // Bound the peer-controlled text in the log.
                         let preview: alloc::string::String = text.chars().take(64).collect();
                         tracing::warn!(
                             peer = %self.peer_id,

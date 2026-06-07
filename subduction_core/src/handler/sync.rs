@@ -395,11 +395,9 @@ impl<
                         self.recv_batch_sync_response(&from, id, diff).await?;
                     }
                     SyncResult::NotFound => {
-                        // Routine sync outcome, not an anomaly → DEBUG.
                         tracing::debug!(peer = %from, tree = ?id, "peer reports sedimentree not found");
                     }
                     SyncResult::Unauthorized => {
-                        // Routine sync outcome (we lack access) → DEBUG.
                         tracing::debug!(peer = %from, tree = ?id, "peer reports we are unauthorized for sedimentree");
                     }
                 }
@@ -407,7 +405,6 @@ impl<
             SyncMessage::BlobsRequest { id, digests } => {
                 match self.recv_blob_request(conn, id, &digests).await {
                     Ok(()) => {
-                        // Happy path of every blob request → DEBUG.
                         tracing::debug!(peer = %from, tree = ?id, "handled blob request");
                     }
                     Err(BlobRequestErr::IoError(e)) => Err(e)?,
