@@ -13,7 +13,6 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use tracing::Instrument;
 use sedimentree_core::depth::DepthMetric;
 use subduction_core::{
     authenticated::Authenticated,
@@ -31,6 +30,7 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
+use tracing::Instrument;
 
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};

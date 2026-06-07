@@ -474,7 +474,10 @@ where
         .timer(FuturesTimerTimeout);
 
     let builder = if let Some(max) = args.max_resident_trees {
-        tracing::info!(max_resident_trees = max, "bounding in-memory sedimentree cache");
+        tracing::info!(
+            max_resident_trees = max,
+            "bounding in-memory sedimentree cache"
+        );
         builder.max_resident_trees(max)
     } else {
         builder

@@ -18,7 +18,6 @@
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
-use tracing::Instrument;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -31,6 +30,7 @@ use sedimentree_core::{
     sedimentree::{FingerprintSummary, Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
+use tracing::Instrument;
 
 use crate::{
     authenticated::Authenticated,
@@ -333,7 +333,9 @@ impl<
         #[cfg(feature = "metrics")]
         let _timer = crate::metrics::DispatchTimer::new();
 
-        self.dispatch_inner(from, message, conn).instrument(span).await
+        self.dispatch_inner(from, message, conn)
+            .instrument(span)
+            .await
     }
 
     /// Inner dispatch body, run inside the per-message correlation span.

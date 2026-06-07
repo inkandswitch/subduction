@@ -34,8 +34,7 @@ pub fn start_sedimentree_wasm() {
 #[cfg(all(target_arch = "wasm32", cdylib_primary))]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = setSubductionLogLevel)]
 pub fn set_subduction_log_level(level: &str) -> Result<(), wasm_bindgen::JsValue> {
-    subduction_wasm_bootstrap::set_log_level(level)
-        .map_err(|e| wasm_bindgen::JsValue::from_str(&e))
+    subduction_wasm_bootstrap::set_log_level(level).map_err(|e| wasm_bindgen::JsValue::from_str(&e))
 }
 
 /// Forward every tracing event to a JavaScript callback
