@@ -14,8 +14,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob,
-    commit::CountLeadingZeroBytes,
-    depth::{Depth, DepthMetric},
+    depth::{CountLeadingZeroBytes, Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -27,6 +26,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -119,7 +119,7 @@ async fn multi_round_convergence_with_fragments() -> TestResult {
     let bob = make_node(bob_signer.clone());
 
     let sed_id = SedimentreeId::new([2u8; 32]);
-    let sync_timeout = Some(Duration::from_millis(500));
+    let sync_timeout = CallTimeout::TimeoutMillis(500);
 
     // ── Phase 1: initial data (no connection yet, no broadcasts) ──
 
@@ -476,7 +476,7 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
     let bob = make_deep_node(bob_signer.clone());
 
     let sed_id = SedimentreeId::new([3u8; 32]);
-    let sync_timeout = Some(Duration::from_millis(500));
+    let sync_timeout = CallTimeout::TimeoutMillis(500);
 
     // ── Alice adds 3 commits (no connection, no broadcasts) ──
 
@@ -662,7 +662,7 @@ async fn full_sync_with_peer_includes_evicted_documents() -> TestResult {
         let mut done = false;
         for _ in 0..8 {
             let (_had_success, _stats, _call_errs, io_errs) = alice
-                .full_sync_with_peer(&bob_peer, true, Some(Duration::from_secs(2)))
+                .full_sync_with_peer(&bob_peer, true, CallTimeout::TimeoutMillis(2_000))
                 .await;
             assert!(io_errs.is_empty(), "no per-document IO errors: {io_errs:?}");
 

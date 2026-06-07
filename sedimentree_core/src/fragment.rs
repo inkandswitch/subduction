@@ -473,7 +473,7 @@ mod tests {
 
     use crate::{
         blob::{Blob, BlobMeta},
-        commit::CountLeadingZeroBytes,
+        depth::CountLeadingZeroBytes,
         fragment::{Fragment, FragmentSummary},
         id::SedimentreeId,
         loose_commit::id::CommitId,
@@ -687,8 +687,8 @@ mod tests {
                 decode::DecodeFields,
                 encode::{Encode, EncodeFields},
             },
-            commit::CountLeadingZeroBytes,
             crypto::digest::Digest,
+            depth::CountLeadingZeroBytes,
             fragment::Fragment,
         };
 

@@ -51,7 +51,7 @@
 //! [`.nonce_cache()`]: SubductionBuilder::nonce_cache
 //! [`.max_pending_blob_requests()`]: SubductionBuilder::max_pending_blob_requests
 //! [`.sedimentrees()`]: SubductionBuilder::sedimentrees
-//! [`CountLeadingZeroBytes`]: sedimentree_core::commit::CountLeadingZeroBytes
+//! [`CountLeadingZeroBytes`]: sedimentree_core::depth::CountLeadingZeroBytes
 //! [`NonceCache::default()`]: crate::nonce_cache::NonceCache
 //! [`BoundedShardedMap::new()`]: crate::collections::bounded_sharded_map::BoundedShardedMap::new
 
@@ -60,8 +60,7 @@ use async_lock::Mutex;
 use core::time::Duration;
 use sedimentree_core::{
     collections::{Map, Set},
-    commit::CountLeadingZeroBytes,
-    depth::DepthMetric,
+    depth::{CountLeadingZeroBytes, DepthMetric},
     id::SedimentreeId,
     sedimentree::minimized::MinimizedSedimentree,
 };
@@ -77,6 +76,7 @@ use crate::{
     },
     handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
+    multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -126,7 +126,7 @@ pub struct SubductionBuilder<
     timer: Timer,
 
     discovery_id: Option<DiscoveryId>,
-    default_call_timeout: Option<Duration>,
+    default_roundtrip_timeout: Option<Duration>,
     depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
@@ -172,7 +172,7 @@ impl<const SHARDS: usize>
             storage: Unset,
             timer: Unset,
             discovery_id: None,
-            default_call_timeout: None,
+            default_roundtrip_timeout: None,
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
             max_pending_blob_requests: DEFAULT_MAX_PENDING_BLOB_REQUESTS,
@@ -206,7 +206,7 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
             storage: self.storage,
             timer: self.timer,
             discovery_id: self.discovery_id,
-            default_call_timeout: self.default_call_timeout,
+            default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -234,7 +234,7 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
             storage: self.storage,
             timer: self.timer,
             discovery_id: self.discovery_id,
-            default_call_timeout: self.default_call_timeout,
+            default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -262,7 +262,7 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
             storage: StoragePowerbox::new(storage, policy),
             timer: self.timer,
             discovery_id: self.discovery_id,
-            default_call_timeout: self.default_call_timeout,
+            default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -287,7 +287,7 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize>
             storage: self.storage,
             timer,
             discovery_id: self.discovery_id,
-            default_call_timeout: self.default_call_timeout,
+            default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -309,14 +309,24 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
         self
     }
 
-    /// Set the default timeout for sync roundtrips
-    /// (`BatchSyncRequest` → `BatchSyncResponse`).
+    /// Set the default per-call **total deadline** for sync roundtrips
+    /// (`BatchSyncRequest` → `BatchSyncResponse`), resolved when a caller
+    /// passes [`CallTimeout::Default`](crate::timeout::call::CallTimeout::Default).
     ///
-    /// Defaults to 30 seconds if not set. Individual calls to
-    /// `sync_with_peer` can override this per-request.
+    /// This is **caller-side policy** applied over a cancel-safe wait, not a
+    /// transport-layer fuse and **not** an idle/progress timeout: the
+    /// multiplexer holds no clock. A blocking `sync_with_peer` is bounded by
+    /// this deadline unless it supplies its own. Bounding by default matches
+    /// the Erlang/OTP `GenServer.call` convention and keeps calls finite even
+    /// on transports (e.g. HTTP long-poll) that don't guarantee an eventual
+    /// disconnect on a byte-alive but protocol-silent peer.
+    ///
+    /// Defaults to [`DEFAULT_ROUNDTRIP_TIMEOUT`](crate::multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT)
+    /// (30 s) if not set. Individual calls can override this per-request via
+    /// [`CallTimeout`](crate::timeout::call::CallTimeout).
     #[must_use]
     pub const fn roundtrip_timeout(mut self, timeout: Duration) -> Self {
-        self.default_call_timeout = Some(timeout);
+        self.default_roundtrip_timeout = Some(timeout);
         self
     }
 
@@ -333,7 +343,7 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
             storage: self.storage,
             timer: self.timer,
             discovery_id: self.discovery_id,
-            default_call_timeout: self.default_call_timeout,
+            default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -506,7 +516,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             send_counter,
             nonce_cache,
             self.timer,
-            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
+            self.default_roundtrip_timeout
+                .unwrap_or(DEFAULT_ROUNDTRIP_TIMEOUT),
             self.depth_metric,
             self.spawner,
         );
@@ -601,7 +612,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             PeerCounter::default(),
             nonce_cache,
             self.timer,
-            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
+            self.default_roundtrip_timeout
+                .unwrap_or(DEFAULT_ROUNDTRIP_TIMEOUT),
             self.depth_metric,
             self.spawner,
         )
@@ -705,7 +717,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             send_counter,
             nonce_cache,
             self.timer,
-            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
+            self.default_roundtrip_timeout
+                .unwrap_or(DEFAULT_ROUNDTRIP_TIMEOUT),
             self.depth_metric,
             self.spawner,
         );

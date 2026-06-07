@@ -22,7 +22,7 @@ use std::sync::{
 };
 
 use future_form::Sendable;
-use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::{depth::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     authenticated::Authenticated,
     connection::{

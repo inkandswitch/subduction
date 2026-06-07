@@ -138,8 +138,8 @@ mod tests {
 
     use crate::{
         blob::{Blob, BlobMeta},
-        commit::CountLeadingZeroBytes,
         crypto::fingerprint::FingerprintSeed,
+        depth::CountLeadingZeroBytes,
         id::SedimentreeId,
         loose_commit::{LooseCommit, id::CommitId},
         sedimentree::Sedimentree,

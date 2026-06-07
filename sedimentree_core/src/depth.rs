@@ -12,7 +12,7 @@ use crate::loose_commit::id::CommitId;
 /// into smaller or larger sections based on a hash hardness metric.
 ///
 /// The depth is determined by a [`DepthMetric`] applied to the commit's
-/// [`CommitId`]. The default metric ([`CountLeadingZeroBytes`](crate::commit::CountLeadingZeroBytes))
+/// [`CommitId`]. The default metric ([`CountLeadingZeroBytes`])
 /// counts leading zero bytes, giving ~1/256 probability per depth level.
 ///
 /// If there are zero leading zero bytes, the commit lives only in the topmost (0th) layer.

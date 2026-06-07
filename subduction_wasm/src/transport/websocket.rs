@@ -619,11 +619,11 @@ impl WasmAuthenticatedWebSocket {
         self.inner.peer_id().into()
     }
 
-    /// Convert to a transport-erased [`AuthenticatedTransport`](super::WasmAuthenticatedTransport).
+    /// Convert to a transport-erased [`AuthenticatedTransport`](super::authenticated::WasmAuthenticatedTransport).
     #[must_use]
     #[wasm_bindgen(js_name = toTransport)]
-    pub fn to_transport(self) -> super::WasmAuthenticatedTransport {
-        super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
+    pub fn to_transport(self) -> super::authenticated::WasmAuthenticatedTransport {
+        super::authenticated::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
             let transport: super::JsTransport = wasm_bindgen::JsValue::from(ws).unchecked_into();
             MessageTransport::new(transport)
         }))

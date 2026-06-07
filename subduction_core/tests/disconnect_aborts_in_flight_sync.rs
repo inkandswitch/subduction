@@ -22,7 +22,7 @@ use std::{
 use future_form::Sendable;
 use futures::future::{AbortHandle, Abortable, BoxFuture};
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
     authenticated::Authenticated,
@@ -36,6 +36,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -110,7 +111,7 @@ async fn connect_pair(
 /// Long enough that the per-call default timeout cannot mask a missing
 /// disconnect-cancellation. If the test passes only thanks to the
 /// timeout firing, it would still take well over [`BOUND`].
-const LONG_PER_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const LONG_PER_CALL_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(60_000);
 const BOUND: Duration = Duration::from_secs(3);
 
 #[tokio::test(flavor = "current_thread")]
@@ -131,7 +132,7 @@ async fn disconnect_from_peer_cancels_in_flight_sync_with_all_peers() -> TestRes
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
 
@@ -194,7 +195,7 @@ async fn disconnect_single_conn_when_last_cancels_in_flight_sync() -> TestResult
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -254,7 +255,7 @@ async fn remove_connection_cancels_in_flight_then_second_removal_is_noop() -> Te
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -506,7 +507,7 @@ async fn disconnect_all_cancels_in_flight_sync_for_every_peer() -> TestResult {
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -580,7 +581,7 @@ async fn remove_non_last_connection_does_not_cancel_pending_calls() -> TestResul
     let a_clone = a.clone();
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .sync_with_all_peers(sed_id, true, Some(LONG_PER_CALL_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, LONG_PER_CALL_TIMEOUT)
             .await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -752,7 +753,7 @@ async fn dropping_full_sync_aborts_spawned_per_document_tasks() -> TestResult {
     let a_clone = Arc::clone(&a);
     let sync_handle = tokio::spawn(async move {
         a_clone
-            .full_sync_with_peer(&b_peer, true, Some(LONG_PER_CALL_TIMEOUT))
+            .full_sync_with_peer(&b_peer, true, LONG_PER_CALL_TIMEOUT)
             .await;
     });
 
@@ -780,6 +781,72 @@ async fn dropping_full_sync_aborts_spawned_per_document_tasks() -> TestResult {
          driving future was dropped (live = {}, baseline = {baseline}); they were \
          left detached against the wedged peer",
         live.load(Ordering::SeqCst)
+    );
+
+    Ok(())
+}
+
+/// An **uncapped** ([`CallTimeout::Uncapped`]) sync against a wedged peer must
+/// NOT self-terminate (it has no deadline) — it stays pending until the peer
+/// disconnects, at which point it resolves as `ResponseDropped` via
+/// `cancel_all_pending`. This pins the real-world `Uncapped` contract: "no
+/// deadline; the only non-success exit is disconnect (or an outer drop)."
+#[tokio::test(flavor = "current_thread")]
+async fn uncapped_sync_stays_pending_then_resolves_on_disconnect() -> TestResult {
+    let a_signer = make_signer(40);
+    let b_signer = make_signer(41);
+    let a = make_node(a_signer.clone());
+    let b = make_node(b_signer.clone());
+
+    let (_t_a, t_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    // Wedge B: byte-connected but never answers.
+    t_b.pause();
+
+    let sed_id = SedimentreeId::new([7u8; 32]);
+    let done = Arc::new(AtomicUsize::new(0));
+    let done_clone = done.clone();
+    let a_clone = a.clone();
+    let sync_handle = tokio::spawn(async move {
+        let r = a_clone
+            .sync_with_all_peers(sed_id, true, CallTimeout::Uncapped)
+            .await;
+        done_clone.store(1, Ordering::SeqCst);
+        r
+    });
+
+    // The uncapped call must still be pending after a window that would have
+    // tripped any sane default deadline. If `Uncapped` (wrongly) resolved to a
+    // bound, `done` would flip to 1 here.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        done.load(Ordering::SeqCst),
+        0,
+        "an uncapped sync must NOT self-terminate while the peer is wedged"
+    );
+
+    // Disconnect: the dropped mux sender must resolve the uncapped call.
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    a.disconnect_from_peer(&b_peer).await?;
+
+    let result = tokio::time::timeout(BOUND, sync_handle).await;
+    assert!(
+        result.is_ok(),
+        "uncapped sync did not resolve within {BOUND:?} after disconnect; \
+         disconnect must drop the pending mux sender"
+    );
+    let result = result.expect("join error").expect("task panicked")?;
+
+    let (success, _stats, conn_errs) = result
+        .get(&b_peer)
+        .expect("wedged peer must be present in the result map");
+    assert!(!success, "peer should not have succeeded");
+    assert!(
+        matches!(conn_errs[0].1, CallError::ResponseDropped),
+        "uncapped call must resolve as ResponseDropped on disconnect, \
+         never Timeout; got {:?}",
+        conn_errs[0].1
     );
 
     Ok(())

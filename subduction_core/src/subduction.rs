@@ -89,7 +89,7 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
-    timeout::Timeout,
+    timeout::{Timeout, call::CallTimeout},
 };
 use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
@@ -117,9 +117,8 @@ use sedimentree_core::{
         Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
-    commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
-    depth::{Depth, DepthMetric},
+    depth::{CountLeadingZeroBytes, Depth, DepthMetric},
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
@@ -201,8 +200,11 @@ pub struct Subduction<
     /// also need `connections` must take `connections` first.
     multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
 
-    /// Default timeout for roundtrip calls (`BatchSyncRequest` → `BatchSyncResponse`).
-    default_call_timeout: Duration,
+    /// Default per-call deadline for roundtrip calls (`BatchSyncRequest` →
+    /// `BatchSyncResponse`) when a caller passes `timeout: None`. This is
+    /// caller-side policy applied over a cancel-safe wait; the multiplexer
+    /// holds no clock. See [`DEFAULT_ROUNDTRIP_TIMEOUT`](crate::multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT).
+    default_roundtrip_timeout: Duration,
 
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
@@ -323,7 +325,7 @@ where
         send_counter: PeerCounter,
         nonce_cache: NonceCache,
         timer: Timer,
-        default_call_timeout: Duration,
+        default_roundtrip_timeout: Duration,
         depth_metric: Metric,
         spawner: Sp,
     ) -> (
@@ -361,7 +363,7 @@ where
             discovery_id,
             signer,
             timer,
-            default_call_timeout,
+            default_roundtrip_timeout,
             depth_metric,
             sedimentrees,
             connections,
@@ -738,7 +740,7 @@ where
                 }
             }
 
-            let mux = Arc::new(Multiplexer::new(peer_id, self.default_call_timeout));
+            let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
             let mut multiplexers = self.multiplexers.lock().await;
             match multiplexers.get_mut(&peer_id) {
                 Some(muxes) => muxes.push(mux),
@@ -1011,8 +1013,11 @@ where
     pub async fn fetch_blobs(
         &self,
         id: SedimentreeId,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> Result<Option<NonEmpty<Blob>>, IoError<Async, Store, Conn, Hdl::Message>> {
+        // Resolve caller policy to the low-level deadline (`None` = uncapped).
+        let timeout = timeout.resolve(self.default_roundtrip_timeout);
+
         tracing::debug!("Fetching blobs for sedimentree with id {:?}", id);
         if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
@@ -1811,8 +1816,8 @@ where
     ///
     /// Awaits the broadcast and returns its per-peer outcome
     /// ([`PerPeerSync`]); a wedged peer can stall this for up to `timeout`
-    /// (`None` = configured `default_call_timeout`). For a durable write
-    /// that does not wait on peers, use
+    /// ([`CallTimeout::Default`] = configured `roundtrip_timeout`). For a
+    /// durable write that does not wait on peers, use
     /// [`store_sedimentree`](Self::store_sedimentree) and drive sync
     /// separately.
     ///
@@ -1828,7 +1833,7 @@ where
         id: SedimentreeId,
         sedimentree: Sedimentree,
         blobs: Vec<Blob>,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> Result<
         PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
@@ -1853,8 +1858,8 @@ where
     ///
     /// This **awaits the broadcast** and returns its per-peer outcome
     /// ([`PerPeerSync`]). A byte-connected but protocol-unresponsive peer
-    /// can therefore stall this call for up to `timeout` (or the configured
-    /// `default_call_timeout` when `timeout` is `None`). Callers that need
+    /// can therefore stall this call for up to `timeout` (or the
+    /// configured `roundtrip_timeout` for [`CallTimeout::Default`]). Callers that need
     /// the durable write to return *without* waiting on peers should call
     /// [`store_built_batch`](Self::store_built_batch) and drive
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately (or let
@@ -1889,7 +1894,7 @@ where
         id: SedimentreeId,
         commits: Vec<(LooseCommit, Blob)>,
         fragments: Vec<(Fragment, Blob)>,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> Result<
         PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
@@ -1919,7 +1924,7 @@ where
     /// This **awaits the broadcast** and returns its per-peer outcome
     /// ([`PerPeerSync`]); a byte-connected but protocol-unresponsive peer can
     /// stall the call for up to `timeout` (or the configured
-    /// `default_call_timeout` when `timeout` is `None`). Callers that want the
+    /// `roundtrip_timeout` for [`CallTimeout::Default`]). Callers that want the
     /// durable write to return *without* waiting on peers should call
     /// [`store_commits_batch`](Self::store_commits_batch) and drive
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately. An empty
@@ -1940,7 +1945,7 @@ where
         &self,
         id: SedimentreeId,
         commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> Result<
         PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
@@ -1968,7 +1973,7 @@ where
     /// This **awaits the broadcast** and returns its per-peer outcome
     /// ([`PerPeerSync`]); a byte-connected but protocol-unresponsive peer can
     /// stall the call for up to `timeout` (or the configured
-    /// `default_call_timeout` when `timeout` is `None`). Callers that want the
+    /// `roundtrip_timeout` for [`CallTimeout::Default`]). Callers that want the
     /// durable write to return *without* waiting on peers should call
     /// [`store_fragments_batch`](Self::store_fragments_batch) and drive
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) separately. An empty
@@ -1989,7 +1994,7 @@ where
         &self,
         id: SedimentreeId,
         fragments: Vec<FragmentBatchItem>,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> Result<
         PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
@@ -2057,7 +2062,10 @@ where
             .map(|peer| async move {
                 tracing::debug!("propagating subscription for {id:?} upstream to peer {peer}");
 
-                let established = match self.sync_with_peer(&peer, id, true, None).await {
+                let established = match self
+                    .sync_with_peer(&peer, id, true, CallTimeout::Default)
+                    .await
+                {
                     Ok((had_success, _, _)) => had_success,
                     Err(e) => {
                         tracing::debug!("subscribe propagation to {peer} for {id:?} failed: {e}");
@@ -2106,7 +2114,7 @@ where
         to_ask: &PeerId,
         id: SedimentreeId,
         subscribe: bool,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> Result<
         (
             bool,
@@ -2118,6 +2126,9 @@ where
         ),
         IoError<Async, Store, Conn, Hdl::Message>,
     > {
+        // Resolve caller policy to the low-level deadline (`None` = uncapped).
+        let timeout = timeout.resolve(self.default_roundtrip_timeout);
+
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from peer {:?}",
             id,
@@ -2376,11 +2387,14 @@ where
         &self,
         id: SedimentreeId,
         subscribe: bool,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> Result<
         PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
         IoError<Async, Store, Conn, Hdl::Message>,
     > {
+        // Resolve caller policy to the low-level deadline (`None` = uncapped).
+        let timeout = timeout.resolve(self.default_roundtrip_timeout);
+
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
@@ -2653,7 +2667,7 @@ where
     /// Sync all known [`Sedimentree`]s with all connected peers.
     pub async fn full_sync_with_all_peers(
         &self,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> (
         bool,
         SyncStats,
@@ -3370,7 +3384,7 @@ where
         self: &Arc<Self>,
         peer_id: &PeerId,
         subscribe: bool,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
     ) -> (
         bool,
         SyncStats,
@@ -3823,7 +3837,7 @@ pub trait SpawnDocSync<
         peer_id: PeerId,
         id: SedimentreeId,
         subscribe: bool,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
         sender: async_channel::Sender<DocSyncResult<Self, Store, Conn, WireMsg>>,
     ) -> Self::Future<'static, ()>
     where
@@ -3895,7 +3909,7 @@ where
         peer_id: PeerId,
         id: SedimentreeId,
         subscribe: bool,
-        timeout: Option<Duration>,
+        timeout: CallTimeout,
         sender: async_channel::Sender<DocSyncResult<Self, Store, Conn, WireMsg>>,
     ) -> Self::Future<'static, ()>
     where
@@ -3974,7 +3988,7 @@ mod tests {
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         collections::Map,
-        commit::CountLeadingZeroBytes,
+        depth::CountLeadingZeroBytes,
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::{LooseCommit, id::CommitId},

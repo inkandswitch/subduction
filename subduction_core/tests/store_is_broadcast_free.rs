@@ -14,7 +14,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -26,6 +26,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -50,7 +51,7 @@ type TestSubduction = Arc<
     >,
 >;
 
-const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_millis(500));
+const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
 
 /// Time allowed for any (unwanted) broadcast to land before we assert it
 /// did not. Generous relative to the in-process channel latency so a

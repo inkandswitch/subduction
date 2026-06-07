@@ -11,7 +11,7 @@ use future_form::Sendable;
 use futures::future::Aborted;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},

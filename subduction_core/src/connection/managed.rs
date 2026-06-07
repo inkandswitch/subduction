@@ -107,6 +107,52 @@ impl<Conn: Clone, Async: FutureForm, Timer> ManagedConnection<Conn, Async, Timer
     }
 }
 
+/// RAII guard that removes a pending entry if the call future is dropped
+/// before it resolves.
+///
+/// This is what makes a [`call`](ManagedConnection::call) **cancel-safe**:
+/// dropping the future — because an outer deadline elapsed, a `select!`
+/// arm lost, or a shutdown token fired — runs [`Drop`], which removes the
+/// registered [`oneshot::Sender`](futures::channel::oneshot) so no entry
+/// leaks in the multiplexer's pending map.
+///
+/// [`disarm`](Self::disarm) is called once the call resolves normally
+/// (response received or channel dropped), so the guard does not
+/// double-remove.
+struct PendingGuard {
+    multiplexer: Arc<Multiplexer>,
+    req_id: RequestId,
+    armed: bool,
+}
+
+impl PendingGuard {
+    const fn new(multiplexer: Arc<Multiplexer>, req_id: RequestId) -> Self {
+        Self {
+            multiplexer,
+            req_id,
+            armed: true,
+        }
+    }
+
+    /// Stop the guard from removing the entry on drop (the call resolved).
+    const fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            // Synchronous best-effort removal. On the rare `try_lock` miss
+            // the straggler is reaped by the next `resolve_pending` /
+            // `cancel_all_pending`; it can never be mismatched because
+            // `RequestId`s are never reused. See
+            // `Multiplexer::try_cancel_pending`.
+            let _removed = self.multiplexer.try_cancel_pending(&self.req_id);
+        }
+    }
+}
+
 /// Error from a roundtrip [`call`](ManagedConnection::call).
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CallError<SendErr: core::error::Error> {
@@ -179,9 +225,30 @@ where
     /// `Connection::send`. The response arrives via the `Multiplexer`'s
     /// pending map, which is resolved by the `Subduction` listen loop.
     ///
+    /// # Deadline (`timeout`)
+    ///
+    /// This is the **low-level** entry point. `timeout` is a *total deadline*,
+    /// **not** a fallback to the configured default:
+    ///
+    /// - `Some(d)` — fail with [`CallError::Timeout`] if no response arrives
+    ///   within `d`.
+    /// - `None` — **no deadline**: the bare cancel-safe wait. The caller owns
+    ///   the cancellation policy (wrap in an outer `select!`/`timeout`/shutdown
+    ///   token; dropping this future removes the pending entry). The call still
+    ///   resolves on disconnect via `cancel_all_pending`.
+    ///
+    /// The configured default ([`DEFAULT_ROUNDTRIP_TIMEOUT`]) is applied by the
+    /// convenience layer (the high-level `Subduction` methods) before reaching
+    /// here, not inside this method.
+    ///
+    /// Either way the wait is **cancel-safe**: dropping the returned future for
+    /// any reason removes the registered pending entry via [`PendingGuard`].
+    ///
     /// # Errors
     ///
     /// Returns [`CallError`] on send failure, dropped response, or timeout.
+    ///
+    /// [`DEFAULT_ROUNDTRIP_TIMEOUT`]: crate::multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT
     pub fn call_inner<WireMsg>(
         &self,
         req: BatchSyncRequest,
@@ -192,28 +259,44 @@ where
         Conn::SendError: Send + 'static,
         WireMsg: Encode + Decode + From<SyncMessage> + Send,
     {
-        let time_limit = timeout.unwrap_or(self.multiplexer.default_time_limit());
         async move {
             let req_id = req.req_id;
             let rx = self.multiplexer.register_pending(req_id).await;
+            // Cancel-safe from here: if this future is dropped (outer
+            // deadline / select / shutdown) before resolving, the guard
+            // removes the pending entry on drop.
+            let mut guard = PendingGuard::new(Arc::clone(&self.multiplexer), req_id);
 
             let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
             Connection::<Sendable, WireMsg>::send(&self.authenticated, &wire_msg)
                 .await
                 .map_err(CallError::Send)?;
 
-            match self.timer.timeout(time_limit, rx.boxed()).await {
+            // `Some(d)` wraps the wait in a deadline; `None` is the bare
+            // (uncapped) cancel-safe wait.
+            let waited = match timeout {
+                Some(deadline) => self.timer.timeout(deadline, rx.boxed()).await,
+                None => Ok(rx.await),
+            };
+
+            match waited {
                 Ok(Ok(resp)) => {
+                    // Entry already removed by `resolve_pending`.
+                    guard.disarm();
                     tracing::debug!("request {req_id:?} completed");
                     Ok(resp)
                 }
                 Ok(Err(_)) => {
-                    tracing::error!("request {req_id:?} response dropped");
+                    // Sender dropped (e.g. `cancel_all_pending` on disconnect)
+                    // already removed the entry.
+                    guard.disarm();
+                    tracing::debug!("request {req_id:?} response channel dropped");
                     Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
-                    tracing::error!("request {req_id:?} timed out");
-                    self.multiplexer.cancel_pending(&req_id).await;
+                    // Deadline elapsed with the entry still registered; let
+                    // the armed guard remove it on drop.
+                    tracing::warn!("request {req_id:?} timed out after {timeout:?}");
                     Err(CallError::Timeout)
                 }
             }
@@ -261,28 +344,37 @@ where
         Conn: Connection<Local, WireMsg> + PartialEq,
         WireMsg: Encode + Decode + From<SyncMessage>,
     {
-        let time_limit = timeout.unwrap_or(self.multiplexer.default_time_limit());
         async move {
             let req_id = req.req_id;
             let rx = self.multiplexer.register_pending(req_id).await;
+            // Cancel-safe from here: see the `Sendable` variant.
+            let mut guard = PendingGuard::new(Arc::clone(&self.multiplexer), req_id);
 
             let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
             Connection::<Local, WireMsg>::send(&self.authenticated, &wire_msg)
                 .await
                 .map_err(CallError::Send)?;
 
-            match self.timer.timeout(time_limit, rx.boxed_local()).await {
+            // `Some(d)` wraps the wait in a deadline; `None` is the bare
+            // (uncapped) cancel-safe wait.
+            let waited = match timeout {
+                Some(deadline) => self.timer.timeout(deadline, rx.boxed_local()).await,
+                None => Ok(rx.await),
+            };
+
+            match waited {
                 Ok(Ok(resp)) => {
+                    guard.disarm();
                     tracing::debug!("request {req_id:?} completed");
                     Ok(resp)
                 }
                 Ok(Err(_)) => {
-                    tracing::error!("request {req_id:?} response dropped");
+                    guard.disarm();
+                    tracing::debug!("request {req_id:?} response channel dropped");
                     Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
-                    tracing::error!("request {req_id:?} timed out");
-                    self.multiplexer.cancel_pending(&req_id).await;
+                    tracing::warn!("request {req_id:?} timed out after {timeout:?}");
                     Err(CallError::Timeout)
                 }
             }

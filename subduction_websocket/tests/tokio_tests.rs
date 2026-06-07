@@ -3,7 +3,7 @@
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use std::{
     collections::BTreeSet,
@@ -20,6 +20,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder, listener_future::ListenerFuture},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -536,7 +537,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 1: Each client syncs to get the server's initial commit and subscribe
     for (client, _) in &clients {
         client
-            .sync_with_all_peers(sed_id, true, Some(Duration::from_secs(5)))
+            .sync_with_all_peers(sed_id, true, CallTimeout::TimeoutMillis(5_000))
             .await?;
     }
 
@@ -549,7 +550,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 3: All clients sync again to push their commits to the server
     for (client, _) in &clients {
         client
-            .sync_with_all_peers(sed_id, true, Some(Duration::from_secs(5)))
+            .sync_with_all_peers(sed_id, true, CallTimeout::TimeoutMillis(5_000))
             .await?;
     }
 
@@ -570,7 +571,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 5: All clients sync again to pull commits from other clients via server
     for (client, _) in &clients {
         client
-            .sync_with_all_peers(sed_id, true, Some(Duration::from_secs(5)))
+            .sync_with_all_peers(sed_id, true, CallTimeout::TimeoutMillis(5_000))
             .await?;
     }
 
@@ -685,7 +686,7 @@ async fn large_message_handling() -> TestResult {
 
     // Sync with server
     client
-        .full_sync_with_all_peers(Some(Duration::from_secs(5)))
+        .full_sync_with_all_peers(CallTimeout::TimeoutMillis(5_000))
         .await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -776,7 +777,7 @@ async fn message_ordering() -> TestResult {
 
     // Sync all commits to server
     client
-        .full_sync_with_all_peers(Some(Duration::from_secs(5)))
+        .full_sync_with_all_peers(CallTimeout::TimeoutMillis(5_000))
         .await;
 
     // Small delay for server to process
@@ -1034,7 +1035,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
 
     // Client syncs (pushes its commits, pulls server's commits)
     let (had_success, _stats, call_errs, io_errs) = client
-        .full_sync_with_all_peers(Some(Duration::from_secs(5)))
+        .full_sync_with_all_peers(CallTimeout::TimeoutMillis(5_000))
         .await;
     assert!(call_errs.is_empty(), "full_sync call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "full_sync IO errors: {io_errs:?}");

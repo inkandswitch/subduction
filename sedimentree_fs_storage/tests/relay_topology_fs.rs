@@ -10,7 +10,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -22,6 +22,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -44,7 +45,7 @@ type TestSubduction = Arc<
     >,
 >;
 
-const SYNC_TIMEOUT: Option<Duration> = Some(Duration::from_secs(1));
+const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(1_000);
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(80);
 
 fn make_signer(seed: u8) -> MemorySigner {
@@ -205,7 +206,7 @@ async fn fs_relay_single_client_repeated_add_built_batch_converges() -> TestResu
     let total = 10_u8;
     for seed in 1..=total {
         let pair = make_commit_pair(sed_id, seed);
-        h.a.add_built_batch(sed_id, vec![pair], Vec::new(), None)
+        h.a.add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
             .await?;
         tokio::time::sleep(PROPAGATION_PAUSE).await;
     }
@@ -241,11 +242,11 @@ async fn fs_relay_two_clients_add_built_batch_converge_via_relay() -> TestResult
     for i in 0..total_pairs {
         if i % 2 == 0 {
             let pair = make_commit_pair(sed_id, i + 1);
-            h.a.add_built_batch(sed_id, vec![pair], Vec::new(), None)
+            h.a.add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await?;
         } else {
             let pair = make_commit_pair(sed_id, 100 + i);
-            h.b.add_built_batch(sed_id, vec![pair], Vec::new(), None)
+            h.b.add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await?;
         }
         tokio::time::sleep(PROPAGATION_PAUSE).await;
@@ -284,11 +285,11 @@ async fn fs_relay_two_clients_rapid_fire_converges() -> TestResult {
     for i in 0..total_u8 {
         if i % 2 == 0 {
             let pair = make_commit_pair(sed_id, i + 1);
-            h.a.add_built_batch(sed_id, vec![pair], Vec::new(), None)
+            h.a.add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await?;
         } else {
             let pair = make_commit_pair(sed_id, 100 + i);
-            h.b.add_built_batch(sed_id, vec![pair], Vec::new(), None)
+            h.b.add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await?;
         }
     }
@@ -328,7 +329,7 @@ async fn fs_relay_concurrent_add_built_batch_calls_converge() -> TestResult {
         let a_clone = h.a.clone();
         handles.push(tokio::spawn(async move {
             a_clone
-                .add_built_batch(sed_id, vec![pair], Vec::new(), None)
+                .add_built_batch(sed_id, vec![pair], Vec::new(), CallTimeout::Default)
                 .await
         }));
     }

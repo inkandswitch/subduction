@@ -25,7 +25,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
+    depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -37,6 +37,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder, fragment_batch_item::FragmentBatchItem},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -76,7 +77,7 @@ const BOUND: Duration = Duration::from_secs(3);
 /// Per-call timeout used for the `add_built_batch` combinator test, kept
 /// short so the bounded broadcast resolves the test quickly. The combinator
 /// is *expected* to wait roughly this long against a wedged peer.
-const SHORT_PER_CALL_TIMEOUT: Duration = Duration::from_millis(500);
+const SHORT_PER_CALL_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
 
 fn make_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
@@ -201,7 +202,7 @@ async fn add_built_batch_bounds_at_timeout_and_reports_wedged_peer() -> TestResu
     let a_clone = a.clone();
     let add_handle = tokio::spawn(async move {
         a_clone
-            .add_built_batch(sed_id, commits, Vec::new(), Some(SHORT_PER_CALL_TIMEOUT))
+            .add_built_batch(sed_id, commits, Vec::new(), SHORT_PER_CALL_TIMEOUT)
             .await
     });
 
@@ -260,7 +261,7 @@ async fn add_commits_batch_bounds_at_timeout_and_reports_wedged_peer() -> TestRe
     let a_clone = a.clone();
     let add_handle = tokio::spawn(async move {
         a_clone
-            .add_commits_batch(sed_id, commits, Some(SHORT_PER_CALL_TIMEOUT))
+            .add_commits_batch(sed_id, commits, SHORT_PER_CALL_TIMEOUT)
             .await
     });
 
@@ -316,7 +317,7 @@ async fn add_fragments_batch_bounds_at_timeout_and_reports_wedged_peer() -> Test
     let a_clone = a.clone();
     let add_handle = tokio::spawn(async move {
         a_clone
-            .add_fragments_batch(sed_id, fragments, Some(SHORT_PER_CALL_TIMEOUT))
+            .add_fragments_batch(sed_id, fragments, SHORT_PER_CALL_TIMEOUT)
             .await
     });
 

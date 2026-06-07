@@ -240,7 +240,7 @@ mod digest {
     use std::hint::black_box;
 
     use criterion::{BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric};
+    use sedimentree_core::depth::{CountLeadingZeroBytes, DepthMetric};
 
     use super::generators::{commit_id_from_seed, commit_id_with_leading_zeros};
 
@@ -299,7 +299,7 @@ mod sedimentree {
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{
-        commit::CountLeadingZeroBytes, fragment::Fragment, loose_commit::LooseCommit,
+        depth::CountLeadingZeroBytes, fragment::Fragment, loose_commit::LooseCommit,
         sedimentree::Sedimentree,
     };
 
@@ -760,7 +760,7 @@ mod fragment {
     use std::hint::black_box;
 
     use criterion::{BenchmarkId, Criterion};
-    use sedimentree_core::commit::CountLeadingZeroBytes;
+    use sedimentree_core::depth::CountLeadingZeroBytes;
 
     use super::generators::synthetic_fragment;
 
@@ -827,7 +827,7 @@ mod topology {
     use std::hint::black_box;
 
     use criterion::{BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{commit::CountLeadingZeroBytes, sedimentree::Sedimentree};
+    use sedimentree_core::{depth::CountLeadingZeroBytes, sedimentree::Sedimentree};
 
     use super::generators::{linear_commit_chain, merge_heavy_dag};
 

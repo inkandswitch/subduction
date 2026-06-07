@@ -11,8 +11,8 @@
 use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob,
-    commit::CountLeadingZeroBytes,
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
+    depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::id::CommitId,
 };

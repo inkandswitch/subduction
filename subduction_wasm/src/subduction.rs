@@ -22,8 +22,7 @@ use js_sys::Uint8Array;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
-    commit::CountLeadingZeroBytes,
-    depth::{Depth, DepthMetric},
+    depth::{CountLeadingZeroBytes, Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::id::CommitId,
 };
@@ -32,6 +31,7 @@ use subduction_core::{
     connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
+    multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
     nonce_cache::NonceCache,
     peer::id::PeerId,
     storage::powerbox::StoragePowerbox,
@@ -40,6 +40,7 @@ use subduction_core::{
         pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
         per_peer_sync::PerPeerSync,
     },
+    timeout::call::CallTimeout,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
@@ -66,7 +67,8 @@ use crate::{
     sync_stats::WasmSyncStats,
     topic::{JsTopic, WasmTopic},
     transport::{
-        DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
+        DEFAULT_LOCAL_SERVICE_NAME, JsTransport,
+        authenticated::WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         websocket::WasmWebSocket,
     },
@@ -186,6 +188,9 @@ impl WasmSubduction {
     ///   Defaults to allow-all.
     /// * `on_remote_heads` - Optional callback fired when a peer's heads change.
     /// * `on_ephemeral` - Optional callback fired on inbound ephemeral messages.
+    /// * `default_timeout_milliseconds` - Optional default per-call total
+    ///   deadline (milliseconds) for roundtrip syncs when a call omits its own
+    ///   `timeout_milliseconds`. Omit for the built-in default (30000).
     ///
     /// # Panics
     ///
@@ -205,8 +210,13 @@ impl WasmSubduction {
         ephemeral_policy: Option<JsEphemeralPolicy>,
         on_remote_heads: Option<js_sys::Function>,
         on_ephemeral: Option<js_sys::Function>,
+        default_timeout_milliseconds: Option<u32>,
     ) -> Self {
         tracing::debug!("new Subduction node");
+        let default_roundtrip_timeout = default_timeout_milliseconds
+            .map_or(DEFAULT_ROUNDTRIP_TIMEOUT, |ms| {
+                Duration::from_millis(u64::from(ms))
+            });
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         #[allow(clippy::expect_used)]
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(|h| {
@@ -274,7 +284,7 @@ impl WasmSubduction {
             send_counter,
             NonceCache::default(),
             JsTimeout,
-            Duration::from_secs(30),
+            default_roundtrip_timeout,
             depth_metric,
             WasmSpawn,
         );
@@ -374,9 +384,9 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         sedimentree: &WasmSedimentree,
         blobs: Vec<Uint8Array>,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
         let per_peer = self
             .core
             .add_sedimentree(
@@ -446,7 +456,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `address` - The WebSocket URL to connect to
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (defaults to 30000)
     /// * `service_name` - The service name for discovery (defaults to URL host)
     ///
     /// # Errors
@@ -484,7 +493,6 @@ impl WasmSubduction {
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     ///
     /// # Errors
     ///
@@ -518,7 +526,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     /// * `service_name` - The service name for discovery (defaults to `base_url`)
     ///
     /// # Errors
@@ -781,9 +788,9 @@ impl WasmSubduction {
     pub async fn fetch_blobs(
         &self,
         id: &WasmSedimentreeId,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> Result<Option<Vec<Uint8Array>>, WasmIoError> {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
         if let Some(blobs) = self
             .core
             .fetch_blobs(id.clone().into(), timeout)
@@ -1050,7 +1057,7 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
         fragments: Vec<WasmFragmentInput>,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
         let core_commits = commits
@@ -1061,7 +1068,7 @@ impl WasmSubduction {
             .into_iter()
             .map(WasmFragmentInput::into_core)
             .collect();
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
 
         let per_peer = self
             .core
@@ -1124,14 +1131,14 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
         let core_commits = commits
             .into_iter()
             .map(WasmCommitInput::into_core)
             .collect();
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
 
         let per_peer = self
             .core
@@ -1194,14 +1201,14 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         fragments: Vec<WasmFragmentInput>,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerResultMap, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
         let core_fragments = fragments
             .into_iter()
             .map(WasmFragmentInput::into_core)
             .collect();
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
 
         let per_peer = self
             .core
@@ -1240,7 +1247,19 @@ impl WasmSubduction {
     /// * `to_ask` - The peer ID to sync with
     /// * `id` - The sedimentree ID to sync
     /// * `subscribe` - Whether to subscribe for incremental updates
-    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    /// * `timeout_milliseconds` - Optional per-call total deadline in milliseconds; omit to use the configured default
+    ///
+    /// # Cancellation
+    ///
+    /// The call is bounded by `timeout_milliseconds` (or the configured
+    /// default). **Abandoning the returned `Promise` — e.g. via
+    /// `Promise.race([syncWithPeer(...), timeout(5000)])` — does NOT cancel
+    /// the underlying sync:** the work runs on the Wasm executor, not the
+    /// `Promise`, so it continues until the deadline elapses, the response
+    /// arrives, or the peer disconnects. To stop it early, set a shorter
+    /// `timeout_milliseconds` or disconnect the peer
+    /// ([`disconnect_from_peer`](Self::disconnect_from_peer) /
+    /// [`disconnect_all`](Self::disconnect_all)).
     ///
     /// # Errors
     ///
@@ -1251,9 +1270,9 @@ impl WasmSubduction {
         to_ask: &WasmPeerId,
         id: &WasmSedimentreeId,
         subscribe: bool,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
         let (success, stats, transport_errors) = self
             .core
             .sync_with_peer(
@@ -1281,7 +1300,7 @@ impl WasmSubduction {
     ///
     /// * `id` - The sedimentree ID to sync
     /// * `subscribe` - Whether to subscribe for incremental updates
-    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    /// * `timeout_milliseconds` - Optional per-call total deadline in milliseconds; omit to use the configured default
     ///
     /// # Errors
     ///
@@ -1291,10 +1310,10 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         subscribe: bool,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
         tracing::debug!("WasmSubduction::sync_with_all_peers");
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
         let peer_map = self
             .core
             .sync_with_all_peers(id.clone().into(), subscribe, timeout)
@@ -1309,16 +1328,16 @@ impl WasmSubduction {
     ///
     /// * `peer_id` - The peer to sync with
     /// * `subscribe` - Whether to subscribe to future updates (default: `true`)
-    /// * `timeout_milliseconds` - Per-call timeout in milliseconds
+    /// * `timeout_milliseconds` - Optional per-call total deadline in milliseconds; omit to use the configured default
     #[wasm_bindgen(js_name = fullSyncWithPeer)]
     pub async fn full_sync_with_peer(
         &self,
         peer_id: &WasmPeerId,
         subscribe: Option<bool>,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> PeerBatchSyncResult {
         let subscribe = subscribe.unwrap_or(true);
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
         let (success, stats, conn_errs, io_errs) = self
             .core
             .full_sync_with_peer(&peer_id.clone().into(), subscribe, timeout)
@@ -1346,9 +1365,9 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = fullSyncWithAllPeers)]
     pub async fn full_sync_with_all_peers(
         &self,
-        timeout_milliseconds: Option<u64>,
+        timeout_milliseconds: Option<u32>,
     ) -> PeerBatchSyncResult {
-        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
         let (success, stats, conn_errs, io_errs) =
             self.core.full_sync_with_all_peers(timeout).await;
 

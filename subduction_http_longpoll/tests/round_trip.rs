@@ -22,7 +22,7 @@ use std::{
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
     connection::test_utils::TokioSpawn,
@@ -33,6 +33,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
@@ -46,7 +47,7 @@ use testresult::TestResult;
 use tokio::net::TcpListener;
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(2);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(5_000);
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 const SERVICE_NAME: &str = "test-service";
 
@@ -383,7 +384,7 @@ async fn known_peer_connect() -> TestResult {
         .await?;
 
     let (had_success, _stats, call_errs, io_errs) =
-        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
+        client.full_sync_with_all_peers(REQUEST_TIMEOUT).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
     assert!(had_success);
@@ -430,7 +431,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 1: Each client syncs to get the server's initial commit
     for client in &clients {
         client
-            .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, REQUEST_TIMEOUT)
             .await?;
     }
 
@@ -444,7 +445,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 3: All clients sync their commits to the server
     for client in &clients {
         client
-            .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, REQUEST_TIMEOUT)
             .await?;
     }
 
@@ -466,7 +467,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 5: All clients sync to pull the other clients' commits via server
     for client in &clients {
         client
-            .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+            .sync_with_all_peers(sed_id, true, REQUEST_TIMEOUT)
             .await?;
     }
 
@@ -507,7 +508,7 @@ async fn large_message_handling() -> TestResult {
         .await?;
 
     let (had_success, _stats, call_errs, io_errs) =
-        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
+        client.full_sync_with_all_peers(REQUEST_TIMEOUT).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
     assert!(had_success);
@@ -559,7 +560,7 @@ async fn multiple_commits_all_delivered() -> TestResult {
     }
 
     let (had_success, _stats, call_errs, io_errs) =
-        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
+        client.full_sync_with_all_peers(REQUEST_TIMEOUT).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
     assert!(had_success);
@@ -597,9 +598,8 @@ async fn disconnect_and_reconnect() -> TestResult {
         )
         .await?;
 
-    let (had_success, _, call_errs, io_errs) = client1
-        .full_sync_with_all_peers(Some(REQUEST_TIMEOUT))
-        .await;
+    let (had_success, _, call_errs, io_errs) =
+        client1.full_sync_with_all_peers(REQUEST_TIMEOUT).await;
     assert!(call_errs.is_empty());
     assert!(io_errs.is_empty());
     assert!(had_success);
@@ -627,7 +627,7 @@ async fn disconnect_and_reconnect() -> TestResult {
 
     // Sync: client2 should get both the original commit and the server's new commit
     let result = client2
-        .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+        .sync_with_all_peers(sed_id, true, REQUEST_TIMEOUT)
         .await?;
 
     let had_success = result.values().any(|(success, _, _)| *success);
@@ -668,7 +668,7 @@ async fn server_to_client_sync() -> TestResult {
     // Use sync_all (not full_sync) because the client doesn't know about
     // this sedimentree yet — full_sync only iterates locally known IDs.
     let result = client
-        .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+        .sync_with_all_peers(sed_id, true, REQUEST_TIMEOUT)
         .await
         .expect("sync_all");
 
@@ -734,7 +734,7 @@ async fn bidirectional_sync() -> TestResult {
 
     // Client syncs
     let (had_success, _stats, call_errs, io_errs) =
-        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
+        client.full_sync_with_all_peers(REQUEST_TIMEOUT).await;
 
     assert!(call_errs.is_empty(), "full_sync call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "full_sync IO errors: {io_errs:?}");
