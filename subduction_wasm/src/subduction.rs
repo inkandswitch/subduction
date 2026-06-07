@@ -59,7 +59,7 @@ use crate::{
     batch_input::{WasmCommitInput, WasmFragmentInput},
     error::{
         WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHandshakeError,
-        WasmIoError, WasmLongPollConnectError, WasmWriteError,
+        WasmInitError, WasmIoError, WasmLongPollConnectError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -176,15 +176,23 @@ impl WasmSubduction {
     /// `signer` and `storage` are required; all other fields are optional.
     /// See [`SubductionOptions`] for the full field list and defaults.
     ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmInitError`] if the required `signer` or `storage` field
+    /// is missing (`undefined`/`null`). The TypeScript interface marks these as
+    /// required, so this only fires for callers that bypass the type checker.
+    ///
     /// # Panics
     ///
     /// Panics if `hashMetricOverride` is provided but the underlying JS value
     /// cannot be cast to a `Function`.
-    #[must_use]
     #[wasm_bindgen(constructor)]
     #[allow(clippy::too_many_lines)]
-    pub fn new(opts: &JsSubductionOptions) -> Self {
+    pub fn new(opts: &JsSubductionOptions) -> Result<Self, WasmInitError> {
         tracing::debug!("new Subduction node");
+
+        let signer = opts.signer().ok_or(WasmInitError::MissingSigner)?;
+        let opts_storage = opts.storage().ok_or(WasmInitError::MissingStorage)?;
 
         let default_roundtrip_timeout = opts
             .default_timeout_milliseconds()
@@ -192,7 +200,6 @@ impl WasmSubduction {
                 Duration::from_millis(u64::from(ms))
             });
 
-        let opts_storage = opts.storage();
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&opts_storage).clone();
 
         #[allow(clippy::expect_used)]
@@ -258,7 +265,7 @@ impl WasmSubduction {
         let (core, listener_fut, manager_fut) = Subduction::new(
             handler,
             discovery_id,
-            opts.signer(),
+            signer,
             sedimentrees,
             connections,
             subscriptions,
@@ -303,12 +310,12 @@ impl WasmSubduction {
             }
         });
 
-        Self {
+        Ok(Self {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
             keyhive_handler,
-        }
+        })
     }
 
     /// Persist a whole [`Sedimentree`](sedimentree_wasm::WasmSedimentree)
@@ -1791,11 +1798,14 @@ extern "C" {
     #[wasm_bindgen(js_name = SubductionOptions, typescript_type = "SubductionOptions")]
     pub type JsSubductionOptions;
 
+    // `signer`/`storage` are required by the TS interface, but a JS caller can
+    // omit them; `Option` lets `new` detect absence and throw a clear error
+    // instead of silently wrapping `undefined`.
     #[wasm_bindgen(method, getter)]
-    fn signer(this: &JsSubductionOptions) -> JsSigner;
+    fn signer(this: &JsSubductionOptions) -> Option<JsSigner>;
 
     #[wasm_bindgen(method, getter)]
-    fn storage(this: &JsSubductionOptions) -> JsStorage;
+    fn storage(this: &JsSubductionOptions) -> Option<JsStorage>;
 
     #[wasm_bindgen(method, getter, js_name = serviceName)]
     fn service_name(this: &JsSubductionOptions) -> Option<String>;
