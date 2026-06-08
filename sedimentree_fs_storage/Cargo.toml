@@ -21,7 +21,7 @@ sedimentree_core = { workspace = true, features = ["std"] }
 subduction_core = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
 tracing = { workspace = true, default-features = true }
 
 [dev-dependencies]

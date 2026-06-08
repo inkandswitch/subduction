@@ -122,7 +122,7 @@ mod tests {
     fn duration_histograms_render_as_buckets() {
         let handle = init_metrics();
         // Record through the installed recorder.
-        subduction_core::metrics::dispatch_duration(0.000_3);
+        subduction_core::metrics::dispatch_duration("LooseCommit", 0.000_3);
         subduction_core::metrics::storage_operation_duration("save_loose_commit", 0.000_8);
         subduction_core::metrics::sync_duration(2.0);
 
@@ -139,6 +139,14 @@ mod tests {
                 "{series} should emit _bucket series:\n{rendered}"
             );
         }
+
+        // Dispatch latency carries the bounded `type` label so per-type
+        // quantiles don't blend cheap and heavy messages.
+        assert!(
+            rendered.contains("subduction_dispatch_duration_seconds_bucket")
+                && rendered.contains("type=\"LooseCommit\""),
+            "dispatch histogram should carry the `type` label:\n{rendered}"
+        );
 
         // Fine metrics (storage op, dispatch) resolve sub-millisecond: the 50µs
         // boundary only exists in FINE_BUCKETS_SECONDS.

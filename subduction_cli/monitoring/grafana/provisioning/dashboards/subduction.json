@@ -126,16 +126,16 @@
     },
     {
       "type": "timeseries",
-      "title": "Dispatch Latency (quantiles)",
+      "title": "Message Handling Latency by Type (p50 / p95 / p99)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 7 },
       "id": 12,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "s" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.99, sum by (le) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p99", "refId": "C" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum by (le, type) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p50 {{type}}", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le, type) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{type}}", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.99, sum by (le, type) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p99 {{type}}", "refId": "C" }
       ]
     },
     {

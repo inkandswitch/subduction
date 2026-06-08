@@ -326,7 +326,7 @@ impl<
         crate::metrics::message_dispatched(message.variant_name());
 
         #[cfg(feature = "metrics")]
-        let _timer = crate::metrics::DispatchTimer::new();
+        let _timer = crate::metrics::DispatchTimer::new(message.variant_name());
 
         self.dispatch_inner(from, message, conn)
             .instrument(span)

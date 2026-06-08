@@ -112,40 +112,43 @@ pub fn message_dispatched(message_type: &'static str) {
     metrics::counter!(names::MESSAGES_TOTAL, "type" => message_type).increment(1);
 }
 
-/// Record the duration of a dispatch operation.
+/// Record the duration of handling one inbound message of the given type.
+///
+/// The `message_type` is a bounded `&'static str` (the wire-message variant
+/// name), keeping label cardinality fixed.
 #[inline]
-pub fn dispatch_duration(duration_secs: f64) {
-    metrics::histogram!(names::DISPATCH_DURATION_SECONDS).record(duration_secs);
+pub fn dispatch_duration(message_type: &'static str, duration_secs: f64) {
+    metrics::histogram!(names::DISPATCH_DURATION_SECONDS, "type" => message_type)
+        .record(duration_secs);
 }
 
-/// A scope guard that records dispatch duration on drop.
+/// A scope guard that records message-handling duration on drop.
 ///
 /// This ensures the duration is recorded even if the function returns early
 /// via `?` or other control flow, capturing both success and failure latencies.
+/// The recorded sample is labelled with the message type so per-type quantiles
+/// don't blend cheap (e.g. `HeadsUpdate`) and heavy (e.g. `BatchSyncRequest`)
+/// messages into a single misleading distribution.
 #[derive(Debug)]
 pub struct DispatchTimer {
+    message_type: &'static str,
     start: std::time::Instant,
 }
 
 impl DispatchTimer {
-    /// Create a new dispatch timer, starting the clock now.
+    /// Create a new dispatch timer for `message_type`, starting the clock now.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(message_type: &'static str) -> Self {
         Self {
+            message_type,
             start: std::time::Instant::now(),
         }
     }
 }
 
-impl Default for DispatchTimer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Drop for DispatchTimer {
     fn drop(&mut self) {
-        dispatch_duration(self.start.elapsed().as_secs_f64());
+        dispatch_duration(self.message_type, self.start.elapsed().as_secs_f64());
     }
 }
 
@@ -357,7 +360,7 @@ pub fn describe_all() {
     metrics::describe_histogram!(
         names::DISPATCH_DURATION_SECONDS,
         metrics::Unit::Seconds,
-        "Duration of message dispatch (per-message handler runtime)."
+        "Duration of handling one inbound message (handler runtime), labeled by `type` (`SyncMessage` variant)."
     );
     metrics::describe_gauge!(
         names::DISPATCH_INFLIGHT,

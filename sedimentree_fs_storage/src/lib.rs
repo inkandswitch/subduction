@@ -90,6 +90,10 @@ pub enum FsStorageError {
     #[error(transparent)]
     Decode(#[from] DecodeError),
 
+    /// A blocking storage task panicked or was cancelled.
+    #[error("blocking storage task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+
     /// Signed data is too short to be valid — refusing to write corrupt data.
     #[error("signed data too short: have {have} bytes, need at least {need} bytes")]
     SignedDataTooShort {
@@ -404,14 +408,7 @@ impl Storage<Sendable> for FsStorage {
             let meta_path = self.commit_meta_path(sedimentree_id, commit_id, digest);
             let blob_path = self.commit_blob_path(sedimentree_id, commit_id, digest);
 
-            // CAS: skip if already exists
-            if tokio::fs::try_exists(&meta_path).await.unwrap_or(false) {
-                return Ok(());
-            }
-
-            tokio::fs::create_dir_all(&id_dir).await?;
-
-            // Validate signed data before writing
+            // Validate signed data before touching the filesystem.
             let signed_data = verified.signed().as_bytes().to_vec();
             let min_size =
                 <LooseCommit as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
@@ -430,15 +427,32 @@ impl Storage<Sendable> for FsStorage {
             }
 
             let blob_data = verified.blob().contents().clone();
-            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
 
-            let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
-            let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
+            // Collapse the CAS check + mkdir + 2 writes + 2 renames into a
+            // single blocking-pool hop. With `tokio::fs` each call is its own
+            // `spawn_blocking` round-trip, so a 6-step save pays the scheduling
+            // jitter 6×; doing the whole sequence in one closure pays it once,
+            // tightening the latency tail under concurrent load.
+            tokio::task::spawn_blocking(move || -> Result<(), FsStorageError> {
+                // CAS: skip if already exists.
+                if std::fs::metadata(&meta_path).is_ok() {
+                    return Ok(());
+                }
 
-            tokio::fs::write(&blob_temp, &blob_data).await?;
-            tokio::fs::write(&meta_temp, &signed_data).await?;
-            tokio::fs::rename(&blob_temp, &blob_path).await?;
-            tokio::fs::rename(&meta_temp, &meta_path).await?;
+                std::fs::create_dir_all(&id_dir)?;
+
+                let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+                let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
+                let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
+
+                std::fs::write(&blob_temp, &blob_data)?;
+                std::fs::write(&meta_temp, &signed_data)?;
+                std::fs::rename(&blob_temp, &blob_path)?;
+                std::fs::rename(&meta_temp, &meta_path)?;
+
+                Ok(())
+            })
+            .await??;
 
             Ok(())
         })
@@ -623,14 +637,7 @@ impl Storage<Sendable> for FsStorage {
             let meta_path = self.fragment_meta_path(sedimentree_id, fragment_head, digest);
             let blob_path = self.fragment_blob_path(sedimentree_id, fragment_head, digest);
 
-            // Skip if already exists (CAS)
-            if tokio::fs::try_exists(&meta_path).await.unwrap_or(false) {
-                return Ok(());
-            }
-
-            tokio::fs::create_dir_all(&id_dir).await?;
-
-            // Validate signed data before writing
+            // Validate signed data before touching the filesystem.
             let signed_data = verified.signed().as_bytes().to_vec();
             let min_size =
                 <Fragment as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
@@ -649,15 +656,29 @@ impl Storage<Sendable> for FsStorage {
             }
 
             let blob_data = verified.blob().contents().clone();
-            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
 
-            let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
-            let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
+            // Single blocking-pool hop for the whole CAS + write + rename
+            // sequence; see `save_loose_commit` for the rationale.
+            tokio::task::spawn_blocking(move || -> Result<(), FsStorageError> {
+                // CAS: skip if already exists.
+                if std::fs::metadata(&meta_path).is_ok() {
+                    return Ok(());
+                }
 
-            tokio::fs::write(&blob_temp, &blob_data).await?;
-            tokio::fs::write(&meta_temp, &signed_data).await?;
-            tokio::fs::rename(&blob_temp, &blob_path).await?;
-            tokio::fs::rename(&meta_temp, &meta_path).await?;
+                std::fs::create_dir_all(&id_dir)?;
+
+                let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+                let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
+                let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
+
+                std::fs::write(&blob_temp, &blob_data)?;
+                std::fs::write(&meta_temp, &signed_data)?;
+                std::fs::rename(&blob_temp, &blob_path)?;
+                std::fs::rename(&meta_temp, &meta_path)?;
+
+                Ok(())
+            })
+            .await??;
 
             Ok(())
         })
