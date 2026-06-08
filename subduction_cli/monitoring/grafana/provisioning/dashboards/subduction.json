@@ -171,7 +171,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Sync Throughput (commits/fragments per second)",
+      "title": "Foreground Sync Throughput (commits/fragments per second)",
+      "description": "Counts only foreground reconciliation via `sync_with_peer` (BatchSyncRequest/Response). The live subscription-push path (LooseCommit/Fragment pushed to subscribers) is NOT counted here — see the \"Subscriptions & Pushes\" panel. A push-driven server can read ~0 here while still actively moving data.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 22 },
       "id": 20,
@@ -337,10 +338,37 @@
       "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (operation) (rate(subduction_storage_operation_errors_total[5m]))", "legendFormat": "{{operation}}", "refId": "A" }]
     },
     {
+      "type": "timeseries",
+      "title": "Sedimentree Cache Hit Ratio",
+      "description": "Fraction of sedimentree resolutions served from the in-memory LRU vs. hydrated from storage. A low ratio means hydration (and the minimization it triggers) is on the hot path — i.e. the resident cache is too small or churning.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 52 },
+      "id": 43,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(subduction_sedimentree_cache_hits_total[5m])) / clamp_min(sum(rate(subduction_sedimentree_cache_hits_total[5m])) + sum(rate(subduction_sedimentree_cache_misses_total[5m])), 1)", "legendFormat": "hit ratio", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Sedimentree Cache Resident vs Total",
+      "description": "Resident in-memory cache occupancy vs. total trees in durable storage. When resident is pinned at the cap below total, eviction is causing the misses.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 52 },
+      "id": 44,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_sedimentree_cache_resident", "legendFormat": "resident", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_storage_sedimentrees", "legendFormat": "total on disk", "refId": "B" }
+      ]
+    },
+    {
       "type": "row",
       "title": "Logs",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 59 },
       "id": 105,
       "panels": []
     },
@@ -349,7 +377,7 @@
       "title": "Log Rate by Level",
       "description": "Requires JSON logs (`--log-format json`) shipped to Loki.",
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 53 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 60 },
       "id": 50,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ERROR" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "WARN" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }, { "matcher": { "id": "byName", "options": "INFO" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }, { "matcher": { "id": "byName", "options": "DEBUG" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }] },
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -364,7 +392,7 @@
       "type": "logs",
       "title": "Server Logs",
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 59 },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 66 },
       "id": 51,
       "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
       "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "{service=\"subduction\"} | json", "refId": "A" }]
