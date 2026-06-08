@@ -3,11 +3,13 @@
 //! Gated behind `dhat-heap` (which installs dhat as the global allocator)
 //! so normal builds and `cargo test` are unaffected.
 //!
-//! Run:
+//! Both are `#[ignore]`d: dhat's profiler is a global singleton, so the two
+//! cannot run concurrently (the default multi-threaded runner would panic with
+//! "a profiler is already running"). Run one at a time, explicitly:
 //!   cargo test -p subduction_keyhive --release --features test-utils,dhat-heap \
-//!       serving_membench -- --nocapture --exact
+//!       serving_membench -- --nocapture --include-ignored
 //!   cargo test -p subduction_keyhive --release --features test-utils,dhat-heap \
-//!       keyhive_baseline_membench -- --nocapture --exact
+//!       keyhive_baseline_membench -- --nocapture --include-ignored
 
 #![allow(
     clippy::cast_precision_loss,
@@ -49,8 +51,9 @@ fn env_usize(key: &str, default: usize) -> usize {
 /// MEMBENCH_K (5), MEMBENCH_ROT (5), MEMBENCH_ITERS (10), MEMBENCH_EDITS (5),
 /// MEMBENCH_SERVE (500). Run:
 ///   cargo test -p subduction_keyhive --release --features test-utils,dhat-heap \
-///       serving_membench -- --nocapture --exact
+///       serving_membench -- --nocapture --include-ignored
 #[test]
+#[ignore = "dhat profiling harness; run explicitly, one at a time (global profiler)"]
 fn serving_membench() {
     use alloc::vec::Vec;
 
@@ -268,8 +271,9 @@ fn serving_membench() {
 /// Params (env, defaults): MEMBENCH_N (100), MEMBENCH_K (5),
 /// MEMBENCH_ROT (5). Run:
 ///   cargo test -p subduction_keyhive --release --features test-utils,dhat-heap \
-///       keyhive_baseline_membench -- --nocapture --exact
+///       keyhive_baseline_membench -- --nocapture --include-ignored
 #[test]
+#[ignore = "dhat profiling harness; run explicitly, one at a time (global profiler)"]
 fn keyhive_baseline_membench() {
     use alloc::vec::Vec;
 
