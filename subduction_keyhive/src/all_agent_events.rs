@@ -5,7 +5,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    message::{CborBytes, EventBytes, EventHash},
+    message::{EventHash, EventPair},
     peer_id::KeyhivePeerId,
 };
 
@@ -15,8 +15,9 @@ pub struct AllAgentEvents {
     /// Per-agent reachable hash sets.
     pub agent_hashes: BTreeMap<KeyhivePeerId, BTreeSet<EventHash>>,
     /// Bincode-serialized `StaticEvent` bytes paired with pre-encoded CBOR
-    /// byte-string framing.
-    pub event_data: BTreeMap<EventHash, (EventBytes, CborBytes)>,
+    /// byte-string framing, [`Arc`](alloc::sync::Arc)-shared so the cache and
+    /// every served response reference one copy.
+    pub event_data: BTreeMap<EventHash, EventPair>,
 }
 
 impl AllAgentEvents {

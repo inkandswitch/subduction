@@ -5,10 +5,13 @@
 //! - Global byte stores: keyed by hash, deduplicated across all
 //!   agents. Events are immutable so these grow monotonically.
 //!
-//! [`hashes_for_peer_pair`](PeriodicEventCache::hashes_for_peer_pair)
+//! [`events_for_peer_pair`](PeriodicEventCache::events_for_peer_pair)
 //! joins the per-agent sets with the global byte stores at request time.
 
-use alloc::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use dupe::Dupe;
 use keyhive_core::{
@@ -22,7 +25,7 @@ use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::Async
 use crate::{
     KeyhivePeerId, KeyhiveProtocol, ProtocolError,
     connection::KeyhiveConnection,
-    message::{AgentHashMap, CborBytes, EventBytes, EventHash},
+    message::{AgentHashMap, EventHash, EventPair},
     storage::KeyhiveStorage,
 };
 
@@ -41,10 +44,14 @@ pub(crate) struct PeriodicEventCache {
     /// Unioned into every peer pair's hash set without intersection.
     public_hashes: BTreeSet<EventHash>,
 
-    /// Hash -> raw event bytes paired with pre-encoded CBOR byte-string
-    /// framing. Monotonic growth across refreshes. Events are immutable,
-    /// so entries are never invalidated.
-    event_data: BTreeMap<EventHash, (EventBytes, CborBytes)>,
+    /// The public set materialized as an `AgentHashMap`.
+    public_pair: Arc<AgentHashMap>,
+
+    /// Hash -> raw event bytes paired with pre-encoded CBOR byte-string, `Arc`-shared.
+    /// Monotonic growth across refreshes. Events are immutable, so entries are never
+    /// invalidated. Served responses clone the `Arc`s, not the bytes, so concurrent
+    /// responses share this one copy.
+    event_data: BTreeMap<EventHash, EventPair>,
 
     /// Last keyhive `total_ops` seen, so refresh can skip rebuilds
     /// when nothing has changed.
@@ -53,10 +60,11 @@ pub(crate) struct PeriodicEventCache {
 
 impl PeriodicEventCache {
     /// Create an empty cache.
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             agent_hashes: BTreeMap::new(),
             public_hashes: BTreeSet::new(),
+            public_pair: Arc::new(AgentHashMap::new()),
             event_data: BTreeMap::new(),
             last_total_ops: None,
         }
@@ -90,34 +98,42 @@ impl PeriodicEventCache {
     /// Public hashes ∪ (A ∩ B).
     ///
     /// Every event the public agent can see is unconditionally included,
-    /// plus events reachable to *both* `a` and `b`. Returns a map keyed
-    /// by hash with `(EventBytes, CborBytes)` cloned from the byte stores.
+    /// plus events reachable to both `a` and `b`. Returns an `Arc`-shared
+    /// map whose values are [`EventPair`]s (`Arc`-shared bytes), so callers
+    /// share the cache's single copy rather than deep-copying.
     pub(crate) fn events_for_peer_pair(
         &self,
         a: &KeyhivePeerId,
         b: &KeyhivePeerId,
-    ) -> AgentHashMap {
-        let mut out = AgentHashMap::new();
-        for h in &self.public_hashes {
-            self.insert_pair_entry(&mut out, *h);
+    ) -> Arc<AgentHashMap> {
+        let (Some(ha), Some(hb)) = (self.agent_hashes.get(a), self.agent_hashes.get(b)) else {
+            // Unknown peer: served set is the public set.
+            return self.public_pair.dupe();
+        };
+
+        // Private events reachable to both a and b, beyond the public set and
+        // present in the byte store.
+        let mut private = ha
+            .intersection(hb)
+            .filter(|h| !self.public_pair.contains_key(*h))
+            .filter_map(|h| self.event_data.get(h).map(|pair| (*h, pair.dupe())))
+            .peekable();
+
+        if private.peek().is_none() {
+            return self.public_pair.dupe();
         }
-        if let (Some(ha), Some(hb)) = (self.agent_hashes.get(a), self.agent_hashes.get(b)) {
-            for h in ha.intersection(hb) {
-                if let Entry::Vacant(e) = out.entry(*h)
-                    && let Some((eb, cb)) = self.event_data.get(h)
-                {
-                    e.insert((eb.clone(), cb.clone()));
-                }
-            }
-        }
-        out
+
+        let mut out = (*self.public_pair).clone();
+        out.extend(private);
+        Arc::new(out)
     }
 
-    /// Insert `hash`'s deduplicated bytes into `out`.
-    fn insert_pair_entry(&self, out: &mut AgentHashMap, hash: EventHash) {
-        if let Some((eb, cb)) = self.event_data.get(&hash) {
-            out.insert(hash, (eb.clone(), cb.clone()));
-        }
+    /// Build the public set as an `AgentHashMap`
+    fn build_public_pair(&self) -> AgentHashMap {
+        self.public_hashes
+            .iter()
+            .filter_map(|h| self.event_data.get(h).map(|pair| (*h, pair.dupe())))
+            .collect()
     }
 
     /// Refresh the cache from the protocol's keyhive view.
@@ -188,10 +204,17 @@ impl PeriodicEventCache {
 
         self.agent_hashes = new_agent_hashes;
         self.public_hashes = new_public;
+        // Materialize the public set once per refresh so per-request serving
+        // can share it by `Arc` instead of rebuilding it.
+        self.public_pair = Arc::new(self.build_public_pair());
         self.last_total_ops = Some(total);
         Ok(true)
     }
 }
+
+/// Heap-profiling membenches, gated behind `dhat-heap`.
+#[cfg(all(test, feature = "dhat-heap", feature = "test-utils"))]
+mod membench;
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
@@ -203,15 +226,15 @@ mod tests {
     fn peer(seed: u8) -> KeyhivePeerId {
         KeyhivePeerId::from_bytes([seed; 32])
     }
-
     #[test]
     fn events_for_peer_pair_returns_only_public_when_peers_unknown() {
         let mut cache = PeriodicEventCache::new();
         let h: EventHash = [9; 32];
         cache
             .event_data
-            .insert(h, (vec![1, 2, 3], vec![0x43, 1, 2, 3]));
+            .insert(h, (vec![1, 2, 3].into(), vec![0x43, 1, 2, 3].into()));
         cache.public_hashes.insert(h);
+        cache.public_pair = Arc::new(cache.build_public_pair());
 
         let result = cache.events_for_peer_pair(&peer(1), &peer(2));
         assert_eq!(result.len(), 1);
@@ -227,10 +250,13 @@ mod tests {
         let bob_only: EventHash = [3; 32];
 
         for h in [public_h, shared_h, alice_only, bob_only] {
-            cache.event_data.insert(h, (vec![h[0]], vec![0x41, h[0]]));
+            cache
+                .event_data
+                .insert(h, (vec![h[0]].into(), vec![0x41, h[0]].into()));
         }
 
         cache.public_hashes.insert(public_h);
+        cache.public_pair = Arc::new(cache.build_public_pair());
 
         let mut alice = BTreeSet::new();
         alice.insert(shared_h);
@@ -248,5 +274,89 @@ mod tests {
         assert!(!result.contains_key(&alice_only), "alice-only excluded");
         assert!(!result.contains_key(&bob_only), "bob-only excluded");
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn events_for_peer_pair_excludes_intersection_hash_absent_from_store() {
+        // A hash reachable to both peers but never serialized into event_data
+        // must not appear, and the served map must equal the public set.
+        let mut cache = PeriodicEventCache::new();
+        let public_h: EventHash = [9; 32];
+        let ghost_h: EventHash = [4; 32];
+        cache
+            .event_data
+            .insert(public_h, (vec![1].into(), vec![0x41, 1].into()));
+        cache.public_hashes.insert(public_h);
+        cache.public_pair = Arc::new(cache.build_public_pair());
+
+        cache
+            .agent_hashes
+            .insert(peer(1), BTreeSet::from([ghost_h]));
+        cache
+            .agent_hashes
+            .insert(peer(2), BTreeSet::from([ghost_h]));
+
+        let result = cache.events_for_peer_pair(&peer(1), &peer(2));
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&public_h));
+        assert!(!result.contains_key(&ghost_h), "unserialized hash excluded");
+    }
+
+    #[test]
+    fn events_for_peer_pair_shares_public_arc_when_no_private_events() {
+        let mut cache = PeriodicEventCache::new();
+        let public_h: EventHash = [9; 32];
+        cache
+            .event_data
+            .insert(public_h, (vec![1].into(), vec![0x41, 1].into()));
+        cache.public_hashes.insert(public_h);
+        cache.public_pair = Arc::new(cache.build_public_pair());
+
+        // Unknown peers -> public-only -> shares the cached Arc (no allocation).
+        let r1 = cache.events_for_peer_pair(&peer(1), &peer(2));
+        assert!(Arc::ptr_eq(&r1, &cache.public_pair));
+
+        // Known peers whose intersection is only the public hash -> still shared.
+        cache
+            .agent_hashes
+            .insert(peer(1), BTreeSet::from([public_h]));
+        cache
+            .agent_hashes
+            .insert(peer(2), BTreeSet::from([public_h]));
+        let r2 = cache.events_for_peer_pair(&peer(1), &peer(2));
+        assert!(Arc::ptr_eq(&r2, &cache.public_pair));
+    }
+
+    #[test]
+    fn events_for_peer_pair_returns_fresh_arc_with_private_events() {
+        let mut cache = PeriodicEventCache::new();
+        let public_h: EventHash = [9; 32];
+        let private_h: EventHash = [5; 32];
+        cache
+            .event_data
+            .insert(public_h, (vec![1].into(), vec![0x41, 1].into()));
+        cache
+            .event_data
+            .insert(private_h, (vec![2].into(), vec![0x41, 2].into()));
+        cache.public_hashes.insert(public_h);
+        cache.public_pair = Arc::new(cache.build_public_pair());
+
+        // Both peers reach the private hash beyond the public set, so the rare
+        // clone-and-extend path runs.
+        cache
+            .agent_hashes
+            .insert(peer(1), BTreeSet::from([public_h, private_h]));
+        cache
+            .agent_hashes
+            .insert(peer(2), BTreeSet::from([public_h, private_h]));
+
+        let result = cache.events_for_peer_pair(&peer(1), &peer(2));
+        // A fresh map, not an alias of the shared public set.
+        assert!(!Arc::ptr_eq(&result, &cache.public_pair));
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key(&public_h));
+        assert!(result.contains_key(&private_h));
+        // The shared public map is left untouched (still public-only).
+        assert_eq!(cache.public_pair.len(), 1);
     }
 }

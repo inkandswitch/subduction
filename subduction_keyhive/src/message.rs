@@ -1,6 +1,6 @@
 //! Message types for the keyhive sync protocol.
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
 use crate::peer_id::KeyhivePeerId;
 
@@ -15,8 +15,19 @@ pub type EventBytes = Vec<u8>;
 /// [`EventBytes`] wrapped as a CBOR byte string (major type 2).
 pub type CborBytes = Vec<u8>;
 
+/// Reference-counted serialized-event bytes.
+///
+/// The periodic cache stores one copy of each event's bytes and hands every
+/// peer-pair response an `Arc` clone rather than copying the bytes, so
+/// concurrent responses share a single copy.
+pub type SharedBytes = Arc<[u8]>;
+
+/// A cached event's two serialized forms shared via `Arc`: the bincode
+/// [`EventBytes`] and its CBOR byte-string framing ([`CborBytes`]).
+pub type EventPair = (SharedBytes, SharedBytes);
+
 /// Hash-keyed map of serialized events for a peer or peer pair.
-pub type AgentHashMap = BTreeMap<EventHash, (EventBytes, CborBytes)>;
+pub type AgentHashMap = BTreeMap<EventHash, EventPair>;
 
 /// The keyhive sync protocol messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +87,7 @@ pub enum Message {
         ///
         /// These are operations we have that the initiator is missing.
         #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
-        found: Vec<EventBytes>,
+        found: Vec<SharedBytes>,
 
         /// Total operation count for the responder (intersection + pending).
         ///
@@ -102,7 +113,7 @@ pub enum Message {
 
         /// The serialized operations being sent.
         #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
-        ops: Vec<EventBytes>,
+        ops: Vec<SharedBytes>,
 
         /// Total operation count for the responder (from the sync response).
         ///
@@ -301,7 +312,7 @@ mod wire_format_tests {
             sender_id: peer(1),
             target_id: peer(2),
             requested: vec![[3u8; 32]],
-            found: vec![vec![10, 11, 12], vec![20, 21]],
+            found: vec![vec![10, 11, 12].into(), vec![20, 21].into()],
             sync_responder_total: 5,
             sync_requester_total: 4,
         };
@@ -320,7 +331,7 @@ mod wire_format_tests {
         let msg = Message::SyncOps {
             sender_id: peer(1),
             target_id: peer(2),
-            ops: vec![vec![1, 2, 3], vec![4, 5]],
+            ops: vec![vec![1, 2, 3].into(), vec![4, 5].into()],
             sync_responder_total: 1,
             sync_requester_total: 1,
         };
@@ -339,6 +350,48 @@ mod wire_format_tests {
             target_id: peer(2),
             found: vec![[7u8; 32], [9u8; 32]],
             pending: vec![[11u8; 32]],
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&original, &mut buf).expect("encode");
+        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
+        assert_eq!(original, recovered);
+    }
+
+    /// `SyncResponse.found` byte payloads must survive a CBOR round-trip with
+    /// their content intact.
+    #[test]
+    fn sync_response_round_trips_found_bytes() {
+        let original = Message::SyncResponse {
+            sender_id: peer(1),
+            target_id: peer(2),
+            requested: vec![[7u8; 32]],
+            found: vec![
+                vec![0xDE, 0xAD, 0xBE, 0xEF].into(),
+                Vec::new().into(),
+                vec![1, 2, 3, 4, 5].into(),
+            ],
+            sync_responder_total: 9,
+            sync_requester_total: 4,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&original, &mut buf).expect("encode");
+        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
+        assert_eq!(original, recovered);
+    }
+
+    /// `SyncOps.ops` byte payloads must survive a CBOR round-trip intact.
+    #[test]
+    fn sync_ops_round_trips_op_bytes() {
+        let original = Message::SyncOps {
+            sender_id: peer(1),
+            target_id: peer(2),
+            ops: vec![
+                vec![1, 2, 3].into(),
+                vec![4, 5, 6, 7].into(),
+                Vec::new().into(),
+            ],
+            sync_responder_total: 2,
+            sync_requester_total: 3,
         };
         let mut buf = Vec::new();
         ciborium::into_writer(&original, &mut buf).expect("encode");

@@ -60,7 +60,7 @@ use crate::{
     collections::{Map, Set},
     connection::KeyhiveConnection,
     error::{ProtocolError, SigningError, StorageError, VerificationError},
-    message::{AgentHashMap, CborBytes, EventBytes, EventHash, Message},
+    message::{AgentHashMap, EventHash, EventPair, Message, SharedBytes},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
     storage::{KeyhiveStorage, StorageHash},
@@ -227,13 +227,14 @@ where
 
     /// Serialized events reachable by `peer_id`.
     ///
+    /// Values are [`Arc`]-shared.
+    ///
     /// # Errors
     /// Returns [`ProtocolError`] on serialization failure.
     pub async fn get_events_for_agent(
         &self,
         peer_id: &KeyhivePeerId,
-    ) -> Result<Option<BTreeMap<EventHash, (EventBytes, CborBytes)>>, ProtocolError<Conn::SendError>>
-    {
+    ) -> Result<Option<AgentHashMap>, ProtocolError<Conn::SendError>> {
         let id = peer_id
             .to_identifier()
             .map_err(ProtocolError::InvalidIdentifier)?;
@@ -246,24 +247,6 @@ where
         };
 
         collect_serialized_events(events).map(Some)
-    }
-
-    /// Serialized events reachable by the public agent.
-    ///
-    /// # Errors
-    /// Returns [`ProtocolError`] on serialization failure.
-    pub async fn get_events_for_public_agent(
-        &self,
-    ) -> Result<BTreeMap<EventHash, (EventBytes, CborBytes)>, ProtocolError<Conn::SendError>> {
-        let events = {
-            let keyhive = self.keyhive.lock().await;
-            let Some(agent) = keyhive.get_agent(Public.id()).await else {
-                return Ok(BTreeMap::new());
-            };
-            sync_events_for_agent(&keyhive, &agent).await
-        };
-
-        collect_serialized_events(events)
     }
 
     /// Bulk snapshot of every agent's reachable events, deduplicated.
@@ -287,7 +270,7 @@ where
             (all_membership, all_prekey, all_cgka)
         };
 
-        let mut event_data: BTreeMap<EventHash, (EventBytes, CborBytes)> = BTreeMap::new();
+        let mut event_data: BTreeMap<EventHash, EventPair> = BTreeMap::new();
 
         // Phase 1: serialize every distinct op once, skipping hashes
         // the caller already has cached.
@@ -426,7 +409,7 @@ where
             let cached = self.cached_events_for_pair_with_peer(target_id).await;
             let computed;
             let pair = if let Some(ref c) = cached {
-                Some(c)
+                Some(&**c)
             } else {
                 match self.get_events_for_peer_pair(target_id).await {
                     Ok(p) => {
@@ -573,11 +556,11 @@ where
 
         match &message {
             Message::SyncRequest { .. } => {
-                self.handle_sync_request(message, cached_sender_pair.as_ref())
+                self.handle_sync_request(message, cached_sender_pair.as_deref())
                     .await
             }
             Message::SyncResponse { .. } => {
-                self.handle_sync_response(message, cached_sender_pair.as_ref())
+                self.handle_sync_response(message, cached_sender_pair.as_deref())
                     .await
             }
             Message::SyncOps { .. } => self.handle_sync_ops(message).await,
@@ -671,21 +654,20 @@ where
         // Build sets for comparison.
         let peer_found_set: Set<EventHash> = peer_found.iter().copied().collect();
         let peer_pending_set: Set<EventHash> = peer_pending.iter().copied().collect();
-        let local_set: Set<EventHash> = local_events.keys().copied().collect();
         let our_pending_set: Set<EventHash> = our_pending_hashes.iter().copied().collect();
 
         // Ops to send = local - (peer_found U peer_pending)
-        let mut found_ops: Vec<EventBytes> = Vec::new();
+        let mut found_ops: Vec<SharedBytes> = Vec::new();
         for (h, (event_bytes, _)) in local_events {
             if !peer_found_set.contains(h) && !peer_pending_set.contains(h) {
-                found_ops.push(event_bytes.clone());
+                found_ops.push(event_bytes.dupe());
             }
         }
 
         // Ops to request = peer_found - (local U our_pending)
         let requested: Vec<EventHash> = peer_found
             .into_iter()
-            .filter(|h| !local_set.contains(h) && !our_pending_set.contains(h))
+            .filter(|h| !local_events.contains_key(h) && !our_pending_set.contains(h))
             .collect();
 
         tracing::debug!(
@@ -1030,7 +1012,7 @@ where
         sender_id: &KeyhivePeerId,
         requested: &[EventHash],
         cached_pair: Option<&AgentHashMap>,
-    ) -> Result<Vec<EventBytes>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Vec<SharedBytes>, ProtocolError<Conn::SendError>> {
         let computed;
         let pair = if let Some(c) = cached_pair {
             c
@@ -1045,7 +1027,7 @@ where
         let mut result = Vec::with_capacity(requested.len().min(pair.len()));
         for h in requested {
             if let Some((bytes, _)) = pair.get(h) {
-                result.push(bytes.clone());
+                result.push(bytes.dupe());
             }
         }
         Ok(result)
@@ -1055,12 +1037,13 @@ where
     ///
     /// If some events remain pending (missing dependencies), attempts recovery
     /// by loading from storage and retrying.
-    async fn ingest_events(
+    async fn ingest_events<B: AsRef<[u8]>>(
         &self,
-        event_bytes_list: &[EventBytes],
+        event_bytes_list: &[B],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
         let mut events: Vec<StaticEvent<CRef>> = Vec::with_capacity(event_bytes_list.len());
-        for (idx, bytes) in event_bytes_list.iter().enumerate() {
+        for (idx, item) in event_bytes_list.iter().enumerate() {
+            let bytes = item.as_ref();
             match bincode_deserialize::<StaticEvent<CRef>>(bytes) {
                 Ok(ev) => events.push(ev),
                 Err(e) => {
@@ -1122,7 +1105,8 @@ where
         } else {
             for event_bytes in event_bytes_list {
                 if let Err(e) =
-                    storage_ops::save_event_bytes(&self.storage, event_bytes.clone()).await
+                    storage_ops::save_event_bytes(&self.storage, event_bytes.as_ref().to_vec())
+                        .await
                 {
                     tracing::warn!(error = %e, "failed to persist event to storage");
                 }
@@ -1133,9 +1117,9 @@ where
     }
 
     /// Attempt to recover by ingesting from storage and retrying.
-    async fn try_storage_recovery(
+    async fn try_storage_recovery<B: AsRef<[u8]>>(
         &self,
-        event_bytes_list: &[EventBytes],
+        event_bytes_list: &[B],
     ) -> Result<(), StorageError> {
         {
             let keyhive = self.keyhive.lock().await;
@@ -1144,7 +1128,7 @@ where
 
         let events: Vec<StaticEvent<CRef>> = event_bytes_list
             .iter()
-            .filter_map(|bytes| match bincode_deserialize(bytes) {
+            .filter_map(|bytes| match bincode_deserialize(bytes.as_ref()) {
                 Ok(ev) => Some(ev),
                 Err(e) => {
                     tracing::warn!(error = %e, "storage recovery: failed to deserialize event");
@@ -1222,7 +1206,10 @@ where
     }
 
     /// Look up cached events for us paired with the provided peer
-    async fn cached_events_for_pair_with_peer(&self, peer: &KeyhivePeerId) -> Option<AgentHashMap> {
+    async fn cached_events_for_pair_with_peer(
+        &self,
+        peer: &KeyhivePeerId,
+    ) -> Option<Arc<AgentHashMap>> {
         let cache = self.cache.lock().await;
         let local = self.peer_id();
         let map = cache.events_for_peer_pair(&local, peer);
@@ -1311,7 +1298,7 @@ where
 ///
 /// Hashes present in `skip_serialization` are recorded but not serialized.
 fn hash_and_insert_events<Async, Signer, CRef, Listener, E>(
-    event_data: &mut BTreeMap<EventHash, (EventBytes, CborBytes)>,
+    event_data: &mut BTreeMap<EventHash, EventPair>,
     events: impl Iterator<Item = Event<Async, Signer, CRef, Listener>>,
     skip_serialization: &BTreeSet<EventHash>,
 ) -> Result<Vec<EventHash>, ProtocolError<E>>
@@ -1340,24 +1327,27 @@ where
 /// Serialize a map of digested events into a hash-keyed byte map.
 fn collect_serialized_events<CRef: ContentRef, E: core::error::Error + 'static>(
     events: Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>,
-) -> Result<BTreeMap<EventHash, (EventBytes, CborBytes)>, ProtocolError<E>> {
-    let mut out = BTreeMap::new();
+) -> Result<AgentHashMap, ProtocolError<E>> {
+    let mut out = AgentHashMap::new();
     for (digest, event) in events {
         let h = digest_to_bytes(&digest);
-        let (event_bytes, cbor_bytes) = serialize_event_pair(&event)?;
-        out.insert(h, (event_bytes, cbor_bytes));
+        out.insert(h, serialize_event_pair(&event)?);
     }
     Ok(out)
 }
 
 /// Serialize a `StaticEvent` to bincode bytes and a CBOR byte-string wrapper.
+///
+/// Both forms are `Arc`-shared (an [`EventPair`]) so the periodic cache and
+/// every served response reference one copy instead of each deep-copying the
+/// bytes.
 fn serialize_event_pair<CRef: ContentRef, E: core::error::Error + 'static>(
     event: &StaticEvent<CRef>,
-) -> Result<(EventBytes, CborBytes), ProtocolError<E>> {
+) -> Result<EventPair, ProtocolError<E>> {
     let bytes =
         bincode_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
     let cbor = wrap_as_cbor_byte_string(&bytes);
-    Ok((bytes, cbor))
+    Ok((Arc::from(bytes), Arc::from(cbor)))
 }
 
 /// Collect hashes reachable from `agent_id` through `index` into `hash_set`.
@@ -1448,6 +1438,7 @@ const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {
 mod tests {
     use super::*;
     use crate::{
+        message::EventBytes,
         storage::MemoryKeyhiveStorage,
         test_utils::{
             SimpleKeyhive, TestProtocol, TwoPeerHarness, create_channel_pair,
@@ -1980,7 +1971,7 @@ mod tests {
             .await
             .unwrap()
             .expect("bob should resolve to an agent");
-        let event_bytes: Vec<EventBytes> = pair.values().map(|(b, _)| b.clone()).collect();
+        let event_bytes: Vec<SharedBytes> = pair.values().map(|(b, _)| b.dupe()).collect();
         assert!(
             event_bytes.len() > 2,
             "need >2 events to exceed threshold of 2 (got {})",
@@ -2030,7 +2021,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let event_bytes: Vec<EventBytes> = pair.values().map(|(b, _)| b.clone()).collect();
+        let event_bytes: Vec<SharedBytes> = pair.values().map(|(b, _)| b.dupe()).collect();
         assert!(!event_bytes.is_empty());
 
         protocol.ingest_events(&event_bytes).await.unwrap();
@@ -2104,7 +2095,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let dependent: Vec<EventBytes> = other_proto
+        let dependent: Vec<SharedBytes> = other_proto
             .get_events_for_agent(&other_id)
             .await
             .unwrap()
@@ -2196,7 +2187,10 @@ mod tests {
         let synthetic_cbor = wrap_as_cbor_byte_string(&synthetic_bytes);
 
         let mut cached_pair = AgentHashMap::new();
-        cached_pair.insert(synthetic_hash, (synthetic_bytes.clone(), synthetic_cbor));
+        cached_pair.insert(
+            synthetic_hash,
+            (synthetic_bytes.clone().into(), synthetic_cbor.into()),
+        );
 
         // SyncResponse from Bob asking Alice for the synthetic hash.
         // Bob's `requested` always lists hashes Alice advertised, so
@@ -2240,7 +2234,8 @@ mod tests {
             "alice should have served exactly one op (the synthetic one)"
         );
         assert_eq!(
-            ops[0], synthetic_bytes,
+            ops[0].as_ref(),
+            synthetic_bytes.as_slice(),
             "served bytes should match the cached pair entry, \
              not anything from a live keyhive walk"
         );
