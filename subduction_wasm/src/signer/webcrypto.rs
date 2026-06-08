@@ -69,7 +69,7 @@ const KEY_ID: &str = "default";
 /// # Example
 ///
 /// ```javascript
-/// import { WebCryptoSigner } from "@anthropic/subduction";
+/// import { WebCryptoSigner } from "@automerge/subduction";
 ///
 /// const signer = await WebCryptoSigner.setup();
 /// console.log("Peer ID:", signer.peerId().toString());
