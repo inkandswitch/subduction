@@ -326,7 +326,7 @@ impl<
         crate::metrics::message_dispatched(message.variant_name());
 
         #[cfg(feature = "metrics")]
-        let _timer = crate::metrics::DispatchTimer::new();
+        let _timer = crate::metrics::DispatchTimer::new(message.variant_name());
 
         self.dispatch_inner(from, message, conn)
             .instrument(span)
@@ -531,25 +531,124 @@ impl<
 
             // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
-            for conn in conns {
-                let peer_id = conn.peer_id();
-                let msg = SyncMessage::LooseCommit {
-                    id,
-                    commit: signed_for_wire.clone(),
-                    blob: blob.clone(),
-                    sender_heads: RemoteHeads {
-                        counter: self.send_counter.next(peer_id).await,
-                        heads: heads.clone(),
-                    },
-                };
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
-                    self.remove_connection(&conn).await;
-                }
-            }
+            #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
+            let pushed = self
+                .broadcast_loose_commit(id, &signed_for_wire, &blob, &heads, conns)
+                .await;
+            #[cfg(feature = "metrics")]
+            crate::metrics::subscription_pushes(pushed);
         }
 
         Ok(was_new)
+    }
+
+    /// Fan a newly-received loose commit out to its authorized subscribers.
+    ///
+    /// Per-peer send counters are allocated sequentially (cheap, and counter
+    /// order per peer must be preserved), then the wire sends run concurrently
+    /// so a slow or backpressured subscriber can't stall delivery to the rest.
+    /// Connections whose send failed are pruned afterwards. Returns the number
+    /// of successful pushes.
+    async fn broadcast_loose_commit(
+        &self,
+        id: SedimentreeId,
+        commit: &Signed<LooseCommit>,
+        blob: &Blob,
+        heads: &[CommitId],
+        conns: Vec<Authenticated<Conn, Async>>,
+    ) -> u64 {
+        // Allocate counters + build messages sequentially.
+        let mut pending = Vec::with_capacity(conns.len());
+        for conn in conns {
+            let peer_id = conn.peer_id();
+            let msg = SyncMessage::LooseCommit {
+                id,
+                commit: commit.clone(),
+                blob: blob.clone(),
+                sender_heads: RemoteHeads {
+                    counter: self.send_counter.next(peer_id).await,
+                    heads: heads.to_vec(),
+                },
+            };
+            pending.push((conn, msg));
+        }
+
+        // Run the sends concurrently; collect failures to prune after.
+        let results = futures::future::join_all(
+            pending
+                .iter()
+                .map(|(conn, msg)| async move { (conn, conn.send(msg).await) }),
+        )
+        .await;
+
+        let mut pushed: u64 = 0;
+        let mut failed = Vec::new();
+        for (conn, result) in results {
+            match result {
+                Ok(()) => pushed += 1,
+                Err(e) => {
+                    tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
+                    failed.push(conn);
+                }
+            }
+        }
+        for conn in failed {
+            self.remove_connection(conn).await;
+        }
+
+        pushed
+    }
+
+    /// Fan a newly-received fragment out to its authorized subscribers.
+    ///
+    /// See [`broadcast_loose_commit`](Self::broadcast_loose_commit) for the
+    /// sequential-counter / concurrent-send rationale.
+    async fn broadcast_fragment(
+        &self,
+        id: SedimentreeId,
+        fragment: &Signed<Fragment>,
+        blob: &Blob,
+        heads: &[CommitId],
+        conns: Vec<Authenticated<Conn, Async>>,
+    ) -> u64 {
+        let mut pending = Vec::with_capacity(conns.len());
+        for conn in conns {
+            let peer_id = conn.peer_id();
+            let msg = SyncMessage::Fragment {
+                id,
+                fragment: fragment.clone(),
+                blob: blob.clone(),
+                sender_heads: RemoteHeads {
+                    counter: self.send_counter.next(peer_id).await,
+                    heads: heads.to_vec(),
+                },
+            };
+            pending.push((conn, msg));
+        }
+
+        let results = futures::future::join_all(
+            pending
+                .iter()
+                .map(|(conn, msg)| async move { (conn, conn.send(msg).await) }),
+        )
+        .await;
+
+        let mut pushed: u64 = 0;
+        let mut failed = Vec::new();
+        for (conn, result) in results {
+            match result {
+                Ok(()) => pushed += 1,
+                Err(e) => {
+                    tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
+                    failed.push(conn);
+                }
+            }
+        }
+        for conn in failed {
+            self.remove_connection(conn).await;
+        }
+
+        pushed
     }
 
     async fn recv_fragment(
@@ -625,22 +724,12 @@ impl<
 
             // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
-            for conn in conns {
-                let peer_id = conn.peer_id();
-                let msg = SyncMessage::Fragment {
-                    id,
-                    fragment: signed_for_wire.clone(),
-                    blob: blob.clone(),
-                    sender_heads: RemoteHeads {
-                        counter: self.send_counter.next(peer_id).await,
-                        heads: heads.clone(),
-                    },
-                };
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
-                    self.remove_connection(&conn).await;
-                }
-            }
+            #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
+            let pushed = self
+                .broadcast_fragment(id, &signed_for_wire, &blob, &heads, conns)
+                .await;
+            #[cfg(feature = "metrics")]
+            crate::metrics::subscription_pushes(pushed);
         }
 
         Ok(was_new)
@@ -745,9 +834,11 @@ impl<
 
         // The wire diff requires the minimal form. A freshly built value is
         // already minimal, but an adopted concurrently-installed value may be
-        // dirty, so minimize before computing heads / diff.
+        // dirty, so minimize once here. `heads_assuming_minimal` then reads the
+        // heads off the now-minimal tree without re-minimizing (which
+        // `Sedimentree::heads` would otherwise do internally).
         let minimal = sedimentree.minimized(&self.depth_metric);
-        let raw_heads = minimal.heads(&self.depth_metric);
+        let raw_heads = minimal.heads_assuming_minimal();
         let diff = minimal.diff_remote_fingerprints(their_fingerprints);
         let local_commit_ids: Vec<_> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
         let local_fragment_ids: Vec<_> = diff
@@ -879,23 +970,18 @@ impl<
         ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
     }
 
-    /// Get a sedimentree from the in-memory LRU cache, hydrating from
-    /// durable storage on a miss. Returns `None` if the tree does not exist.
-    /// See [`ingest::get_or_hydrate`].
-    async fn get_or_hydrate(&self, id: SedimentreeId) -> Result<Option<Sedimentree>, Store::Error> {
-        ingest::get_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id).await
-    }
-
     /// Compute the current heads for a sedimentree (without a counter).
     ///
-    /// Routes through [`get_or_hydrate`](Self::get_or_hydrate) so an
-    /// evicted (or never-resident) tree reports its real heads from storage
-    /// rather than empty. A nonexistent tree (or a storage error) yields
-    /// empty heads (best-effort; the heads field is advisory).
+    /// Routes through [`ingest::heads_or_hydrate`] so an evicted (or
+    /// never-resident) tree reports its real heads from storage rather than
+    /// empty, while a resident hit computes heads in place — no tree clone and
+    /// a single dirty-gated minimize. A nonexistent tree (or a storage error)
+    /// yields empty heads (best-effort; the heads field is advisory).
     async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
-        match self.get_or_hydrate(id).await {
-            Ok(Some(tree)) => tree.heads(&self.depth_metric),
-            Ok(None) => Vec::new(),
+        match ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
+            .await
+        {
+            Ok(heads) => heads,
             Err(e) => {
                 tracing::warn!(tree = ?id, error = %e, "heads_for: hydration failed");
                 Vec::new()
@@ -905,6 +991,8 @@ impl<
 
     async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
         peers::add_subscription(&self.subscriptions, peer_id, sedimentree_id).await;
+        #[cfg(feature = "metrics")]
+        crate::metrics::set_subscribed_sedimentrees(self.subscriptions.lock().await.len());
     }
 
     async fn remove_subscriptions(&self, peer_id: PeerId, ids: &[SedimentreeId]) {
@@ -917,6 +1005,8 @@ impl<
                 }
             }
         }
+        #[cfg(feature = "metrics")]
+        crate::metrics::set_subscribed_sedimentrees(subscriptions.len());
     }
 
     async fn get_authorized_subscriber_conns(

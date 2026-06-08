@@ -37,6 +37,7 @@ keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+metrics-util = { workspace = true }
 nonempty = { workspace = true, features = ["std"] }
 rand = { workspace = true }
 reqwest = { workspace = true }

@@ -70,6 +70,118 @@ use thiserror::Error;
 /// the same content-addressed path.
 static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
+/// One compound item (meta + blob) to persist, with its target paths already
+/// resolved. Carried into a blocking closure so the whole write sequence runs
+/// in a single `spawn_blocking` hop.
+struct PendingWrite {
+    id_dir: PathBuf,
+    meta_path: PathBuf,
+    blob_path: PathBuf,
+    signed_data: Vec<u8>,
+    blob_data: Vec<u8>,
+}
+
+/// Synchronously persist one compound item using the durable temp-then-rename
+/// dance. CAS: a no-op if the `.meta` already exists. Must be called from a
+/// blocking context (e.g. inside `spawn_blocking`).
+fn write_compound_sync(item: &PendingWrite) -> Result<(), FsStorageError> {
+    // CAS: skip if already exists.
+    if std::fs::metadata(&item.meta_path).is_ok() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&item.id_dir)?;
+
+    let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+    let blob_temp = item.blob_path.with_extension(format!("{nonce}.blob.tmp"));
+    let meta_temp = item.meta_path.with_extension(format!("{nonce}.meta.tmp"));
+
+    std::fs::write(&blob_temp, &item.blob_data)?;
+    std::fs::write(&meta_temp, &item.signed_data)?;
+    std::fs::rename(&blob_temp, &item.blob_path)?;
+    std::fs::rename(&meta_temp, &item.meta_path)?;
+
+    Ok(())
+}
+
+/// The undecoded `.meta` + `.blob` byte pair read from one identity directory.
+type MetaBlobPair = (Vec<u8>, Vec<u8>);
+
+/// One raw on-disk compound item: its identity-dir name plus the undecoded
+/// `.meta` and `.blob` bytes. Decoding is deferred to async land so the
+/// blocking closure stays pure I/O.
+type RawCompound = (String, Vec<u8>, Vec<u8>);
+
+/// Synchronously walk every `<id>/` subdirectory of `parent`, reading the first
+/// `.meta` + `.blob` pair from each. Returns the raw, undecoded bytes for all
+/// items in a single blocking-pool hop (vs. one hop per `tokio::fs` call).
+///
+/// `parent` absent → empty result. Subdirectories whose name isn't a valid id,
+/// or that hold no complete pair, are skipped. Must be called from a blocking
+/// context.
+fn read_all_compound_sync(parent: &Path) -> Result<Vec<RawCompound>, FsStorageError> {
+    let entries = match std::fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+
+        if FsStorage::parse_commit_id_from_dirname(&name).is_none() {
+            continue;
+        }
+
+        if let Some((signed_data, blob_data)) = read_first_meta_blob_pair_sync(&entry.path())? {
+            out.push((name, signed_data, blob_data));
+        }
+    }
+
+    Ok(out)
+}
+
+/// Synchronously read the first `.meta` + `.blob` pair from `dir`. Returns
+/// `None` if the directory is absent or holds no complete pair. Must be called
+/// from a blocking context.
+fn read_first_meta_blob_pair_sync(dir: &Path) -> Result<Option<MetaBlobPair>, FsStorageError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        if let Ok(name) = entry.file_name().into_string()
+            && let Some(stem) = name.strip_suffix(".meta")
+        {
+            let meta_path = dir.join(&name);
+            let blob_path = dir.join(format!("{stem}.blob"));
+
+            let signed_data = match std::fs::read(&meta_path) {
+                Ok(data) => data,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+
+            let blob_data = match std::fs::read(&blob_path) {
+                Ok(data) => data,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+
+            return Ok(Some((signed_data, blob_data)));
+        }
+    }
+
+    Ok(None)
+}
+
 /// Number of leading [`SedimentreeId`] bytes used as the on-disk bucket name
 /// under `trees/`. Two bytes give 65,536 buckets (`0000`..`ffff`).
 ///
@@ -89,6 +201,10 @@ pub enum FsStorageError {
     /// Decoding error.
     #[error(transparent)]
     Decode(#[from] DecodeError),
+
+    /// A blocking storage task panicked or was cancelled.
+    #[error("blocking storage task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
 
     /// Signed data is too short to be valid — refusing to write corrupt data.
     #[error("signed data too short: have {have} bytes, need at least {need} bytes")]
@@ -283,9 +399,7 @@ impl FsStorage {
     }
 
     /// Read the first `.meta` + `.blob` pair from a directory as a `Signed<T>` + `Blob`.
-    async fn read_first_meta_blob_pair(
-        dir: &Path,
-    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, FsStorageError> {
+    async fn read_first_meta_blob_pair(dir: &Path) -> Result<Option<MetaBlobPair>, FsStorageError> {
         let mut entries = match tokio::fs::read_dir(dir).await {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -318,6 +432,76 @@ impl FsStorage {
 
         Ok(None)
     }
+
+    /// Resolve paths and validate a loose commit into a [`PendingWrite`].
+    ///
+    /// Validation (the undersized-`.meta` guard) is pure CPU and runs here,
+    /// off the filesystem, so the blocking closure only does I/O.
+    fn build_commit_write(
+        &self,
+        sedimentree_id: SedimentreeId,
+        verified: &VerifiedMeta<LooseCommit>,
+    ) -> Result<PendingWrite, FsStorageError> {
+        let commit_id = verified.payload().head();
+        let digest = Digest::hash(verified.payload());
+        let signed_data = verified.signed().as_bytes().to_vec();
+        let min_size =
+            <LooseCommit as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
+        if signed_data.len() < min_size {
+            tracing::error!(
+                ?sedimentree_id,
+                ?digest,
+                have = signed_data.len(),
+                need = min_size,
+                "refusing to write undersized LooseCommit .meta file"
+            );
+            return Err(FsStorageError::SignedDataTooShort {
+                have: signed_data.len(),
+                need: min_size,
+            });
+        }
+
+        Ok(PendingWrite {
+            id_dir: self.commit_id_dir(sedimentree_id, commit_id),
+            meta_path: self.commit_meta_path(sedimentree_id, commit_id, digest),
+            blob_path: self.commit_blob_path(sedimentree_id, commit_id, digest),
+            signed_data,
+            blob_data: verified.blob().contents().clone(),
+        })
+    }
+
+    /// Resolve paths and validate a fragment into a [`PendingWrite`].
+    fn build_fragment_write(
+        &self,
+        sedimentree_id: SedimentreeId,
+        verified: &VerifiedMeta<Fragment>,
+    ) -> Result<PendingWrite, FsStorageError> {
+        let fragment_head = verified.payload().head();
+        let digest = Digest::hash(verified.payload());
+        let signed_data = verified.signed().as_bytes().to_vec();
+        let min_size = <Fragment as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
+        if signed_data.len() < min_size {
+            tracing::error!(
+                ?sedimentree_id,
+                ?digest,
+                have = signed_data.len(),
+                need = min_size,
+                "refusing to write undersized Fragment .meta file"
+            );
+            return Err(FsStorageError::SignedDataTooShort {
+                have: signed_data.len(),
+                need: min_size,
+            });
+        }
+
+        Ok(PendingWrite {
+            id_dir: self.fragment_id_dir(sedimentree_id, fragment_head),
+            meta_path: self.fragment_meta_path(sedimentree_id, fragment_head, digest),
+            blob_path: self.fragment_blob_path(sedimentree_id, fragment_head, digest),
+            signed_data,
+            blob_data: verified.blob().contents().clone(),
+        })
+    }
 }
 
 impl Storage<Sendable> for FsStorage {
@@ -332,12 +516,16 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::save_sedimentree_id");
 
-            self.ids_cache.lock().await.insert(sedimentree_id);
-
-            let tree_dir = self.tree_path(sedimentree_id);
-            tokio::fs::create_dir_all(&tree_dir).await?;
-            tokio::fs::create_dir_all(self.commits_dir(sedimentree_id)).await?;
-            tokio::fs::create_dir_all(self.fragments_dir(sedimentree_id)).await?;
+            if self.ids_cache.lock().await.insert(sedimentree_id) {
+                let commits_dir = self.commits_dir(sedimentree_id);
+                let fragments_dir = self.fragments_dir(sedimentree_id);
+                tokio::task::spawn_blocking(move || -> Result<(), FsStorageError> {
+                    std::fs::create_dir_all(&commits_dir)?;
+                    std::fs::create_dir_all(&fragments_dir)?;
+                    Ok(())
+                })
+                .await??;
+            }
 
             Ok(())
         })
@@ -391,54 +579,16 @@ impl Storage<Sendable> for FsStorage {
         verified: VerifiedMeta<LooseCommit>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            let commit_id = verified.payload().head();
-            let digest = Digest::hash(verified.payload());
-            tracing::trace!(
-                ?sedimentree_id,
-                ?commit_id,
-                ?digest,
-                "FsStorage::save_loose_commit"
-            );
+            tracing::trace!(?sedimentree_id, "FsStorage::save_loose_commit");
 
-            let id_dir = self.commit_id_dir(sedimentree_id, commit_id);
-            let meta_path = self.commit_meta_path(sedimentree_id, commit_id, digest);
-            let blob_path = self.commit_blob_path(sedimentree_id, commit_id, digest);
-
-            // CAS: skip if already exists
-            if tokio::fs::try_exists(&meta_path).await.unwrap_or(false) {
-                return Ok(());
-            }
-
-            tokio::fs::create_dir_all(&id_dir).await?;
-
-            // Validate signed data before writing
-            let signed_data = verified.signed().as_bytes().to_vec();
-            let min_size =
-                <LooseCommit as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
-            if signed_data.len() < min_size {
-                tracing::error!(
-                    ?sedimentree_id,
-                    ?digest,
-                    have = signed_data.len(),
-                    need = min_size,
-                    "refusing to write undersized LooseCommit .meta file"
-                );
-                return Err(FsStorageError::SignedDataTooShort {
-                    have: signed_data.len(),
-                    need: min_size,
-                });
-            }
-
-            let blob_data = verified.blob().contents().clone();
-            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-
-            let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
-            let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
-
-            tokio::fs::write(&blob_temp, &blob_data).await?;
-            tokio::fs::write(&meta_temp, &signed_data).await?;
-            tokio::fs::rename(&blob_temp, &blob_path).await?;
-            tokio::fs::rename(&meta_temp, &meta_path).await?;
+            // Validate + resolve paths off the filesystem, then collapse the
+            // CAS check + mkdir + 2 writes + 2 renames into a single
+            // blocking-pool hop. With `tokio::fs` each call is its own
+            // `spawn_blocking` round-trip, so a 6-step save pays the scheduling
+            // jitter 6×; doing the whole sequence in one closure pays it once,
+            // tightening the latency tail under concurrent load.
+            let item = self.build_commit_write(sedimentree_id, &verified)?;
+            tokio::task::spawn_blocking(move || write_compound_sync(&item)).await??;
 
             Ok(())
         })
@@ -525,54 +675,36 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::load_loose_commits");
 
+            // Read every commit dir's meta+blob bytes in a single blocking hop,
+            // then decode in async land. Previously this was N+1 `read_dir`s
+            // plus 2N sequential `tokio::fs::read`s — each its own blocking-pool
+            // round-trip — on the hydration hot path.
             let commits_dir = self.commits_dir(sedimentree_id);
-            let mut results = Vec::new();
+            let raw =
+                tokio::task::spawn_blocking(move || read_all_compound_sync(&commits_dir)).await??;
 
-            let mut entries = match tokio::fs::read_dir(&commits_dir).await {
-                Ok(e) => e,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(results),
-                Err(e) => return Err(e.into()),
-            };
-
-            while let Some(entry) = entries.next_entry().await? {
-                if let Ok(name) = entry.file_name().into_string()
-                    && Self::parse_commit_id_from_dirname(&name).is_some()
-                {
-                    let subdir = commits_dir.join(&name);
-                    match Self::read_first_meta_blob_pair(&subdir).await {
-                        Ok(Some((signed_data, blob_data))) => {
-                            let signed = match Signed::try_decode(signed_data) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        ?sedimentree_id,
-                                        dir = %name,
-                                        "skipping corrupt loose commit dir: {e}"
-                                    );
-                                    continue;
-                                }
-                            };
-                            let blob = Blob::new(blob_data);
-                            match VerifiedMeta::try_from_trusted(signed, blob) {
-                                Ok(verified) => results.push(verified),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        ?sedimentree_id,
-                                        dir = %name,
-                                        "skipping corrupt loose commit dir: {e}"
-                                    );
-                                }
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(FsStorageError::Decode(e)) => {
-                            tracing::warn!(
-                                ?sedimentree_id,
-                                dir = %name,
-                                "skipping corrupt loose commit dir: {e}"
-                            );
-                        }
-                        Err(e) => return Err(e),
+            let mut results = Vec::with_capacity(raw.len());
+            for (name, signed_data, blob_data) in raw {
+                let signed = match Signed::try_decode(signed_data) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(
+                            ?sedimentree_id,
+                            dir = %name,
+                            "skipping corrupt loose commit dir: {e}"
+                        );
+                        continue;
+                    }
+                };
+                let blob = Blob::new(blob_data);
+                match VerifiedMeta::try_from_trusted(signed, blob) {
+                    Ok(verified) => results.push(verified),
+                    Err(e) => {
+                        tracing::warn!(
+                            ?sedimentree_id,
+                            dir = %name,
+                            "skipping corrupt loose commit dir: {e}"
+                        );
                     }
                 }
             }
@@ -610,54 +742,12 @@ impl Storage<Sendable> for FsStorage {
         verified: VerifiedMeta<Fragment>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            let fragment_head = verified.payload().head();
-            let digest = Digest::hash(verified.payload());
-            tracing::trace!(
-                ?sedimentree_id,
-                ?fragment_head,
-                ?digest,
-                "FsStorage::save_fragment"
-            );
+            tracing::trace!(?sedimentree_id, "FsStorage::save_fragment");
 
-            let id_dir = self.fragment_id_dir(sedimentree_id, fragment_head);
-            let meta_path = self.fragment_meta_path(sedimentree_id, fragment_head, digest);
-            let blob_path = self.fragment_blob_path(sedimentree_id, fragment_head, digest);
-
-            // Skip if already exists (CAS)
-            if tokio::fs::try_exists(&meta_path).await.unwrap_or(false) {
-                return Ok(());
-            }
-
-            tokio::fs::create_dir_all(&id_dir).await?;
-
-            // Validate signed data before writing
-            let signed_data = verified.signed().as_bytes().to_vec();
-            let min_size =
-                <Fragment as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
-            if signed_data.len() < min_size {
-                tracing::error!(
-                    ?sedimentree_id,
-                    ?digest,
-                    have = signed_data.len(),
-                    need = min_size,
-                    "refusing to write undersized Fragment .meta file"
-                );
-                return Err(FsStorageError::SignedDataTooShort {
-                    have: signed_data.len(),
-                    need: min_size,
-                });
-            }
-
-            let blob_data = verified.blob().contents().clone();
-            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-
-            let blob_temp = blob_path.with_extension(format!("{nonce}.blob.tmp"));
-            let meta_temp = meta_path.with_extension(format!("{nonce}.meta.tmp"));
-
-            tokio::fs::write(&blob_temp, &blob_data).await?;
-            tokio::fs::write(&meta_temp, &signed_data).await?;
-            tokio::fs::rename(&blob_temp, &blob_path).await?;
-            tokio::fs::rename(&meta_temp, &meta_path).await?;
+            // Single blocking-pool hop for the whole CAS + write + rename
+            // sequence; see `save_loose_commit` for the rationale.
+            let item = self.build_fragment_write(sedimentree_id, &verified)?;
+            tokio::task::spawn_blocking(move || write_compound_sync(&item)).await??;
 
             Ok(())
         })
@@ -731,32 +821,36 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::load_fragments");
 
+            // One blocking hop for the whole directory walk, then decode in
+            // async land. Previously this re-entered the full `load_fragment`
+            // trait method per fragment — a fresh `read_dir` + 2 reads each,
+            // all sequential blocking-pool round-trips.
             let fragments_dir = self.fragments_dir(sedimentree_id);
-            let mut results = Vec::new();
+            let raw = tokio::task::spawn_blocking(move || read_all_compound_sync(&fragments_dir))
+                .await??;
 
-            let mut entries = match tokio::fs::read_dir(&fragments_dir).await {
-                Ok(e) => e,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(results),
-                Err(e) => return Err(e.into()),
-            };
-
-            while let Some(entry) = entries.next_entry().await? {
-                if let Ok(name) = entry.file_name().into_string()
-                    && let Some(fragment_head) = Self::parse_commit_id_from_dirname(&name)
-                {
-                    match Storage::<Sendable>::load_fragment(self, sedimentree_id, fragment_head)
-                        .await
-                    {
-                        Ok(Some(verified)) => results.push(verified),
-                        Ok(None) => {}
-                        Err(FsStorageError::Decode(e)) => {
-                            tracing::warn!(
-                                ?sedimentree_id,
-                                ?fragment_head,
-                                "skipping corrupt fragment dir: {e}"
-                            );
-                        }
-                        Err(e) => return Err(e),
+            let mut results = Vec::with_capacity(raw.len());
+            for (name, signed_data, blob_data) in raw {
+                let signed = match Signed::try_decode(signed_data) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(
+                            ?sedimentree_id,
+                            dir = %name,
+                            "skipping corrupt fragment dir: {e}"
+                        );
+                        continue;
+                    }
+                };
+                let blob = Blob::new(blob_data);
+                match VerifiedMeta::try_from_trusted(signed, blob) {
+                    Ok(verified) => results.push(verified),
+                    Err(e) => {
+                        tracing::warn!(
+                            ?sedimentree_id,
+                            dir = %name,
+                            "skipping corrupt fragment dir: {e}"
+                        );
                     }
                 }
             }
@@ -829,13 +923,25 @@ impl Storage<Sendable> for FsStorage {
 
             Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
 
-            for verified in commits {
-                Storage::<Sendable>::save_loose_commit(self, sedimentree_id, verified).await?;
+            // Validate + resolve every item off the filesystem, then persist the
+            // whole batch in a single blocking-pool hop. Previously each item
+            // was its own `spawn_blocking` save, so an N-item batch paid the
+            // scheduling round-trip N times back-to-back; now it pays it once.
+            let mut items = Vec::with_capacity(num_commits + num_fragments);
+            for verified in &commits {
+                items.push(self.build_commit_write(sedimentree_id, verified)?);
+            }
+            for verified in &fragments {
+                items.push(self.build_fragment_write(sedimentree_id, verified)?);
             }
 
-            for verified in fragments {
-                Storage::<Sendable>::save_fragment(self, sedimentree_id, verified).await?;
-            }
+            tokio::task::spawn_blocking(move || -> Result<(), FsStorageError> {
+                for item in &items {
+                    write_compound_sync(item)?;
+                }
+                Ok(())
+            })
+            .await??;
 
             Ok(num_commits + num_fragments)
         })

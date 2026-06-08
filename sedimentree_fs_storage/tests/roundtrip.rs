@@ -336,3 +336,34 @@ async fn commit_readable_after_reopen_under_sharding() -> testresult::TestResult
 
     Ok(())
 }
+
+/// A tree registered with NO commits or fragments must still persist across a
+/// reopen. This guards the invariant the cache-gated `save_sedimentree_id`
+/// optimization leans on: the *first* save must materialize the on-disk leaf
+/// directory (via creating its `commits`/`fragments` children) so boot-time
+/// `load_tree_ids` can rediscover the id, and a *repeated* save for an
+/// already-cached id must be a harmless no-op.
+#[tokio::test]
+async fn empty_registered_tree_survives_reopen() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let id = make_sedimentree_id(0x5E);
+
+    {
+        let storage = FsStorage::new(dir.path().to_path_buf())?;
+        // Register the id (creates dirs on the first call)...
+        Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+        // ...and again (cache-gated no-op; must not error or lose the id).
+        Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+    }
+
+    // Reopen: id discovery walks the on-disk leaf layout, not a warm cache.
+    let reopened = FsStorage::new(dir.path().to_path_buf())?;
+    let ids = Storage::<Sendable>::load_all_sedimentree_ids(&reopened).await?;
+
+    assert!(
+        ids.contains(&id),
+        "an empty registered tree's id must survive reopen, but it was not rediscovered from disk"
+    );
+
+    Ok(())
+}

@@ -84,6 +84,21 @@
         "type": "indirect"
       }
     },
+    "nixpkgs-grafana": {
+      "locked": {
+        "lastModified": 1767313136,
+        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
+        "type": "github"
+      },
+      "original": {
+        "id": "nixpkgs",
+        "ref": "nixos-25.05",
+        "type": "indirect"
+      }
+    },
     "nixpkgs_2": {
       "locked": {
         "lastModified": 1780203844,
@@ -105,6 +120,7 @@
         "flake-utils": "flake-utils_2",
         "nixos-unstable": "nixos-unstable",
         "nixpkgs": "nixpkgs_2",
+        "nixpkgs-grafana": "nixpkgs-grafana",
         "rust-overlay": "rust-overlay",
         "wasm-bodge-src": "wasm-bodge-src"
       }

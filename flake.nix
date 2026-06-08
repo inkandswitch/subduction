@@ -5,6 +5,12 @@
     nixpkgs.url = "nixpkgs/nixos-26.05";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
 
+    # Pinned solely for Grafana 12.x: nixos-26.05 ships Grafana 13.x, but the
+    # provisioned dashboard targets the 12.x schema and 13.x has proven
+    # GC-volatile in the dev store. The pinned 12.x is added to the dev shell
+    # (a gc root) so `monitoring:start` cannot lose its binary to GC.
+    nixpkgs-grafana.url = "nixpkgs/nixos-25.05";
+
     command-utils.url = "git+https://codeberg.org/expede/nix-command-utils";
     flake-utils.url = "github:numtide/flake-utils";
 
@@ -24,6 +30,7 @@
     flake-utils,
     nixos-unstable,
     nixpkgs,
+    nixpkgs-grafana,
     rust-overlay,
     command-utils,
     wasm-bodge-src
@@ -50,6 +57,12 @@
           inherit system overlays;
           config.allowUnfree = true;
         };
+
+        # Grafana 12.x, pinned for the local `monitoring:start` dev command.
+        grafanaPinned = (import nixpkgs-grafana {
+          inherit system;
+          config.allowUnfree = true;
+        }).grafana;
 
         rustVersion = "1.90.0";
 
@@ -145,7 +158,7 @@
 
         # Project-specific commands (monitoring, etc.)
         projectCommands = import ./nix/commands.nix {
-          inherit pkgs system cmd wasm-bodge;
+          inherit pkgs system cmd wasm-bodge grafanaPinned;
         };
 
         command_menu = command-utils.commands.${system} [
@@ -173,23 +186,6 @@
           # Project-specific commands
           { commands = projectCommands; packages = []; }
         ];
-
-        grafana =
-          let
-            pluginsDir = pkgs.linkFarm "grafana-plugins" [
-              {
-                name = "grafana-pyroscope-app";
-                path = pkgs.grafanaPlugins.grafana-pyroscope-app;
-              }
-            ];
-          in pkgs.symlinkJoin {
-            name = "grafana-with-plugins";
-            paths = [ pkgs.grafana ];
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            postBuild = ''
-              wrapProgram $out/bin/grafana --set GF_PATHS_PLUGINS ${pluginsDir}
-            '';
-          };
 
       in rec {
         packages = {
@@ -256,7 +252,7 @@
               pkgs.chromedriver
               pkgs.esbuild
               pkgs.gnuplot
-              grafana
+              grafanaPinned
               pkgs.grafana-loki
               pkgs.http-server
               pnpm

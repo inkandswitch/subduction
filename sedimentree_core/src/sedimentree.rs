@@ -929,19 +929,35 @@ impl Sedimentree {
     /// the loose commit graph.
     #[must_use]
     pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<CommitId> {
-        let minimized = self.minimize(depth_metric);
-        let dag = commit_dag::CommitDag::from_commits(minimized.commits.values());
+        self.minimize(depth_metric).heads_assuming_minimal()
+    }
+
+    /// Compute heads assuming `self` is already in minimal form.
+    ///
+    /// This is the body of [`heads`](Self::heads) without the upfront
+    /// `minimize`. Call it directly when the caller already holds the minimal
+    /// tree (e.g. via
+    /// [`MinimizedSedimentree`](crate::sedimentree::minimized::MinimizedSedimentree))
+    /// to avoid re-minimizing — an `O(|M|² × avg_boundary)` pass plus a full
+    /// tree allocation — on every invocation.
+    ///
+    /// If `self` is *not* minimal the result is still well-defined but may
+    /// include heads that minimization would have collapsed; prefer
+    /// [`heads`](Self::heads) when minimality isn't guaranteed.
+    #[must_use]
+    pub fn heads_assuming_minimal(&self) -> Vec<CommitId> {
+        let dag = commit_dag::CommitDag::from_commits(self.commits.values());
 
         // Precompute boundary union once: O(F) instead of an O(F²)
         // `any()` scan inside the fragment loop.
-        let all_fragment_boundaries: Set<CommitId> = minimized
+        let all_fragment_boundaries: Set<CommitId> = self
             .fragments
             .values()
             .flat_map(|f| f.boundary().iter().copied())
             .collect();
 
         let mut heads = Vec::<CommitId>::new();
-        for fragment in minimized.fragments.values() {
+        for fragment in self.fragments.values() {
             if !all_fragment_boundaries.contains(&fragment.head())
                 && fragment
                     .boundary()
@@ -1970,6 +1986,30 @@ mod tests {
                         assert_eq!(
                             before_set, after_set,
                             "heads must be identical before and after minimize"
+                        );
+                    });
+            }
+
+            /// The assume-minimal fast path used on hot paths must agree with
+            /// the safe `heads` for every tree: minimizing once and calling
+            /// `heads_assuming_minimal` is equivalent to the self-minimizing
+            /// `heads`. Guards the double-minimize elimination from drifting.
+            #[test]
+            fn heads_assuming_minimal_matches_heads() {
+                bolero::check!()
+                    .with_arbitrary::<Sedimentree>()
+                    .for_each(|tree| {
+                        let via_heads: Set<_> =
+                            tree.heads(&CountLeadingZeroBytes).into_iter().collect();
+                        let via_fast: Set<_> = tree
+                            .minimize(&CountLeadingZeroBytes)
+                            .heads_assuming_minimal()
+                            .into_iter()
+                            .collect();
+
+                        assert_eq!(
+                            via_heads, via_fast,
+                            "heads_assuming_minimal on the minimized tree must match heads"
                         );
                     });
             }

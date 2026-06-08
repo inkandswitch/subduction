@@ -161,11 +161,16 @@ in {
         description = "Whether to enable the Prometheus metrics server.";
       };
 
-      metricsRefreshInterval = lib.mkOption {
-        type = lib.types.int;
-        default = 60;
-        description = "Interval in seconds for refreshing storage metrics from disk.";
-      };
+       metricsRefreshInterval = lib.mkOption {
+         type = lib.types.int;
+         default = 60;
+         description = ''
+           Interval in seconds for refreshing the storage gauge metrics.
+           This only refreshes the cheap sedimentree-count gauge from the
+           in-memory id cache (no directory scan); commit/fragment volume is
+           tracked via incremental counters independent of this interval.
+         '';
+       };
 
       maxResidentTrees = lib.mkOption {
         type = lib.types.nullOr lib.types.ints.unsigned;
