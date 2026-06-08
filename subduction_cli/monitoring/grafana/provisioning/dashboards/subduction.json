@@ -339,15 +339,15 @@
     },
     {
       "type": "timeseries",
-      "title": "Sedimentree Cache Hit Ratio",
-      "description": "Fraction of sedimentree resolutions served from the in-memory LRU vs. hydrated from storage. A low ratio means hydration (and the minimization it triggers) is on the hot path — i.e. the resident cache is too small or churning.",
+      "title": "Sedimentree Cache Hit Ratio (read paths)",
+      "description": "Fraction of READ-path sedimentree resolutions (heads lookups, foreground sync, get_commits) served from the in-memory LRU vs. hydrated from storage. A low ratio means hydration (and its minimization) is on the read hot path. NOTE: a pure write-through relay exercises these read paths rarely, so low sample counts here are expected and not a problem — watch it under foreground-sync load.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 52 },
       "id": 43,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(subduction_sedimentree_cache_hits_total[5m])) / clamp_min(sum(rate(subduction_sedimentree_cache_hits_total[5m])) + sum(rate(subduction_sedimentree_cache_misses_total[5m])), 1)", "legendFormat": "hit ratio", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "(sum(rate(subduction_sedimentree_cache_hits_total[5m])) or vector(0)) / clamp_min((sum(rate(subduction_sedimentree_cache_hits_total[5m])) or vector(0)) + (sum(rate(subduction_sedimentree_cache_misses_total[5m])) or vector(0)), 1)", "legendFormat": "hit ratio", "refId": "A" }
       ]
     },
     {
@@ -375,17 +375,17 @@
     {
       "type": "timeseries",
       "title": "Log Rate by Level",
-      "description": "Requires JSON logs (`--log-format json`) shipped to Loki.",
+      "description": "Log volume by level. Uses the `level` stream label (promoted by Loki); case-insensitive so it works whether the deployment emits upper- or lowercase levels.",
       "datasource": { "type": "loki", "uid": "loki" },
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 60 },
       "id": 50,
-      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ERROR" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "WARN" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }, { "matcher": { "id": "byName", "options": "INFO" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }, { "matcher": { "id": "byName", "options": "DEBUG" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }] },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "warn" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }, { "matcher": { "id": "byName", "options": "info" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }, { "matcher": { "id": "byName", "options": "debug" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }] },
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"ERROR\" [1m]))", "legendFormat": "ERROR", "refId": "A" },
-        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"WARN\" [1m]))", "legendFormat": "WARN", "refId": "B" },
-        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"INFO\" [1m]))", "legendFormat": "INFO", "refId": "C" },
-        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"DEBUG\" [1m]))", "legendFormat": "DEBUG", "refId": "D" }
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\", level=~\"(?i)error\"} [1m]))", "legendFormat": "error", "refId": "A" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\", level=~\"(?i)warn\"} [1m]))", "legendFormat": "warn", "refId": "B" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\", level=~\"(?i)info\"} [1m]))", "legendFormat": "info", "refId": "C" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\", level=~\"(?i)debug\"} [1m]))", "legendFormat": "debug", "refId": "D" }
       ]
     },
     {
