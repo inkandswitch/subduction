@@ -37,6 +37,7 @@ use alloc::{
 };
 
 use async_lock::Mutex;
+use dupe::Dupe;
 use keyhive_core::{
     contact_card::ContactCard,
     event::{Event, static_event::StaticEvent},
@@ -145,6 +146,7 @@ where
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<Async>,
     Async: future_form::FutureForm,
+    Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>: Dupe,
 {
     /// Create a new protocol handler.
     pub fn new(
@@ -277,8 +279,8 @@ where
         &self,
         skip_serialization: &BTreeSet<EventHash>,
     ) -> Result<crate::all_agent_events::AllAgentEvents, ProtocolError<Conn::SendError>> {
+        let keyhive = { self.keyhive.lock().await.dupe() };
         let (all_membership, all_prekey, all_cgka) = {
-            let keyhive = self.keyhive.lock().await;
             let all_membership = keyhive.membership_ops_for_all_agents().await;
             let all_prekey = keyhive.reachable_prekey_ops_for_all_agents().await;
             let all_cgka = keyhive.cgka_ops_for_all_agents().await;
@@ -901,18 +903,17 @@ where
         Ok(())
     }
 
-    /// Sign a message and send it to a peer.
-    async fn sign_and_send(
+    /// CBOR-serialize a message, sign it, and wrap it as a [`SignedMessage`].
+    pub(crate) async fn build_signed_message(
         &self,
-        target_peer_id: &KeyhivePeerId,
         message: Message,
         include_contact_card: bool,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SignedMessage, ProtocolError<Conn::SendError>> {
         let msg_bytes =
             cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
 
         let signed: Signed<Vec<u8>> = {
-            let keyhive = self.keyhive.lock().await;
+            let keyhive = { self.keyhive.lock().await.dupe() };
             keyhive
                 .try_sign(msg_bytes)
                 .await
@@ -924,11 +925,23 @@ where
         let signed_bytes =
             bincode::serialize(&signed).map_err(|e| SigningError::Serialization(e.to_string()))?;
 
-        let signed_message = if include_contact_card {
+        Ok(if include_contact_card {
             SignedMessage::with_contact_card(signed_bytes, self.contact_card.clone())
         } else {
             SignedMessage::new(signed_bytes)
-        };
+        })
+    }
+
+    /// Sign a message and send it to a peer.
+    async fn sign_and_send(
+        &self,
+        target_peer_id: &KeyhivePeerId,
+        message: Message,
+        include_contact_card: bool,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
+        let signed_message = self
+            .build_signed_message(message, include_contact_card)
+            .await?;
 
         let conn = {
             let peers = self.peers.lock().await;
@@ -957,7 +970,7 @@ where
             .map_err(ProtocolError::InvalidIdentifier)?;
 
         let (our_events, their_events, public_events) = {
-            let keyhive = self.keyhive.lock().await;
+            let keyhive = { self.keyhive.lock().await.dupe() };
 
             let our_agent = keyhive.get_agent(our_id).await;
             let their_agent = keyhive.get_agent(their_id).await;

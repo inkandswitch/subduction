@@ -2904,9 +2904,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fed8e8a6e6b297464358edd9facdf86a0573b132af338932a18cd48439739d3b"
+checksum = "034de6a8565cc13585f08da0cd3fc80de3bfb2c9f81ec70b5c595dc08c9f8769"
 dependencies = [
  "beekem",
  "bincode",
@@ -5152,6 +5152,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "console-subscriber",
+ "dupe",
  "ed25519-dalek 2.2.0",
  "eyre",
  "future_form",
@@ -5328,6 +5329,7 @@ dependencies = [
  "blake3",
  "bolero",
  "ciborium",
+ "dupe",
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures",

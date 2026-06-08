@@ -19,6 +19,7 @@ bincode = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ciborium = { workspace = true }
+dupe = { version = "0.9", optional = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 future_form = { workspace = true }
@@ -41,7 +42,7 @@ default = []
 bolero = ["dep:bolero"]
 handler = ["dep:async-channel", "dep:subduction_crypto", "std"]
 runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
-serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "std"]
+serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "dep:dupe", "std"]
 std = ["thiserror/std"]
 test-utils = ["dep:async-channel", "serde"]
 
