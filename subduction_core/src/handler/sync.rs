@@ -531,6 +531,8 @@ impl<
 
             // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
+            #[cfg(feature = "metrics")]
+            let mut pushed: u64 = 0;
             for conn in conns {
                 let peer_id = conn.peer_id();
                 let msg = SyncMessage::LooseCommit {
@@ -545,8 +547,15 @@ impl<
                 if let Err(e) = conn.send(&msg).await {
                     tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
                     self.remove_connection(&conn).await;
+                } else {
+                    #[cfg(feature = "metrics")]
+                    {
+                        pushed += 1;
+                    }
                 }
             }
+            #[cfg(feature = "metrics")]
+            crate::metrics::subscription_pushes(pushed);
         }
 
         Ok(was_new)
@@ -625,6 +634,8 @@ impl<
 
             // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
+            #[cfg(feature = "metrics")]
+            let mut pushed: u64 = 0;
             for conn in conns {
                 let peer_id = conn.peer_id();
                 let msg = SyncMessage::Fragment {
@@ -639,8 +650,15 @@ impl<
                 if let Err(e) = conn.send(&msg).await {
                     tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
                     self.remove_connection(&conn).await;
+                } else {
+                    #[cfg(feature = "metrics")]
+                    {
+                        pushed += 1;
+                    }
                 }
             }
+            #[cfg(feature = "metrics")]
+            crate::metrics::subscription_pushes(pushed);
         }
 
         Ok(was_new)
@@ -905,6 +923,8 @@ impl<
 
     async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
         peers::add_subscription(&self.subscriptions, peer_id, sedimentree_id).await;
+        #[cfg(feature = "metrics")]
+        crate::metrics::set_subscribed_sedimentrees(self.subscriptions.lock().await.len());
     }
 
     async fn remove_subscriptions(&self, peer_id: PeerId, ids: &[SedimentreeId]) {
@@ -917,6 +937,8 @@ impl<
                 }
             }
         }
+        #[cfg(feature = "metrics")]
+        crate::metrics::set_subscribed_sedimentrees(subscriptions.len());
     }
 
     async fn get_authorized_subscriber_conns(

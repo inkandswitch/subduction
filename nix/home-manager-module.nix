@@ -144,7 +144,11 @@ in {
       metricsRefreshInterval = lib.mkOption {
         type = lib.types.int;
         default = 60;
-        description = "Interval in seconds for refreshing storage metrics from disk.";
+        description = ''
+          Interval in seconds for refreshing the storage gauge metrics. Only
+          refreshes the cheap sedimentree-count gauge (no directory scan);
+          commit/fragment volume is tracked via incremental counters.
+        '';
       };
 
       wsPeers = lib.mkOption {

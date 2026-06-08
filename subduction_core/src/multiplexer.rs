@@ -147,12 +147,20 @@ impl Multiplexer {
     ) -> oneshot::Receiver<BatchSyncResponse> {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(req_id, tx);
+        #[cfg(feature = "metrics")]
+        crate::metrics::mux_request_registered();
         rx
     }
 
     /// Cancel a pending call (e.g., on timeout).
     pub async fn cancel_pending(&self, req_id: &RequestId) {
-        self.pending.lock().await.remove(req_id);
+        let removed = self.pending.lock().await.remove(req_id).is_some();
+        #[cfg(feature = "metrics")]
+        if removed {
+            crate::metrics::mux_requests_cancelled(1);
+        }
+        #[cfg(not(feature = "metrics"))]
+        let _ = removed;
     }
 
     /// Synchronously cancel a pending call without `await`ing the lock.
@@ -173,7 +181,13 @@ impl Multiplexer {
     /// deferred removal.
     pub fn try_cancel_pending(&self, req_id: &RequestId) -> bool {
         if let Some(mut pending) = self.pending.try_lock() {
-            pending.remove(req_id);
+            let removed = pending.remove(req_id).is_some();
+            #[cfg(feature = "metrics")]
+            if removed {
+                crate::metrics::mux_requests_cancelled(1);
+            }
+            #[cfg(not(feature = "metrics"))]
+            let _ = removed;
             true
         } else {
             false
@@ -200,6 +214,8 @@ impl Multiplexer {
         let mut pending = self.pending.lock().await;
         let n = pending.len();
         pending.clear();
+        #[cfg(feature = "metrics")]
+        crate::metrics::mux_requests_cancelled(n);
         tracing::debug!(count = n, peer = %self.peer_id, "cancelled pending call(s) on multiplexer");
     }
 
@@ -213,6 +229,8 @@ impl Multiplexer {
         let mut pending = self.pending.lock().await;
         if let Some(tx) = pending.remove(&req_id) {
             drop(tx.send(resp.clone()));
+            #[cfg(feature = "metrics")]
+            crate::metrics::mux_request_resolved();
             tracing::debug!(req = ?req_id, "routed BatchSyncResponse to pending caller");
             true
         } else {

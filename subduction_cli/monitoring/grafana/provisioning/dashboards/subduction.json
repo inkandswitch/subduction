@@ -1,764 +1,368 @@
 {
   "annotations": {
-    "list": []
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
   },
+  "description": "Subduction sync server observability: dispatch concurrency, sync health, connections, storage, and logs.",
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
-  "id": null,
+  "graphTooltip": 1,
   "links": [],
-  "panels": [
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "red", "value": 100 }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "id": 1,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_connections_active",
-          "refId": "A"
-        }
-      ],
-      "title": "Active Connections",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "blue", "value": null }]
-          },
-          "unit": "cps"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "id": 2,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_connections_total[5m])",
-          "refId": "A"
-        }
-      ],
-      "title": "Connection Rate",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "orange", "value": null }]
-          },
-          "unit": "cps"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_connections_closed[5m])",
-          "refId": "A"
-        }
-      ],
-      "title": "Disconnect Rate",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "purple", "value": null }]
-          },
-          "unit": "cps"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_batch_sync_requests_total[5m])",
-          "refId": "A"
-        }
-      ],
-      "title": "Batch Sync Rate",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "id": 5,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_connections_active",
-          "legendFormat": "Active",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_connections_total[5m]) * 60",
-          "legendFormat": "Connects / min",
-          "refId": "B"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_connections_closed[5m]) * 60",
-          "legendFormat": "Disconnects / min",
-          "refId": "C"
-        }
-      ],
-      "title": "Connections Over Time",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "id": 6,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_messages_total[1m])",
-          "legendFormat": "{{type}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Messages per Second (by type)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-      "id": 7,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "p95", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.50, rate(subduction_dispatch_duration_seconds_bucket[5m]))",
-          "legendFormat": "p50",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, rate(subduction_dispatch_duration_seconds_bucket[5m]))",
-          "legendFormat": "p95",
-          "refId": "B"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.99, rate(subduction_dispatch_duration_seconds_bucket[5m]))",
-          "legendFormat": "p99",
-          "refId": "C"
-        }
-      ],
-      "title": "Dispatch Latency",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-      "id": 8,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_batch_sync_requests_total[1m])",
-          "legendFormat": "Requests",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_batch_sync_responses_total[1m])",
-          "legendFormat": "Responses",
-          "refId": "B"
-        }
-      ],
-      "title": "Batch Sync Rate",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
-      "id": 9,
-      "options": {
-        "displayMode": "lcd",
-        "minVizHeight": 10,
-        "minVizWidth": 0,
-        "namePlacement": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "showUnfilled": true,
-        "valueMode": "color"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_messages_total",
-          "legendFormat": "{{type}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Total Messages by Type",
-      "type": "bargauge"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
-      "id": 10,
-      "panels": [],
-      "title": "Storage",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 29 },
-      "id": 11,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_storage_sedimentrees",
-          "refId": "A"
-        }
-      ],
-      "title": "Sedimentrees",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "blue", "value": null }]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 29 },
-      "id": 12,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_storage_loose_commits_total",
-          "refId": "A"
-        }
-      ],
-      "title": "Loose Commits",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "orange", "value": null }]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 29 },
-      "id": 13,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_storage_fragments_total",
-          "refId": "A"
-        }
-      ],
-      "title": "Fragments",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 33 },
-      "id": 14,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "p95", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.50, rate(subduction_storage_operation_duration_seconds_bucket[5m]))",
-          "legendFormat": "p50 {{operation}}",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, rate(subduction_storage_operation_duration_seconds_bucket[5m]))",
-          "legendFormat": "p95 {{operation}}",
-          "refId": "B"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.99, rate(subduction_storage_operation_duration_seconds_bucket[5m]))",
-          "legendFormat": "p99 {{operation}}",
-          "refId": "C"
-        }
-      ],
-      "title": "Storage Operation Latency",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 },
-      "id": 15,
-      "panels": [],
-      "title": "Logs",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 42 },
-      "id": 16,
-      "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": false,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "{service=\"subduction\"}",
-          "refId": "A"
-        }
-      ],
-      "title": "Server Logs",
-      "type": "logs"
-    }
-  ],
-  "refresh": "5s",
+  "liveNow": false,
+  "refresh": "10s",
   "schemaVersion": 38,
+  "style": "dark",
   "tags": ["subduction"],
-  "templating": {
-    "list": []
-  },
-  "time": {
-    "from": "now-15m",
-    "to": "now"
-  },
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "Subduction",
   "uid": "subduction-main",
   "version": 2,
-  "weekStart": ""
+  "panels": [
+    {
+      "type": "row",
+      "title": "Health",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Active Connections",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "none" }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_connections_active", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Dispatch In-Flight",
+      "description": "Messages currently being dispatched vs the semaphore ceiling. Approaching max means inbound processing is saturating.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 4, "y": 1 },
+      "id": 2,
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 512 }, { "color": "red", "value": 900 }] }, "unit": "none" }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight", "legendFormat": "in-flight", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight_max", "legendFormat": "max", "refId": "B" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Mux Pending",
+      "description": "Outstanding correlated requests awaiting a response across all multiplexers.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 9, "y": 1 },
+      "id": 3,
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 100 }] }, "unit": "none" }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_mux_pending", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Dispatch Errors (5m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 14, "y": 1 },
+      "id": 4,
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.001 }] }, "unit": "ops" }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(subduction_dispatch_completed_total{outcome=~\"err|aborted\"}[5m]))", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Sedimentrees",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 19, "y": 1 },
+      "id": 5,
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }, "unit": "none" }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_storage_sedimentrees", "refId": "A" }]
+    },
+    {
+      "type": "row",
+      "title": "Dispatch & Messages",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "id": 101,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Dispatch In-Flight vs Max",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 7 },
+      "id": 10,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1, "showPoints": "never" }, "unit": "none" }, "overrides": [{ "matcher": { "id": "byName", "options": "max" }, "properties": [{ "id": "custom.lineStyle", "value": { "dash": [8, 4], "fill": "dash" } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }] },
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight", "legendFormat": "in-flight", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight_max", "legendFormat": "max", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dispatch Outcomes /s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 7 },
+      "id": 11,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ok" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }, { "matcher": { "id": "byName", "options": "err" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "aborted" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (outcome) (rate(subduction_dispatch_completed_total[1m]))", "legendFormat": "{{outcome}}", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dispatch Latency (quantiles)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 7 },
+      "id": 12,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.99, sum by (le) (rate(subduction_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages /s by Type",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
+      "id": 13,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (type) (rate(subduction_messages_total[1m]))", "legendFormat": "{{type}}", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Batch Sync Req/Resp /s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
+      "id": 14,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_batch_sync_requests_total[1m])", "legendFormat": "requests", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_batch_sync_responses_total[1m])", "legendFormat": "responses", "refId": "B" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Sync Health",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 102,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Sync Throughput (commits/fragments per second)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 22 },
+      "id": 20,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_sync_commits_received_total[1m])", "legendFormat": "commits in", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_sync_commits_sent_total[1m])", "legendFormat": "commits out", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_sync_fragments_received_total[1m])", "legendFormat": "fragments in", "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_sync_fragments_sent_total[1m])", "legendFormat": "fragments out", "refId": "D" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Sync Round Duration (quantiles)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 12, "y": 22 },
+      "id": 21,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(subduction_sync_duration_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(subduction_sync_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.99, sum by (le) (rate(subduction_sync_duration_seconds_bucket[5m])))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Sync Failures /s by Reason",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 22 },
+      "id": 22,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (reason) (rate(subduction_sync_call_failures_total[5m]))", "legendFormat": "{{reason}}", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Background Sync Duration (quantiles)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 29 },
+      "id": 23,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(subduction_background_sync_duration_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(subduction_background_sync_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Background Sync Errors /s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 29 },
+      "id": 24,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never" }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_background_sync_call_errors_total[5m])", "legendFormat": "call errors", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_background_sync_io_errors_total[5m])", "legendFormat": "io errors", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Subscriptions & Pushes",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 29 },
+      "id": 25,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "none" }, "overrides": [{ "matcher": { "id": "byName", "options": "pushes/s" }, "properties": [{ "id": "unit", "value": "ops" }] }] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_subscribed_sedimentrees", "legendFormat": "subscribed trees", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_subscription_pushes_total[1m])", "legendFormat": "pushes/s", "refId": "B" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Connections & Multiplexer",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 103,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Connection Open/Close /min",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 37 },
+      "id": 30,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "none" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_connections_total[5m]) * 60", "legendFormat": "opened/min", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_connections_closed[5m]) * 60", "legendFormat": "closed/min", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Active Connections",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 37 },
+      "id": 31,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never" }, "unit": "none" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_connections_active", "legendFormat": "active", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Multiplexer Pending & Cancels",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 37 },
+      "id": 32,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "none" }, "overrides": [{ "matcher": { "id": "byName", "options": "cancels/s" }, "properties": [{ "id": "unit", "value": "ops" }] }, { "matcher": { "id": "byName", "options": "requests/s" }, "properties": [{ "id": "unit", "value": "ops" }] }] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_mux_pending", "legendFormat": "pending", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_mux_requests_total[1m])", "legendFormat": "requests/s", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_mux_cancelled_total[1m])", "legendFormat": "cancels/s", "refId": "C" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Storage",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
+      "id": 104,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Storage Writes & Deletes /s",
+      "description": "Cumulative write operations (CAS; includes idempotent no-ops) and deletes. Tracked incrementally — no directory scan.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 45 },
+      "id": 40,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_storage_commits_written_total[1m])", "legendFormat": "commits written", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_storage_fragments_written_total[1m])", "legendFormat": "fragments written", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_storage_commits_deleted_total[1m])", "legendFormat": "commits deleted", "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_storage_fragments_deleted_total[1m])", "legendFormat": "fragments deleted", "refId": "D" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Storage Op Latency p95 by Operation",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 45 },
+      "id": 41,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" }, "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(subduction_storage_operation_duration_seconds_bucket[5m])))", "legendFormat": "{{operation}}", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Storage Errors /s by Operation",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 45 },
+      "id": 42,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (operation) (rate(subduction_storage_operation_errors_total[5m]))", "legendFormat": "{{operation}}", "refId": "A" }]
+    },
+    {
+      "type": "row",
+      "title": "Logs",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 },
+      "id": 105,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Log Rate by Level",
+      "description": "Requires JSON logs (`--log-format json`) shipped to Loki.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 53 },
+      "id": 50,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0, "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ERROR" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "WARN" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }] },
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum by (level) (count_over_time({service=\"subduction\"} | json [1m]))", "legendFormat": "{{level}}", "refId": "A" }]
+    },
+    {
+      "type": "logs",
+      "title": "Server Logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 59 },
+      "id": 51,
+      "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "{service=\"subduction\"} | json", "refId": "A" }]
+    }
+  ]
 }

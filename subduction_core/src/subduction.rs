@@ -2119,6 +2119,9 @@ where
 
         tracing::info!(tree = ?id, peer = %to_ask, "requesting batch sync for sedimentree");
 
+        #[cfg(feature = "metrics")]
+        let sync_start = std::time::Instant::now();
+
         let mut stats = SyncStats::new();
         let mut had_success = false;
 
@@ -2334,6 +2337,20 @@ where
                     had_success = true;
                     break;
                 }
+            }
+        }
+
+        #[cfg(feature = "metrics")]
+        {
+            crate::metrics::sync_duration(sync_start.elapsed().as_secs_f64());
+            crate::metrics::sync_data_exchanged(
+                stats.commits_received,
+                stats.fragments_received,
+                stats.commits_sent,
+                stats.fragments_sent,
+            );
+            for (_, err) in &conn_errs {
+                crate::metrics::sync_call_failure(err.error_name());
             }
         }
 
@@ -3180,21 +3197,43 @@ where
 
         let dispatch_permits = Arc::new(Semaphore::new(MAX_INFLIGHT_DISPATCH));
 
+        #[cfg(feature = "metrics")]
+        crate::metrics::set_dispatch_inflight_max(MAX_INFLIGHT_DISPATCH);
+
         loop {
             futures::select_biased! {
                 done = done_rx.recv().fuse() => {
-                    if let Ok(DispatchOutcome::Completed { conn, result: Err(e) }) = done {
-                        let peer_id = conn.peer_id();
-                        tracing::error!(
-                            peer = %peer_id,
-                            error = %e,
-                            "error dispatching message"
-                        );
+                    if let Ok(outcome) = done {
+                        // Every received outcome means one dispatch task ended.
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::dispatch_inflight_dec();
 
-                        if self.remove_connection(&conn).await == Some(true) {
-                            handler.on_peer_disconnect(peer_id).await;
+                        match outcome {
+                            DispatchOutcome::Completed { conn, result: Err(e) } => {
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::dispatch_completed("err");
+
+                                let peer_id = conn.peer_id();
+                                tracing::error!(
+                                    peer = %peer_id,
+                                    error = %e,
+                                    "error dispatching message"
+                                );
+
+                                if self.remove_connection(&conn).await == Some(true) {
+                                    handler.on_peer_disconnect(peer_id).await;
+                                }
+                                tracing::debug!(peer = %peer_id, "removed failed connection");
+                            }
+                            DispatchOutcome::Completed { result: Ok(()), .. } => {
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::dispatch_completed("ok");
+                            }
+                            DispatchOutcome::Aborted => {
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::dispatch_completed("aborted");
+                            }
                         }
-                        tracing::debug!(peer = %peer_id, "removed failed connection");
                     }
                 }
 
@@ -3278,6 +3317,12 @@ where
                         let propagate = msg
                             .try_as_subscribe_request()
                             .map(|sed_id| (sed_id, peer_id));
+
+                        // Increment before spawning; the matching decrement
+                        // happens in the `done_rx` arm when the task reports
+                        // its outcome (guaranteed exactly once per task).
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::dispatch_inflight_inc();
 
                         self.spawner.spawn(Async::dispatch_task(
                             Arc::clone(&self),

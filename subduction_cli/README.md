@@ -384,11 +384,31 @@ This starts:
 - **Prometheus** at `http://localhost:9092` (metrics)
 - **Grafana** at `http://localhost:3939` with pre-configured datasources and dashboards
 
-To ship logs from the Subduction server to Loki, run it with `LOKI_URL`:
+The **Subduction** dashboard is auto-provisioned — open it directly at
+<http://localhost:3939/d/subduction-main/subduction> (anonymous admin; no login).
+`monitoring:start` waits for each service to bind its port and fails loudly if a
+binary is missing (e.g. its Nix store path was garbage-collected — re-enter the
+dev shell to re-realize it). Grafana is pinned to 12.x and kept as a dev-shell
+gc-root so it can't be collected out from under the command.
+
+Run a metrics-enabled server so Prometheus has something to scrape:
 
 ```bash
-LOKI_URL=http://localhost:3100 cargo run -p subduction_cli -- server
+cargo run -p subduction_cli -- server --ephemeral-key --auth open \
+  --metrics --metrics-port 9090 --log-format json
 ```
+
+To populate the dashboard's **log panels**, ship logs to Loki with `LOKI_URL`
+and emit JSON (the panels use `{service="subduction"} | json`):
+
+```bash
+LOKI_URL=http://localhost:3100 \
+  cargo run -p subduction_cli -- server --log-format json --ephemeral-key --auth open
+```
+
+> On the production server (bedrock), Grafana Alloy ships the systemd journal to
+> Loki with `service="subduction"` automatically; just set `logFormat = "json"`
+> in the NixOS module (the default) so the log panels can parse fields.
 
 Then query logs in Grafana via the Explore tab with the Loki datasource:
 

@@ -4,10 +4,13 @@
   system,
   cmd,
   wasm-bodge,
+  grafanaPinned,
 }: let
   cargo = "${pkgs.cargo}/bin/cargo";
-  grafana-server = "${pkgs.grafana}/bin/grafana-server";
-  grafana-homepath = "${pkgs.grafana}/share/grafana";
+  # Pinned Grafana 12.x (see flake.nix `nixpkgs-grafana`). Referenced here and
+  # added to the dev-shell packages so its store path is a gc-root.
+  grafana-server = "${grafanaPinned}/bin/grafana-server";
+  grafana-homepath = "${grafanaPinned}/share/grafana";
   pnpm = "${pkgs.pnpm}/bin/pnpm";
   playwright = "${pnpm} --dir=./subduction_wasm exec playwright";
   loki = "${pkgs.grafana-loki}/bin/loki";
@@ -501,7 +504,30 @@
 
   monitoring = {
     "monitoring:start" = cmd "Start Loki, Prometheus, and Grafana for metrics + logs" ''
-      set -e
+      set -euo pipefail
+
+      LOKI_BIN="${loki}"
+      PROM_BIN="${prometheus}"
+      GRAFANA_BIN="${grafana-server}"
+      GRAFANA_HOME="${grafana-homepath}"
+
+      # Pre-flight: fail loudly if a pinned binary is missing (e.g. its Nix
+      # store path was garbage-collected). Without this, a backgrounded
+      # exec-failure would silently leave the port empty with a misleading
+      # "started" message. The usual fix for a stale path is `nix develop`
+      # again (or `nix flake update`) to re-realize the derivation.
+      for pair in "Loki:$LOKI_BIN" "Prometheus:$PROM_BIN" "Grafana:$GRAFANA_BIN"; do
+        name="''${pair%%:*}"
+        bin="''${pair#*:}"
+        if [ ! -x "$bin" ]; then
+          echo "ERROR: $name binary not found or not executable:" >&2
+          echo "  $bin" >&2
+          echo "Its Nix store path may have been garbage-collected. Re-enter the" >&2
+          echo "dev shell (exit, then 'nix develop') to re-realize it, or run" >&2
+          echo "'nix flake update' if the pin moved." >&2
+          exit 1
+        fi
+      done
 
       echo "Starting monitoring stack..."
       echo "  Loki:       http://localhost:3100"
@@ -509,45 +535,67 @@
       echo "  Grafana:    http://localhost:3939"
       echo ""
 
+      # Fresh Grafana state each run: a dirty SQLite DB / journal from a prior
+      # unclean shutdown can wedge startup. Cheap to recreate (provisioned).
+      rm -rf /tmp/grafana-data
       mkdir -p /tmp/grafana-data /tmp/grafana-dashboards /tmp/loki
       cp "$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
 
-      ${loki} \
-        -config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/loki.yaml" \
-        &
-      LOKI_PID=$!
-      echo "Loki started (PID: $LOKI_PID)"
-
-      ${prometheus} \
-        --config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/prometheus.yml" \
-        --web.listen-address=":9092" \
-        --storage.tsdb.path="/tmp/prometheus-data" \
-        &
-      PROM_PID=$!
-      echo "Prometheus started (PID: $PROM_PID)"
-
-      ${grafana-server} \
-        --homepath="${grafana-homepath}" \
-        --config="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/grafana.ini" \
-        cfg:paths.data=/tmp/grafana-data \
-        cfg:paths.provisioning="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning" \
-        &
-      GRAF_PID=$!
-      echo "Grafana started (PID: $GRAF_PID)"
-
-      echo ""
-      echo "Monitoring stack running. Press Ctrl+C to stop."
-      echo "  Tip: run the server with LOKI_URL=http://localhost:3100 to ship logs"
-
+      LOKI_PID=""
+      PROM_PID=""
+      GRAF_PID=""
       cleanup() {
         echo ""
         echo "Stopping monitoring stack..."
-        kill $LOKI_PID 2>/dev/null || true
-        kill $PROM_PID 2>/dev/null || true
-        kill $GRAF_PID 2>/dev/null || true
+        [ -n "$GRAF_PID" ] && kill "$GRAF_PID" 2>/dev/null || true
+        [ -n "$PROM_PID" ] && kill "$PROM_PID" 2>/dev/null || true
+        [ -n "$LOKI_PID" ] && kill "$LOKI_PID" 2>/dev/null || true
         echo "Done."
       }
       trap cleanup EXIT INT TERM
+
+      # Wait until a TCP port accepts a connection, or fail after ~20s.
+      wait_for_port() {
+        name="$1"; port="$2"; pid="$3"
+        for _ in $(seq 1 100); do
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "ERROR: $name exited during startup (port $port never came up)." >&2
+            return 1
+          fi
+          if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+            exec 3>&- 3<&- 2>/dev/null || true
+            echo "  $name ready on :$port"
+            return 0
+          fi
+          sleep 0.2
+        done
+        echo "ERROR: $name did not bind :$port within 20s." >&2
+        return 1
+      }
+
+      "$LOKI_BIN" -config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/loki.yaml" &
+      LOKI_PID=$!
+      wait_for_port "Loki" 3100 "$LOKI_PID"
+
+      "$PROM_BIN" \
+        --config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/prometheus.yml" \
+        --web.listen-address=":9092" \
+        --storage.tsdb.path="/tmp/prometheus-data" &
+      PROM_PID=$!
+      wait_for_port "Prometheus" 9092 "$PROM_PID"
+
+      "$GRAFANA_BIN" \
+        --homepath="$GRAFANA_HOME" \
+        --config="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/grafana.ini" \
+        cfg:paths.data=/tmp/grafana-data \
+        cfg:paths.provisioning="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning" &
+      GRAF_PID=$!
+      wait_for_port "Grafana" 3939 "$GRAF_PID"
+
+      echo ""
+      echo "Monitoring stack running. Open http://localhost:3939 (Dashboards -> Subduction)."
+      echo "Press Ctrl+C to stop."
+      echo "  Tip: run the server with LOKI_URL=http://localhost:3100 to ship logs"
 
       wait
     '';
