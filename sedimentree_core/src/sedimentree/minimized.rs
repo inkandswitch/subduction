@@ -24,10 +24,14 @@
 //! [`minimized`](Self::minimized) (or [`ensure_minimized`](Self::ensure_minimized))
 //! first.
 
+use alloc::vec::Vec;
 use core::ops::Deref;
 
 use crate::{
-    depth::DepthMetric, fragment::Fragment, loose_commit::LooseCommit, sedimentree::Sedimentree,
+    depth::DepthMetric,
+    fragment::Fragment,
+    loose_commit::{LooseCommit, id::CommitId},
+    sedimentree::Sedimentree,
 };
 
 /// A [`Sedimentree`] plus an external "needs minimizing" flag.
@@ -109,6 +113,17 @@ impl MinimizedSedimentree {
     pub fn minimized<M: DepthMetric>(&mut self, depth_metric: &M) -> &Sedimentree {
         self.ensure_minimized(depth_metric);
         &self.tree
+    }
+
+    /// Compute the tree's heads, minimizing in place first only if dirty.
+    ///
+    /// Cheaper than `tree.minimized(m).clone().heads(m)`: it minimizes at most
+    /// once (gated by the dirty flag), avoids cloning the tree out, and skips
+    /// the redundant re-minimization inside [`Sedimentree::heads`] by calling
+    /// [`Sedimentree::heads_assuming_minimal`] on the already-minimal tree.
+    pub fn heads<M: DepthMetric>(&mut self, depth_metric: &M) -> Vec<CommitId> {
+        self.ensure_minimized(depth_metric);
+        self.tree.heads_assuming_minimal()
     }
 
     /// Consume the wrapper and return the inner tree (without minimizing).
@@ -305,5 +320,27 @@ mod tests {
         let m = MinimizedSedimentree::already_minimal(dominating_tree());
         // `fragments()` reached through Deref<Target = Sedimentree>.
         assert_eq!(m.fragments().count(), 2);
+    }
+
+    /// The wrapper's `heads` (which minimizes once if dirty, then reads heads
+    /// off the minimal tree) must agree with `Sedimentree::heads` regardless of
+    /// the starting dirty/clean state — for a tree that minimization actually
+    /// reshapes.
+    #[test]
+    fn wrapper_heads_match_sedimentree_heads() {
+        let full = dominating_tree();
+        let expected: BTreeSet<_> = full.heads(&CountLeadingZeroBytes).into_iter().collect();
+
+        // From a dirty wrapper.
+        let mut dirty = MinimizedSedimentree::new(full.clone());
+        let from_dirty: BTreeSet<_> = dirty.heads(&CountLeadingZeroBytes).into_iter().collect();
+        assert_eq!(from_dirty, expected);
+        assert!(!dirty.is_dirty(), "heads must leave the wrapper minimized");
+
+        // From a clean wrapper (already minimal).
+        let mut clean =
+            MinimizedSedimentree::already_minimal(full.minimize(&CountLeadingZeroBytes));
+        let from_clean: BTreeSet<_> = clean.heads(&CountLeadingZeroBytes).into_iter().collect();
+        assert_eq!(from_clean, expected);
     }
 }

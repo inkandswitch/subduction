@@ -1267,7 +1267,7 @@ where
             .sedimentrees
             .get_cloned(&id)
             .await
-            .map(|s| s.heads(&self.depth_metric))
+            .map(|mut s| s.heads(&self.depth_metric))
             .unwrap_or_default();
         {
             let conns = {
@@ -1410,7 +1410,7 @@ where
             .sedimentrees
             .get_cloned(&id)
             .await
-            .map(|s| s.heads(&self.depth_metric))
+            .map(|mut s| s.heads(&self.depth_metric))
             .unwrap_or_default();
 
         let conns = {

@@ -351,9 +351,14 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 53 },
       "id": 50,
-      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0, "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ERROR" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "WARN" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }] },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ERROR" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "WARN" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }, { "matcher": { "id": "byName", "options": "INFO" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }, { "matcher": { "id": "byName", "options": "DEBUG" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }] },
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum by (level) (count_over_time({service=\"subduction\"} | json [1m]))", "legendFormat": "{{level}}", "refId": "A" }]
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"ERROR\" [1m]))", "legendFormat": "ERROR", "refId": "A" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"WARN\" [1m]))", "legendFormat": "WARN", "refId": "B" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"INFO\" [1m]))", "legendFormat": "INFO", "refId": "C" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum (count_over_time({service=\"subduction\"} | json | level=\"DEBUG\" [1m]))", "legendFormat": "DEBUG", "refId": "D" }
+      ]
     },
     {
       "type": "logs",

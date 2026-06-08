@@ -18,7 +18,7 @@ use sedimentree_core::{
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
@@ -440,6 +440,53 @@ pub(crate) async fn get_or_hydrate<
         })
         .await;
     Ok(Some(hydrated))
+}
+
+/// Compute a sedimentree's heads, hydrating from storage on a cache miss.
+///
+/// Like [`get_or_hydrate`] but returns only the heads, computing them inside
+/// the shard lock *without cloning the whole tree out* and without the
+/// double-minimization that `get_or_hydrate(...).heads()` incurred (one
+/// minimize in the cache, then a second inside [`Sedimentree::heads`]). On the
+/// resident-hit fast path — taken on every newly-accepted commit/fragment —
+/// this is a single dirty-gated minimize plus the head walk.
+///
+/// Returns an empty `Vec` for a nonexistent tree (heads are advisory).
+pub(crate) async fn heads_or_hydrate<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>(
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    storage: &StoragePowerbox<Store, Auth>,
+    depth_metric: &Metric,
+    id: SedimentreeId,
+) -> Result<Vec<CommitId>, Store::Error> {
+    // Fast path: resident hit. Compute heads in place — minimize only if dirty,
+    // no tree clone, no re-minimize.
+    if let Some(heads) = sedimentrees
+        .with_entry(&id, |tree| tree.heads(depth_metric))
+        .await
+    {
+        return Ok(heads);
+    }
+
+    // Miss: hydrate (which installs into the cache), then read its heads. The
+    // hydrated tree is already minimal, so this second call is a clean,
+    // dirty-gated no-op minimize plus the head walk.
+    match get_or_hydrate::<Async, Store, Auth, Metric, SHARDS>(
+        sedimentrees,
+        storage,
+        depth_metric,
+        id,
+    )
+    .await?
+    {
+        Some(tree) => Ok(tree.heads_assuming_minimal()),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// Reconstruct a sedimentree's full history directly from storage.
