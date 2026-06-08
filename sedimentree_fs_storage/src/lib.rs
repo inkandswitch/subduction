@@ -399,9 +399,7 @@ impl FsStorage {
     }
 
     /// Read the first `.meta` + `.blob` pair from a directory as a `Signed<T>` + `Blob`.
-    async fn read_first_meta_blob_pair(
-        dir: &Path,
-    ) -> Result<Option<MetaBlobPair>, FsStorageError> {
+    async fn read_first_meta_blob_pair(dir: &Path) -> Result<Option<MetaBlobPair>, FsStorageError> {
         let mut entries = match tokio::fs::read_dir(dir).await {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -526,7 +524,7 @@ impl Storage<Sendable> for FsStorage {
                     std::fs::create_dir_all(&fragments_dir)?;
                     Ok(())
                 })
-                    .await??;
+                .await??;
             }
 
             Ok(())
@@ -828,8 +826,8 @@ impl Storage<Sendable> for FsStorage {
             // trait method per fragment — a fresh `read_dir` + 2 reads each,
             // all sequential blocking-pool round-trips.
             let fragments_dir = self.fragments_dir(sedimentree_id);
-            let raw =
-                tokio::task::spawn_blocking(move || read_all_compound_sync(&fragments_dir)).await??;
+            let raw = tokio::task::spawn_blocking(move || read_all_compound_sync(&fragments_dir))
+                .await??;
 
             let mut results = Vec::with_capacity(raw.len());
             for (name, signed_data, blob_data) in raw {

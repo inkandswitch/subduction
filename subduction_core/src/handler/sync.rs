@@ -978,13 +978,8 @@ impl<
     /// a single dirty-gated minimize. A nonexistent tree (or a storage error)
     /// yields empty heads (best-effort; the heads field is advisory).
     async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
-        match ingest::heads_or_hydrate(
-            &self.sedimentrees,
-            &self.storage,
-            &self.depth_metric,
-            id,
-        )
-        .await
+        match ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
+            .await
         {
             Ok(heads) => heads,
             Err(e) => {
