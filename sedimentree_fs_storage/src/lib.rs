@@ -518,12 +518,16 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::save_sedimentree_id");
 
-            self.ids_cache.lock().await.insert(sedimentree_id);
-
-            let tree_dir = self.tree_path(sedimentree_id);
-            tokio::fs::create_dir_all(&tree_dir).await?;
-            tokio::fs::create_dir_all(self.commits_dir(sedimentree_id)).await?;
-            tokio::fs::create_dir_all(self.fragments_dir(sedimentree_id)).await?;
+            if self.ids_cache.lock().await.insert(sedimentree_id) {
+                let commits_dir = self.commits_dir(sedimentree_id);
+                let fragments_dir = self.fragments_dir(sedimentree_id);
+                tokio::task::spawn_blocking(move || -> Result<(), FsStorageError> {
+                    std::fs::create_dir_all(&commits_dir)?;
+                    std::fs::create_dir_all(&fragments_dir)?;
+                    Ok(())
+                })
+                    .await??;
+            }
 
             Ok(())
         })
