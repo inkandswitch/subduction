@@ -2733,6 +2733,15 @@ where
         }
     }
 
+    /// Number of sedimentrees currently resident in the in-memory LRU cache.
+    ///
+    /// This is the cache occupancy (bounded by the resident cap), *not* the
+    /// total number of trees in durable storage — compare the two to gauge
+    /// eviction pressure.
+    pub async fn resident_sedimentree_count(&self) -> usize {
+        self.sedimentrees.len().await
+    }
+
     /// Get all commits for a given sedimentree ID.
     ///
     /// Hydrates from storage on an in-RAM cache miss, so an evicted tree

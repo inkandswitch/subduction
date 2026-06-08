@@ -387,10 +387,16 @@ pub(crate) async fn get_or_hydrate<
         .await
     {
         tracing::trace!(tree = ?id, "sedimentree cache hit");
+        #[cfg(feature = "metrics")]
+        crate::metrics::sedimentree_cache_hit();
         return Ok(Some(tree));
     }
 
-    // Miss: load full history from storage with NO shard lock held.
+    // Miss: load full history from storage with NO shard lock held. This is the
+    // single point where a miss is recorded — `heads_or_hydrate` falls through
+    // to here on its own miss, so it must not also count one.
+    #[cfg(feature = "metrics")]
+    crate::metrics::sedimentree_cache_miss();
     tracing::debug!(tree = ?id, "sedimentree cache miss; hydrating from storage");
     let local_access = storage.hydration_access();
     let loose_commits: Vec<LooseCommit> = local_access
@@ -470,12 +476,15 @@ pub(crate) async fn heads_or_hydrate<
         .with_entry(&id, |tree| tree.heads(depth_metric))
         .await
     {
+        #[cfg(feature = "metrics")]
+        crate::metrics::sedimentree_cache_hit();
         return Ok(heads);
     }
 
     // Miss: hydrate (which installs into the cache), then read its heads. The
     // hydrated tree is already minimal, so this second call is a clean,
-    // dirty-gated no-op minimize plus the head walk.
+    // dirty-gated no-op minimize plus the head walk. `get_or_hydrate` records
+    // the miss (don't double-count it here).
     match get_or_hydrate::<Async, Store, Auth, Metric, SHARDS>(
         sedimentrees,
         storage,

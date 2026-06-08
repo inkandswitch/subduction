@@ -66,6 +66,17 @@ pub mod names {
     /// Refreshed cheaply from the storage backend's in-memory id cache (no
     /// directory scan).
     pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
+
+    /// Cumulative resident-cache hits when resolving a sedimentree (the tree
+    /// was already in the in-memory LRU; no storage hydration needed).
+    pub const SEDIMENTREE_CACHE_HITS_TOTAL: &str = "subduction_sedimentree_cache_hits_total";
+    /// Cumulative resident-cache misses (the tree had to be hydrated from
+    /// durable storage). A high miss ratio means hydration — and the
+    /// minimization it triggers — is on the hot path.
+    pub const SEDIMENTREE_CACHE_MISSES_TOTAL: &str = "subduction_sedimentree_cache_misses_total";
+    /// Sedimentrees currently resident in the in-memory LRU cache. Compare
+    /// against the cache cap to see eviction pressure (which drives misses).
+    pub const SEDIMENTREE_CACHE_RESIDENT: &str = "subduction_sedimentree_cache_resident";
     /// Cumulative loose-commit write operations (CAS; includes idempotent
     /// no-ops). Maintained incrementally — never scanned.
     pub const STORAGE_COMMITS_WRITTEN_TOTAL: &str = "subduction_storage_commits_written_total";
@@ -269,6 +280,25 @@ pub fn set_storage_sedimentrees(count: usize) {
     metrics::gauge!(names::STORAGE_SEDIMENTREES).set(count as f64);
 }
 
+/// Record a sedimentree resident-cache hit (resolved without hydration).
+#[inline]
+pub fn sedimentree_cache_hit() {
+    metrics::counter!(names::SEDIMENTREE_CACHE_HITS_TOTAL).increment(1);
+}
+
+/// Record a sedimentree resident-cache miss (had to hydrate from storage).
+#[inline]
+pub fn sedimentree_cache_miss() {
+    metrics::counter!(names::SEDIMENTREE_CACHE_MISSES_TOTAL).increment(1);
+}
+
+/// Publish the current number of sedimentrees resident in the in-memory cache.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_sedimentree_cache_resident(count: usize) {
+    metrics::gauge!(names::SEDIMENTREE_CACHE_RESIDENT).set(count as f64);
+}
+
 /// Record a loose-commit write operation (one per `save_loose_commit`).
 #[inline]
 pub fn storage_commit_written() {
@@ -430,6 +460,18 @@ pub fn describe_all() {
     metrics::describe_gauge!(
         names::STORAGE_SEDIMENTREES,
         "Current number of sedimentrees in storage (from the in-memory id cache)."
+    );
+    metrics::describe_counter!(
+        names::SEDIMENTREE_CACHE_HITS_TOTAL,
+        "Cumulative sedimentree resident-cache hits (resolved without hydration)."
+    );
+    metrics::describe_counter!(
+        names::SEDIMENTREE_CACHE_MISSES_TOTAL,
+        "Cumulative sedimentree resident-cache misses (hydrated from durable storage)."
+    );
+    metrics::describe_gauge!(
+        names::SEDIMENTREE_CACHE_RESIDENT,
+        "Sedimentrees currently resident in the in-memory LRU cache."
     );
     metrics::describe_counter!(
         names::STORAGE_COMMITS_WRITTEN_TOTAL,

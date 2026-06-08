@@ -78,13 +78,16 @@ pub trait RefreshMetrics {
     /// impl below), so this method never walks per-tree storage. The previous
     /// implementation scanned every tree on every tick, which was O(trees) of
     /// `read_dir` syscalls per refresh and the dominant cost at scale.
-    fn refresh_metrics(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    ///
+    /// Returns the current sedimentree count (also published to the gauge) so
+    /// callers can log it — e.g. the boot-time tree count.
+    fn refresh_metrics(&self) -> impl Future<Output = Result<usize, Self::Error>> + Send;
 }
 
 impl<Store: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<Store> {
     type Error = Store::Error;
 
-    async fn refresh_metrics(&self) -> Result<(), Self::Error> {
+    async fn refresh_metrics(&self) -> Result<usize, Self::Error> {
         // Cheap: the FS backend returns a clone of its in-memory id cache.
         let sedimentree_count = Storage::<Sendable>::load_all_sedimentree_ids(&self.inner)
             .await?
@@ -92,7 +95,7 @@ impl<Store: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S
         metrics::set_storage_sedimentrees(sedimentree_count);
 
         tracing::trace!(sedimentrees = sedimentree_count, "refreshed storage gauges");
-        Ok(())
+        Ok(sedimentree_count)
     }
 }
 

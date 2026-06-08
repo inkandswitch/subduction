@@ -384,7 +384,14 @@ impl SetupCommon {
 
         // Background metrics refresh
         if args.metrics {
-            storage.refresh_metrics().await?;
+            // Seed the storage gauge from the on-disk id cache and log the
+            // startup tree count explicitly (the gauge alone only surfaces it
+            // to scrapers; this makes the boot-time count visible in logs too).
+            let startup_tree_count = storage.refresh_metrics().await?;
+            tracing::info!(
+                sedimentrees = startup_tree_count,
+                "Loaded sedimentrees from durable storage at startup"
+            );
 
             let metrics_storage = storage.clone();
             let metrics_token = token.clone();
@@ -519,6 +526,28 @@ where
         });
 
     let server_peer_id = subduction.peer_id();
+
+    // Periodically publish the in-memory cache occupancy. Lives here (not in
+    // the storage refresh task) because the resident count comes from
+    // `Subduction`'s LRU, not the storage backend. Compared against
+    // `subduction_storage_sedimentrees`, this shows eviction pressure.
+    if args.metrics {
+        let resident_subduction = subduction.clone();
+        let resident_token = token.clone();
+        let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
+        tokio::spawn(async move {
+            let mut interval = time::interval(refresh_interval);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let resident = resident_subduction.resident_sedimentree_count().await;
+                        subduction_core::metrics::set_sedimentree_cache_resident(resident);
+                    }
+                    () = resident_token.cancelled() => break,
+                }
+            }
+        });
+    }
 
     // Set up the HTTP long-poll handler (uses its own NonceCache)
     let lp_handler = LongPollHandler::new(

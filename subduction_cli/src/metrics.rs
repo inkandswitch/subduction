@@ -126,6 +126,13 @@ mod tests {
         subduction_core::metrics::storage_operation_duration("save_loose_commit", 0.000_8);
         subduction_core::metrics::sync_duration(2.0);
 
+        // Cache counters: 2 hits + 1 miss must render with exactly those totals
+        // (guards against the hit/miss being mis-wired or a miss double-counted).
+        subduction_core::metrics::sedimentree_cache_hit();
+        subduction_core::metrics::sedimentree_cache_hit();
+        subduction_core::metrics::sedimentree_cache_miss();
+        subduction_core::metrics::set_sedimentree_cache_resident(7);
+
         let rendered = handle.render();
 
         // All three render as histograms (have `_bucket` series).
@@ -176,6 +183,20 @@ mod tests {
         assert!(
             sync_lines.contains("le=\"60\""),
             "sync duration histogram should use the coarse 60s bucket:\n{sync_lines}"
+        );
+
+        // Cache counters render with their exact totals; the resident gauge too.
+        assert!(
+            rendered.contains("subduction_sedimentree_cache_hits_total 2"),
+            "cache hits counter should render a total of 2:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_sedimentree_cache_misses_total 1"),
+            "cache misses counter should render a total of 1:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_sedimentree_cache_resident 7"),
+            "cache resident gauge should render 7:\n{rendered}"
         );
     }
 }
