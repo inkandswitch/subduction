@@ -10,7 +10,9 @@
 
 use alloc::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
+use dupe::Dupe;
 use keyhive_core::{
+    keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::public::Public,
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
@@ -164,6 +166,7 @@ impl PeriodicEventCache {
         Conn::DisconnectError: 'static,
         Store: KeyhiveStorage<Async>,
         Async: future_form::FutureForm,
+        Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>: Dupe,
     {
         let total = protocol.total_ops().await;
         if self.last_total_ops == Some(total) {

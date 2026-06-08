@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use async_lock::Mutex as AsyncMutex;
+use dupe::Dupe;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
@@ -54,8 +55,8 @@ impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         };
         let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = keyhive.lock().await;
-            authorize_connect_with(&*kh, peer).await
+            let kh = { keyhive.lock().await.dupe() };
+            authorize_connect_with(&kh, peer).await
         }
         .boxed()
     }
@@ -78,8 +79,8 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         }
         let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = keyhive.lock().await;
-            authorize_fetch_with(&*kh, peer, sedimentree_id).await
+            let kh = { keyhive.lock().await.dupe() };
+            authorize_fetch_with(&kh, peer, sedimentree_id).await
         }
         .boxed()
     }
@@ -98,8 +99,8 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         }
         let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = keyhive.lock().await;
-            authorize_put_with(&*kh, requestor, author, sedimentree_id).await
+            let kh = { keyhive.lock().await.dupe() };
+            authorize_put_with(&kh, requestor, author, sedimentree_id).await
         }
         .boxed()
     }
@@ -115,8 +116,8 @@ impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
         let (legacy, keyhive_ids): (Vec<_>, Vec<_>) = ids.into_iter().partition(is_legacy);
         let keyhive = Arc::clone(keyhive);
         async move {
-            let kh = keyhive.lock().await;
-            let mut allowed = filter_authorized_fetch_with(&*kh, peer, keyhive_ids).await;
+            let kh = { keyhive.lock().await.dupe() };
+            let mut allowed = filter_authorized_fetch_with(&kh, peer, keyhive_ids).await;
             allowed.extend(legacy);
             allowed
         }
