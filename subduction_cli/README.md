@@ -389,7 +389,8 @@ The **Subduction** dashboard is auto-provisioned — open it directly at
 `monitoring:start` waits for each service to bind its port and fails loudly if a
 binary is missing (e.g. its Nix store path was garbage-collected — re-enter the
 dev shell to re-realize it). Grafana is pinned to 12.x and kept as a dev-shell
-gc-root so it can't be collected out from under the command.
+dependency so its store path is retained and cannot be collected out from under
+the command.
 
 Run a metrics-enabled server so Prometheus has something to scrape:
 

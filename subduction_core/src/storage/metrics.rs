@@ -86,8 +86,9 @@ impl<Store: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S
 
     async fn refresh_metrics(&self) -> Result<(), Self::Error> {
         // Cheap: the FS backend returns a clone of its in-memory id cache.
-        let sedimentree_count =
-            Storage::<Sendable>::load_all_sedimentree_ids(&self.inner).await?.len();
+        let sedimentree_count = Storage::<Sendable>::load_all_sedimentree_ids(&self.inner)
+            .await?
+            .len();
         metrics::set_storage_sedimentrees(sedimentree_count);
 
         tracing::trace!(sedimentrees = sedimentree_count, "refreshed storage gauges");

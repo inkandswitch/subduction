@@ -7,8 +7,6 @@
   grafanaPinned,
 }: let
   cargo = "${pkgs.cargo}/bin/cargo";
-  # Pinned Grafana 12.x (see flake.nix `nixpkgs-grafana`). Referenced here and
-  # added to the dev-shell packages so its store path is a gc-root.
   grafana-server = "${grafanaPinned}/bin/grafana-server";
   grafana-homepath = "${grafanaPinned}/share/grafana";
   pnpm = "${pkgs.pnpm}/bin/pnpm";

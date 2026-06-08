@@ -8,7 +8,7 @@
     # Pinned solely for Grafana 12.x: nixos-26.05 ships Grafana 13.x, but the
     # provisioned dashboard targets the 12.x schema and 13.x has proven
     # GC-volatile in the dev store. The pinned 12.x is added to the dev shell
-    # (a gc-root) so `monitoring:start` cannot lose its binary to GC.
+    # (a gc root) so `monitoring:start` cannot lose its binary to GC.
     nixpkgs-grafana.url = "nixpkgs/nixos-25.05";
 
     command-utils.url = "git+https://codeberg.org/expede/nix-command-utils";
