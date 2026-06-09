@@ -26,6 +26,10 @@
 
 use super::*;
 
+/// One held in-flight response in the serve phase: the `Arc`-shared per-pair
+/// map plus its wire-built `found_ops` (empty unless the `cold` mode builds it).
+type InflightResponse = (Arc<AgentHashMap>, Vec<Arc<[u8]>>);
+
 /// Read a `usize` tuning knob from env var `key`, falling back to `default`.
 /// Shared by the `dhat-heap` membench tests below.
 fn env_usize(key: &str, default: usize) -> usize {
@@ -209,7 +213,7 @@ fn serving_membench() {
             let cold = wire == "cold";
             let serialize = wire == "serialize";
             let pre = dhat::HeapStats::get();
-            let mut inflight: Vec<(Arc<AgentHashMap>, Vec<Arc<[u8]>>)> =
+            let mut inflight: Vec<InflightResponse> =
                 Vec::with_capacity(if serialize { 0 } else { serve });
             let mut frames: Vec<alloc::vec::Vec<u8>> =
                 Vec::with_capacity(if serialize { serve } else { 0 });
