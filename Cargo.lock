@@ -5329,6 +5329,8 @@ dependencies = [
  "blake3",
  "bolero",
  "ciborium",
+ "criterion",
+ "dhat",
  "dupe",
  "ed25519-dalek 2.2.0",
  "future_form",

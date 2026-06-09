@@ -2,21 +2,21 @@
 
 #![cfg(all(feature = "serde", feature = "std"))]
 
-use alloc::collections::{BTreeMap, BTreeSet};
-
-use crate::{
-    message::{CborBytes, EventBytes, EventHash},
-    peer_id::KeyhivePeerId,
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
 };
+
+use crate::{message::EventHash, peer_id::KeyhivePeerId};
 
 /// Per-agent event snapshot, deduplicated by hash.
 #[derive(Debug, Clone, Default)]
 pub struct AllAgentEvents {
     /// Per-agent reachable hash sets.
     pub agent_hashes: BTreeMap<KeyhivePeerId, BTreeSet<EventHash>>,
-    /// Bincode-serialized `StaticEvent` bytes paired with pre-encoded CBOR
-    /// byte-string framing.
-    pub event_data: BTreeMap<EventHash, (EventBytes, CborBytes)>,
+    /// Bincode-serialized `StaticEvent` bytes, [`Arc`](alloc::sync::Arc)-shared
+    /// so the cache and every served response reference one copy.
+    pub event_data: BTreeMap<EventHash, Arc<[u8]>>,
 }
 
 impl AllAgentEvents {

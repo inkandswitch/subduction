@@ -25,6 +25,7 @@ futures = { workspace = true }
 future_form = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true, optional = true }
+dhat = { workspace = true, optional = true }
 keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true }
 sedimentree_core = { workspace = true }
@@ -45,14 +46,25 @@ runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
 serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "dep:dupe", "std"]
 std = ["thiserror/std"]
 test-utils = ["dep:async-channel", "serde"]
+# In-crate heap-profiling harness (the periodic-cache serving/refresh membench
+# in cache/membench.rs). Installs dhat as the global allocator. Run with:
+#   cargo test -p subduction_keyhive --release --features test-utils,dhat-heap \
+#       serving_membench -- --nocapture --exact
+dhat-heap = ["dep:dhat", "test-utils"]
 
 [dev-dependencies]
 async-channel = { workspace = true }
+criterion = { workspace = true }
 nonempty = "0.10.0"
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
 subduction_crypto = { workspace = true }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[[bench]]
+name = "periodic_cache"
+harness = false
+required-features = ["test-utils"]
 
 [lints]
 workspace = true

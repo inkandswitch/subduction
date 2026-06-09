@@ -6,6 +6,13 @@
 
 extern crate alloc;
 
+// Heap-profiling global allocator for the in-crate periodic-cache membench
+// (`cache::tests::serving_membench`). Only installed under the `dhat-heap`
+// feature so normal builds and `cargo test` are unaffected.
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static DHAT_ALLOC: dhat::Alloc = dhat::Alloc;
+
 mod collections;
 
 pub mod connection;

@@ -31,15 +31,19 @@ pub(crate) mod vec_byte_array_32 {
     }
 }
 
-/// `Vec<Vec<u8>>` with each element as a CBOR byte string.
+/// `Vec<Arc<[u8]>>` with each element as a CBOR byte string.
+///
+/// Elements are `Arc`-shared so a response can share one copy of each event's
+/// bytes across concurrent uses. Each element encodes as a plain CBOR byte
+/// string (major type 2), the same wire form as a `Vec<u8>` element.
 pub(crate) mod vec_byte_buf {
-    use alloc::vec::Vec;
+    use alloc::{sync::Arc, vec::Vec};
 
     use serde::{Deserialize, Deserializer, Serializer, ser::SerializeSeq};
     use serde_bytes::ByteBuf;
 
     pub(crate) fn serialize<S: Serializer>(
-        v: &[Vec<u8>],
+        v: &[Arc<[u8]>],
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         let mut seq = serializer.serialize_seq(Some(v.len()))?;
@@ -49,8 +53,13 @@ pub(crate) mod vec_byte_buf {
         seq.end()
     }
 
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Vec<Vec<u8>>, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        de: D,
+    ) -> Result<Vec<Arc<[u8]>>, D::Error> {
         let wrapped: Vec<ByteBuf> = Vec::deserialize(de)?;
-        Ok(wrapped.into_iter().map(ByteBuf::into_vec).collect())
+        Ok(wrapped
+            .into_iter()
+            .map(|b| Arc::from(b.into_vec()))
+            .collect())
     }
 }
