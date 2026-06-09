@@ -3980,7 +3980,7 @@ where
                         .is_ok()
                     {
                         sd.propagate_subscription(sed_id, originator).await;
-                    };
+                    }
                 }));
             }
 
