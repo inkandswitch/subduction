@@ -67,7 +67,7 @@ fn serving_membench() {
     use nonempty::nonempty;
 
     use crate::{
-        message::{Message, SharedBytes},
+        message::Message,
         test_utils::{keyhive_peer_id, make_keyhive, make_protocol_with_shared_keyhive},
     };
 
@@ -199,7 +199,7 @@ fn serving_membench() {
         //   "off":       hold only the Arc-shared per-pair maps. A warm peer
         //                 whose found_ops diff is empty.
         //   "cold":      also hold found_ops = the full event set as
-        //                 `Vec<SharedBytes>`, which clones the cache `Arc`s
+        //                 `Vec<Arc<[u8]>>`, which clones the cache `Arc`s
         //                 rather than copying bytes.
         //   "serialize": build and hold one serialized `SyncResponse` frame
         //                 per peer, dropping the maps and found_ops first (as
@@ -209,7 +209,7 @@ fn serving_membench() {
             let cold = wire == "cold";
             let serialize = wire == "serialize";
             let pre = dhat::HeapStats::get();
-            let mut inflight: Vec<(Arc<AgentHashMap>, Vec<SharedBytes>)> =
+            let mut inflight: Vec<(Arc<AgentHashMap>, Vec<Arc<[u8]>>)> =
                 Vec::with_capacity(if serialize { 0 } else { serve });
             let mut frames: Vec<alloc::vec::Vec<u8>> =
                 Vec::with_capacity(if serialize { serve } else { 0 });
@@ -219,8 +219,7 @@ fn serving_membench() {
                 let response = cache.events_for_peer_pair(&local, &peer);
                 per_response = response.len();
                 if serialize {
-                    let found_ops: Vec<SharedBytes> =
-                        response.values().map(|(eb, _)| eb.dupe()).collect();
+                    let found_ops: Vec<Arc<[u8]>> = response.values().map(Dupe::dupe).collect();
                     let msg = Message::SyncResponse {
                         sender_id: local.clone(),
                         target_id: peer,
@@ -234,8 +233,8 @@ fn serving_membench() {
                     frames.push(buf);
                     // response and found_ops drop here, as in the handler.
                 } else {
-                    let found_ops: Vec<SharedBytes> = if cold {
-                        response.values().map(|(eb, _)| eb.dupe()).collect()
+                    let found_ops: Vec<Arc<[u8]>> = if cold {
+                        response.values().map(Dupe::dupe).collect()
                     } else {
                         Vec::new()
                     };

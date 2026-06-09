@@ -60,7 +60,7 @@ use crate::{
     collections::{Map, Set},
     connection::KeyhiveConnection,
     error::{ProtocolError, SigningError, StorageError, VerificationError},
-    message::{AgentHashMap, EventHash, EventPair, Message, SharedBytes},
+    message::{AgentHashMap, EventHash, Message},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
     storage::{KeyhiveStorage, StorageHash},
@@ -270,7 +270,7 @@ where
             (all_membership, all_prekey, all_cgka)
         };
 
-        let mut event_data: BTreeMap<EventHash, EventPair> = BTreeMap::new();
+        let mut event_data: BTreeMap<EventHash, Arc<[u8]>> = BTreeMap::new();
 
         // Phase 1: serialize every distinct op once, skipping hashes
         // the caller already has cached.
@@ -290,7 +290,7 @@ where
                 {
                     let event: Event<Async, Signer, CRef, Listener> = op.clone().into();
                     let static_event = StaticEvent::from(event);
-                    e.insert(serialize_event_pair(&static_event)?);
+                    e.insert(serialize_event(&static_event)?);
                 }
             }
             membership_source_hashes.insert(*source_id, hashes);
@@ -408,8 +408,8 @@ where
 
             let cached = self.cached_events_for_pair_with_peer(target_id).await;
             let computed;
-            let pair = if let Some(ref c) = cached {
-                Some(&**c)
+            let pair = if let Some(c) = cached.as_deref() {
+                Some(c)
             } else {
                 match self.get_events_for_peer_pair(target_id).await {
                     Ok(p) => {
@@ -657,8 +657,8 @@ where
         let our_pending_set: Set<EventHash> = our_pending_hashes.iter().copied().collect();
 
         // Ops to send = local - (peer_found U peer_pending)
-        let mut found_ops: Vec<SharedBytes> = Vec::new();
-        for (h, (event_bytes, _)) in local_events {
+        let mut found_ops: Vec<Arc<[u8]>> = Vec::new();
+        for (h, event_bytes) in local_events {
             if !peer_found_set.contains(h) && !peer_pending_set.contains(h) {
                 found_ops.push(event_bytes.dupe());
             }
@@ -976,7 +976,7 @@ where
         let mut result = AgentHashMap::new();
         for (digest, event) in public_events {
             let h = digest_to_bytes(&digest);
-            let pair = serialize_event_pair(&event)?;
+            let pair = serialize_event(&event)?;
             result.insert(h, pair);
         }
 
@@ -984,7 +984,7 @@ where
             if their_events.contains_key(&digest) {
                 let h = digest_to_bytes(&digest);
                 if let Entry::Vacant(entry) = result.entry(h) {
-                    let pair = serialize_event_pair(&event)?;
+                    let pair = serialize_event(&event)?;
                     entry.insert(pair);
                 }
             }
@@ -1012,7 +1012,7 @@ where
         sender_id: &KeyhivePeerId,
         requested: &[EventHash],
         cached_pair: Option<&AgentHashMap>,
-    ) -> Result<Vec<SharedBytes>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Vec<Arc<[u8]>>, ProtocolError<Conn::SendError>> {
         let computed;
         let pair = if let Some(c) = cached_pair {
             c
@@ -1026,7 +1026,7 @@ where
 
         let mut result = Vec::with_capacity(requested.len().min(pair.len()));
         for h in requested {
-            if let Some((bytes, _)) = pair.get(h) {
+            if let Some(bytes) = pair.get(h) {
                 result.push(bytes.dupe());
             }
         }
@@ -1298,7 +1298,7 @@ where
 ///
 /// Hashes present in `skip_serialization` are recorded but not serialized.
 fn hash_and_insert_events<Async, Signer, CRef, Listener, E>(
-    event_data: &mut BTreeMap<EventHash, EventPair>,
+    event_data: &mut BTreeMap<EventHash, Arc<[u8]>>,
     events: impl Iterator<Item = Event<Async, Signer, CRef, Listener>>,
     skip_serialization: &BTreeSet<EventHash>,
 ) -> Result<Vec<EventHash>, ProtocolError<E>>
@@ -1318,7 +1318,7 @@ where
             && let Entry::Vacant(e) = event_data.entry(h)
         {
             let static_event = StaticEvent::from(event);
-            e.insert(serialize_event_pair(&static_event)?);
+            e.insert(serialize_event(&static_event)?);
         }
     }
     Ok(hashes)
@@ -1331,23 +1331,21 @@ fn collect_serialized_events<CRef: ContentRef, E: core::error::Error + 'static>(
     let mut out = AgentHashMap::new();
     for (digest, event) in events {
         let h = digest_to_bytes(&digest);
-        out.insert(h, serialize_event_pair(&event)?);
+        out.insert(h, serialize_event(&event)?);
     }
     Ok(out)
 }
 
-/// Serialize a `StaticEvent` to bincode bytes and a CBOR byte-string wrapper.
+/// Serialize a `StaticEvent` to bincode bytes, `Arc`-shared.
 ///
-/// Both forms are `Arc`-shared (an [`EventPair`]) so the periodic cache and
-/// every served response reference one copy instead of each deep-copying the
-/// bytes.
-fn serialize_event_pair<CRef: ContentRef, E: core::error::Error + 'static>(
+/// The bytes are `Arc`-shared so the periodic cache and every served response
+/// reference one copy instead of each deep-copying the bytes.
+fn serialize_event<CRef: ContentRef, E: core::error::Error + 'static>(
     event: &StaticEvent<CRef>,
-) -> Result<EventPair, ProtocolError<E>> {
+) -> Result<Arc<[u8]>, ProtocolError<E>> {
     let bytes =
         bincode_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
-    let cbor = wrap_as_cbor_byte_string(&bytes);
-    Ok((Arc::from(bytes), Arc::from(cbor)))
+    Ok(Arc::from(bytes))
 }
 
 /// Collect hashes reachable from `agent_id` through `index` into `hash_set`.
@@ -1372,48 +1370,6 @@ fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageErro
     ciborium::into_writer(value, &mut buf)
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
     Ok(buf)
-}
-
-/// Wrap raw bytes in a CBOR byte-string (major type 2) header.
-///
-/// Lets the cache hand pre-encoded fragments straight to a hand-rolled
-/// wire path without re-running ciborium's array serializer.
-#[allow(clippy::cast_possible_truncation)] // match arms guarantee range
-fn wrap_as_cbor_byte_string(bytes: &[u8]) -> Vec<u8> {
-    let len = bytes.len();
-    let mut out = match len {
-        0..=23 => {
-            let mut v = Vec::with_capacity(1 + len);
-            v.push(0x40 | len as u8);
-            v
-        }
-        24..=255 => {
-            let mut v = Vec::with_capacity(2 + len);
-            v.push(0x58);
-            v.push(len as u8);
-            v
-        }
-        256..=65535 => {
-            let mut v = Vec::with_capacity(3 + len);
-            v.push(0x59);
-            v.extend_from_slice(&(len as u16).to_be_bytes());
-            v
-        }
-        65536..=4_294_967_295 => {
-            let mut v = Vec::with_capacity(5 + len);
-            v.push(0x5A);
-            v.extend_from_slice(&(len as u32).to_be_bytes());
-            v
-        }
-        _ => {
-            let mut v = Vec::with_capacity(9 + len);
-            v.push(0x5B);
-            v.extend_from_slice(&(len as u64).to_be_bytes());
-            v
-        }
-    };
-    out.extend_from_slice(bytes);
-    out
 }
 
 /// Deserialize a value from CBOR bytes.
@@ -1971,7 +1927,7 @@ mod tests {
             .await
             .unwrap()
             .expect("bob should resolve to an agent");
-        let event_bytes: Vec<SharedBytes> = pair.values().map(|(b, _)| b.dupe()).collect();
+        let event_bytes: Vec<Arc<[u8]>> = pair.values().map(Dupe::dupe).collect();
         assert!(
             event_bytes.len() > 2,
             "need >2 events to exceed threshold of 2 (got {})",
@@ -2021,7 +1977,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let event_bytes: Vec<SharedBytes> = pair.values().map(|(b, _)| b.dupe()).collect();
+        let event_bytes: Vec<Arc<[u8]>> = pair.values().map(Dupe::dupe).collect();
         assert!(!event_bytes.is_empty());
 
         protocol.ingest_events(&event_bytes).await.unwrap();
@@ -2095,14 +2051,14 @@ mod tests {
             )
             .await
             .unwrap();
-        let dependent: Vec<SharedBytes> = other_proto
+        let dependent: Vec<Arc<[u8]>> = other_proto
             .get_events_for_agent(&other_id)
             .await
             .unwrap()
             .expect("other resolves to an agent")
             .into_iter()
             .filter(|(hash, _)| !before_add.contains(hash))
-            .map(|(_, (bytes, _))| bytes)
+            .map(|(_, bytes)| bytes)
             .collect();
         assert!(
             !dependent.is_empty(),
@@ -2184,13 +2140,9 @@ mod tests {
 
         let synthetic_hash: EventHash = [0xAB; 32];
         let synthetic_bytes: EventBytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let synthetic_cbor = wrap_as_cbor_byte_string(&synthetic_bytes);
 
         let mut cached_pair = AgentHashMap::new();
-        cached_pair.insert(
-            synthetic_hash,
-            (synthetic_bytes.clone().into(), synthetic_cbor.into()),
-        );
+        cached_pair.insert(synthetic_hash, synthetic_bytes.clone().into());
 
         // SyncResponse from Bob asking Alice for the synthetic hash.
         // Bob's `requested` always lists hashes Alice advertised, so
@@ -2946,21 +2898,10 @@ mod tests {
             "alice's agent should have membership/cgka ops after the group was created"
         );
 
-        // Event bytes round-trip via bincode (matching keyhive-wasm); the
-        // pre-encoded form wraps them in a CBOR byte-string header for the
-        // outer envelope.
-        for (event_bytes, cbor_bytes) in alice_hashes.values() {
+        // Event bytes round-trip via bincode (matching keyhive-wasm).
+        for event_bytes in alice_hashes.values() {
             bincode_deserialize::<StaticEvent<[u8; 32]>>(event_bytes)
                 .expect("event_bytes round-trips");
-            assert!(
-                cbor_bytes.len() > event_bytes.len(),
-                "cbor_bytes carries at least a 1-byte byte-string header"
-            );
-            // Major-type-2 (byte-string) marker check.
-            assert!(
-                cbor_bytes[0] & 0xE0 == 0x40,
-                "cbor_bytes[0] should be a CBOR byte-string major type"
-            );
         }
 
         // Symmetric: querying for a peer keyhive doesn't know about returns None.
@@ -3417,7 +3358,7 @@ mod tests {
         let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
             alloc::collections::BTreeMap::new();
         for h in public_hashes {
-            if let Some((bytes, _)) = snapshot.event_data.get(h) {
+            if let Some(bytes) = snapshot.event_data.get(h) {
                 events.insert(*h, bincode_deserialize(bytes).unwrap());
             }
         }
@@ -3568,7 +3509,7 @@ mod tests {
         let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
             alloc::collections::BTreeMap::new();
         for h in public_hashes {
-            if let Some((bytes, _)) = snapshot.event_data.get(h) {
+            if let Some(bytes) = snapshot.event_data.get(h) {
                 events.insert(*h, bincode_deserialize(bytes).unwrap());
             }
         }
@@ -3776,7 +3717,7 @@ mod tests {
         let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
             alloc::collections::BTreeMap::new();
         for h in public_hashes {
-            if let Some((bytes, _)) = snapshot.event_data.get(h) {
+            if let Some(bytes) = snapshot.event_data.get(h) {
                 events.insert(*h, bincode_deserialize(bytes).unwrap());
             }
         }
@@ -3926,7 +3867,7 @@ mod tests {
         let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
             alloc::collections::BTreeMap::new();
         for h in public_hashes {
-            if let Some((bytes, _)) = snapshot.event_data.get(h) {
+            if let Some(bytes) = snapshot.event_data.get(h) {
                 events.insert(*h, bincode_deserialize(bytes).unwrap());
             }
         }
@@ -3969,88 +3910,6 @@ mod tests {
             "expected at least one CgkaOperation in the public event set after \
              the add/revoke delegation chain, but found none"
         );
-    }
-
-    // ── wrap_as_cbor_byte_string boundary tests ──────────────────────────
-
-    /// Helper: decode a CBOR byte string using ciborium and return the inner bytes.
-    fn ciborium_decode_byte_string(cbor: &[u8]) -> Vec<u8> {
-        let value: ciborium::Value = ciborium::from_reader(cbor).expect("ciborium decode");
-        match value {
-            ciborium::Value::Bytes(b) => b,
-            other => panic!("expected CBOR Bytes, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn wrap_cbor_len_0() {
-        let input = vec![];
-        let cbor = wrap_as_cbor_byte_string(&input);
-        assert_eq!(cbor[0], 0x40, "len 0: initial byte should be 0x40");
-        assert_eq!(cbor.len(), 1);
-        assert_eq!(ciborium_decode_byte_string(&cbor), input);
-    }
-
-    #[test]
-    fn wrap_cbor_len_23() {
-        let input = vec![0xAB; 23];
-        let cbor = wrap_as_cbor_byte_string(&input);
-        assert_eq!(cbor[0], 0x40 | 23, "len 23: initial byte should be 0x57");
-        assert_eq!(cbor.len(), 1 + 23);
-        assert_eq!(ciborium_decode_byte_string(&cbor), input);
-    }
-
-    #[test]
-    fn wrap_cbor_len_24() {
-        let input = vec![0xCD; 24];
-        let cbor = wrap_as_cbor_byte_string(&input);
-        assert_eq!(cbor[0], 0x58, "len 24: initial byte should be 0x58");
-        assert_eq!(cbor[1], 24);
-        assert_eq!(cbor.len(), 2 + 24);
-        assert_eq!(ciborium_decode_byte_string(&cbor), input);
-    }
-
-    #[test]
-    fn wrap_cbor_len_255() {
-        let input = vec![0xEF; 255];
-        let cbor = wrap_as_cbor_byte_string(&input);
-        assert_eq!(cbor[0], 0x58, "len 255: initial byte should be 0x58");
-        assert_eq!(cbor[1], 255);
-        assert_eq!(cbor.len(), 2 + 255);
-        assert_eq!(ciborium_decode_byte_string(&cbor), input);
-    }
-
-    #[test]
-    fn wrap_cbor_len_256() {
-        let input = vec![0x11; 256];
-        let cbor = wrap_as_cbor_byte_string(&input);
-        assert_eq!(cbor[0], 0x59, "len 256: initial byte should be 0x59");
-        let encoded_len = u16::from_be_bytes([cbor[1], cbor[2]]);
-        assert_eq!(encoded_len, 256);
-        assert_eq!(cbor.len(), 3 + 256);
-        assert_eq!(ciborium_decode_byte_string(&cbor), input);
-    }
-
-    #[test]
-    fn wrap_cbor_len_65535() {
-        let input = vec![0x22; 65535];
-        let cbor = wrap_as_cbor_byte_string(&input);
-        assert_eq!(cbor[0], 0x59, "len 65535: initial byte should be 0x59");
-        let encoded_len = u16::from_be_bytes([cbor[1], cbor[2]]);
-        assert_eq!(encoded_len, 65535);
-        assert_eq!(cbor.len(), 3 + 65535);
-        assert_eq!(ciborium_decode_byte_string(&cbor), input);
-    }
-
-    #[test]
-    fn wrap_cbor_len_65536() {
-        let input = vec![0x33; 65536];
-        let cbor = wrap_as_cbor_byte_string(&input);
-        assert_eq!(cbor[0], 0x5A, "len 65536: initial byte should be 0x5A");
-        let encoded_len = u32::from_be_bytes([cbor[1], cbor[2], cbor[3], cbor[4]]);
-        assert_eq!(encoded_len, 65536);
-        assert_eq!(cbor.len(), 5 + 65536);
-        assert_eq!(ciborium_decode_byte_string(&cbor), input);
     }
 }
 

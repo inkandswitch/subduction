@@ -12,22 +12,13 @@ pub type EventHash = [u8; 32];
 /// Bincode-serialized `StaticEvent<T>`.
 pub type EventBytes = Vec<u8>;
 
-/// [`EventBytes`] wrapped as a CBOR byte string (major type 2).
-pub type CborBytes = Vec<u8>;
-
-/// Reference-counted serialized-event bytes.
-///
-/// The periodic cache stores one copy of each event's bytes and hands every
-/// peer-pair response an `Arc` clone rather than copying the bytes, so
-/// concurrent responses share a single copy.
-pub type SharedBytes = Arc<[u8]>;
-
-/// A cached event's two serialized forms shared via `Arc`: the bincode
-/// [`EventBytes`] and its CBOR byte-string framing ([`CborBytes`]).
-pub type EventPair = (SharedBytes, SharedBytes);
-
 /// Hash-keyed map of serialized events for a peer or peer pair.
-pub type AgentHashMap = BTreeMap<EventHash, EventPair>;
+///
+/// Values are `Arc`-shared bincode event bytes: the periodic cache stores one
+/// copy of each event and hands every peer-pair response an `Arc` clone, so
+/// cloning a whole response is a set of refcount bumps, not a byte-for-byte
+/// copy of every event.
+pub type AgentHashMap = BTreeMap<EventHash, Arc<[u8]>>;
 
 /// The keyhive sync protocol messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +78,7 @@ pub enum Message {
         ///
         /// These are operations we have that the initiator is missing.
         #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
-        found: Vec<SharedBytes>,
+        found: Vec<Arc<[u8]>>,
 
         /// Total operation count for the responder (intersection + pending).
         ///
@@ -113,7 +104,7 @@ pub enum Message {
 
         /// The serialized operations being sent.
         #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
-        ops: Vec<SharedBytes>,
+        ops: Vec<Arc<[u8]>>,
 
         /// Total operation count for the responder (from the sync response).
         ///
