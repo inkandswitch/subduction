@@ -3969,14 +3969,19 @@ where
             let result = handler.handle(&conn, msg).await;
             if result.is_ok()
                 && let Some((sed_id, originator)) = propagate
-                && subduction
-                    .storage
-                    .policy()
-                    .authorize_fetch(originator, sed_id)
-                    .await
-                    .is_ok()
             {
-                subduction.propagate_subscription(sed_id, originator).await;
+                let sd = Arc::clone(&subduction);
+                let _propagation = subduction.spawner.spawn(Async::from_future(async move {
+                    if sd
+                        .storage
+                        .policy()
+                        .authorize_fetch(originator, sed_id)
+                        .await
+                        .is_ok()
+                    {
+                        sd.propagate_subscription(sed_id, originator).await;
+                    };
+                }));
             }
 
             completion.complete(conn, result);
