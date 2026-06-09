@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "automerge",
  "base58",
@@ -4765,7 +4765,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-lock",
  "base58",
@@ -5352,7 +5352,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5386,7 +5386,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm_bootstrap"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
