@@ -109,7 +109,7 @@ fn write_compound_sync(item: &PendingWrite) -> Result<(), FsStorageError> {
 /// 2. rename blob before meta — the `.meta`'s existence is the CAS marker,
 ///    so it must imply the blob is already in place.
 fn write_compound_files_sync(item: &PendingWrite) -> Result<bool, FsStorageError> {
-    let Some(staged) = stage_compound_write_sync(item)? else {
+    let Some(mut staged) = stage_compound_write_sync(item)? else {
         return Ok(false);
     };
 
@@ -121,20 +121,41 @@ fn write_compound_files_sync(item: &PendingWrite) -> Result<bool, FsStorageError
 }
 
 /// Temp files written (but not yet fsynced or renamed) for one compound item.
+///
+/// Dropping a `StagedWrite` whose [`rename_into_place`](Self::rename_into_place)
+/// did not complete best-effort-removes the temp files, so a failure
+/// mid-write (fsync error, ENOSPC, blocked rename) doesn't strand `.tmp`
+/// files on disk — which would otherwise accumulate per retry and, in the
+/// ENOSPC case, worsen the very condition that caused the failure.
 struct StagedWrite<'a> {
     item: &'a PendingWrite,
     blob_temp: PathBuf,
     meta_temp: PathBuf,
+    renamed: bool,
 }
 
 impl StagedWrite<'_> {
     /// Rename both temp files to their final CAS paths: blob before meta,
     /// since the `.meta`'s existence is the marker that the compound item is
     /// complete. Call only after both temps are fsynced.
-    fn rename_into_place(&self) -> Result<(), FsStorageError> {
+    fn rename_into_place(&mut self) -> Result<(), FsStorageError> {
         std::fs::rename(&self.blob_temp, &self.item.blob_path)?;
         std::fs::rename(&self.meta_temp, &self.item.meta_path)?;
+        self.renamed = true;
         Ok(())
+    }
+}
+
+impl Drop for StagedWrite<'_> {
+    fn drop(&mut self) {
+        if self.renamed {
+            return;
+        }
+
+        // Best-effort cleanup; an already-renamed (or never-created) temp
+        // just yields NotFound, which is fine.
+        std::fs::remove_file(&self.blob_temp).ok();
+        std::fs::remove_file(&self.meta_temp).ok();
     }
 }
 
@@ -169,7 +190,7 @@ fn stage_compound_write_sync(
         );
     }
 
-    std::fs::create_dir_all(&item.id_dir)?;
+    create_dir_all_durable(&item.id_dir)?;
 
     let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
     let blob_temp = item.blob_path.with_extension(format!("{nonce}.blob.tmp"));
@@ -182,6 +203,7 @@ fn stage_compound_write_sync(
         item,
         blob_temp,
         meta_temp,
+        renamed: false,
     }))
 }
 
@@ -242,6 +264,47 @@ fn fsync_compound_dirs_sync(item: &PendingWrite) -> Result<(), FsStorageError> {
 /// Fsync a directory so renames/creations of its entries are durable.
 fn fsync_dir_sync(dir: &Path) -> Result<(), FsStorageError> {
     std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// Create `dir` and any missing ancestors, fsyncing the parent of every
+/// directory this call actually created.
+///
+/// `create_dir_all` alone leaves the *links* of freshly created ancestors
+/// (`trees/{bucket}/`, `{leaf}/`, `commits/`, …) unsynced: strictly per
+/// POSIX, a crash could lose the whole new chain even though the leaf's
+/// contents were fsynced. (ext4's journal usually entangles them with the
+/// child fsync, but that is filesystem-specific behavior, not a contract.)
+///
+/// Steady-state cost is one `metadata` call; the extra fsyncs are paid only
+/// when directories are actually created (typically once per new tree).
+/// Must be called from a blocking context.
+fn create_dir_all_durable(dir: &Path) -> Result<(), FsStorageError> {
+    if std::fs::metadata(dir).is_ok() {
+        return Ok(());
+    }
+
+    // Record the missing chain before creating it, deepest first.
+    let mut missing = vec![dir.to_path_buf()];
+    while let Some(parent) = missing
+        .last()
+        .and_then(|p| p.parent())
+        .filter(|p| !p.as_os_str().is_empty() && std::fs::metadata(p).is_err())
+    {
+        missing.push(parent.to_path_buf());
+    }
+
+    std::fs::create_dir_all(dir)?;
+
+    // Each created directory's link lives in its parent; fsync each such
+    // parent so the chain survives a crash. (Concurrent creators may race
+    // the existence checks above — the worst case is a redundant fsync.)
+    for created in &missing {
+        if let Some(parent) = created.parent() {
+            fsync_dir_sync(parent)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -458,8 +521,8 @@ impl FsStorage {
     ///
     /// Returns an error if the directories cannot be created.
     pub fn new(root: PathBuf) -> Result<Self, FsStorageError> {
-        std::fs::create_dir_all(&root)?;
-        std::fs::create_dir_all(root.join("trees"))?;
+        create_dir_all_durable(&root)?;
+        create_dir_all_durable(&root.join("trees"))?;
 
         let ids_cache = Arc::new(Mutex::new(Self::load_tree_ids(&root)));
 
@@ -730,8 +793,8 @@ impl Storage<Sendable> for FsStorage {
                 let commits_dir = self.commits_dir(sedimentree_id);
                 let fragments_dir = self.fragments_dir(sedimentree_id);
                 tokio::task::spawn_blocking(move || -> Result<(), FsStorageError> {
-                    std::fs::create_dir_all(&commits_dir)?;
-                    std::fs::create_dir_all(&fragments_dir)?;
+                    create_dir_all_durable(&commits_dir)?;
+                    create_dir_all_durable(&fragments_dir)?;
                     Ok(())
                 })
                 .await??;
@@ -1148,7 +1211,9 @@ impl Storage<Sendable> for FsStorage {
                 //      concurrent fsyncs into shared journal transactions
                 //   3. rename all temps into place (blob before meta per item)
                 //   4. fsync each touched directory exactly once, in parallel
-                let staged: Vec<_> = items
+                // An early error return drops the staged writes, whose
+                // `Drop` impl removes the not-yet-renamed temp files.
+                let mut staged: Vec<_> = items
                     .iter()
                     .map(stage_compound_write_sync)
                     .filter_map(Result::transpose)
@@ -1161,7 +1226,7 @@ impl Storage<Sendable> for FsStorage {
                 fsync_paths_parallel_sync(&temp_paths)?;
 
                 let mut dirs = std::collections::BTreeSet::new();
-                for s in &staged {
+                for s in &mut staged {
                     s.rename_into_place()?;
                     dirs.insert(s.item.id_dir.as_path());
                     if let Some(parent) = s.item.id_dir.parent() {

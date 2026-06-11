@@ -86,7 +86,6 @@ use future_form::{FutureForm, Local, Sendable};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use sedimentree_core::{
     blob::{Blob, has_meta::HasBlobMeta},
-    codec::error::DecodeError,
     collections::Set,
     crypto::digest::Digest,
     fragment::Fragment,
@@ -188,6 +187,13 @@ impl RedbStorage {
         let blobs_dir = root.join(BLOBS_DIR_NAME);
         std::fs::create_dir_all(&blobs_dir)?;
 
+        // Make the directory links themselves durable (one-time cost):
+        // `blobs/`'s link lives in `root`, `root`'s in its parent.
+        std::fs::File::open(root)?.sync_all()?;
+        if let Some(parent) = root.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+
         let db = Database::create(root.join(DB_FILE_NAME))?;
 
         // Materialize all tables up front so read transactions never hit
@@ -246,9 +252,11 @@ fn item_range(tree: SedimentreeId, item: CommitId) -> (Key96, Key96) {
 }
 
 /// Extract the item id (bytes 32..64) from a composite key.
-fn item_id_of(key: &Key96) -> CommitId {
+const fn item_id_of(key: &Key96) -> CommitId {
+    let (_, rest) = key.split_at(32);
+    let (item_id, _) = rest.split_at(32);
     let mut id = [0u8; 32];
-    id.copy_from_slice(key.get(32..64).unwrap_or(&[0u8; 32]));
+    id.copy_from_slice(item_id);
     CommitId::new(id)
 }
 
@@ -366,22 +374,48 @@ fn write_blob_file_sync(
         );
     }
 
-    std::fs::create_dir_all(&bucket_dir)?;
+    // Bucket dirs are one level below `blobs/`; if this one is new, fsync
+    // `blobs/` so the bucket's link survives a crash (the constructor made
+    // `blobs/` itself durable).
+    if std::fs::metadata(&bucket_dir).is_err() {
+        std::fs::create_dir_all(&bucket_dir)?;
+        std::fs::File::open(blobs_dir)?.sync_all()?;
+    }
 
     // Temp-then-rename with the fsyncs ordered for crash consistency:
     // contents durable before the name appears, name durable before return.
+    // The guard removes the temp on any early error exit (e.g. ENOSPC), so
+    // failures don't strand `.tmp` files that worsen a full disk on retry.
     let nonce = TMP_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp = path.with_extension(format!("{nonce}.tmp"));
+    let mut temp = TempFileGuard {
+        path: path.with_extension(format!("{nonce}.tmp")),
+        renamed: false,
+    };
 
-    let mut file = std::fs::File::create(&temp)?;
+    let mut file = std::fs::File::create(&temp.path)?;
     file.write_all(data)?;
     file.sync_all()?;
     drop(file);
 
-    std::fs::rename(&temp, &path)?;
+    std::fs::rename(&temp.path, &path)?;
+    temp.renamed = true;
     std::fs::File::open(bucket_dir)?.sync_all()?;
 
     Ok(())
+}
+
+/// Removes its temp file on drop unless the rename into place completed.
+struct TempFileGuard {
+    path: PathBuf,
+    renamed: bool,
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if !self.renamed {
+            std::fs::remove_file(&self.path).ok();
+        }
+    }
 }
 
 /// Read an external blob file. `Ok(None)` if absent.
@@ -569,16 +603,37 @@ fn delete_range(
     Ok(())
 }
 
+/// Durably write the external blob files for every over-threshold item.
+///
+/// Runs **before** `begin_write()`: redb has a single database-wide writer,
+/// so file fsyncs done inside an open write transaction would stall every
+/// other writer (all trees, all peers) for the duration of the blob I/O.
+/// Staging first keeps the exclusive window down to the B+tree inserts and
+/// one commit fsync, with identical crash consistency — the only invariant
+/// is "file durable before the referencing transaction commits", and a
+/// crash before that commit leaves only harmless content-addressed
+/// orphans. Must be called from a blocking context.
+fn stage_external_blobs_sync(
+    items: &[PendingInsert],
+    blobs_dir: &Path,
+    inline_threshold: usize,
+) -> Result<(), RedbStorageError> {
+    for item in items {
+        if item.blob.len() > inline_threshold {
+            write_blob_file_sync(blobs_dir, &item.blob_digest, &item.blob)?;
+        }
+    }
+    Ok(())
+}
+
 /// Insert one compound item (CAS: no-op if the key already exists).
 ///
-/// Blobs larger than `inline_threshold` are written as durable external
-/// files *before* the record referencing them is inserted; the surrounding
-/// transaction's commit then makes the reference visible only after the
-/// file exists.
+/// Pure B+tree work: any external blob file must already have been staged
+/// via [`stage_external_blobs_sync`] before the surrounding transaction
+/// commits.
 fn insert_compound(
     table: &mut redb::Table<'_, &'static [u8; 96], &'static [u8]>,
     item: &PendingInsert,
-    blobs_dir: &Path,
     inline_threshold: usize,
 ) -> Result<(), RedbStorageError> {
     if table.get(&item.key)?.is_some() {
@@ -586,9 +641,7 @@ fn insert_compound(
     }
 
     if item.blob.len() > inline_threshold {
-        write_blob_file_sync(blobs_dir, &item.blob_digest, &item.blob)?;
-        let value = encode_external(&item.meta);
-        table.insert(&item.key, value.as_slice())?;
+        table.insert(&item.key, encode_external(&item.meta).as_slice())?;
     } else {
         table.insert(&item.key, encode_inline(&item.meta, &item.blob).as_slice())?;
     }
@@ -716,13 +769,12 @@ impl Storage<Sendable> for RedbStorage {
             let pending = pending_commit(sedimentree_id, &verified);
             let threshold = self.inline_threshold;
             self.with_db(move |db, blobs_dir| {
+                // External blob (if any) staged before the write txn so its
+                // file I/O doesn't hold the database-wide writer slot.
+                stage_external_blobs_sync(core::slice::from_ref(&pending), blobs_dir, threshold)?;
+
                 let txn = db.begin_write()?;
-                insert_compound(
-                    &mut txn.open_table(COMMITS)?,
-                    &pending,
-                    blobs_dir,
-                    threshold,
-                )?;
+                insert_compound(&mut txn.open_table(COMMITS)?, &pending, threshold)?;
                 txn.commit()?;
                 Ok(())
             })
@@ -847,13 +899,12 @@ impl Storage<Sendable> for RedbStorage {
             let pending = pending_fragment(sedimentree_id, &verified);
             let threshold = self.inline_threshold;
             self.with_db(move |db, blobs_dir| {
+                // External blob (if any) staged before the write txn so its
+                // file I/O doesn't hold the database-wide writer slot.
+                stage_external_blobs_sync(core::slice::from_ref(&pending), blobs_dir, threshold)?;
+
                 let txn = db.begin_write()?;
-                insert_compound(
-                    &mut txn.open_table(FRAGMENTS)?,
-                    &pending,
-                    blobs_dir,
-                    threshold,
-                )?;
+                insert_compound(&mut txn.open_table(FRAGMENTS)?, &pending, threshold)?;
                 txn.commit()?;
                 Ok(())
             })
@@ -993,11 +1044,15 @@ impl Storage<Sendable> for RedbStorage {
 
             // The whole batch — id registration included — is one
             // transaction: all-or-nothing, with a single fsync at commit.
-            // External blob files (if any) are written durably inside
-            // `insert_compound`, before the commit makes their references
-            // visible.
+            // External blob files are staged durably *before* the write txn
+            // opens, so their file I/O never holds the database-wide writer
+            // slot; the commit then makes the references visible only after
+            // the files exist.
             let threshold = self.inline_threshold;
             self.with_db(move |db, blobs_dir| {
+                stage_external_blobs_sync(&pending_commits, blobs_dir, threshold)?;
+                stage_external_blobs_sync(&pending_fragments, blobs_dir, threshold)?;
+
                 let txn = db.begin_write()?;
                 {
                     txn.open_table(TREES)?
@@ -1005,12 +1060,12 @@ impl Storage<Sendable> for RedbStorage {
 
                     let mut commits_table = txn.open_table(COMMITS)?;
                     for p in &pending_commits {
-                        insert_compound(&mut commits_table, p, blobs_dir, threshold)?;
+                        insert_compound(&mut commits_table, p, threshold)?;
                     }
 
                     let mut fragments_table = txn.open_table(FRAGMENTS)?;
                     for p in &pending_fragments {
-                        insert_compound(&mut fragments_table, p, blobs_dir, threshold)?;
+                        insert_compound(&mut fragments_table, p, threshold)?;
                     }
                 }
                 txn.commit()?;
@@ -1238,10 +1293,6 @@ pub enum RedbStorageError {
     /// Failed to commit a transaction.
     #[error(transparent)]
     Commit(#[from] redb::CommitError),
-
-    /// Decoding error.
-    #[error(transparent)]
-    Decode(#[from] DecodeError),
 
     /// A blocking storage task panicked or was cancelled.
     #[error("blocking storage task failed: {0}")]

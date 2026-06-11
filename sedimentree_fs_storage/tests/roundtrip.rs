@@ -443,3 +443,96 @@ async fn corrupt_meta_self_heals_on_resave() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// Find the first directory named `name` under `dir` (recursive).
+fn find_dir_named(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == name) {
+                return Some(path);
+            }
+            if let Some(found) = find_dir_named(&path, name) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
+/// Recursively collect every `.tmp` file under `dir`.
+fn find_tmp_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(find_tmp_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "tmp") {
+            out.push(path);
+        }
+    }
+
+    out
+}
+
+/// A batch save that fails partway must not strand `.tmp` files: staged
+/// writes clean their temps on drop. (The realistic trigger is ENOSPC,
+/// where stranded temps would worsen the disk-full condition on every
+/// retry; here the failure is forced by pre-creating a regular FILE where
+/// the second commit's directory must go.)
+#[tokio::test]
+async fn failed_batch_leaves_no_temp_files() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6D);
+
+    // Register the tree so the commits/ dir exists.
+    Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+
+    let good_head = CommitId::new([0x01; 32]);
+    let blocked_head = CommitId::new([0x02; 32]);
+
+    // Block the second commit's id_dir with a regular file
+    // (trees/{bucket}/{leaf}/commits/{commit_id_hex}).
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after registration");
+    let mut blocked_hex = String::with_capacity(64);
+    for byte in blocked_head.as_bytes() {
+        use std::fmt::Write as _;
+        let _unused = write!(blocked_hex, "{byte:02x}");
+    }
+    std::fs::write(commits_dir.join(blocked_hex), b"roadblock")?;
+
+    let make = |head: CommitId| {
+        let signer = &signer;
+        async move {
+            let verified_blob = VerifiedBlobMeta::new(Blob::new(vec![9; 32]));
+            VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                signer,
+                (id, head, BTreeSet::new()),
+                verified_blob,
+            )
+            .await
+        }
+    };
+
+    let commits = vec![make(good_head).await, make(blocked_head).await];
+    let result = Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await;
+    assert!(result.is_err(), "batch must fail on the blocked id_dir");
+
+    assert_eq!(
+        find_tmp_files(dir.path()),
+        Vec::<std::path::PathBuf>::new(),
+        "failed batch must not strand .tmp files"
+    );
+
+    Ok(())
+}

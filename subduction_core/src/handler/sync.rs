@@ -788,6 +788,13 @@ impl<
         // request. The cached tree holds payload metadata only, so the wire
         // data (signed bytes + blobs) still comes from storage — but only
         // for the (typically small) local-only set.
+        //
+        // Coherence note: writes persist to storage *before* updating the
+        // resident tree, so a commit that is durable but not yet cached is
+        // omitted from this response. That brief lag is benign — the next
+        // sync round picks it up, and the protocol tolerates stale views —
+        // but it is a (deliberate) change from the pre-cache behavior of
+        // rebuilding from a storage scan per request.
         let cached = self
             .sedimentrees
             .with_entry(&id, |tree| {
@@ -799,27 +806,41 @@ impl<
             #[cfg(feature = "metrics")]
             crate::metrics::sedimentree_cache_hit();
 
+            // Point reads run concurrently in bounded chunks: a cold peer
+            // missing the whole tree would otherwise serialize N storage
+            // round-trips where the slow path does one bulk scan. The bound
+            // keeps a single request from monopolizing the blocking pool.
             let mut commits = Vec::with_capacity(diff.local_commit_ids.len());
-            for commit_id in &diff.local_commit_ids {
-                if let Some(verified) = fetcher
-                    .load_loose_commit(*commit_id)
-                    .await
-                    .map_err(IoError::Storage)?
-                {
-                    let (signed, _, blob) = verified.into_full_parts();
-                    commits.push((signed, blob));
+            for chunk in diff.local_commit_ids.chunks(POINT_READ_CHUNK) {
+                let results = futures::future::join_all(
+                    chunk
+                        .iter()
+                        .map(|commit_id| fetcher.load_loose_commit(*commit_id)),
+                )
+                .await;
+
+                for result in results {
+                    if let Some(verified) = result.map_err(IoError::Storage)? {
+                        let (signed, _, blob) = verified.into_full_parts();
+                        commits.push((signed, blob));
+                    }
                 }
             }
 
             let mut fragments = Vec::with_capacity(diff.local_fragment_ids.len());
-            for fragment_id in &diff.local_fragment_ids {
-                if let Some(verified) = fetcher
-                    .load_fragment(*fragment_id)
-                    .await
-                    .map_err(IoError::Storage)?
-                {
-                    let (signed, _, blob) = verified.into_full_parts();
-                    fragments.push((signed, blob));
+            for chunk in diff.local_fragment_ids.chunks(POINT_READ_CHUNK) {
+                let results = futures::future::join_all(
+                    chunk
+                        .iter()
+                        .map(|fragment_id| fetcher.load_fragment(*fragment_id)),
+                )
+                .await;
+
+                for result in results {
+                    if let Some(verified) = result.map_err(IoError::Storage)? {
+                        let (signed, _, blob) = verified.into_full_parts();
+                        fragments.push((signed, blob));
+                    }
                 }
             }
 
@@ -1082,6 +1103,11 @@ impl<
         peers::remove_connection(&self.connections, &self.subscriptions, conn).await
     }
 }
+
+/// Number of responder fast-path point reads issued concurrently per
+/// batch. Bounds blocking-pool pressure from a single request while still
+/// overlapping storage round-trips for peers missing many items.
+const POINT_READ_CHUNK: usize = 32;
 
 /// The responder-side wire diff, copied out to owned values.
 ///
