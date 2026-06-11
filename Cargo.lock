@@ -4774,24 +4774,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sedimentree_redb_storage"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "future_form",
- "redb",
- "sedimentree_core",
- "sedimentree_fs_storage",
- "subduction_core",
- "subduction_crypto",
- "tempfile",
- "testresult",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "sedimentree_wasm"
 version = "0.15.0"
 dependencies = [
@@ -5377,6 +5359,24 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "subduction_redb_storage"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "future_form",
+ "redb",
+ "sedimentree_core",
+ "sedimentree_fs_storage",
+ "subduction_core",
+ "subduction_crypto",
+ "tempfile",
+ "testresult",
+ "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 

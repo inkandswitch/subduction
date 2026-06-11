@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo bench -p sedimentree_redb_storage --bench backends
+//! cargo bench -p subduction_redb_storage --bench backends
 //! ```
 //!
 //! Set `SUBDUCTION_BENCH_CI_SLIM=1` for a slim sweep (drops the 10k-commit
@@ -79,9 +79,9 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
 };
 use sedimentree_fs_storage::FsStorage;
-use sedimentree_redb_storage::RedbStorage;
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
+use subduction_redb_storage::RedbStorage;
 use tokio::runtime::Runtime;
 
 const TREE: [u8; 32] = [0xAB; 32];
@@ -108,12 +108,14 @@ fn count_sweep() -> &'static [usize] {
 ///
 /// 48 KiB sits midway between the 32 Ki and 64 Ki buddy-allocator
 /// boundaries (representative ~33% inline waste); 64 KiB is the documented
-/// pathological worst case (see module docs).
+/// pathological worst case (see module docs); 192 KiB matches the *actual*
+/// average size of production blobs above the external threshold (~171 KB
+/// measured across 31.6k externals, 2026-06).
 fn blob_size_sweep() -> &'static [usize] {
     if ci_slim() {
         &[64, 1024]
     } else {
-        &[64, 1024, 49_152, 65_536]
+        &[64, 1024, 49_152, 65_536, 196_608]
     }
 }
 
@@ -286,7 +288,7 @@ fn measure_size<S: Storage<Sendable>>(
     let (apparent, allocated) = disk_usage(dir.path());
 
     let compacted = backend.compactable.then(|| {
-        let db_path = dir.path().join(sedimentree_redb_storage::DB_FILE_NAME);
+        let db_path = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
         let mut db = redb::Database::create(&db_path).expect("reopen redb for compaction");
         db.compact().expect("compact redb");
         drop(db);

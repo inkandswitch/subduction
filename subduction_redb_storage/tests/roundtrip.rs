@@ -12,9 +12,9 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
-use sedimentree_redb_storage::RedbStorage;
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
+use subduction_redb_storage::RedbStorage;
 
 fn test_signer() -> MemorySigner {
     MemorySigner::from_bytes(&[42u8; 32])
@@ -207,7 +207,7 @@ fn blob_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 
     let mut out = Vec::new();
     walk(
-        &root.join(sedimentree_redb_storage::BLOBS_DIR_NAME),
+        &root.join(subduction_redb_storage::BLOBS_DIR_NAME),
         &mut out,
     );
     out

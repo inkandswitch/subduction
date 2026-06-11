@@ -1,5 +1,5 @@
 [package]
-name = "sedimentree_redb_storage"
+name = "subduction_redb_storage"
 version = "0.1.0"
 description = "redb-based storage backend for Sedimentree"
 
@@ -16,9 +16,9 @@ rust-version.workspace = true
 [dependencies]
 future_form = { workspace = true }
 redb = { workspace = true }
-sedimentree_core = { workspace = true, features = ["std"] }
-subduction_core = { workspace = true, features = ["std"] }
-subduction_crypto = { workspace = true, features = ["std"] }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 tracing = { workspace = true, default-features = true }

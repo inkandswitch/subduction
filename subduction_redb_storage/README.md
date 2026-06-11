@@ -1,4 +1,4 @@
-# `sedimentree_redb_storage`
+# `subduction_redb_storage`
 
 A [redb]-backed storage backend for Sedimentree, implementing the
 `Storage` trait from `subduction_core`.

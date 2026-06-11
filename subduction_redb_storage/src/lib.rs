@@ -27,10 +27,16 @@
 //! fragments: [u8; 96] = tree_id ++ head_id  ++ digest → tagged compound value
 //!
 //! tagged compound value:
-//!   0x00 ++ meta_len:u32be ++ meta ++ blob                      (inline)
-//!   0x01 ++ meta_len:u32be ++ meta ++ blob_digest:[u8;32]
-//!        ++ blob_len:u64be                                      (external)
+//!   0x00 ++ meta_len:u32be ++ meta ++ blob    (inline)
+//!   0x01 ++ meta                              (external)
 //! ```
+//!
+//! External records store *only* the signed metadata: the blob's digest
+//! (and size) already live inside the signed payload's `BlobMeta`, so the
+//! file name is derived by decoding the meta rather than duplicating the
+//! digest in the value. Bulk loads therefore run in three phases: one
+//! blocking hop for the B+tree range scan, decoding in async land, then
+//! the external blob files read in parallel chunks on the blocking pool.
 //!
 //! Keys sort lexicographically, so all items of a tree (or of one
 //! commit/fragment identity) are contiguous: bulk loads are a single B+tree
@@ -61,7 +67,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use sedimentree_redb_storage::RedbStorage;
+//! use subduction_redb_storage::RedbStorage;
 //! use std::path::PathBuf;
 //!
 //! let storage = RedbStorage::new(PathBuf::from("./data")).expect("failed to open storage");
@@ -256,12 +262,11 @@ enum DecodedCompound {
         blob: Vec<u8>,
     },
 
-    /// Blob lives in an external content-addressed file.
+    /// Blob lives in an external content-addressed file, named by the
+    /// digest inside the meta's own `BlobMeta` (no duplication).
     External {
         /// `Signed<T>` wire bytes.
         meta: Vec<u8>,
-        /// The blob's content digest (names the file).
-        blob_digest: [u8; 32],
     },
 }
 
@@ -276,37 +281,34 @@ fn encode_inline(meta: &[u8], blob: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Encode an external compound value:
-/// `0x01 ++ meta_len:u32be ++ meta ++ blob_digest ++ blob_len:u64be`.
-fn encode_external(meta: &[u8], blob_digest: &[u8; 32], blob_len: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + 4 + meta.len() + 32 + 8);
+/// Encode an external compound value: `0x01 ++ meta`.
+///
+/// No length prefix and no blob reference: the meta is the remainder of
+/// the value, and the blob's digest/size are already inside the signed
+/// payload's `BlobMeta`.
+fn encode_external(meta: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + meta.len());
     out.push(TAG_EXTERNAL);
-    #[allow(clippy::cast_possible_truncation)]
-    out.extend_from_slice(&(meta.len() as u32).to_be_bytes());
     out.extend_from_slice(meta);
-    out.extend_from_slice(blob_digest);
-    out.extend_from_slice(&blob_len.to_be_bytes());
     out
 }
 
 /// Decode a compound value. `None` on a malformed buffer.
 fn decode_compound(bytes: &[u8]) -> Option<DecodedCompound> {
     let tag = *bytes.first()?;
-    let len_bytes: [u8; 4] = bytes.get(1..5)?.try_into().ok()?;
-    let meta_len = u32::from_be_bytes(len_bytes) as usize;
-    let meta = bytes.get(5..5 + meta_len)?.to_vec();
-    let rest = bytes.get(5 + meta_len..)?;
 
     match tag {
-        TAG_INLINE => Some(DecodedCompound::Inline {
-            meta,
-            blob: rest.to_vec(),
-        }),
-        TAG_EXTERNAL => {
-            let blob_digest: [u8; 32] = rest.get(..32)?.try_into().ok()?;
-            // Trailing 8 bytes are the blob length (diagnostics only).
-            Some(DecodedCompound::External { meta, blob_digest })
+        TAG_INLINE => {
+            let len_bytes: [u8; 4] = bytes.get(1..5)?.try_into().ok()?;
+            let meta_len = u32::from_be_bytes(len_bytes) as usize;
+            Some(DecodedCompound::Inline {
+                meta: bytes.get(5..5 + meta_len)?.to_vec(),
+                blob: bytes.get(5 + meta_len..)?.to_vec(),
+            })
         }
+        TAG_EXTERNAL => Some(DecodedCompound::External {
+            meta: bytes.get(1..)?.to_vec(),
+        }),
         _ => None,
     }
 }
@@ -394,29 +396,6 @@ fn read_blob_file_sync(
     }
 }
 
-/// Resolve a decoded compound to its raw `meta` + `blob` pair, reading the
-/// external file if needed. `Ok(None)` if the external file is missing
-/// (treated as a corrupt entry by callers).
-fn resolve_compound(
-    decoded: DecodedCompound,
-    blobs_dir: &Path,
-) -> Result<Option<RawCompound>, RedbStorageError> {
-    match decoded {
-        DecodedCompound::Inline { meta, blob } => Ok(Some((meta, blob))),
-        DecodedCompound::External { meta, blob_digest } => {
-            if let Some(blob) = read_blob_file_sync(blobs_dir, &blob_digest)? {
-                Ok(Some((meta, blob)))
-            } else {
-                tracing::warn!(
-                    digest = %hex_encode(&blob_digest),
-                    "external blob file missing; skipping record"
-                );
-                Ok(None)
-            }
-        }
-    }
-}
-
 /// Decode a raw compound pair into a [`VerifiedMeta`], skip-and-warn on
 /// corruption (mirrors the filesystem backend's tolerance).
 fn decode_verified<T>(raw: RawCompound, what: &str) -> Option<VerifiedMeta<T>>
@@ -444,27 +423,117 @@ where
     }
 }
 
-/// Read every raw compound value in `range` from `table`, resolving
-/// external blobs to their file contents. Malformed values and records
-/// whose external blob file is missing are skipped with a warning.
-fn scan_range(
+/// Number of external blob files read per blocking task when bulk loads
+/// resolve them (mirrors the filesystem backend's bulk-read fan-out).
+const EXTERNAL_READ_CHUNK: usize = 128;
+
+/// Scan the compound values in `range` from `table`, decoding each one
+/// straight off the borrowed page (a single copy of the meta/blob bytes —
+/// no intermediate whole-value `Vec`). Malformed values are skipped with a
+/// warning. No file I/O.
+fn scan_decoded(
     table: &impl ReadableTable<&'static [u8; 96], &'static [u8]>,
-    blobs_dir: &Path,
     lo: &Key96,
     hi: &Key96,
-) -> Result<Vec<RawCompound>, RedbStorageError> {
+) -> Result<Vec<DecodedCompound>, RedbStorageError> {
     let mut out = Vec::new();
     for entry in table.range::<&[u8; 96]>(lo..=hi)? {
         let (_, value) = entry?;
-        let Some(decoded) = decode_compound(value.value()) else {
+        if let Some(decoded) = decode_compound(value.value()) {
+            out.push(decoded);
+        } else {
             tracing::warn!("skipping malformed compound value");
+        }
+    }
+    Ok(out)
+}
+
+/// Decode scanned compound values into [`VerifiedMeta`]s, resolving
+/// external blobs via parallel chunked file reads.
+///
+/// Three phases: the values arrive pre-decoded from a single B+tree scan
+/// hop, the metas decode here in async land (yielding each external
+/// record's blob digest from its own `BlobMeta`), and the external files
+/// are then read in chunks of [`EXTERNAL_READ_CHUNK`] across blocking
+/// tasks so a large tree's blob resolution is not bound by one thread's
+/// sequential open/read throughput.
+///
+/// Undecodable metas, missing external files, and corrupt items are
+/// skipped with a warning (mirroring the filesystem backend's tolerance).
+async fn resolve_items<T>(
+    blobs_dir: Arc<PathBuf>,
+    items: Vec<DecodedCompound>,
+    what: &str,
+) -> Result<Vec<VerifiedMeta<T>>, RedbStorageError>
+where
+    T: sedimentree_core::blob::has_meta::HasBlobMeta
+        + sedimentree_core::codec::schema::Schema
+        + sedimentree_core::codec::encode::EncodeFields
+        + sedimentree_core::codec::decode::DecodeFields,
+{
+    let mut out = Vec::with_capacity(items.len());
+    let mut pending: Vec<(Signed<T>, [u8; 32])> = Vec::new();
+
+    for item in items {
+        match item {
+            DecodedCompound::Inline { meta, blob } => {
+                if let Some(verified) = decode_verified((meta, blob), what) {
+                    out.push(verified);
+                }
+            }
+            DecodedCompound::External { meta } => match Signed::<T>::try_decode(meta) {
+                Ok(signed) => match signed.try_decode_trusted_payload() {
+                    Ok(payload) => {
+                        pending.push((signed, *payload.blob_meta().digest().as_bytes()));
+                    }
+                    Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
+                },
+                Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
+            },
+        }
+    }
+
+    if pending.is_empty() {
+        return Ok(out);
+    }
+
+    let digests: Vec<[u8; 32]> = pending.iter().map(|(_, digest)| *digest).collect();
+    let handles: Vec<_> = digests
+        .chunks(EXTERNAL_READ_CHUNK)
+        .map(|chunk| {
+            let chunk = chunk.to_vec();
+            let blobs_dir = Arc::clone(&blobs_dir);
+            tokio::task::spawn_blocking(
+                move || -> Result<Vec<Option<Vec<u8>>>, RedbStorageError> {
+                    chunk
+                        .iter()
+                        .map(|digest| read_blob_file_sync(&blobs_dir, digest))
+                        .collect()
+                },
+            )
+        })
+        .collect();
+
+    let mut blobs = Vec::with_capacity(pending.len());
+    for handle in handles {
+        blobs.extend(handle.await??);
+    }
+
+    for ((signed, digest), blob) in pending.into_iter().zip(blobs) {
+        let Some(blob) = blob else {
+            tracing::warn!(
+                digest = %hex_encode(&digest),
+                "external blob file missing; skipping {what}"
+            );
             continue;
         };
 
-        if let Some(raw) = resolve_compound(decoded, blobs_dir)? {
-            out.push(raw);
+        match VerifiedMeta::try_from_trusted(signed, Blob::new(blob)) {
+            Ok(verified) => out.push(verified),
+            Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
         }
     }
+
     Ok(out)
 }
 
@@ -518,7 +587,7 @@ fn insert_compound(
 
     if item.blob.len() > inline_threshold {
         write_blob_file_sync(blobs_dir, &item.blob_digest, &item.blob)?;
-        let value = encode_external(&item.meta, &item.blob_digest, item.blob.len() as u64);
+        let value = encode_external(&item.meta);
         table.insert(&item.key, value.as_slice())?;
     } else {
         table.insert(&item.key, encode_inline(&item.meta, &item.blob).as_slice())?;
@@ -684,19 +753,16 @@ impl Storage<Sendable> for RedbStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::load_loose_commits");
 
-            // One range scan in a blocking hop; decode in async land.
+            // Scan hop → decode in async land → parallel external blob reads.
             let raw = self
-                .with_db(move |db, blobs_dir| {
+                .with_db(move |db, _blobs_dir| {
                     let (lo, hi) = tree_range(sedimentree_id);
                     let txn = db.begin_read()?;
-                    scan_range(&txn.open_table(COMMITS)?, blobs_dir, &lo, &hi)
+                    scan_decoded(&txn.open_table(COMMITS)?, &lo, &hi)
                 })
                 .await?;
 
-            Ok(raw
-                .into_iter()
-                .filter_map(|pair| decode_verified(pair, "loose commit"))
-                .collect())
+            resolve_items(Arc::clone(&self.blobs_dir), raw, "loose commit").await
         })
     }
 
@@ -714,16 +780,19 @@ impl Storage<Sendable> for RedbStorage {
             );
 
             let raw = self
-                .with_db(move |db, blobs_dir| {
+                .with_db(move |db, _blobs_dir| {
                     let (lo, hi) = item_range(sedimentree_id, commit_id);
                     let txn = db.begin_read()?;
-                    Ok(scan_range(&txn.open_table(COMMITS)?, blobs_dir, &lo, &hi)?
-                        .into_iter()
-                        .next())
+                    scan_decoded(&txn.open_table(COMMITS)?, &lo, &hi)
                 })
                 .await?;
 
-            Ok(raw.and_then(|pair| decode_verified(pair, "loose commit")))
+            Ok(
+                resolve_items(Arc::clone(&self.blobs_dir), raw, "loose commit")
+                    .await?
+                    .into_iter()
+                    .next(),
+            )
         })
     }
 
@@ -806,18 +875,17 @@ impl Storage<Sendable> for RedbStorage {
             );
 
             let raw = self
-                .with_db(move |db, blobs_dir| {
+                .with_db(move |db, _blobs_dir| {
                     let (lo, hi) = item_range(sedimentree_id, fragment_head);
                     let txn = db.begin_read()?;
-                    Ok(
-                        scan_range(&txn.open_table(FRAGMENTS)?, blobs_dir, &lo, &hi)?
-                            .into_iter()
-                            .next(),
-                    )
+                    scan_decoded(&txn.open_table(FRAGMENTS)?, &lo, &hi)
                 })
                 .await?;
 
-            Ok(raw.and_then(|pair| decode_verified(pair, "fragment")))
+            Ok(resolve_items(Arc::clone(&self.blobs_dir), raw, "fragment")
+                .await?
+                .into_iter()
+                .next())
         })
     }
 
@@ -844,18 +912,16 @@ impl Storage<Sendable> for RedbStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::load_fragments");
 
+            // Scan hop → decode in async land → parallel external blob reads.
             let raw = self
-                .with_db(move |db, blobs_dir| {
+                .with_db(move |db, _blobs_dir| {
                     let (lo, hi) = tree_range(sedimentree_id);
                     let txn = db.begin_read()?;
-                    scan_range(&txn.open_table(FRAGMENTS)?, blobs_dir, &lo, &hi)
+                    scan_decoded(&txn.open_table(FRAGMENTS)?, &lo, &hi)
                 })
                 .await?;
 
-            Ok(raw
-                .into_iter()
-                .filter_map(|pair| decode_verified(pair, "fragment"))
-                .collect())
+            resolve_items(Arc::clone(&self.blobs_dir), raw, "fragment").await
         })
     }
 

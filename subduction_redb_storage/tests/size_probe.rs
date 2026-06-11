@@ -22,7 +22,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo test -p sedimentree_redb_storage --test size_probe -- --ignored --nocapture
+//! cargo test -p subduction_redb_storage --test size_probe -- --ignored --nocapture
 //! ```
 #![allow(
     clippy::cast_lossless,
@@ -39,9 +39,9 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
-use sedimentree_redb_storage::RedbStorage;
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
+use subduction_redb_storage::RedbStorage;
 
 #[tokio::test]
 #[ignore = "diagnostic probe, run manually"]
@@ -82,7 +82,7 @@ async fn inline_size_amplification_probe() {
             .expect("save batch");
         drop(storage);
 
-        let db = dir.path().join(sedimentree_redb_storage::DB_FILE_NAME);
+        let db = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
         let file_len = std::fs::metadata(&db).expect("metadata").len();
         let logical = 1000 * blob_size as u64;
         eprintln!(
