@@ -22,7 +22,7 @@ use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
     collections::{Map, Set},
-    crypto::digest::Digest,
+    crypto::{digest::Digest, fingerprint::Fingerprint},
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
@@ -773,57 +773,6 @@ impl<
             }
         };
 
-        let mut their_missing_commits = Vec::new();
-        let mut their_missing_fragments = Vec::new();
-
-        let verified_commits = fetcher
-            .load_loose_commits()
-            .await
-            .map_err(IoError::Storage)?;
-        let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
-
-        let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
-        for vm in verified_commits {
-            commit_by_id.entry(vm.payload().head()).or_insert(vm);
-        }
-        let fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = verified_fragments
-            .into_iter()
-            .map(|vm| (vm.payload().head(), vm))
-            .collect();
-
-        // Build the resident tree from the data we just loaded (reusing the
-        // fetcher reads above — no second storage round-trip).
-        let loose_commits: Vec<_> = commit_by_id
-            .values()
-            .map(|vm| vm.payload().clone())
-            .collect();
-        let fragments: Vec<_> = fragment_by_id
-            .values()
-            .map(|vm| vm.payload().clone())
-            .collect();
-
-        // Only install into the cache when there is actual stored data.
-        //
-        // Caching an empty tree for a never-stored id would make a later
-        // `get_or_hydrate(id)` return `Some(empty)` instead of `None`,
-        // corrupting the exists-vs-nonexistent contract eviction relies on —
-        // and would let any authorized peer pollute the cache by requesting
-        // arbitrary ids (`get_fetcher` gates on policy, not existence). When
-        // there is no data we diff against an ephemeral empty tree and cache
-        // nothing; the response correctly advertises no local items.
-        //
-        // `get_or_insert_with` adopts a concurrently-installed value if one
-        // appeared and records an LRU access; the built tree is already
-        // minimal, so it is wrapped clean.
-        let mut sedimentree = if loose_commits.is_empty() && fragments.is_empty() {
-            MinimizedSedimentree::already_minimal(Sedimentree::default())
-        } else {
-            let built = Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-            self.sedimentrees
-                .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(built))
-                .await
-        };
-
         tracing::debug!(
             tree = ?id,
             req = ?req_id,
@@ -832,39 +781,144 @@ impl<
             "received batch sync request"
         );
 
-        // The wire diff requires the minimal form. A freshly built value is
-        // already minimal, but an adopted concurrently-installed value may be
-        // dirty, so minimize once here. `heads_assuming_minimal` then reads the
-        // heads off the now-minimal tree without re-minimizing (which
-        // `Sedimentree::heads` would otherwise do internally).
-        let minimal = sedimentree.minimized(&self.depth_metric);
-        let raw_heads = minimal.heads_assuming_minimal();
-        let diff = minimal.diff_remote_fingerprints(their_fingerprints);
-        let local_commit_ids: Vec<_> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
-        let local_fragment_ids: Vec<_> = diff
-            .local_only_fragments
-            .iter()
-            .map(|(id, _)| **id)
-            .collect();
-        let our_missing_commit_fingerprints = diff.remote_only_commit_fingerprints;
-        let our_missing_fragment_fingerprints = diff.remote_only_fragment_fingerprints;
+        // Fast path: diff against the resident minimized tree (recording an
+        // LRU touch), then fetch only the items the peer is actually missing
+        // as targeted point reads. For a cache-resident tree this replaces
+        // the full commit+fragment storage scan that previously ran on every
+        // request. The cached tree holds payload metadata only, so the wire
+        // data (signed bytes + blobs) still comes from storage — but only
+        // for the (typically small) local-only set.
+        let cached = self
+            .sedimentrees
+            .with_entry(&id, |tree| {
+                ResponderDiff::new(tree.minimized(&self.depth_metric), their_fingerprints)
+            })
+            .await;
+
+        let (diff, their_missing_commits, their_missing_fragments) = if let Some(diff) = cached {
+            #[cfg(feature = "metrics")]
+            crate::metrics::sedimentree_cache_hit();
+
+            let mut commits = Vec::with_capacity(diff.local_commit_ids.len());
+            for commit_id in &diff.local_commit_ids {
+                if let Some(verified) = fetcher
+                    .load_loose_commit(*commit_id)
+                    .await
+                    .map_err(IoError::Storage)?
+                {
+                    let (signed, _, blob) = verified.into_full_parts();
+                    commits.push((signed, blob));
+                }
+            }
+
+            let mut fragments = Vec::with_capacity(diff.local_fragment_ids.len());
+            for fragment_id in &diff.local_fragment_ids {
+                if let Some(verified) = fetcher
+                    .load_fragment(*fragment_id)
+                    .await
+                    .map_err(IoError::Storage)?
+                {
+                    let (signed, _, blob) = verified.into_full_parts();
+                    fragments.push((signed, blob));
+                }
+            }
+
+            (diff, commits, fragments)
+        } else {
+            #[cfg(feature = "metrics")]
+            crate::metrics::sedimentree_cache_miss();
+
+            // Slow path (cache miss): full storage scan, which also warms
+            // the cache so subsequent requests for this tree take the
+            // fast path.
+            let verified_commits = fetcher
+                .load_loose_commits()
+                .await
+                .map_err(IoError::Storage)?;
+            let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
+
+            let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
+            for vm in verified_commits {
+                commit_by_id.entry(vm.payload().head()).or_insert(vm);
+            }
+            let fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = verified_fragments
+                .into_iter()
+                .map(|vm| (vm.payload().head(), vm))
+                .collect();
+
+            // Build the resident tree from the data we just loaded
+            // (reusing the fetcher reads above — no second storage
+            // round-trip).
+            let loose_commits: Vec<_> = commit_by_id
+                .values()
+                .map(|vm| vm.payload().clone())
+                .collect();
+            let fragments: Vec<_> = fragment_by_id
+                .values()
+                .map(|vm| vm.payload().clone())
+                .collect();
+
+            // Only install into the cache when there is actual stored
+            // data.
+            //
+            // Caching an empty tree for a never-stored id would make a
+            // later `get_or_hydrate(id)` return `Some(empty)` instead of
+            // `None`, corrupting the exists-vs-nonexistent contract
+            // eviction relies on — and would let any authorized peer
+            // pollute the cache by requesting arbitrary ids
+            // (`get_fetcher` gates on policy, not existence). When there
+            // is no data we diff against an ephemeral empty tree and
+            // cache nothing; the response correctly advertises no local
+            // items.
+            //
+            // `get_or_insert_with` adopts a concurrently-installed value
+            // if one appeared and records an LRU access; the built tree
+            // is already minimal, so it is wrapped clean.
+            let mut sedimentree = if loose_commits.is_empty() && fragments.is_empty() {
+                MinimizedSedimentree::already_minimal(Sedimentree::default())
+            } else {
+                let built = Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
+                self.sedimentrees
+                    .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(built))
+                    .await
+            };
+
+            // The wire diff requires the minimal form. A freshly built
+            // value is already minimal, but an adopted
+            // concurrently-installed value may be dirty, so minimize once
+            // here.
+            let diff = ResponderDiff::new(
+                sedimentree.minimized(&self.depth_metric),
+                their_fingerprints,
+            );
+
+            let commits = diff
+                .local_commit_ids
+                .iter()
+                .filter_map(|commit_id| commit_by_id.get(commit_id))
+                .map(|vm| (vm.signed().clone(), vm.blob().clone()))
+                .collect();
+            let fragments = diff
+                .local_fragment_ids
+                .iter()
+                .filter_map(|fragment_id| fragment_by_id.get(fragment_id))
+                .map(|vm| (vm.signed().clone(), vm.blob().clone()))
+                .collect();
+
+            (diff, commits, fragments)
+        };
+
+        let ResponderDiff {
+            heads,
+            requesting_commit_fingerprints,
+            requesting_fragment_fingerprints,
+            ..
+        } = diff;
 
         let responder_heads = RemoteHeads {
             counter: self.send_counter.next(conn.peer_id()).await,
-            heads: raw_heads,
+            heads,
         };
-
-        for commit_id in local_commit_ids {
-            if let Some(verified) = commit_by_id.get(&commit_id) {
-                their_missing_commits.push((verified.signed().clone(), verified.blob().clone()));
-            }
-        }
-
-        for frag_id in local_fragment_ids {
-            if let Some(verified) = fragment_by_id.get(&frag_id) {
-                their_missing_fragments.push((verified.signed().clone(), verified.blob().clone()));
-            }
-        }
 
         tracing::info!(
             peer = %peer_id,
@@ -872,8 +926,8 @@ impl<
             req = ?req_id,
             missing_commits = their_missing_commits.len(),
             missing_fragments = their_missing_fragments.len(),
-            requesting_commits = our_missing_commit_fingerprints.len(),
-            requesting_fragments = our_missing_fragment_fingerprints.len(),
+            requesting_commits = requesting_commit_fingerprints.len(),
+            requesting_fragments = requesting_fragment_fingerprints.len(),
             "sending batch sync response"
         );
 
@@ -881,8 +935,8 @@ impl<
             missing_commits: their_missing_commits,
             missing_fragments: their_missing_fragments,
             requesting: RequestedData {
-                commit_fingerprints: our_missing_commit_fingerprints,
-                fragment_fingerprints: our_missing_fragment_fingerprints,
+                commit_fingerprints: requesting_commit_fingerprints,
+                fragment_fingerprints: requesting_fragment_fingerprints,
             },
         };
 
@@ -1026,5 +1080,53 @@ impl<
 
     async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
         peers::remove_connection(&self.connections, &self.subscriptions, conn).await
+    }
+}
+
+/// The responder-side wire diff, copied out to owned values.
+///
+/// [`Sedimentree::diff_remote_fingerprints`] returns a
+/// [`FingerprintDiff`](sedimentree_core::sedimentree::FingerprintDiff) that
+/// *borrows* from the tree, which cannot escape the sedimentree cache's
+/// shard lock (`with_entry` runs its closure under the lock). This type
+/// extracts everything `recv_batch_sync_request` needs as owned data: the
+/// ids to fetch from storage, the fingerprints to echo back, and the heads.
+struct ResponderDiff {
+    /// The responder's heads, read off the minimal tree.
+    heads: Vec<CommitId>,
+
+    /// Ids of commits we hold that the requestor is missing.
+    local_commit_ids: Vec<CommitId>,
+
+    /// Ids of fragments we hold that the requestor is missing.
+    local_fragment_ids: Vec<CommitId>,
+
+    /// Requestor commit fingerprints we don't recognize (echoed back so the
+    /// requestor can reverse-lookup and send the data).
+    requesting_commit_fingerprints: Vec<Fingerprint<CommitId>>,
+
+    /// Requestor fragment fingerprints we don't recognize (echoed back).
+    requesting_fragment_fingerprints: Vec<Fingerprint<CommitId>>,
+}
+
+impl ResponderDiff {
+    /// Diff `minimal` against the requestor's fingerprint summary.
+    ///
+    /// `minimal` must already be in minimal form (the wire diff and
+    /// `heads_assuming_minimal` both rely on it).
+    fn new(minimal: &Sedimentree, their_fingerprints: &FingerprintSummary) -> Self {
+        let diff = minimal.diff_remote_fingerprints(their_fingerprints);
+
+        Self {
+            heads: minimal.heads_assuming_minimal(),
+            local_commit_ids: diff.local_only_commits.iter().map(|(id, _)| **id).collect(),
+            local_fragment_ids: diff
+                .local_only_fragments
+                .iter()
+                .map(|(id, _)| **id)
+                .collect(),
+            requesting_commit_fingerprints: diff.remote_only_commit_fingerprints,
+            requesting_fragment_fingerprints: diff.remote_only_fragment_fingerprints,
+        }
     }
 }
