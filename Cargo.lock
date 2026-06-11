@@ -4391,6 +4391,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redb"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4755,6 +4764,24 @@ dependencies = [
  "future_form",
  "hex",
  "sedimentree_core",
+ "subduction_core",
+ "subduction_crypto",
+ "tempfile",
+ "testresult",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sedimentree_redb_storage"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "future_form",
+ "redb",
+ "sedimentree_core",
+ "sedimentree_fs_storage",
  "subduction_core",
  "subduction_crypto",
  "tempfile",
