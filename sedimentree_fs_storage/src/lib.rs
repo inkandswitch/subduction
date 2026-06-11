@@ -81,13 +81,92 @@ struct PendingWrite {
     blob_data: Vec<u8>,
 }
 
-/// Synchronously persist one compound item using the durable temp-then-rename
-/// dance. CAS: a no-op if the `.meta` already exists. Must be called from a
-/// blocking context (e.g. inside `spawn_blocking`).
+/// Synchronously persist one compound item with full crash durability:
+/// file contents are fsynced *before* the renames make them visible, and the
+/// containing directories are fsynced *after* so the renames (and the
+/// `id_dir` creation) survive a crash. Must be called from a blocking
+/// context (e.g. inside `spawn_blocking`).
 fn write_compound_sync(item: &PendingWrite) -> Result<(), FsStorageError> {
-    // CAS: skip if already exists.
-    if std::fs::metadata(&item.meta_path).is_ok() {
-        return Ok(());
+    if write_compound_files_sync(item)? {
+        fsync_compound_dirs_sync(item)?;
+    }
+    Ok(())
+}
+
+/// Write the temp files (fsynced) and rename them into place, *without* the
+/// trailing directory fsyncs. Returns `true` if the item was written, `false`
+/// if the CAS check found an intact existing `.meta` and skipped the write.
+///
+/// # Crash consistency
+///
+/// The ordering is load-bearing:
+///
+/// 1. fsync both temp files — contents are durable *before* any name points
+///    at them. `rename` is atomic in the namespace but says nothing about
+///    data blocks; renaming first risks a visible-but-empty `.meta` after a
+///    crash (and ext4's `auto_da_alloc` rescue only applies when replacing
+///    an *existing* file, which a fresh CAS target never is).
+/// 2. rename blob before meta — the `.meta`'s existence is the CAS marker,
+///    so it must imply the blob is already in place.
+fn write_compound_files_sync(item: &PendingWrite) -> Result<bool, FsStorageError> {
+    let Some(staged) = stage_compound_write_sync(item)? else {
+        return Ok(false);
+    };
+
+    fsync_file_sync(&staged.blob_temp)?;
+    fsync_file_sync(&staged.meta_temp)?;
+    staged.rename_into_place()?;
+
+    Ok(true)
+}
+
+/// Temp files written (but not yet fsynced or renamed) for one compound item.
+struct StagedWrite<'a> {
+    item: &'a PendingWrite,
+    blob_temp: PathBuf,
+    meta_temp: PathBuf,
+}
+
+impl StagedWrite<'_> {
+    /// Rename both temp files to their final CAS paths: blob before meta,
+    /// since the `.meta`'s existence is the marker that the compound item is
+    /// complete. Call only after both temps are fsynced.
+    fn rename_into_place(&self) -> Result<(), FsStorageError> {
+        std::fs::rename(&self.blob_temp, &self.item.blob_path)?;
+        std::fs::rename(&self.meta_temp, &self.item.meta_path)?;
+        Ok(())
+    }
+}
+
+/// Run the CAS check and, if the item needs writing, create its directory
+/// and write (but do not fsync or rename) both temp files.
+///
+/// Returns `None` if an intact `.meta` already exists. Batch callers stage
+/// every item first, then fsync all temps in one pass — on journaling
+/// filesystems the first fsync commits the shared journal transaction, making
+/// the remaining fsyncs nearly free — then rename, then fsync directories.
+///
+/// # CAS validation
+///
+/// The skip requires the existing `.meta` length to match the expected
+/// signed bytes (same CAS path ⇒ same content ⇒ same length). A
+/// zero-length or truncated `.meta` left by a pre-fsync crash is rewritten
+/// instead of being preserved forever.
+fn stage_compound_write_sync(
+    item: &PendingWrite,
+) -> Result<Option<StagedWrite<'_>>, FsStorageError> {
+    // CAS: skip only if the existing `.meta` is intact.
+    if let Ok(existing) = std::fs::metadata(&item.meta_path) {
+        if existing.len() == item.signed_data.len() as u64 {
+            return Ok(None);
+        }
+
+        tracing::warn!(
+            meta_path = %item.meta_path.display(),
+            have = existing.len(),
+            need = item.signed_data.len(),
+            "rewriting corrupt .meta (size mismatch; likely a pre-fsync crash artifact)"
+        );
     }
 
     std::fs::create_dir_all(&item.id_dir)?;
@@ -98,9 +177,71 @@ fn write_compound_sync(item: &PendingWrite) -> Result<(), FsStorageError> {
 
     std::fs::write(&blob_temp, &item.blob_data)?;
     std::fs::write(&meta_temp, &item.signed_data)?;
-    std::fs::rename(&blob_temp, &item.blob_path)?;
-    std::fs::rename(&meta_temp, &item.meta_path)?;
 
+    Ok(Some(StagedWrite {
+        item,
+        blob_temp,
+        meta_temp,
+    }))
+}
+
+/// Fsync `path`'s contents. Opening a fresh read handle is sufficient:
+/// `fsync` flushes the *inode's* dirty pages, regardless of which descriptor
+/// wrote them.
+fn fsync_file_sync(path: &Path) -> Result<(), FsStorageError> {
+    std::fs::File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+/// Fsync many paths (files or directories), fanned across scoped threads.
+///
+/// A sequential fsync loop pays one device flush per call (~0.5 ms each on
+/// consumer `NVMe`), which makes large batches scale linearly with item count.
+/// Concurrent fsyncs let the journal's group commit (e.g. ext4's jbd2)
+/// coalesce many waiters into shared transactions, amortizing the flushes.
+/// Must be called from a blocking context.
+fn fsync_paths_parallel_sync(paths: &[&Path]) -> Result<(), FsStorageError> {
+    const MAX_FSYNC_THREADS: usize = 16;
+
+    if paths.len() <= 1 {
+        return paths.iter().try_for_each(|p| fsync_file_sync(p));
+    }
+
+    let threads = std::thread::available_parallelism()
+        .map_or(4, std::num::NonZero::get)
+        .min(MAX_FSYNC_THREADS);
+    let chunk_size = paths.len().div_ceil(threads).max(1);
+
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = paths
+            .chunks(chunk_size)
+            .map(|chunk| scope.spawn(move || chunk.iter().try_for_each(|p| fsync_file_sync(p))))
+            .collect();
+
+        for handle in handles {
+            match handle.join() {
+                Ok(result) => result?,
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+
+        Ok(())
+    })
+}
+
+/// Fsync the directories whose entries `write_compound_files_sync` mutated:
+/// `id_dir` (the renames) and its parent (the `create_dir_all` of `id_dir`).
+fn fsync_compound_dirs_sync(item: &PendingWrite) -> Result<(), FsStorageError> {
+    fsync_dir_sync(&item.id_dir)?;
+    if let Some(parent) = item.id_dir.parent() {
+        fsync_dir_sync(parent)?;
+    }
+    Ok(())
+}
+
+/// Fsync a directory so renames/creations of its entries are durable.
+fn fsync_dir_sync(dir: &Path) -> Result<(), FsStorageError> {
+    std::fs::File::open(dir)?.sync_all()?;
     Ok(())
 }
 
@@ -112,14 +253,17 @@ type MetaBlobPair = (Vec<u8>, Vec<u8>);
 /// blocking closure stays pure I/O.
 type RawCompound = (String, Vec<u8>, Vec<u8>);
 
-/// Synchronously walk every `<id>/` subdirectory of `parent`, reading the first
-/// `.meta` + `.blob` pair from each. Returns the raw, undecoded bytes for all
-/// items in a single blocking-pool hop (vs. one hop per `tokio::fs` call).
+/// Number of compound `<id>/` directories read per blocking task when bulk
+/// loads fan out. Small enough that a 10k-item tree spreads across ~80 tasks
+/// (well under the blocking pool's default 512 threads), large enough that
+/// per-task spawn overhead stays negligible.
+const READ_CHUNK_SIZE: usize = 128;
+
+/// Synchronously list the valid `<id>/` subdirectories of `parent`.
 ///
-/// `parent` absent → empty result. Subdirectories whose name isn't a valid id,
-/// or that hold no complete pair, are skipped. Must be called from a blocking
-/// context.
-fn read_all_compound_sync(parent: &Path) -> Result<Vec<RawCompound>, FsStorageError> {
+/// `parent` absent → empty result. Entries whose name isn't a valid id are
+/// skipped. Must be called from a blocking context.
+fn list_compound_dirs_sync(parent: &Path) -> Result<Vec<(String, PathBuf)>, FsStorageError> {
     let entries = match std::fs::read_dir(parent) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -137,9 +281,75 @@ fn read_all_compound_sync(parent: &Path) -> Result<Vec<RawCompound>, FsStorageEr
             continue;
         }
 
-        if let Some((signed_data, blob_data)) = read_first_meta_blob_pair_sync(&entry.path())? {
-            out.push((name, signed_data, blob_data));
+        out.push((name, entry.path()));
+    }
+
+    Ok(out)
+}
+
+/// Synchronously read the first `.meta` + `.blob` pair from each listed
+/// directory. Directories holding no complete pair are skipped. Must be
+/// called from a blocking context.
+fn read_compound_chunk_sync(
+    dirs: &[(String, PathBuf)],
+) -> Result<Vec<RawCompound>, FsStorageError> {
+    let mut out = Vec::with_capacity(dirs.len());
+
+    for (name, path) in dirs {
+        if let Some((signed_data, blob_data)) = read_first_meta_blob_pair_sync(path)? {
+            out.push((name.clone(), signed_data, blob_data));
         }
+    }
+
+    Ok(out)
+}
+
+/// Result of the first blocking hop of [`read_all_compound_parallel`]: small
+/// trees are read to completion in that same hop; large trees return the
+/// directory listing for fan-out.
+enum FirstHop {
+    /// Tree fit in one chunk and was fully read.
+    Done(Vec<RawCompound>),
+    /// Tree is large; here is the listing to fan out over.
+    FanOut(Vec<(String, PathBuf)>),
+}
+
+/// Read every compound item under `parent`.
+///
+/// Small trees (≤ [`READ_CHUNK_SIZE`] items) are listed *and* read in a
+/// single blocking hop — the common case pays exactly what the old
+/// sequential implementation did. Larger trees return the listing from the
+/// first hop and fan the per-directory `readdir` + 2 reads across blocking
+/// tasks in chunks of [`READ_CHUNK_SIZE`], so a big tree's load is no longer
+/// bound by one thread's sequential syscall throughput (and seeks overlap on
+/// cold caches).
+async fn read_all_compound_parallel(parent: PathBuf) -> Result<Vec<RawCompound>, FsStorageError> {
+    let first = tokio::task::spawn_blocking(move || -> Result<FirstHop, FsStorageError> {
+        let dirs = list_compound_dirs_sync(&parent)?;
+        if dirs.len() <= READ_CHUNK_SIZE {
+            Ok(FirstHop::Done(read_compound_chunk_sync(&dirs)?))
+        } else {
+            Ok(FirstHop::FanOut(dirs))
+        }
+    })
+    .await??;
+
+    let dirs = match first {
+        FirstHop::Done(out) => return Ok(out),
+        FirstHop::FanOut(dirs) => dirs,
+    };
+
+    let handles: Vec<_> = dirs
+        .chunks(READ_CHUNK_SIZE)
+        .map(|chunk| {
+            let chunk = chunk.to_vec();
+            tokio::task::spawn_blocking(move || read_compound_chunk_sync(&chunk))
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(dirs.len());
+    for handle in handles {
+        out.extend(handle.await??);
     }
 
     Ok(out)
@@ -675,13 +885,10 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::load_loose_commits");
 
-            // Read every commit dir's meta+blob bytes in a single blocking hop,
-            // then decode in async land. Previously this was N+1 `read_dir`s
-            // plus 2N sequential `tokio::fs::read`s — each its own blocking-pool
-            // round-trip — on the hydration hot path.
+            // List once, then fan the per-commit reads across blocking tasks;
+            // decode in async land. See `read_all_compound_parallel`.
             let commits_dir = self.commits_dir(sedimentree_id);
-            let raw =
-                tokio::task::spawn_blocking(move || read_all_compound_sync(&commits_dir)).await??;
+            let raw = read_all_compound_parallel(commits_dir).await?;
 
             let mut results = Vec::with_capacity(raw.len());
             for (name, signed_data, blob_data) in raw {
@@ -821,13 +1028,10 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::load_fragments");
 
-            // One blocking hop for the whole directory walk, then decode in
-            // async land. Previously this re-entered the full `load_fragment`
-            // trait method per fragment — a fresh `read_dir` + 2 reads each,
-            // all sequential blocking-pool round-trips.
+            // List once, then fan the per-fragment reads across blocking
+            // tasks; decode in async land. See `read_all_compound_parallel`.
             let fragments_dir = self.fragments_dir(sedimentree_id);
-            let raw = tokio::task::spawn_blocking(move || read_all_compound_sync(&fragments_dir))
-                .await??;
+            let raw = read_all_compound_parallel(fragments_dir).await?;
 
             let mut results = Vec::with_capacity(raw.len());
             for (name, signed_data, blob_data) in raw {
@@ -936,9 +1140,37 @@ impl Storage<Sendable> for FsStorage {
             }
 
             tokio::task::spawn_blocking(move || -> Result<(), FsStorageError> {
-                for item in &items {
-                    write_compound_sync(item)?;
+                // Phased batch write so the fsync cost amortizes (via the
+                // journal's group commit) instead of being paid per item:
+                //
+                //   1. stage every item (CAS check + write temps, no fsync)
+                //   2. fsync all temps in parallel — group commit coalesces
+                //      concurrent fsyncs into shared journal transactions
+                //   3. rename all temps into place (blob before meta per item)
+                //   4. fsync each touched directory exactly once, in parallel
+                let staged: Vec<_> = items
+                    .iter()
+                    .map(stage_compound_write_sync)
+                    .filter_map(Result::transpose)
+                    .collect::<Result<_, _>>()?;
+
+                let temp_paths: Vec<&Path> = staged
+                    .iter()
+                    .flat_map(|s| [s.blob_temp.as_path(), s.meta_temp.as_path()])
+                    .collect();
+                fsync_paths_parallel_sync(&temp_paths)?;
+
+                let mut dirs = std::collections::BTreeSet::new();
+                for s in &staged {
+                    s.rename_into_place()?;
+                    dirs.insert(s.item.id_dir.as_path());
+                    if let Some(parent) = s.item.id_dir.parent() {
+                        dirs.insert(parent);
+                    }
                 }
+
+                let dir_paths: Vec<&Path> = dirs.into_iter().collect();
+                fsync_paths_parallel_sync(&dir_paths)?;
                 Ok(())
             })
             .await??;

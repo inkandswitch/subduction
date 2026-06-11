@@ -367,3 +367,79 @@ async fn empty_registered_tree_survives_reopen() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// Recursively collect every `.meta` file under `dir`.
+fn find_meta_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(find_meta_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "meta") {
+            out.push(path);
+        }
+    }
+
+    out
+}
+
+/// A truncated `.meta` (e.g. left visible-but-empty by a crash before its
+/// data blocks reached disk) must be *rewritten* by the next save of the
+/// same content — the CAS skip validates the existing file's size instead
+/// of trusting bare existence. Guards against the corruption trap where a
+/// crash artifact is preserved forever because re-saves no-op and loads
+/// skip-and-warn.
+#[tokio::test]
+async fn corrupt_meta_self_heals_on_resave() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6C);
+    let head = CommitId::new([0x77; 32]);
+
+    let make_verified = || async {
+        let blob = Blob::new(vec![3; 64]);
+        let verified_blob = VerifiedBlobMeta::new(blob);
+        VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, head, BTreeSet::new()),
+            verified_blob,
+        )
+        .await
+    };
+
+    Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+    let original = make_verified().await;
+    let expected_signed_bytes = original.signed().as_bytes().to_vec();
+    Storage::<Sendable>::save_loose_commit(&storage, id, original).await?;
+
+    // Simulate the crash artifact: the `.meta` exists but is empty.
+    let metas = find_meta_files(dir.path());
+    assert_eq!(metas.len(), 1, "expected exactly one .meta on disk");
+    std::fs::write(&metas[0], [])?;
+
+    // The corrupt entry is skipped on load (not returned, not an error)...
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert!(
+        loaded.is_empty(),
+        "truncated .meta must be skipped on load, got {} items",
+        loaded.len()
+    );
+
+    // ...and a re-save of the same content must rewrite it, not no-op.
+    Storage::<Sendable>::save_loose_commit(&storage, id, make_verified().await).await?;
+
+    let healed = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(healed.len(), 1, "commit must be loadable after re-save");
+    assert_eq!(
+        healed[0].signed().as_bytes(),
+        &expected_signed_bytes[..],
+        "healed .meta must hold the original signed bytes"
+    );
+
+    Ok(())
+}
