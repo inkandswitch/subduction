@@ -806,45 +806,94 @@ impl<
             #[cfg(feature = "metrics")]
             crate::metrics::sedimentree_cache_hit();
 
-            // Point reads run concurrently in bounded chunks: a cold peer
-            // missing the whole tree would otherwise serialize N storage
-            // round-trips where the slow path does one bulk scan. The bound
-            // keeps a single request from monopolizing the blocking pool.
-            let mut commits = Vec::with_capacity(diff.local_commit_ids.len());
-            for chunk in diff.local_commit_ids.chunks(POINT_READ_CHUNK) {
-                let results = futures::future::join_all(
-                    chunk
-                        .iter()
-                        .map(|commit_id| fetcher.load_loose_commit(*commit_id)),
-                )
-                .await;
+            let missing = diff.local_commit_ids.len() + diff.local_fragment_ids.len();
+            let crossover =
+                (diff.total_items / SCAN_FRACTION_DENOMINATOR).max(SCAN_CROSSOVER_FLOOR);
+            if missing > crossover {
+                // Cold-clone-sized diff (e.g. a fresh peer with an empty
+                // fingerprint summary): one bulk scan beats N point-read
+                // round-trips. The cache stays authoritative for the diff
+                // itself; the scan only supplies the wire payloads.
+                let wanted_commits: Set<CommitId> = diff.local_commit_ids.iter().copied().collect();
+                let wanted_fragments: Set<CommitId> =
+                    diff.local_fragment_ids.iter().copied().collect();
 
-                for result in results {
-                    if let Some(verified) = result.map_err(IoError::Storage)? {
-                        let (signed, _, blob) = verified.into_full_parts();
-                        commits.push((signed, blob));
+                let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
+                for vm in fetcher
+                    .load_loose_commits()
+                    .await
+                    .map_err(IoError::Storage)?
+                {
+                    let head = vm.payload().head();
+                    if wanted_commits.contains(&head) {
+                        commit_by_id.entry(head).or_insert(vm);
                     }
                 }
-            }
 
-            let mut fragments = Vec::with_capacity(diff.local_fragment_ids.len());
-            for chunk in diff.local_fragment_ids.chunks(POINT_READ_CHUNK) {
-                let results = futures::future::join_all(
-                    chunk
-                        .iter()
-                        .map(|fragment_id| fetcher.load_fragment(*fragment_id)),
-                )
-                .await;
-
-                for result in results {
-                    if let Some(verified) = result.map_err(IoError::Storage)? {
-                        let (signed, _, blob) = verified.into_full_parts();
-                        fragments.push((signed, blob));
+                let mut fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = Map::new();
+                for vm in fetcher.load_fragments().await.map_err(IoError::Storage)? {
+                    let head = vm.payload().head();
+                    if wanted_fragments.contains(&head) {
+                        fragment_by_id.entry(head).or_insert(vm);
                     }
                 }
-            }
 
-            (diff, commits, fragments)
+                let commits = commit_by_id
+                    .into_values()
+                    .map(|vm| {
+                        let (signed, _, blob) = vm.into_full_parts();
+                        (signed, blob)
+                    })
+                    .collect();
+                let fragments = fragment_by_id
+                    .into_values()
+                    .map(|vm| {
+                        let (signed, _, blob) = vm.into_full_parts();
+                        (signed, blob)
+                    })
+                    .collect();
+
+                (diff, commits, fragments)
+            } else {
+                // Incremental sync: targeted point reads, run concurrently
+                // in bounded chunks so a single request can't monopolize
+                // the blocking pool.
+                let mut commits = Vec::with_capacity(diff.local_commit_ids.len());
+                for chunk in diff.local_commit_ids.chunks(POINT_READ_CHUNK) {
+                    let results = futures::future::join_all(
+                        chunk
+                            .iter()
+                            .map(|commit_id| fetcher.load_loose_commit(*commit_id)),
+                    )
+                    .await;
+
+                    for result in results {
+                        if let Some(verified) = result.map_err(IoError::Storage)? {
+                            let (signed, _, blob) = verified.into_full_parts();
+                            commits.push((signed, blob));
+                        }
+                    }
+                }
+
+                let mut fragments = Vec::with_capacity(diff.local_fragment_ids.len());
+                for chunk in diff.local_fragment_ids.chunks(POINT_READ_CHUNK) {
+                    let results = futures::future::join_all(
+                        chunk
+                            .iter()
+                            .map(|fragment_id| fetcher.load_fragment(*fragment_id)),
+                    )
+                    .await;
+
+                    for result in results {
+                        if let Some(verified) = result.map_err(IoError::Storage)? {
+                            let (signed, _, blob) = verified.into_full_parts();
+                            fragments.push((signed, blob));
+                        }
+                    }
+                }
+
+                (diff, commits, fragments)
+            }
         } else {
             #[cfg(feature = "metrics")]
             crate::metrics::sedimentree_cache_miss();
@@ -1109,6 +1158,30 @@ impl<
 /// overlapping storage round-trips for peers missing many items.
 const POINT_READ_CHUNK: usize = 32;
 
+/// Scan-fallback fraction denominator: the responder fast path switches
+/// from point reads to one bulk scan when the requestor is missing more
+/// than `total_items / 4` of the tree.
+///
+/// A cold clone (fresh peer, empty fingerprint summary) of a *popular* —
+/// therefore cache-resident — tree would otherwise hit the point-read path
+/// with the entire tree as its missing set: thousands of storage
+/// round-trips where one bulk scan does the same work.
+///
+/// The crossover is a *fraction* of tree size, not a constant, because the
+/// two costs scale differently — scans with the tree, point reads with the
+/// missing set. Measured (backends bench, `load/point_reads` vs
+/// `load/count`, within-run): point reads ≈ 15–22 µs each on both
+/// backends; scans ≈ 5–8 µs/item; intersection at ~0.24–0.38 × tree size
+/// across fs/redb at 1k and 10k items. `1/4` sits at the conservative edge
+/// of that band.
+const SCAN_FRACTION_DENOMINATOR: usize = 4;
+
+/// Absolute floor for the scan fallback: below this many missing items,
+/// point reads are always used regardless of the fraction rule (a scan of
+/// a tiny tree and a handful of point reads are both trivial; the floor
+/// keeps micro-diffs on the zero-scan path).
+const SCAN_CROSSOVER_FLOOR: usize = 32;
+
 /// The responder-side wire diff, copied out to owned values.
 ///
 /// [`Sedimentree::diff_remote_fingerprints`] returns a
@@ -1118,6 +1191,10 @@ const POINT_READ_CHUNK: usize = 32;
 /// extracts everything `recv_batch_sync_request` needs as owned data: the
 /// ids to fetch from storage, the fingerprints to echo back, and the heads.
 struct ResponderDiff {
+    /// Total items (loose commits + fragments) in the minimal tree, used
+    /// by the point-read/bulk-scan crossover.
+    total_items: usize,
+
     /// The responder's heads, read off the minimal tree.
     heads: Vec<CommitId>,
 
@@ -1144,6 +1221,7 @@ impl ResponderDiff {
         let diff = minimal.diff_remote_fingerprints(their_fingerprints);
 
         Self {
+            total_items: minimal.loose_commits().count() + minimal.fragments().count(),
             heads: minimal.heads_assuming_minimal(),
             local_commit_ids: diff.local_only_commits.iter().map(|(id, _)| **id).collect(),
             local_fragment_ids: diff

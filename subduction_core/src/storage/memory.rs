@@ -172,6 +172,9 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
             let digest = Digest::hash(verified.payload());
             tracing::trace!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
 
+            // Contract: persisting an item registers its sedimentree id.
+            self.ids.lock().await.insert(sedimentree_id);
+
             let (signed, _payload, blob) = verified.into_full_parts();
             self.commits
                 .shard(&sedimentree_id)
@@ -298,6 +301,9 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
             let fragment_head = verified.payload().head();
             let digest = Digest::hash(verified.payload());
             tracing::trace!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
+
+            // Contract: persisting an item registers its sedimentree id.
+            self.ids.lock().await.insert(sedimentree_id);
 
             let (signed, _payload, blob) = verified.into_full_parts();
             self.fragments
@@ -522,6 +528,43 @@ mod tests {
                 .expect("infallible"),
             "deleted id must no longer be contained"
         );
+    }
+
+    /// Cross-backend `Storage` contract: persisting any item registers its
+    /// sedimentree id (see `storage::conformance`).
+    #[cfg(feature = "test_utils")]
+    #[tokio::test]
+    async fn saves_register_tree_id_conformance() {
+        use alloc::{collections::BTreeSet, vec};
+
+        use sedimentree_core::blob::{Blob, verified::VerifiedBlobMeta};
+        use subduction_crypto::signer::memory::MemorySigner;
+
+        use crate::storage::conformance;
+
+        let signer = MemorySigner::from_bytes(&[42u8; 32]);
+        let store = MemoryStorage::new();
+
+        let commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (sid(0x21), CommitId::new([1; 32]), BTreeSet::new()),
+            VerifiedBlobMeta::new(Blob::new(vec![1, 2, 3])),
+        )
+        .await;
+        conformance::assert_commit_save_registers_tree_id::<Sendable, _>(&store, commit).await;
+
+        let fragment = VerifiedMeta::<Fragment>::seal::<Sendable, _>(
+            &signer,
+            (
+                sid(0x22),
+                CommitId::new([2; 32]),
+                BTreeSet::from([CommitId::new([3; 32])]),
+                vec![CommitId::new([4; 32])],
+            ),
+            VerifiedBlobMeta::new(Blob::new(vec![4, 5, 6])),
+        )
+        .await;
+        conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&store, fragment).await;
     }
 
     /// Property tests for the `SedimentreeId`-sharded commit/fragment stores.

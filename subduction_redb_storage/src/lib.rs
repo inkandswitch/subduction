@@ -189,9 +189,9 @@ impl RedbStorage {
 
         // Make the directory links themselves durable (one-time cost):
         // `blobs/`'s link lives in `root`, `root`'s in its parent.
-        std::fs::File::open(root)?.sync_all()?;
+        fsync_dir_sync(root)?;
         if let Some(parent) = root.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::File::open(parent)?.sync_all()?;
+            fsync_dir_sync(parent)?;
         }
 
         let db = Database::create(root.join(DB_FILE_NAME))?;
@@ -379,7 +379,7 @@ fn write_blob_file_sync(
     // `blobs/` itself durable).
     if std::fs::metadata(&bucket_dir).is_err() {
         std::fs::create_dir_all(&bucket_dir)?;
-        std::fs::File::open(blobs_dir)?.sync_all()?;
+        fsync_dir_sync(blobs_dir)?;
     }
 
     // Temp-then-rename with the fsyncs ordered for crash consistency:
@@ -399,7 +399,22 @@ fn write_blob_file_sync(
 
     std::fs::rename(&temp.path, &path)?;
     temp.renamed = true;
-    std::fs::File::open(bucket_dir)?.sync_all()?;
+    fsync_dir_sync(&bucket_dir)?;
+
+    Ok(())
+}
+
+/// Fsync a directory so its entries survive a crash.
+///
+/// No-op on non-Unix targets: `std` cannot open a directory handle on
+/// Windows (it would need `FILE_FLAG_BACKUP_SEMANTICS`), and Windows has
+/// no portable directory-fsync concept — directory-entry durability there
+/// is best-effort.
+fn fsync_dir_sync(dir: &Path) -> Result<(), RedbStorageError> {
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
 
     Ok(())
 }
@@ -774,7 +789,13 @@ impl Storage<Sendable> for RedbStorage {
                 stage_external_blobs_sync(core::slice::from_ref(&pending), blobs_dir, threshold)?;
 
                 let txn = db.begin_write()?;
-                insert_compound(&mut txn.open_table(COMMITS)?, &pending, threshold)?;
+                {
+                    // Contract: persisting an item registers its
+                    // sedimentree id, atomically with the item itself.
+                    txn.open_table(TREES)?
+                        .insert(sedimentree_id.as_bytes(), ())?;
+                    insert_compound(&mut txn.open_table(COMMITS)?, &pending, threshold)?;
+                }
                 txn.commit()?;
                 Ok(())
             })
@@ -904,7 +925,13 @@ impl Storage<Sendable> for RedbStorage {
                 stage_external_blobs_sync(core::slice::from_ref(&pending), blobs_dir, threshold)?;
 
                 let txn = db.begin_write()?;
-                insert_compound(&mut txn.open_table(FRAGMENTS)?, &pending, threshold)?;
+                {
+                    // Contract: persisting an item registers its
+                    // sedimentree id, atomically with the item itself.
+                    txn.open_table(TREES)?
+                        .insert(sedimentree_id.as_bytes(), ())?;
+                    insert_compound(&mut txn.open_table(FRAGMENTS)?, &pending, threshold)?;
+                }
                 txn.commit()?;
                 Ok(())
             })

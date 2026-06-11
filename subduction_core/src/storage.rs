@@ -60,6 +60,9 @@ pub mod powerbox;
 pub mod putter;
 pub mod traits;
 
+#[cfg(feature = "test_utils")]
+pub mod conformance;
+
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub mod metrics;

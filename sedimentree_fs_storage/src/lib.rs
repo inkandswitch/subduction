@@ -262,8 +262,17 @@ fn fsync_compound_dirs_sync(item: &PendingWrite) -> Result<(), FsStorageError> {
 }
 
 /// Fsync a directory so renames/creations of its entries are durable.
+///
+/// No-op on non-Unix targets: `std` cannot open a directory handle on
+/// Windows (it would need `FILE_FLAG_BACKUP_SEMANTICS`), and Windows has
+/// no portable directory-fsync concept — directory-entry durability there
+/// is best-effort.
 fn fsync_dir_sync(dir: &Path) -> Result<(), FsStorageError> {
+    #[cfg(unix)]
     std::fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+
     Ok(())
 }
 
@@ -854,6 +863,10 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::save_loose_commit");
 
+            // Contract: persisting an item registers its sedimentree id
+            // (cache-gated no-op after the first save for this tree).
+            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
+
             // Validate + resolve paths off the filesystem, then collapse the
             // CAS check + mkdir + 2 writes + 2 renames into a single
             // blocking-pool hop. With `tokio::fs` each call is its own
@@ -1013,6 +1026,10 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::save_fragment");
+
+            // Contract: persisting an item registers its sedimentree id
+            // (cache-gated no-op after the first save for this tree).
+            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
 
             // Single blocking-pool hop for the whole CAS + write + rename
             // sequence; see `save_loose_commit` for the rationale.
@@ -1234,8 +1251,16 @@ impl Storage<Sendable> for FsStorage {
                     }
                 }
 
-                let dir_paths: Vec<&Path> = dirs.into_iter().collect();
-                fsync_paths_parallel_sync(&dir_paths)?;
+                // Parallel on Unix; directory fsync is a no-op concept on
+                // Windows (see `fsync_dir_sync`).
+                #[cfg(unix)]
+                {
+                    let dir_paths: Vec<&Path> = dirs.into_iter().collect();
+                    fsync_paths_parallel_sync(&dir_paths)?;
+                }
+                #[cfg(not(unix))]
+                drop(dirs);
+
                 Ok(())
             })
             .await??;

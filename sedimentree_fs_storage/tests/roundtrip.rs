@@ -536,3 +536,46 @@ async fn failed_batch_leaves_no_temp_files() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// Cross-backend `Storage` contract: persisting any item registers its
+/// sedimentree id — including across a reopen (recovered from the on-disk
+/// layout).
+#[tokio::test]
+async fn saves_register_tree_id_conformance() -> testresult::TestResult {
+    use subduction_core::storage::conformance;
+
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+
+    let commit_tree = make_sedimentree_id(0x70);
+    let commit: VerifiedMeta<LooseCommit> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (commit_tree, CommitId::new([0x10; 32]), BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(vec![1; 16])),
+    )
+    .await;
+    conformance::assert_commit_save_registers_tree_id::<Sendable, _>(&storage, commit).await;
+
+    let fragment_tree = make_sedimentree_id(0x71);
+    let fragment: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (
+            fragment_tree,
+            CommitId::new([0x11; 32]),
+            BTreeSet::from([CommitId::new([0x12; 32])]),
+            vec![CommitId::new([0x13; 32])],
+        ),
+        VerifiedBlobMeta::new(Blob::new(vec![2; 16])),
+    )
+    .await;
+    conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&storage, fragment).await;
+
+    // Registration survives reopen (rediscovered from the directory layout).
+    drop(storage);
+    let reopened = FsStorage::new(dir.path().to_path_buf())?;
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, commit_tree).await?);
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, fragment_tree).await?);
+
+    Ok(())
+}

@@ -5368,6 +5368,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "future_form",
+ "futures",
  "redb",
  "sedimentree_core",
  "sedimentree_fs_storage",

@@ -331,3 +331,158 @@ async fn responder_serves_resident_tree_without_bulk_scans() -> TestResult {
 
     Ok(())
 }
+
+/// A cold clone (fresh peer missing the whole tree) of a cache-resident
+/// tree must use the bulk-scan crossover, not thousands of point reads.
+#[tokio::test]
+async fn cold_clone_of_resident_tree_uses_bulk_scan() -> TestResult {
+    const N: usize = 300; // > POINT_READ_CROSSOVER (256)
+
+    let alice_signer = MemorySigner::from_bytes(&[62u8; 32]);
+    let bob_signer = MemorySigner::from_bytes(&[63u8; 32]);
+
+    let alice_storage = CallCountingStorage::new();
+    let bob_storage = CallCountingStorage::new();
+
+    let alice = make_node(alice_signer.clone(), alice_storage.clone());
+    let bob = make_node(bob_signer.clone(), bob_storage.clone());
+
+    let sed_id = SedimentreeId::new([0x78; 32]);
+
+    // Bob holds a large tree (resident in his cache via the write path);
+    // Alice has nothing.
+    for i in 0..N {
+        let mut head = [0u8; 32];
+        head[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        bob.add_commit(
+            sed_id,
+            CommitId::new(head),
+            BTreeSet::new(),
+            Blob::new(vec![1; 16]),
+        )
+        .await?;
+    }
+
+    connect_pair(&alice, &alice_signer, &bob, &bob_signer).await?;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let bob_bulk_before = bob_storage.bulk_loads();
+    let bob_point_before = bob_storage.point_reads();
+
+    let bob_peer_id = PeerId::from(bob_signer.verifying_key());
+    let (synced, _stats, send_errors) = alice
+        .sync_with_peer(
+            &bob_peer_id,
+            sed_id,
+            false,
+            CallTimeout::TimeoutMillis(5_000),
+        )
+        .await?;
+    assert!(synced, "sync should reach Bob");
+    assert!(send_errors.is_empty(), "no send errors expected");
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let bob_bulk = bob_storage.bulk_loads() - bob_bulk_before;
+    let bob_points = bob_storage.point_reads() - bob_point_before;
+
+    assert!(
+        bob_points < N,
+        "cold clone must not point-read every item (saw {bob_points} point reads for {N} items)"
+    );
+    assert!(
+        bob_bulk >= 1,
+        "cold clone above the crossover must bulk-scan (saw {bob_bulk} bulk loads)"
+    );
+
+    // Convergence: Alice received the whole tree.
+    let alice_commits = alice
+        .get_commits(sed_id)
+        .await
+        .expect("Alice's tree must exist after the clone");
+    assert_eq!(alice_commits.len(), N, "Alice must receive all commits");
+
+    Ok(())
+}
+
+/// A moderate diff on a large tree must stay on point reads: the scan
+/// fallback is a *fraction* of tree size (total/4, floor 32), not an
+/// absolute count. A fixed threshold here would bulk-scan 800 records to
+/// serve 150 — measured ~9–12x slower than the point reads.
+#[tokio::test]
+async fn moderate_diff_on_large_tree_stays_on_point_reads() -> TestResult {
+    const SHARED: usize = 650;
+    const BOB_ONLY: usize = 150; // > old fixed floor region, ≤ total/4 (= 200)
+
+    let alice_signer = MemorySigner::from_bytes(&[64u8; 32]);
+    let bob_signer = MemorySigner::from_bytes(&[65u8; 32]);
+
+    let alice_storage = CallCountingStorage::new();
+    let bob_storage = CallCountingStorage::new();
+
+    let alice = make_node(alice_signer.clone(), alice_storage.clone());
+    let bob = make_node(bob_signer.clone(), bob_storage.clone());
+
+    let sed_id = SedimentreeId::new([0x79; 32]);
+
+    // Both peers hold the shared prefix (same heads + blobs, so the
+    // fingerprints match); Bob additionally holds BOB_ONLY items.
+    for i in 0..(SHARED + BOB_ONLY) {
+        let mut head = [0u8; 32];
+        head[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        let commit_id = CommitId::new(head);
+        let content = Blob::new(i.to_le_bytes().to_vec());
+
+        bob.add_commit(sed_id, commit_id, BTreeSet::new(), content.clone())
+            .await?;
+        if i < SHARED {
+            alice
+                .add_commit(sed_id, commit_id, BTreeSet::new(), content)
+                .await?;
+        }
+    }
+
+    connect_pair(&alice, &alice_signer, &bob, &bob_signer).await?;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let bob_bulk_before = bob_storage.bulk_loads();
+    let bob_point_before = bob_storage.point_reads();
+
+    let bob_peer_id = PeerId::from(bob_signer.verifying_key());
+    let (synced, _stats, send_errors) = alice
+        .sync_with_peer(
+            &bob_peer_id,
+            sed_id,
+            false,
+            CallTimeout::TimeoutMillis(5_000),
+        )
+        .await?;
+    assert!(synced, "sync should reach Bob");
+    assert!(send_errors.is_empty(), "no send errors expected");
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let bob_bulk = bob_storage.bulk_loads() - bob_bulk_before;
+    let bob_points = bob_storage.point_reads() - bob_point_before;
+
+    assert_eq!(
+        bob_bulk, 0,
+        "a diff under total/4 must not bulk-scan (saw {bob_bulk} bulk loads)"
+    );
+    assert!(
+        bob_points > 0,
+        "the missing items must be served via point reads"
+    );
+
+    let alice_commits = alice
+        .get_commits(sed_id)
+        .await
+        .expect("Alice's tree must exist");
+    assert_eq!(
+        alice_commits.len(),
+        SHARED + BOB_ONLY,
+        "Alice must converge to the full tree"
+    );
+
+    Ok(())
+}

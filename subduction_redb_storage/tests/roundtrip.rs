@@ -339,3 +339,42 @@ async fn batch_with_large_blobs_roundtrips() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// Cross-backend `Storage` contract: persisting any item registers its
+/// sedimentree id — including across a reopen (the registration is part of
+/// the same transaction as the item).
+#[tokio::test]
+async fn saves_register_tree_id_conformance() -> testresult::TestResult {
+    use sedimentree_core::fragment::Fragment;
+    use subduction_core::storage::conformance;
+
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let signer = test_signer();
+
+    let commit_tree = SedimentreeId::new([0x70; 32]);
+    let commit = seal_commit(&signer, commit_tree, CommitId::new([0x10; 32]), vec![1; 16]).await;
+    conformance::assert_commit_save_registers_tree_id::<Sendable, _>(&storage, commit).await;
+
+    let fragment_tree = SedimentreeId::new([0x71; 32]);
+    let fragment: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (
+            fragment_tree,
+            CommitId::new([0x11; 32]),
+            BTreeSet::from([CommitId::new([0x12; 32])]),
+            vec![CommitId::new([0x13; 32])],
+        ),
+        VerifiedBlobMeta::new(Blob::new(vec![2; 16])),
+    )
+    .await;
+    conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&storage, fragment).await;
+
+    // Registration survives reopen.
+    drop(storage);
+    let reopened = RedbStorage::new(dir.path())?;
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, commit_tree).await?);
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, fragment_tree).await?);
+
+    Ok(())
+}
