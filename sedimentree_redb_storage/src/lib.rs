@@ -1,17 +1,35 @@
-//! [redb]-based storage for Sedimentree.
+//! Hybrid [redb] + filesystem storage for Sedimentree.
 //!
-//! This crate provides [`RedbStorage`], a transactional single-file storage
-//! implementation of the [`Storage`] trait from `subduction_core`, intended
-//! as an alternative to `sedimentree_fs_storage` for native servers.
+//! This crate provides [`RedbStorage`], a storage implementation of the
+//! [`Storage`] trait from `subduction_core` intended as an alternative to
+//! `sedimentree_fs_storage` for native servers. Metadata and small blobs
+//! live in a transactional redb B+tree; large blobs live as flat
+//! content-addressed files beside it. The split captures both measured
+//! sweet spots: a B+tree packs small records densely (no per-file block
+//! rounding) and scans them fast, while the filesystem streams large values
+//! faster and without the ~2x B+tree page amplification.
 //!
 //! # Layout
 //!
-//! All data lives in one redb database file with three tables:
+//! ```text
+//! root/
+//! ├── sedimentree.redb           ← all metadata + blobs ≤ inline threshold
+//! └── blobs/                     ← blobs > inline threshold (CAS)
+//!     └── {hex[0..2]}/           ← 256 buckets by digest prefix
+//!         └── {blob_digest_hex}  ← one flat file per blob, deduplicated
+//! ```
+//!
+//! Database tables:
 //!
 //! ```text
 //! trees:     [u8; 32]                                  → ()
-//! commits:   [u8; 96] = tree_id ++ commit_id ++ digest → meta_len:u32be ++ meta ++ blob
-//! fragments: [u8; 96] = tree_id ++ head_id  ++ digest → meta_len:u32be ++ meta ++ blob
+//! commits:   [u8; 96] = tree_id ++ commit_id ++ digest → tagged compound value
+//! fragments: [u8; 96] = tree_id ++ head_id  ++ digest → tagged compound value
+//!
+//! tagged compound value:
+//!   0x00 ++ meta_len:u32be ++ meta ++ blob                      (inline)
+//!   0x01 ++ meta_len:u32be ++ meta ++ blob_digest:[u8;32]
+//!        ++ blob_len:u64be                                      (external)
 //! ```
 //!
 //! Keys sort lexicographically, so all items of a tree (or of one
@@ -20,12 +38,25 @@
 //! per [`CommitId`] coexist) falls out of the trailing content digest in the
 //! key, mirroring the CAS filenames of the filesystem backend.
 //!
-//! # Durability
+//! # Durability & crash consistency
 //!
-//! redb's default durability ([`Immediate`](redb::Durability::Immediate))
-//! fsyncs on every transaction commit, so each `save_*` call is durable when
-//! it returns and [`save_batch`](Storage::save_batch) amortizes one fsync
-//! across the whole batch — all-or-nothing, unlike the filesystem backend.
+//! redb's default durability fsyncs on every transaction commit, so each
+//! `save_*` call is durable when it returns and
+//! [`save_batch`](Storage::save_batch) amortizes one fsync across the whole
+//! batch. External blob files are written durably (temp file fsynced before
+//! rename, bucket directory fsynced after) **before** the referencing
+//! database transaction commits: a record in the database always points at
+//! a complete blob file. A crash in between leaves at most an *orphan* blob
+//! file, which is harmless — files are content-addressed, so a later save
+//! of the same blob adopts it.
+//!
+//! # Garbage collection
+//!
+//! Deleting records does **not** delete external blob files: blob files are
+//! content-addressed and may be shared by multiple records (the same blob
+//! saved under different commits or trees), so unreferenced files are left
+//! behind rather than risking dangling references. A GC sweep is a future
+//! concern; re-saving previously deleted content adopts the existing file.
 //!
 //! # Example
 //!
@@ -33,19 +64,22 @@
 //! use sedimentree_redb_storage::RedbStorage;
 //! use std::path::PathBuf;
 //!
-//! let storage = RedbStorage::new(PathBuf::from("./data.redb")).expect("failed to open database");
+//! let storage = RedbStorage::new(PathBuf::from("./data")).expect("failed to open storage");
 //! ```
 //!
 //! [redb]: https://github.com/cberner/redb
 
 #![forbid(unsafe_code)]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use future_form::{FutureForm, Local, Sendable};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use sedimentree_core::{
-    blob::Blob,
+    blob::{Blob, has_meta::HasBlobMeta},
     codec::error::DecodeError,
     collections::Set,
     crypto::digest::Digest,
@@ -69,28 +103,86 @@ const FRAGMENTS: TableDefinition<'_, &[u8; 96], &[u8]> = TableDefinition::new("f
 /// A 96-byte composite key: `tree_id ++ item_id ++ content_digest`.
 type Key96 = [u8; 96];
 
-/// Undecoded `meta` + `blob` byte pair from one stored compound value.
+/// Undecoded `meta` + `blob` byte pair from one stored compound value
+/// (external blobs already resolved to their file contents).
 type RawCompound = (Vec<u8>, Vec<u8>);
 
-/// redb-backed storage.
+/// File name of the redb database inside the storage root.
+pub const DB_FILE_NAME: &str = "sedimentree.redb";
+
+/// Directory name for external (large) blob files inside the storage root.
+pub const BLOBS_DIR_NAME: &str = "blobs";
+
+/// Default largest blob size (in bytes) stored inline in the database.
 ///
-/// Cheap to clone (the database handle is shared). All operations run on the
-/// blocking pool; the [`Database`] itself is internally synchronized with
-/// MVCC (concurrent readers, single writer).
+/// Blobs larger than this go to flat content-addressed files under
+/// `blobs/`. 16 KiB keeps commit-sized records (typically well under 1 KiB)
+/// inline — where the B+tree packs them ~10x denser than block-rounded
+/// files — while large fragment blobs avoid the ~2x B+tree page
+/// amplification and slower streaming the shoot-out benchmark measured at
+/// 64 KiB values.
+pub const DEFAULT_INLINE_THRESHOLD: usize = 16 * 1024;
+
+/// Value tag: blob bytes stored inline after the meta.
+const TAG_INLINE: u8 = 0x00;
+
+/// Value tag: blob stored externally; value holds digest + length.
+const TAG_EXTERNAL: u8 = 0x01;
+
+/// Process-wide counter distinguishing concurrent writers that target the
+/// same content-addressed blob path.
+static TMP_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Hybrid redb + filesystem storage.
+///
+/// Cheap to clone (the database handle and paths are shared). All
+/// operations run on the blocking pool; the [`Database`] itself is
+/// internally synchronized with MVCC (concurrent readers, single writer).
 #[derive(Debug, Clone)]
 pub struct RedbStorage {
     db: Arc<Database>,
+    blobs_dir: Arc<PathBuf>,
+    inline_threshold: usize,
 }
 
 impl RedbStorage {
-    /// Open (or create) a redb database at `path`.
+    /// Open (or create) hybrid storage rooted at `root`, with the
+    /// [default inline threshold](DEFAULT_INLINE_THRESHOLD).
+    ///
+    /// Creates `root/sedimentree.redb` and `root/blobs/` as needed.
     ///
     /// # Errors
     ///
-    /// Returns an error if the database cannot be created/opened or the
-    /// tables cannot be initialized.
-    pub fn new(path: PathBuf) -> Result<Self, RedbStorageError> {
-        let db = Database::create(path)?;
+    /// Returns an error if the directories or database cannot be
+    /// created/opened, or the tables cannot be initialized.
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, RedbStorageError> {
+        Self::with_inline_threshold(root, DEFAULT_INLINE_THRESHOLD)
+    }
+
+    /// Open (or create) hybrid storage with a custom inline threshold.
+    ///
+    /// Blobs strictly larger than `inline_threshold` bytes are stored as
+    /// external content-addressed files; everything else lives inline in
+    /// the database.
+    ///
+    /// The threshold only affects *writes*: reads dispatch on the stored
+    /// value's tag, so a store written with one threshold can be reopened
+    /// with another.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directories or database cannot be
+    /// created/opened, or the tables cannot be initialized.
+    pub fn with_inline_threshold(
+        root: impl AsRef<Path>,
+        inline_threshold: usize,
+    ) -> Result<Self, RedbStorageError> {
+        let root = root.as_ref();
+        std::fs::create_dir_all(root)?;
+        let blobs_dir = root.join(BLOBS_DIR_NAME);
+        std::fs::create_dir_all(&blobs_dir)?;
+
+        let db = Database::create(root.join(DB_FILE_NAME))?;
 
         // Materialize all tables up front so read transactions never hit
         // `TableDoesNotExist`.
@@ -102,16 +194,22 @@ impl RedbStorage {
         }
         txn.commit()?;
 
-        Ok(Self { db: Arc::new(db) })
+        Ok(Self {
+            db: Arc::new(db),
+            blobs_dir: Arc::new(blobs_dir),
+            inline_threshold,
+        })
     }
 
-    /// Run `f` against the shared database on the blocking pool.
+    /// Run `f` against the shared database (and blob directory) on the
+    /// blocking pool.
     async fn with_db<T: Send + 'static>(
         &self,
-        f: impl FnOnce(&Database) -> Result<T, RedbStorageError> + Send + 'static,
+        f: impl FnOnce(&Database, &Path) -> Result<T, RedbStorageError> + Send + 'static,
     ) -> Result<T, RedbStorageError> {
         let db = Arc::clone(&self.db);
-        tokio::task::spawn_blocking(move || f(&db)).await?
+        let blobs_dir = Arc::clone(&self.blobs_dir);
+        tokio::task::spawn_blocking(move || f(&db, &blobs_dir)).await?
     }
 }
 
@@ -148,9 +246,29 @@ fn item_id_of(key: &Key96) -> CommitId {
     CommitId::new(id)
 }
 
-/// Encode a compound value: `meta_len:u32be ++ meta ++ blob`.
-fn encode_compound(meta: &[u8], blob: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + meta.len() + blob.len());
+/// A decoded compound value, before external blob resolution.
+enum DecodedCompound {
+    /// Blob bytes were stored inline.
+    Inline {
+        /// `Signed<T>` wire bytes.
+        meta: Vec<u8>,
+        /// Blob contents.
+        blob: Vec<u8>,
+    },
+
+    /// Blob lives in an external content-addressed file.
+    External {
+        /// `Signed<T>` wire bytes.
+        meta: Vec<u8>,
+        /// The blob's content digest (names the file).
+        blob_digest: [u8; 32],
+    },
+}
+
+/// Encode an inline compound value: `0x00 ++ meta_len:u32be ++ meta ++ blob`.
+fn encode_inline(meta: &[u8], blob: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 4 + meta.len() + blob.len());
+    out.push(TAG_INLINE);
     #[allow(clippy::cast_possible_truncation)]
     out.extend_from_slice(&(meta.len() as u32).to_be_bytes());
     out.extend_from_slice(meta);
@@ -158,13 +276,145 @@ fn encode_compound(meta: &[u8], blob: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Encode an external compound value:
+/// `0x01 ++ meta_len:u32be ++ meta ++ blob_digest ++ blob_len:u64be`.
+fn encode_external(meta: &[u8], blob_digest: &[u8; 32], blob_len: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 4 + meta.len() + 32 + 8);
+    out.push(TAG_EXTERNAL);
+    #[allow(clippy::cast_possible_truncation)]
+    out.extend_from_slice(&(meta.len() as u32).to_be_bytes());
+    out.extend_from_slice(meta);
+    out.extend_from_slice(blob_digest);
+    out.extend_from_slice(&blob_len.to_be_bytes());
+    out
+}
+
 /// Decode a compound value. `None` on a malformed buffer.
-fn decode_compound(bytes: &[u8]) -> Option<RawCompound> {
-    let len_bytes: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+fn decode_compound(bytes: &[u8]) -> Option<DecodedCompound> {
+    let tag = *bytes.first()?;
+    let len_bytes: [u8; 4] = bytes.get(1..5)?.try_into().ok()?;
     let meta_len = u32::from_be_bytes(len_bytes) as usize;
-    let meta = bytes.get(4..4 + meta_len)?.to_vec();
-    let blob = bytes.get(4 + meta_len..)?.to_vec();
-    Some((meta, blob))
+    let meta = bytes.get(5..5 + meta_len)?.to_vec();
+    let rest = bytes.get(5 + meta_len..)?;
+
+    match tag {
+        TAG_INLINE => Some(DecodedCompound::Inline {
+            meta,
+            blob: rest.to_vec(),
+        }),
+        TAG_EXTERNAL => {
+            let blob_digest: [u8; 32] = rest.get(..32)?.try_into().ok()?;
+            // Trailing 8 bytes are the blob length (diagnostics only).
+            Some(DecodedCompound::External { meta, blob_digest })
+        }
+        _ => None,
+    }
+}
+
+/// Path of the external blob file for `digest`:
+/// `blobs/{hex[0..2]}/{digest_hex}`.
+fn blob_file_path(blobs_dir: &Path, digest: &[u8; 32]) -> PathBuf {
+    let hex = hex_encode(digest);
+    let (bucket, _) = hex.split_at(2);
+    blobs_dir.join(bucket).join(&hex)
+}
+
+/// Lowercase hex of a 32-byte digest.
+fn hex_encode(digest: &[u8; 32]) -> String {
+    use core::fmt::Write;
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
+/// Durably write an external blob file (CAS: a no-op if an intact file for
+/// this digest already exists).
+///
+/// Must complete — including fsyncs — *before* the database transaction
+/// referencing the digest commits, so a stored record always points at a
+/// complete file. Crash before the commit leaves only a harmless
+/// content-addressed orphan. Must be called from a blocking context.
+fn write_blob_file_sync(
+    blobs_dir: &Path,
+    digest: &[u8; 32],
+    data: &[u8],
+) -> Result<(), RedbStorageError> {
+    use std::io::Write;
+
+    let hex = hex_encode(digest);
+    let (bucket, _) = hex.split_at(2);
+    let bucket_dir = blobs_dir.join(bucket);
+    let path = bucket_dir.join(&hex);
+
+    // CAS: skip only if the existing file is intact (a crash-truncated file
+    // is rewritten — same lesson as the filesystem backend).
+    if let Ok(existing) = std::fs::metadata(&path) {
+        if existing.len() == data.len() as u64 {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            path = %path.display(),
+            have = existing.len(),
+            need = data.len(),
+            "rewriting corrupt external blob file (size mismatch)"
+        );
+    }
+
+    std::fs::create_dir_all(&bucket_dir)?;
+
+    // Temp-then-rename with the fsyncs ordered for crash consistency:
+    // contents durable before the name appears, name durable before return.
+    let nonce = TMP_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = path.with_extension(format!("{nonce}.tmp"));
+
+    let mut file = std::fs::File::create(&temp)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    drop(file);
+
+    std::fs::rename(&temp, &path)?;
+    std::fs::File::open(bucket_dir)?.sync_all()?;
+
+    Ok(())
+}
+
+/// Read an external blob file. `Ok(None)` if absent.
+fn read_blob_file_sync(
+    blobs_dir: &Path,
+    digest: &[u8; 32],
+) -> Result<Option<Vec<u8>>, RedbStorageError> {
+    match std::fs::read(blob_file_path(blobs_dir, digest)) {
+        Ok(data) => Ok(Some(data)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Resolve a decoded compound to its raw `meta` + `blob` pair, reading the
+/// external file if needed. `Ok(None)` if the external file is missing
+/// (treated as a corrupt entry by callers).
+fn resolve_compound(
+    decoded: DecodedCompound,
+    blobs_dir: &Path,
+) -> Result<Option<RawCompound>, RedbStorageError> {
+    match decoded {
+        DecodedCompound::Inline { meta, blob } => Ok(Some((meta, blob))),
+        DecodedCompound::External { meta, blob_digest } => {
+            if let Some(blob) = read_blob_file_sync(blobs_dir, &blob_digest)? {
+                Ok(Some((meta, blob)))
+            } else {
+                tracing::warn!(
+                    digest = %hex_encode(&blob_digest),
+                    "external blob file missing; skipping record"
+                );
+                Ok(None)
+            }
+        }
+    }
 }
 
 /// Decode a raw compound pair into a [`VerifiedMeta`], skip-and-warn on
@@ -194,19 +444,25 @@ where
     }
 }
 
-/// Read every raw compound value in `range` from `table`.
+/// Read every raw compound value in `range` from `table`, resolving
+/// external blobs to their file contents. Malformed values and records
+/// whose external blob file is missing are skipped with a warning.
 fn scan_range(
     table: &impl ReadableTable<&'static [u8; 96], &'static [u8]>,
+    blobs_dir: &Path,
     lo: &Key96,
     hi: &Key96,
 ) -> Result<Vec<RawCompound>, RedbStorageError> {
     let mut out = Vec::new();
     for entry in table.range::<&[u8; 96]>(lo..=hi)? {
         let (_, value) = entry?;
-        if let Some(raw) = decode_compound(value.value()) {
-            out.push(raw);
-        } else {
+        let Some(decoded) = decode_compound(value.value()) else {
             tracing::warn!("skipping malformed compound value");
+            continue;
+        };
+
+        if let Some(raw) = resolve_compound(decoded, blobs_dir)? {
+            out.push(raw);
         }
     }
     Ok(out)
@@ -245,25 +501,39 @@ fn delete_range(
 }
 
 /// Insert one compound item (CAS: no-op if the key already exists).
+///
+/// Blobs larger than `inline_threshold` are written as durable external
+/// files *before* the record referencing them is inserted; the surrounding
+/// transaction's commit then makes the reference visible only after the
+/// file exists.
 fn insert_compound(
     table: &mut redb::Table<'_, &'static [u8; 96], &'static [u8]>,
-    key: &Key96,
-    meta: &[u8],
-    blob: &[u8],
+    item: &PendingInsert,
+    blobs_dir: &Path,
+    inline_threshold: usize,
 ) -> Result<(), RedbStorageError> {
-    if table.get(key)?.is_some() {
+    if table.get(&item.key)?.is_some() {
         return Ok(());
     }
 
-    table.insert(key, encode_compound(meta, blob).as_slice())?;
+    if item.blob.len() > inline_threshold {
+        write_blob_file_sync(blobs_dir, &item.blob_digest, &item.blob)?;
+        let value = encode_external(&item.meta, &item.blob_digest, item.blob.len() as u64);
+        table.insert(&item.key, value.as_slice())?;
+    } else {
+        table.insert(&item.key, encode_inline(&item.meta, &item.blob).as_slice())?;
+    }
+
     Ok(())
 }
 
-/// Resolved write for one item: key + borrowed-from-owned byte payloads.
+/// Resolved write for one item: key + byte payloads + the blob's own
+/// content digest (names the external file when the blob is large).
 struct PendingInsert {
     key: Key96,
     meta: Vec<u8>,
     blob: Vec<u8>,
+    blob_digest: [u8; 32],
 }
 
 /// Resolve a verified commit into its key and payloads.
@@ -273,6 +543,7 @@ fn pending_commit(tree: SedimentreeId, verified: &VerifiedMeta<LooseCommit>) -> 
         key: key96(tree, verified.payload().head(), digest.as_bytes()),
         meta: verified.signed().as_bytes().to_vec(),
         blob: verified.blob().contents().clone(),
+        blob_digest: *verified.payload().blob_meta().digest().as_bytes(),
     }
 }
 
@@ -283,6 +554,7 @@ fn pending_fragment(tree: SedimentreeId, verified: &VerifiedMeta<Fragment>) -> P
         key: key96(tree, verified.payload().head(), digest.as_bytes()),
         meta: verified.signed().as_bytes().to_vec(),
         blob: verified.blob().contents().clone(),
+        blob_digest: *verified.payload().blob_meta().digest().as_bytes(),
     }
 }
 
@@ -297,7 +569,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::save_sedimentree_id");
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let txn = db.begin_write()?;
                 txn.open_table(TREES)?
                     .insert(sedimentree_id.as_bytes(), ())?;
@@ -314,7 +586,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::delete_sedimentree_id");
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let (lo, hi) = tree_range(sedimentree_id);
                 let txn = db.begin_write()?;
                 {
@@ -334,7 +606,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!("RedbStorage::load_all_sedimentree_ids");
-            self.with_db(|db| {
+            self.with_db(|db, _blobs_dir| {
                 let txn = db.begin_read()?;
                 let table = txn.open_table(TREES)?;
                 let mut ids = Set::new();
@@ -354,7 +626,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<bool, Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::contains_sedimentree_id");
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let txn = db.begin_read()?;
                 let table = txn.open_table(TREES)?;
                 Ok(table.get(sedimentree_id.as_bytes())?.is_some())
@@ -373,13 +645,14 @@ impl Storage<Sendable> for RedbStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::save_loose_commit");
             let pending = pending_commit(sedimentree_id, &verified);
-            self.with_db(move |db| {
+            let threshold = self.inline_threshold;
+            self.with_db(move |db, blobs_dir| {
                 let txn = db.begin_write()?;
                 insert_compound(
                     &mut txn.open_table(COMMITS)?,
-                    &pending.key,
-                    &pending.meta,
-                    &pending.blob,
+                    &pending,
+                    blobs_dir,
+                    threshold,
                 )?;
                 txn.commit()?;
                 Ok(())
@@ -394,7 +667,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::list_commit_ids");
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let (lo, hi) = tree_range(sedimentree_id);
                 let txn = db.begin_read()?;
                 scan_ids(&txn.open_table(COMMITS)?, &lo, &hi)
@@ -413,10 +686,10 @@ impl Storage<Sendable> for RedbStorage {
 
             // One range scan in a blocking hop; decode in async land.
             let raw = self
-                .with_db(move |db| {
+                .with_db(move |db, blobs_dir| {
                     let (lo, hi) = tree_range(sedimentree_id);
                     let txn = db.begin_read()?;
-                    scan_range(&txn.open_table(COMMITS)?, &lo, &hi)
+                    scan_range(&txn.open_table(COMMITS)?, blobs_dir, &lo, &hi)
                 })
                 .await?;
 
@@ -441,10 +714,10 @@ impl Storage<Sendable> for RedbStorage {
             );
 
             let raw = self
-                .with_db(move |db| {
+                .with_db(move |db, blobs_dir| {
                     let (lo, hi) = item_range(sedimentree_id, commit_id);
                     let txn = db.begin_read()?;
-                    Ok(scan_range(&txn.open_table(COMMITS)?, &lo, &hi)?
+                    Ok(scan_range(&txn.open_table(COMMITS)?, blobs_dir, &lo, &hi)?
                         .into_iter()
                         .next())
                 })
@@ -465,7 +738,7 @@ impl Storage<Sendable> for RedbStorage {
                 ?commit_id,
                 "RedbStorage::delete_loose_commit"
             );
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let (lo, hi) = item_range(sedimentree_id, commit_id);
                 let txn = db.begin_write()?;
                 delete_range(&mut txn.open_table(COMMITS)?, &lo, &hi)?;
@@ -482,7 +755,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::delete_loose_commits");
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let (lo, hi) = tree_range(sedimentree_id);
                 let txn = db.begin_write()?;
                 delete_range(&mut txn.open_table(COMMITS)?, &lo, &hi)?;
@@ -503,13 +776,14 @@ impl Storage<Sendable> for RedbStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::save_fragment");
             let pending = pending_fragment(sedimentree_id, &verified);
-            self.with_db(move |db| {
+            let threshold = self.inline_threshold;
+            self.with_db(move |db, blobs_dir| {
                 let txn = db.begin_write()?;
                 insert_compound(
                     &mut txn.open_table(FRAGMENTS)?,
-                    &pending.key,
-                    &pending.meta,
-                    &pending.blob,
+                    &pending,
+                    blobs_dir,
+                    threshold,
                 )?;
                 txn.commit()?;
                 Ok(())
@@ -532,12 +806,14 @@ impl Storage<Sendable> for RedbStorage {
             );
 
             let raw = self
-                .with_db(move |db| {
+                .with_db(move |db, blobs_dir| {
                     let (lo, hi) = item_range(sedimentree_id, fragment_head);
                     let txn = db.begin_read()?;
-                    Ok(scan_range(&txn.open_table(FRAGMENTS)?, &lo, &hi)?
-                        .into_iter()
-                        .next())
+                    Ok(
+                        scan_range(&txn.open_table(FRAGMENTS)?, blobs_dir, &lo, &hi)?
+                            .into_iter()
+                            .next(),
+                    )
                 })
                 .await?;
 
@@ -551,7 +827,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Set<CommitId>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::list_fragment_ids");
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let (lo, hi) = tree_range(sedimentree_id);
                 let txn = db.begin_read()?;
                 scan_ids(&txn.open_table(FRAGMENTS)?, &lo, &hi)
@@ -569,10 +845,10 @@ impl Storage<Sendable> for RedbStorage {
             tracing::trace!(?sedimentree_id, "RedbStorage::load_fragments");
 
             let raw = self
-                .with_db(move |db| {
+                .with_db(move |db, blobs_dir| {
                     let (lo, hi) = tree_range(sedimentree_id);
                     let txn = db.begin_read()?;
-                    scan_range(&txn.open_table(FRAGMENTS)?, &lo, &hi)
+                    scan_range(&txn.open_table(FRAGMENTS)?, blobs_dir, &lo, &hi)
                 })
                 .await?;
 
@@ -594,7 +870,7 @@ impl Storage<Sendable> for RedbStorage {
                 ?fragment_head,
                 "RedbStorage::delete_fragment"
             );
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let (lo, hi) = item_range(sedimentree_id, fragment_head);
                 let txn = db.begin_write()?;
                 delete_range(&mut txn.open_table(FRAGMENTS)?, &lo, &hi)?;
@@ -611,7 +887,7 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::delete_fragments");
-            self.with_db(move |db| {
+            self.with_db(move |db, _blobs_dir| {
                 let (lo, hi) = tree_range(sedimentree_id);
                 let txn = db.begin_write()?;
                 delete_range(&mut txn.open_table(FRAGMENTS)?, &lo, &hi)?;
@@ -651,7 +927,11 @@ impl Storage<Sendable> for RedbStorage {
 
             // The whole batch — id registration included — is one
             // transaction: all-or-nothing, with a single fsync at commit.
-            self.with_db(move |db| {
+            // External blob files (if any) are written durably inside
+            // `insert_compound`, before the commit makes their references
+            // visible.
+            let threshold = self.inline_threshold;
+            self.with_db(move |db, blobs_dir| {
                 let txn = db.begin_write()?;
                 {
                     txn.open_table(TREES)?
@@ -659,12 +939,12 @@ impl Storage<Sendable> for RedbStorage {
 
                     let mut commits_table = txn.open_table(COMMITS)?;
                     for p in &pending_commits {
-                        insert_compound(&mut commits_table, &p.key, &p.meta, &p.blob)?;
+                        insert_compound(&mut commits_table, p, blobs_dir, threshold)?;
                     }
 
                     let mut fragments_table = txn.open_table(FRAGMENTS)?;
                     for p in &pending_fragments {
-                        insert_compound(&mut fragments_table, &p.key, &p.meta, &p.blob)?;
+                        insert_compound(&mut fragments_table, p, blobs_dir, threshold)?;
                     }
                 }
                 txn.commit()?;
@@ -869,6 +1149,10 @@ impl Storage<Local> for RedbStorage {
 /// Errors that can occur during redb storage operations.
 #[derive(Debug, Error)]
 pub enum RedbStorageError {
+    /// I/O error (external blob files or directory setup).
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
     /// Failed to open or create the database.
     #[error(transparent)]
     Database(#[from] redb::DatabaseError),

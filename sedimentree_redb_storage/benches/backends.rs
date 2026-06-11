@@ -1,5 +1,5 @@
-//! Backend shoot-out: `FsStorage` vs `RedbStorage` behind the same
-//! `Storage<Sendable>` trait.
+//! Backend shoot-out: `FsStorage` vs hybrid `RedbStorage` vs inline-only
+//! `RedbStorage`, behind the same `Storage<Sendable>` trait.
 //!
 //! Run with:
 //!
@@ -7,20 +7,51 @@
 //! cargo bench -p sedimentree_redb_storage --bench backends
 //! ```
 //!
-//! Groups (each parameterized by backend):
+//! Set `SUBDUCTION_BENCH_CI_SLIM=1` for a slim sweep (drops the 10k-commit
+//! rows and the 64 KiB blob row) suitable for resource-constrained runners
+//! or a quick local smoke.
 //!
-//! - `load/count/{fs,redb}/N`: bulk `load_loose_commits` scaling, 256 B blobs.
-//! - `load/blob_size/{fs,redb}/S`: byte-volume sensitivity at 1k commits.
-//! - `save/single/{fs,redb}`: one durable `save_loose_commit`.
-//! - `save/batch/{fs,redb}/1000`: one durable 1k-commit `save_batch`.
+//! # Backends
 //!
-//! A size-on-disk table (apparent + allocated bytes, plus compacted redb)
-//! is printed to stderr before the timing runs.
+//! | id            | description                                             |
+//! |---------------|---------------------------------------------------------|
+//! | `fs`          | `FsStorage`: one dir + `.meta`/`.blob` files per item   |
+//! | `redb`        | `RedbStorage`, default threshold: large blobs on FS CAS |
+//! | `redb-inline` | `RedbStorage`, threshold = `usize::MAX`: everything in the B+tree |
 //!
-//! Same caveat as the `sedimentree_fs_storage` bench: reads are measured
-//! with a warm page cache. Cold-cache deltas (clustered B+tree pages vs.
-//! ~3 random I/Os per item) are expected to favor redb much more strongly
-//! than the warm numbers shown here.
+//! # Groups
+//!
+//! - `load/count/{backend}/N`: bulk `load_loose_commits` scaling, 256 B blobs.
+//! - `load/blob_size/{backend}/S`: byte-volume sensitivity at 1k commits.
+//! - `save/single/{backend}`: one durable `save_loose_commit`.
+//! - `save/batch/{backend}/1000`: one durable 1k-commit `save_batch`.
+//!
+//! A size-on-disk table (apparent + allocated bytes, plus the compacted
+//! floor for the redb variants) is printed to stderr before the timing runs
+//! and written to `target/criterion/backend_sizes.txt` so it survives in CI
+//! artifacts alongside the criterion results.
+//!
+//! # Comparing results: within-run only
+//!
+//! All backends run in a *single invocation* so that machine conditions
+//! (background load, thermal state, page-cache pressure) cancel out.
+//! Compare backends within one run; treat criterion's `change:` lines —
+//! which compare against the *previous invocation's* saved baseline — with
+//! suspicion: between-run drift on this workload has been observed at the
+//! same magnitude as real 1.5–2x effects. To evaluate a code change, run
+//! the full suite before and after and compare the *ratios between
+//! backends*, not absolute times.
+//!
+//! Reads are measured with a warm page cache. Cold-cache deltas (clustered
+//! B+tree pages vs. ~3 random I/Os per item) are expected to favor redb
+//! much more strongly than the warm numbers shown here.
+//!
+//! The 64 KiB blob row is deliberately redb-inline's *worst case*: redb's
+//! buddy allocator rounds each value up to the next power of two, and a
+//! 64 KiB blob plus ~245 B of record overhead lands just past the 64 Ki
+//! boundary → 128 KiB allocated per value (2x internal fragmentation that
+//! `compact()` cannot reclaim — see `tests/size_probe.rs`). Arbitrary-sized
+//! real-world blobs average ~25–33% buddy waste instead.
 
 #![allow(
     missing_docs,
@@ -35,6 +66,7 @@
 
 use std::{
     collections::BTreeSet,
+    fmt::Write as _,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -57,6 +89,46 @@ const TREE: [u8; 32] = [0xAB; 32];
 /// Global commit sequence so every sealed commit is unique (CAS would
 /// otherwise no-op repeat saves).
 static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the slim sweep was requested (see module docs).
+fn ci_slim() -> bool {
+    std::env::var("SUBDUCTION_BENCH_CI_SLIM").is_ok_and(|v| !v.is_empty())
+}
+
+/// Commit-count sweep for `load/count`.
+fn count_sweep() -> &'static [usize] {
+    if ci_slim() {
+        &[10, 100, 1_000]
+    } else {
+        &[10, 100, 1_000, 10_000]
+    }
+}
+
+/// Blob-size sweep for `load/blob_size`.
+///
+/// 48 KiB sits midway between the 32 Ki and 64 Ki buddy-allocator
+/// boundaries (representative ~33% inline waste); 64 KiB is the documented
+/// pathological worst case (see module docs).
+fn blob_size_sweep() -> &'static [usize] {
+    if ci_slim() {
+        &[64, 1024]
+    } else {
+        &[64, 1024, 49_152, 65_536]
+    }
+}
+
+/// Datasets for the size-on-disk table: `(items, blob_size, label)`.
+fn size_datasets() -> &'static [(usize, usize, &'static str)] {
+    if ci_slim() {
+        &[(1_000, 256, "1k × 256 B"), (1_000, 49_152, "1k × 48 KiB")]
+    } else {
+        &[
+            (10_000, 256, "10k × 256 B"),
+            (1_000, 49_152, "1k × 48 KiB"),
+            (1_000, 65_536, "1k × 64 KiB"),
+        ]
+    }
+}
 
 fn test_signer() -> MemorySigner {
     MemorySigner::from_bytes(&[42u8; 32])
@@ -88,7 +160,7 @@ fn populate<S: Storage<Sendable>>(rt: &Runtime, storage: &S, n: usize, blob_size
         .unwrap_or_else(|e| panic!("save sedimentree id: {e}"));
 
     // Populate through save_batch in chunks: orders of magnitude faster for
-    // the durable FS backend, and identical end-state for both.
+    // the durable FS backend, and identical end-state for all backends.
     for chunk in (0..n).collect::<Vec<_>>().chunks(500) {
         let commits: Vec<_> = chunk
             .iter()
@@ -99,10 +171,15 @@ fn populate<S: Storage<Sendable>>(rt: &Runtime, storage: &S, n: usize, blob_size
     }
 }
 
-/// One backend under test: a constructor and a path to measure for size.
+/// One backend under test.
 struct Backend<S> {
+    /// Criterion id component (also the size-table label).
     name: &'static str,
+    /// Construct the backend rooted at the given (temp) directory.
     make: fn(&Path) -> S,
+    /// Whether the size table should also report a post-`compact()` floor
+    /// (redb variants only).
+    compactable: bool,
 }
 
 fn make_fs(dir: &Path) -> FsStorage {
@@ -110,16 +187,29 @@ fn make_fs(dir: &Path) -> FsStorage {
 }
 
 fn make_redb(dir: &Path) -> RedbStorage {
-    RedbStorage::new(dir.join("data.redb")).expect("create RedbStorage")
+    RedbStorage::new(dir).expect("create RedbStorage")
+}
+
+fn make_redb_inline(dir: &Path) -> RedbStorage {
+    RedbStorage::with_inline_threshold(dir, usize::MAX).expect("create inline RedbStorage")
 }
 
 const FS: Backend<FsStorage> = Backend {
     name: "fs",
     make: make_fs,
+    compactable: false,
 };
+
 const REDB: Backend<RedbStorage> = Backend {
     name: "redb",
     make: make_redb,
+    compactable: true,
+};
+
+const REDB_INLINE: Backend<RedbStorage> = Backend {
+    name: "redb-inline",
+    make: make_redb_inline,
+    compactable: true,
 };
 
 /// Recursive (apparent bytes, allocated bytes) under `path`.
@@ -166,51 +256,105 @@ fn human(bytes: u64) -> String {
     }
 }
 
-/// Print the size-on-disk comparison table to stderr.
-fn report_sizes(rt: &Runtime) {
-    eprintln!("\nsize on disk (apparent / allocated):");
-    eprintln!(
-        "┌──────────────────────┬──────────────────────────┬──────────────────────────────────────────┐"
-    );
-    eprintln!(
-        "│ dataset              │ fs                       │ redb (uncompacted → compacted)           │"
-    );
-    eprintln!(
-        "├──────────────────────┼──────────────────────────┼──────────────────────────────────────────┤"
-    );
+/// One measured row of the size table.
+struct SizeRow {
+    dataset: &'static str,
+    backend: &'static str,
+    apparent: u64,
+    allocated: u64,
+    compacted: Option<u64>,
+}
 
-    for (n, blob_size, label) in [
-        (10_000, 256, "10k × 256 B  "),
-        (1_000, 65_536, "1k × 64 KiB  "),
-    ] {
-        let fs_dir = tempfile::tempdir().expect("tempdir");
-        populate(rt, &make_fs(fs_dir.path()), n, blob_size);
-        let (fs_app, fs_alloc) = disk_usage(fs_dir.path());
+/// Populate a fresh store and measure its footprint (and, for redb
+/// variants, the post-compaction floor).
+fn measure_size<S: Storage<Sendable>>(
+    rt: &Runtime,
+    backend: &Backend<S>,
+    n: usize,
+    blob_size: usize,
+    dataset: &'static str,
+) -> SizeRow {
+    let dir = tempfile::tempdir().expect("tempdir");
 
-        let redb_dir = tempfile::tempdir().expect("tempdir");
-        let redb_path = redb_dir.path().join("data.redb");
-        populate(rt, &make_redb(redb_dir.path()), n, blob_size);
-        let (redb_app, redb_alloc) = disk_usage(&redb_path);
+    // Inner scope: the storage handle (and its database lock, for redb
+    // variants) must drop before the compaction reopen below.
+    {
+        let storage = (backend.make)(dir.path());
+        populate(rt, &storage, n, blob_size);
+    }
 
-        // Compact a copy of the database for the steady-state floor.
-        let mut db = redb::Database::create(&redb_path).expect("reopen redb");
+    let (apparent, allocated) = disk_usage(dir.path());
+
+    let compacted = backend.compactable.then(|| {
+        let db_path = dir.path().join(sedimentree_redb_storage::DB_FILE_NAME);
+        let mut db = redb::Database::create(&db_path).expect("reopen redb for compaction");
         db.compact().expect("compact redb");
         drop(db);
-        let (_, redb_compacted) = disk_usage(&redb_path);
+        disk_usage(dir.path()).1
+    });
 
-        eprintln!(
-            "│ {label}        │ {:>11} / {:>10} │ {:>10} / {:>10} → {:>10} │",
-            human(fs_app),
-            human(fs_alloc),
-            human(redb_app),
-            human(redb_alloc),
-            human(redb_compacted),
+    SizeRow {
+        dataset,
+        backend: backend.name,
+        apparent,
+        allocated,
+        compacted,
+    }
+}
+
+/// Render, print (stderr), and persist the size-on-disk table.
+fn report_sizes(rt: &Runtime) {
+    let mut rows = Vec::new();
+    for &(n, blob_size, dataset) in size_datasets() {
+        rows.push(measure_size(rt, &FS, n, blob_size, dataset));
+        rows.push(measure_size(rt, &REDB, n, blob_size, dataset));
+        rows.push(measure_size(rt, &REDB_INLINE, n, blob_size, dataset));
+    }
+
+    let mut table = String::new();
+    let _ = writeln!(table, "size on disk:");
+    let _ = writeln!(
+        table,
+        "┌──────────────┬─────────────┬─────────────┬─────────────┬─────────────┐"
+    );
+    let _ = writeln!(
+        table,
+        "│ dataset      │ backend     │ apparent    │ allocated   │ compacted   │"
+    );
+    let _ = writeln!(
+        table,
+        "├──────────────┼─────────────┼─────────────┼─────────────┼─────────────┤"
+    );
+
+    for row in &rows {
+        let compacted = row.compacted.map_or_else(|| "—".to_owned(), human);
+        let _ = writeln!(
+            table,
+            "│ {:<12} │ {:<11} │ {:>11} │ {:>11} │ {:>11} │",
+            row.dataset,
+            row.backend,
+            human(row.apparent),
+            human(row.allocated),
+            compacted,
         );
     }
 
-    eprintln!(
-        "└──────────────────────┴──────────────────────────┴──────────────────────────────────────────┘"
+    let _ = writeln!(
+        table,
+        "└──────────────┴─────────────┴─────────────┴─────────────┴─────────────┘"
     );
+
+    eprintln!("\n{table}");
+
+    // Persist next to the criterion results so CI artifact uploads of
+    // `target/criterion/` capture it.
+    let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/criterion");
+    if std::fs::create_dir_all(&out_dir).is_ok() {
+        let path = out_dir.join("backend_sizes.txt");
+        if let Err(e) = std::fs::write(&path, &table) {
+            eprintln!("warning: could not write {}: {e}", path.display());
+        }
+    }
 }
 
 /// Bulk-load scaling over commit count.
@@ -220,10 +364,12 @@ fn bench_load_count<S: Storage<Sendable> + 'static>(
     backend: &Backend<S>,
 ) {
     let mut group = c.benchmark_group("load/count");
-    group.sample_size(10);
     let id = SedimentreeId::new(TREE);
 
-    for n in [10usize, 100, 1_000, 10_000] {
+    for &n in count_sweep() {
+        // Cheap sub-ms cases afford tighter confidence intervals.
+        group.sample_size(if n <= 100 { 50 } else { 10 });
+
         let dir = tempfile::tempdir().expect("tempdir");
         let storage = (backend.make)(dir.path());
         populate(rt, &storage, n, 256);
@@ -255,7 +401,7 @@ fn bench_load_blob_size<S: Storage<Sendable> + 'static>(
     group.sample_size(10);
     let id = SedimentreeId::new(TREE);
 
-    for blob_size in [64usize, 1024, 65_536] {
+    for &blob_size in blob_size_sweep() {
         let dir = tempfile::tempdir().expect("tempdir");
         let storage = (backend.make)(dir.path());
         populate(rt, &storage, N, blob_size);
@@ -333,10 +479,13 @@ fn all_benches(c: &mut Criterion) {
 
     bench_load_count(c, &rt, &FS);
     bench_load_count(c, &rt, &REDB);
+    bench_load_count(c, &rt, &REDB_INLINE);
     bench_load_blob_size(c, &rt, &FS);
     bench_load_blob_size(c, &rt, &REDB);
+    bench_load_blob_size(c, &rt, &REDB_INLINE);
     bench_save(c, &rt, &FS);
     bench_save(c, &rt, &REDB);
+    bench_save(c, &rt, &REDB_INLINE);
 }
 
 criterion_group!(benches, all_benches);

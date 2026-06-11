@@ -34,7 +34,7 @@ async fn seal_commit(
 #[tokio::test]
 async fn save_load_roundtrip() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
-    let storage = RedbStorage::new(dir.path().join("data.redb"))?;
+    let storage = RedbStorage::new(dir.path())?;
     let signer = test_signer();
     let id = SedimentreeId::new([0x01; 32]);
     let head = CommitId::new([0x42; 32]);
@@ -63,7 +63,7 @@ async fn save_load_roundtrip() -> testresult::TestResult {
 #[tokio::test]
 async fn multiple_commits_and_isolation() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
-    let storage = RedbStorage::new(dir.path().join("data.redb"))?;
+    let storage = RedbStorage::new(dir.path())?;
     let signer = test_signer();
     let tree_a = SedimentreeId::new([0xAA; 32]);
     let tree_b = SedimentreeId::new([0xBB; 32]);
@@ -100,7 +100,7 @@ async fn multiple_commits_and_isolation() -> testresult::TestResult {
 #[tokio::test]
 async fn batch_save_registers_and_persists() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
-    let storage = RedbStorage::new(dir.path().join("data.redb"))?;
+    let storage = RedbStorage::new(dir.path())?;
     let signer = test_signer();
     let id = SedimentreeId::new([0x33; 32]);
 
@@ -130,7 +130,7 @@ async fn batch_save_registers_and_persists() -> testresult::TestResult {
 #[tokio::test]
 async fn survives_reopen() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
-    let path = dir.path().join("data.redb");
+    let path = dir.path().to_path_buf();
     let signer = test_signer();
     let id = SedimentreeId::new([0x44; 32]);
     let head = CommitId::new([0x55; 32]);
@@ -158,7 +158,7 @@ async fn survives_reopen() -> testresult::TestResult {
 #[tokio::test]
 async fn delete_operations() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
-    let storage = RedbStorage::new(dir.path().join("data.redb"))?;
+    let storage = RedbStorage::new(dir.path())?;
     let signer = test_signer();
     let id = SedimentreeId::new([0x66; 32]);
 
@@ -185,6 +185,157 @@ async fn delete_operations() -> testresult::TestResult {
 
     Storage::<Sendable>::delete_sedimentree_id(&storage, id).await?;
     assert!(!Storage::<Sendable>::contains_sedimentree_id(&storage, id).await?);
+
+    Ok(())
+}
+
+/// Recursively collect every external blob file under the `blobs/` dir.
+fn blob_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(
+        &root.join(sedimentree_redb_storage::BLOBS_DIR_NAME),
+        &mut out,
+    );
+    out
+}
+
+/// A blob over the inline threshold is stored as an external file and
+/// round-trips byte-identically (including across reopen).
+#[tokio::test]
+async fn large_blob_externalized_and_roundtrips() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x88; 32]);
+    let head = CommitId::new([0x99; 32]);
+
+    // Threshold of 64 bytes so a 1 KiB blob goes external.
+    let big_blob: Vec<u8> = (0..1024u32)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect();
+
+    {
+        let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+        let verified = seal_commit(&signer, id, head, big_blob.clone()).await;
+        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+    }
+
+    let files = blob_files(dir.path());
+    assert_eq!(files.len(), 1, "expected exactly one external blob file");
+    assert_eq!(
+        std::fs::read(&files[0])?,
+        big_blob,
+        "external file must hold the raw blob bytes"
+    );
+
+    // Reload through a fresh handle (and the *default* threshold: reads
+    // dispatch on the stored tag, not the configured threshold).
+    let reopened = RedbStorage::new(dir.path())?;
+    let loaded = Storage::<Sendable>::load_loose_commit(&reopened, id, head)
+        .await?
+        .expect("commit must be loadable");
+    assert_eq!(
+        loaded.blob().contents(),
+        &big_blob,
+        "blob must round-trip byte-identically through the external file"
+    );
+
+    let bulk = Storage::<Sendable>::load_loose_commits(&reopened, id).await?;
+    assert_eq!(bulk.len(), 1);
+    assert_eq!(bulk[0].blob().contents(), &big_blob);
+
+    Ok(())
+}
+
+/// A blob at or under the threshold stays inline: no external files appear.
+#[tokio::test]
+async fn small_blob_stays_inline() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x8A; 32]);
+
+    let verified = seal_commit(&signer, id, CommitId::new([0x01; 32]), vec![7; 256]).await;
+    Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+
+    assert!(
+        blob_files(dir.path()).is_empty(),
+        "small blobs must not create external files"
+    );
+
+    Ok(())
+}
+
+/// Two commits sharing identical blob contents share one external file
+/// (content addressing deduplicates).
+#[tokio::test]
+async fn identical_large_blobs_deduplicate() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x8B; 32]);
+
+    let shared_blob = vec![0xEE; 512];
+    for i in 0..2u8 {
+        let verified = seal_commit(&signer, id, CommitId::new([i; 32]), shared_blob.clone()).await;
+        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+    }
+
+    assert_eq!(
+        blob_files(dir.path()).len(),
+        1,
+        "identical blobs must share one content-addressed file"
+    );
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(loaded.len(), 2, "both commits must load");
+    for vm in &loaded {
+        assert_eq!(vm.blob().contents(), &shared_blob);
+    }
+
+    Ok(())
+}
+
+/// Large blobs flow through `save_batch` too: files written before the
+/// transaction commits, and the batch loads back complete.
+#[tokio::test]
+async fn batch_with_large_blobs_roundtrips() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x8C; 32]);
+
+    let mut commits = Vec::new();
+    for i in 0..5u8 {
+        // Mix of inline (32 B) and external (300 B) blobs.
+        let size = if i % 2 == 0 { 32 } else { 300 };
+        commits.push(seal_commit(&signer, id, CommitId::new([i; 32]), vec![i; size]).await);
+    }
+
+    let saved = Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
+    assert_eq!(saved, 5);
+
+    assert_eq!(
+        blob_files(dir.path()).len(),
+        2,
+        "the two over-threshold blobs must be external"
+    );
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(loaded.len(), 5, "all batch items must load");
 
     Ok(())
 }
