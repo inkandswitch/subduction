@@ -405,6 +405,92 @@ async fn cold_clone_of_resident_tree_uses_bulk_scan() -> TestResult {
     Ok(())
 }
 
+/// The slow path warms the cache: the first request for a tree that lives
+/// only in storage (not resident — e.g. after a restart) takes the
+/// bulk-scan slow path, and that scan installs the tree into the cache so
+/// the *second* request takes the zero-bulk fast path.
+#[tokio::test]
+async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
+    let alice_signer = MemorySigner::from_bytes(&[66u8; 32]);
+    let bob_signer = MemorySigner::from_bytes(&[67u8; 32]);
+
+    let alice_storage = CallCountingStorage::new();
+    let bob_storage = CallCountingStorage::new();
+
+    let alice = make_node(alice_signer.clone(), alice_storage.clone());
+    let bob = make_node(bob_signer.clone(), bob_storage.clone());
+
+    let sed_id = SedimentreeId::new([0x7A; 32]);
+
+    // Write Bob's tree *directly to storage*, bypassing the node: the tree
+    // is durable but not cache-resident — the restart shape.
+    for i in 0..4u8 {
+        let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &bob_signer,
+            (sed_id, CommitId::new([i; 32]), BTreeSet::new()),
+            sedimentree_core::blob::verified::VerifiedBlobMeta::new(Blob::new(vec![i; 32])),
+        )
+        .await;
+        Storage::<Sendable>::save_loose_commit(&bob_storage, sed_id, verified).await?;
+    }
+
+    connect_pair(&alice, &alice_signer, &bob, &bob_signer).await?;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let bob_peer_id = PeerId::from(bob_signer.verifying_key());
+
+    // First request: cache miss ⇒ slow path ⇒ at least one bulk scan.
+    let bulk_before_first = bob_storage.bulk_loads();
+    let (synced, _stats, send_errors) = alice
+        .sync_with_peer(
+            &bob_peer_id,
+            sed_id,
+            false,
+            CallTimeout::TimeoutMillis(2_000),
+        )
+        .await?;
+    assert!(synced, "first sync should reach Bob");
+    assert!(send_errors.is_empty(), "no send errors expected");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let first_bulk = bob_storage.bulk_loads() - bulk_before_first;
+    assert!(
+        first_bulk >= 1,
+        "the first request for a non-resident tree must take the bulk-scan \
+         slow path (saw {first_bulk} bulk loads)"
+    );
+
+    // Second request: the slow path warmed the cache ⇒ zero bulk scans.
+    let bulk_before_second = bob_storage.bulk_loads();
+    let (synced, _stats, send_errors) = alice
+        .sync_with_peer(
+            &bob_peer_id,
+            sed_id,
+            false,
+            CallTimeout::TimeoutMillis(2_000),
+        )
+        .await?;
+    assert!(synced, "second sync should reach Bob");
+    assert!(send_errors.is_empty(), "no send errors expected");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let second_bulk = bob_storage.bulk_loads() - bulk_before_second;
+    assert_eq!(
+        second_bulk, 0,
+        "the second request must take the cache fast path \
+         (saw {second_bulk} bulk loads — the slow path did not warm the cache)"
+    );
+
+    // Convergence sanity: Alice received the whole tree.
+    let alice_commits = alice
+        .get_commits(sed_id)
+        .await
+        .expect("Alice's tree must exist");
+    assert_eq!(alice_commits.len(), 4, "Alice must receive all commits");
+
+    Ok(())
+}
+
 /// A moderate diff on a large tree must stay on point reads: the scan
 /// fallback is a *fraction* of tree size (total/4, floor 32), not an
 /// absolute count. A fixed threshold here would bulk-scan 800 records to

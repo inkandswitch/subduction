@@ -565,6 +565,20 @@ mod tests {
         )
         .await;
         conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&store, fragment).await;
+
+        let batch_commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (sid(0x23), CommitId::new([5; 32]), BTreeSet::new()),
+            VerifiedBlobMeta::new(Blob::new(vec![7, 8, 9])),
+        )
+        .await;
+        conformance::assert_batch_save_registers_tree_id::<Sendable, _>(
+            &store,
+            sid(0x23),
+            vec![batch_commit],
+            Vec::new(),
+        )
+        .await;
     }
 
     /// Property tests for the `SedimentreeId`-sharded commit/fragment stores.

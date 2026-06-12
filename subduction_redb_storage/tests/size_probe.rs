@@ -49,6 +49,8 @@ async fn inline_size_amplification_probe() {
     let signer = MemorySigner::from_bytes(&[42u8; 32]);
     let id = SedimentreeId::new([0xAB; 32]);
 
+    let mut amp_at = std::collections::BTreeMap::new();
+
     // Blob sizes straddling the 64 KiB allocation boundary, accounting for
     // ~245 B of value overhead (tag + meta_len + Signed<LooseCommit>).
     for blob_size in [
@@ -85,12 +87,33 @@ async fn inline_size_amplification_probe() {
         let db = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
         let file_len = std::fs::metadata(&db).expect("metadata").len();
         let logical = 1000 * blob_size as u64;
+        let amp = file_len as f64 / logical as f64;
         eprintln!(
             "blob {:>7} B  → db file {:>7.2} MiB  (logical {:>6.2} MiB, amp {:.2}x)",
             blob_size,
             file_len as f64 / (1 << 20) as f64,
             logical as f64 / (1 << 20) as f64,
-            file_len as f64 / logical as f64,
+            amp,
         );
+        amp_at.insert(blob_size, amp);
     }
+
+    // Pin the buddy-allocator conclusion that justifies
+    // `DEFAULT_INLINE_THRESHOLD` and the external-blob design: crossing a
+    // power-of-two boundary by a few hundred bytes of record overhead
+    // doubles the per-value allocation (~2x amplification), while sitting
+    // just under it costs almost nothing. If a redb upgrade changes its
+    // allocation strategy, these tripwires say the analysis needs redoing.
+    assert!(
+        amp_at[&65_536] >= 1.9,
+        "expected ~2x amplification just past the 64 Ki boundary, got {:.2}x \
+         — redb's allocation behavior has changed; revisit the inline threshold analysis",
+        amp_at[&65_536]
+    );
+    assert!(
+        amp_at[&65_024] <= 1.15,
+        "expected near-1x amplification just under the 64 Ki boundary, got {:.2}x \
+         — redb's allocation behavior has changed; revisit the inline threshold analysis",
+        amp_at[&65_024]
+    );
 }

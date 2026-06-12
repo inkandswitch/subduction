@@ -528,7 +528,7 @@ where
         + sedimentree_core::codec::decode::DecodeFields,
 {
     let mut out = Vec::with_capacity(items.len());
-    let mut pending: Vec<(Signed<T>, [u8; 32])> = Vec::new();
+    let mut pending: Vec<(Signed<T>, [u8; 32], u64)> = Vec::new();
 
     for item in items {
         match item {
@@ -540,7 +540,12 @@ where
             DecodedCompound::External { meta } => match Signed::<T>::try_decode(meta) {
                 Ok(signed) => match signed.try_decode_trusted_payload() {
                     Ok(payload) => {
-                        pending.push((signed, *payload.blob_meta().digest().as_bytes()));
+                        let blob_meta = payload.blob_meta();
+                        pending.push((
+                            signed,
+                            *blob_meta.digest().as_bytes(),
+                            blob_meta.size_bytes(),
+                        ));
                     }
                     Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
                 },
@@ -553,7 +558,7 @@ where
         return Ok(out);
     }
 
-    let digests: Vec<[u8; 32]> = pending.iter().map(|(_, digest)| *digest).collect();
+    let digests: Vec<[u8; 32]> = pending.iter().map(|(_, digest, _)| *digest).collect();
     let handles: Vec<_> = digests
         .chunks(EXTERNAL_READ_CHUNK)
         .map(|chunk| {
@@ -575,7 +580,7 @@ where
         blobs.extend(handle.await??);
     }
 
-    for ((signed, digest), blob) in pending.into_iter().zip(blobs) {
+    for ((signed, digest, expected_size), blob) in pending.into_iter().zip(blobs) {
         let Some(blob) = blob else {
             tracing::warn!(
                 digest = %hex_encode(&digest),
@@ -583,6 +588,21 @@ where
             );
             continue;
         };
+
+        // Size-validate against the signed `BlobMeta` (the same check the
+        // save-side CAS applies): a truncated or tampered-with external
+        // file must be skipped, not paired silently with the meta and
+        // propagated to peers. A re-save of the same content heals it via
+        // the size-mismatch rewrite in `write_blob_file_sync`.
+        if blob.len() as u64 != expected_size {
+            tracing::warn!(
+                digest = %hex_encode(&digest),
+                have = blob.len(),
+                need = expected_size,
+                "external blob file size mismatch (crash artifact or tampering); skipping {what}"
+            );
+            continue;
+        }
 
         match VerifiedMeta::try_from_trusted(signed, Blob::new(blob)) {
             Ok(verified) => out.push(verified),

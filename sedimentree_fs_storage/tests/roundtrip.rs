@@ -571,11 +571,27 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
     .await;
     conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&storage, fragment).await;
 
+    let batch_tree = make_sedimentree_id(0x72);
+    let batch_commit: VerifiedMeta<LooseCommit> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (batch_tree, CommitId::new([0x14; 32]), BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(vec![3; 16])),
+    )
+    .await;
+    conformance::assert_batch_save_registers_tree_id::<Sendable, _>(
+        &storage,
+        batch_tree,
+        vec![batch_commit],
+        Vec::new(),
+    )
+    .await;
+
     // Registration survives reopen (rediscovered from the directory layout).
     drop(storage);
     let reopened = FsStorage::new(dir.path().to_path_buf())?;
     assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, commit_tree).await?);
     assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, fragment_tree).await?);
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, batch_tree).await?);
 
     Ok(())
 }
@@ -640,6 +656,142 @@ async fn missing_blob_self_heals_on_resave() -> testresult::TestResult {
         &expected_blob,
         "healed pair must hold the original blob bytes"
     );
+
+    Ok(())
+}
+
+/// Bulk loads beyond `READ_CHUNK_SIZE` (128) take the parallel fan-out
+/// path (per-item reads spread across blocking tasks) instead of the
+/// single-hop path. That path is otherwise exercised only by benches —
+/// this pins its *correctness*: every item loads back byte-identically.
+#[tokio::test]
+async fn bulk_load_fans_out_beyond_chunk_size_correctly() -> testresult::TestResult {
+    const N: usize = 150; // > READ_CHUNK_SIZE = 128
+
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x73);
+
+    let mut commits = Vec::with_capacity(N);
+    let mut expected = std::collections::BTreeSet::new();
+    for i in 0..N {
+        let mut head = [0u8; 32];
+        head[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, CommitId::new(head), BTreeSet::new()),
+            VerifiedBlobMeta::new(Blob::new(i.to_le_bytes().to_vec())),
+        )
+        .await;
+        expected.insert((
+            verified.signed().as_bytes().to_vec(),
+            verified.blob().contents().clone(),
+        ));
+        commits.push(verified);
+    }
+
+    Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
+
+    let loaded: std::collections::BTreeSet<_> =
+        Storage::<Sendable>::load_loose_commits(&storage, id)
+            .await?
+            .iter()
+            .map(|v| {
+                (
+                    v.signed().as_bytes().to_vec(),
+                    v.blob().contents().clone(),
+                )
+            })
+            .collect();
+    assert_eq!(
+        loaded, expected,
+        "the fan-out path must return every item byte-identically"
+    );
+
+    Ok(())
+}
+
+/// Byzantine equivocation: two payloads sharing one `CommitId` (different
+/// blobs ⇒ different content digests ⇒ two `.meta`/`.blob` pairs in one
+/// commit dir). The fs backend resolves the commit dir to a *single*
+/// (readdir-order) pair — this pins that semantic, which deliberately
+/// diverges from the redb backend where both payloads coexist (see
+/// `subduction_redb_storage/tests/roundtrip.rs::equivocating_commits_coexist`).
+#[tokio::test]
+async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x74);
+    let head = CommitId::new([0x77; 32]);
+
+    let blob_a = vec![0xAA; 16];
+    let blob_b = vec![0xBB; 16];
+    for blob in [blob_a.clone(), blob_b.clone()] {
+        let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, head, BTreeSet::new()),
+            VerifiedBlobMeta::new(Blob::new(blob)),
+        )
+        .await;
+        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+    }
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(
+        loaded.len(),
+        1,
+        "the fs backend must resolve an equivocating commit dir to one item"
+    );
+    let got = loaded[0].blob().contents();
+    assert!(
+        got == &blob_a || got == &blob_b,
+        "the resolved item must be one of the stored payloads"
+    );
+
+    Ok(())
+}
+
+/// Negative registration contract via the shared conformance helper: a
+/// single-item save that fails must not register the tree id (the batch
+/// twin is `failed_batch_does_not_register_tree_id`).
+#[tokio::test]
+async fn failed_single_save_does_not_register_tree_id() -> testresult::TestResult {
+    use subduction_core::storage::conformance;
+
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x75);
+
+    // Same poison as the batch twin: register via a helper instance so the
+    // on-disk commits/ dir exists, plant a roadblock file at the commit's
+    // id_dir, and keep the instance under test's id cache clean.
+    let helper = FsStorage::new(dir.path().to_path_buf())?;
+    Storage::<Sendable>::save_sedimentree_id(&helper, id).await?;
+
+    let blocked_head = CommitId::new([0x04; 32]);
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after registration");
+    let mut blocked_hex = String::with_capacity(64);
+    for byte in blocked_head.as_bytes() {
+        use std::fmt::Write as _;
+        let _unused = write!(blocked_hex, "{byte:02x}");
+    }
+    std::fs::write(commits_dir.join(blocked_hex), b"roadblock")?;
+
+    let commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, blocked_head, BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(vec![7; 16])),
+    )
+    .await;
+
+    conformance::assert_failed_commit_save_does_not_register_tree_id::<Sendable, _>(
+        &storage, commit,
+    )
+    .await;
 
     Ok(())
 }
