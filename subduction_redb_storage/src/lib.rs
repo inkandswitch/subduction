@@ -206,6 +206,13 @@ impl RedbStorage {
         }
         txn.commit()?;
 
+        // Make the database file's own directory entry durable. redb
+        // fsyncs the file *contents* on commit, but the `sedimentree.redb`
+        // link in `root` was created after the directory fsyncs above —
+        // strictly per POSIX, a crash here could otherwise lose the link
+        // (and with it transactions that were already fsynced and acked).
+        fsync_dir_sync(root)?;
+
         Ok(Self {
             db: Arc::new(db),
             blobs_dir: Arc::new(blobs_dir),

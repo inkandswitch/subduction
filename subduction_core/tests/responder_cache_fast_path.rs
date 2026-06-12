@@ -336,7 +336,7 @@ async fn responder_serves_resident_tree_without_bulk_scans() -> TestResult {
 /// tree must use the bulk-scan crossover, not thousands of point reads.
 #[tokio::test]
 async fn cold_clone_of_resident_tree_uses_bulk_scan() -> TestResult {
-    const N: usize = 300; // > POINT_READ_CROSSOVER (256)
+    const N: usize = 300; // missing = 300 > crossover = max(300/4, 32) = 75
 
     let alice_signer = MemorySigner::from_bytes(&[62u8; 32]);
     let bob_signer = MemorySigner::from_bytes(&[63u8; 32]);

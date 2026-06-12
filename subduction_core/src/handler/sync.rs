@@ -818,23 +818,30 @@ impl<
                 let wanted_fragments: Set<CommitId> =
                     diff.local_fragment_ids.iter().copied().collect();
 
+                // Each table is scanned only when the diff actually wants
+                // something from it — a commit-only tree shouldn't pay a
+                // fragments scan (a directory walk on the fs backend).
                 let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
-                for vm in fetcher
-                    .load_loose_commits()
-                    .await
-                    .map_err(IoError::Storage)?
-                {
-                    let head = vm.payload().head();
-                    if wanted_commits.contains(&head) {
-                        commit_by_id.entry(head).or_insert(vm);
+                if !wanted_commits.is_empty() {
+                    for vm in fetcher
+                        .load_loose_commits()
+                        .await
+                        .map_err(IoError::Storage)?
+                    {
+                        let head = vm.payload().head();
+                        if wanted_commits.contains(&head) {
+                            commit_by_id.entry(head).or_insert(vm);
+                        }
                     }
                 }
 
                 let mut fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = Map::new();
-                for vm in fetcher.load_fragments().await.map_err(IoError::Storage)? {
-                    let head = vm.payload().head();
-                    if wanted_fragments.contains(&head) {
-                        fragment_by_id.entry(head).or_insert(vm);
+                if !wanted_fragments.is_empty() {
+                    for vm in fetcher.load_fragments().await.map_err(IoError::Storage)? {
+                        let head = vm.payload().head();
+                        if wanted_fragments.contains(&head) {
+                            fragment_by_id.entry(head).or_insert(vm);
+                        }
                     }
                 }
 
@@ -907,14 +914,17 @@ impl<
                 .map_err(IoError::Storage)?;
             let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
 
+            // Byzantine duplicates (multiple payloads per id) resolve
+            // first-loaded-wins — the same policy for commits and
+            // fragments, in both the crossover and slow paths.
             let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
             for vm in verified_commits {
                 commit_by_id.entry(vm.payload().head()).or_insert(vm);
             }
-            let fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = verified_fragments
-                .into_iter()
-                .map(|vm| (vm.payload().head(), vm))
-                .collect();
+            let mut fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = Map::new();
+            for vm in verified_fragments {
+                fragment_by_id.entry(vm.payload().head()).or_insert(vm);
+            }
 
             // Build the resident tree from the data we just loaded
             // (reusing the fetcher reads above — no second storage

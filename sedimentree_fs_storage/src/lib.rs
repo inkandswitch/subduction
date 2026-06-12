@@ -169,24 +169,31 @@ impl Drop for StagedWrite<'_> {
 ///
 /// # CAS validation
 ///
-/// The skip requires the existing `.meta` length to match the expected
-/// signed bytes (same CAS path ⇒ same content ⇒ same length). A
-/// zero-length or truncated `.meta` left by a pre-fsync crash is rewritten
-/// instead of being preserved forever.
+/// The skip requires the existing *pair* to be intact: the `.meta` length
+/// must match the expected signed bytes and the `.blob` must exist at its
+/// expected length (same CAS path ⇒ same content ⇒ same lengths). A
+/// truncated `.meta` *or* a missing/short `.blob` left by a crash is
+/// rewritten instead of being preserved forever — a meta-intact /
+/// blob-missing pair would otherwise be unhealable (loads skip the
+/// incomplete pair, and a bare-meta CAS check would skip every re-save).
 fn stage_compound_write_sync(
     item: &PendingWrite,
 ) -> Result<Option<StagedWrite<'_>>, FsStorageError> {
-    // CAS: skip only if the existing `.meta` is intact.
-    if let Ok(existing) = std::fs::metadata(&item.meta_path) {
-        if existing.len() == item.signed_data.len() as u64 {
+    // CAS: skip only if the existing meta+blob pair is intact.
+    if let Ok(existing_meta) = std::fs::metadata(&item.meta_path) {
+        let meta_intact = existing_meta.len() == item.signed_data.len() as u64;
+        let blob_intact = std::fs::metadata(&item.blob_path)
+            .is_ok_and(|m| m.len() == item.blob_data.len() as u64);
+
+        if meta_intact && blob_intact {
             return Ok(None);
         }
 
         tracing::warn!(
             meta_path = %item.meta_path.display(),
-            have = existing.len(),
-            need = item.signed_data.len(),
-            "rewriting corrupt .meta (size mismatch; likely a pre-fsync crash artifact)"
+            meta_intact,
+            blob_intact,
+            "rewriting corrupt compound pair (likely a crash artifact)"
         );
     }
 
@@ -863,10 +870,6 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::save_loose_commit");
 
-            // Contract: persisting an item registers its sedimentree id
-            // (cache-gated no-op after the first save for this tree).
-            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
-
             // Validate + resolve paths off the filesystem, then collapse the
             // CAS check + mkdir + 2 writes + 2 renames into a single
             // blocking-pool hop. With `tokio::fs` each call is its own
@@ -875,6 +878,12 @@ impl Storage<Sendable> for FsStorage {
             // tightening the latency tail under concurrent load.
             let item = self.build_commit_write(sedimentree_id, &verified)?;
             tokio::task::spawn_blocking(move || write_compound_sync(&item)).await??;
+
+            // Contract: persisting an item registers its sedimentree id
+            // (cache-gated no-op after the first save for this tree).
+            // Registered *after* the durable item write so a failed write
+            // doesn't leave a registered-but-empty tree behind.
+            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
 
             Ok(())
         })
@@ -1027,14 +1036,15 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::save_fragment");
 
-            // Contract: persisting an item registers its sedimentree id
-            // (cache-gated no-op after the first save for this tree).
-            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
-
             // Single blocking-pool hop for the whole CAS + write + rename
             // sequence; see `save_loose_commit` for the rationale.
             let item = self.build_fragment_write(sedimentree_id, &verified)?;
             tokio::task::spawn_blocking(move || write_compound_sync(&item)).await??;
+
+            // Contract: persisting an item registers its sedimentree id —
+            // after the durable write, so a failed write doesn't leave a
+            // registered-but-empty tree behind.
+            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
 
             Ok(())
         })
@@ -1205,8 +1215,6 @@ impl Storage<Sendable> for FsStorage {
                 "FsStorage::save_batch"
             );
 
-            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
-
             // Validate + resolve every item off the filesystem, then persist the
             // whole batch in a single blocking-pool hop. Previously each item
             // was its own `spawn_blocking` save, so an N-item batch paid the
@@ -1264,6 +1272,12 @@ impl Storage<Sendable> for FsStorage {
                 Ok(())
             })
             .await??;
+
+            // Contract: persisting items registers their sedimentree id —
+            // after the durable batch write, so a failed batch doesn't
+            // leave a registered-but-empty tree behind (mirrors the
+            // single-item `save_loose_commit` / `save_fragment` ordering).
+            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
 
             Ok(num_commits + num_fragments)
         })

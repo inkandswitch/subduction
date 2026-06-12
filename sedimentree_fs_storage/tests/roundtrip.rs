@@ -579,3 +579,121 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// A missing `.blob` beside an intact `.meta` (e.g. a partially lost crash
+/// state) must be healed by a re-save of the same content: the CAS check
+/// validates the *pair*, not just the meta. A bare-meta check would skip
+/// every re-save, leaving the item permanently unrestorable even when a
+/// peer re-sends it.
+#[tokio::test]
+async fn missing_blob_self_heals_on_resave() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6E);
+    let head = CommitId::new([0x88; 32]);
+
+    let make = || async {
+        let verified_blob = VerifiedBlobMeta::new(Blob::new(vec![5; 64]));
+        VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, head, BTreeSet::new()),
+            verified_blob,
+        )
+        .await
+    };
+
+    let original = make().await;
+    let expected_blob = original.blob().contents().clone();
+    Storage::<Sendable>::save_loose_commit(&storage, id, original).await?;
+
+    // Simulate the crash artifact: the `.blob` vanishes, the `.meta` stays.
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after save");
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&commits_dir)?.flatten() {
+        if entry.path().is_dir() {
+            for file in std::fs::read_dir(entry.path())?.flatten() {
+                if file.path().extension().is_some_and(|e| e == "blob") {
+                    std::fs::remove_file(file.path())?;
+                    removed += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(removed, 1, "expected exactly one .blob to remove");
+
+    // The incomplete pair is skipped on load...
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert!(
+        loaded.is_empty(),
+        "meta-without-blob must be skipped on load"
+    );
+
+    // ...and a re-save of the same content must restore it, not no-op.
+    Storage::<Sendable>::save_loose_commit(&storage, id, make().await).await?;
+
+    let healed = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(healed.len(), 1, "commit must be loadable after re-save");
+    assert_eq!(
+        healed[0].blob().contents(),
+        &expected_blob,
+        "healed pair must hold the original blob bytes"
+    );
+
+    Ok(())
+}
+
+/// A batch that fails mid-write must not leave the tree id registered:
+/// `save_batch` registers the id *after* the durable writes (mirroring the
+/// single-item saves), so a failed batch can't strand a
+/// registered-but-empty tree.
+///
+/// Setup uses two instances over the same root: `helper` registers the
+/// tree on disk (so the roadblock can be planted in its `commits/` dir),
+/// while `storage` — constructed before those directories existed — keeps
+/// a clean in-memory id cache. The failed batch must leave that cache
+/// clean.
+#[tokio::test]
+async fn failed_batch_does_not_register_tree_id() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6F);
+
+    // Register via a *separate* instance so `storage`'s id cache stays
+    // empty while the on-disk commits/ dir exists for the roadblock.
+    let helper = FsStorage::new(dir.path().to_path_buf())?;
+    Storage::<Sendable>::save_sedimentree_id(&helper, id).await?;
+
+    let blocked_head = CommitId::new([0x03; 32]);
+
+    // Block the commit's id_dir with a regular file
+    // (trees/{bucket}/{leaf}/commits/{commit_id_hex}).
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after registration");
+    let mut blocked_hex = String::with_capacity(64);
+    for byte in blocked_head.as_bytes() {
+        use std::fmt::Write as _;
+        let _unused = write!(blocked_hex, "{byte:02x}");
+    }
+    std::fs::write(commits_dir.join(blocked_hex), b"roadblock")?;
+
+    let verified_blob = VerifiedBlobMeta::new(Blob::new(vec![7; 32]));
+    let commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, blocked_head, BTreeSet::new()),
+        verified_blob,
+    )
+    .await;
+
+    let result = Storage::<Sendable>::save_batch(&storage, id, vec![commit], Vec::new()).await;
+    assert!(result.is_err(), "batch must fail on the blocked id_dir");
+
+    assert!(
+        !Storage::<Sendable>::contains_sedimentree_id(&storage, id).await?,
+        "failed batch must not register the tree id"
+    );
+
+    Ok(())
+}
