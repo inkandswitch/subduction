@@ -231,6 +231,34 @@ fn make_node(signer: MemorySigner, storage: CallCountingStorage) -> CountingSubd
     sd
 }
 
+/// Poll until `node` holds exactly `expected` commits for `sed_id`, or
+/// panic after a bounded deadline.
+///
+/// The post-sync data path is fire-and-forget with no completion signal,
+/// so convergence is the observable to wait on — a fixed sleep is either
+/// wastefully long or flakily short depending on the machine.
+///
+/// Note: `get_commits` hydrates the node's cache on a miss, so only poll
+/// the *requestor* — polling the responder would warm the very cache state
+/// these tests are probing.
+async fn wait_for_commit_count(node: &CountingSubduction, sed_id: SedimentreeId, expected: usize) {
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const POLL: Duration = Duration::from_millis(10);
+
+    let start = std::time::Instant::now();
+    loop {
+        let count = node.get_commits(sed_id).await.map_or(0, |c| c.len());
+        if count == expected {
+            return;
+        }
+        assert!(
+            start.elapsed() < DEADLINE,
+            "node did not converge to {expected} commits within {DEADLINE:?} (have {count})"
+        );
+        tokio::time::sleep(POLL).await;
+    }
+}
+
 async fn connect_pair(
     a: &CountingSubduction,
     a_signer: &MemorySigner,
@@ -301,8 +329,8 @@ async fn responder_serves_resident_tree_without_bulk_scans() -> TestResult {
     assert!(synced, "sync should reach Bob");
     assert!(send_errors.is_empty(), "no send errors expected");
 
-    // Let fire-and-forget data messages drain.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Wait for convergence (Alice gains Bob's commit: 2 total).
+    wait_for_commit_count(&alice, sed_id, 2).await;
 
     let bob_bulk = bob_storage.bulk_loads() - bob_bulk_before;
     let bob_points = bob_storage.point_reads() - bob_point_before;
@@ -381,7 +409,8 @@ async fn cold_clone_of_resident_tree_uses_bulk_scan() -> TestResult {
     assert!(synced, "sync should reach Bob");
     assert!(send_errors.is_empty(), "no send errors expected");
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Wait for the full clone to arrive.
+    wait_for_commit_count(&alice, sed_id, N).await;
 
     let bob_bulk = bob_storage.bulk_loads() - bob_bulk_before;
     let bob_points = bob_storage.point_reads() - bob_point_before;
@@ -451,7 +480,10 @@ async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
         .await?;
     assert!(synced, "first sync should reach Bob");
     assert!(send_errors.is_empty(), "no send errors expected");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Wait for the clone to arrive (only ever poll Alice — polling Bob
+    // would hydrate his cache and contaminate the slow-path probe).
+    wait_for_commit_count(&alice, sed_id, 4).await;
 
     let first_bulk = bob_storage.bulk_loads() - bulk_before_first;
     assert!(
@@ -472,8 +504,10 @@ async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
         .await?;
     assert!(synced, "second sync should reach Bob");
     assert!(send_errors.is_empty(), "no send errors expected");
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
+    // The responder's storage reads complete before its response is sent,
+    // so the counters are settled once `sync_with_peer` returns — no
+    // drain wait needed.
     let second_bulk = bob_storage.bulk_loads() - bulk_before_second;
     assert_eq!(
         second_bulk, 0,
@@ -546,7 +580,8 @@ async fn moderate_diff_on_large_tree_stays_on_point_reads() -> TestResult {
     assert!(synced, "sync should reach Bob");
     assert!(send_errors.is_empty(), "no send errors expected");
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Wait for Alice to converge to the full tree.
+    wait_for_commit_count(&alice, sed_id, SHARED + BOB_ONLY).await;
 
     let bob_bulk = bob_storage.bulk_loads() - bob_bulk_before;
     let bob_points = bob_storage.point_reads() - bob_point_before;

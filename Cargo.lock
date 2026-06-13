@@ -5366,6 +5366,7 @@ dependencies = [
 name = "subduction_redb_storage"
 version = "0.1.0"
 dependencies = [
+ "bolero",
  "criterion",
  "future_form",
  "futures",

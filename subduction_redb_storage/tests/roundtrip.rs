@@ -30,6 +30,26 @@ async fn seal_commit(
     VerifiedMeta::seal::<Sendable, _>(signer, (id, head, BTreeSet::new()), verified_blob).await
 }
 
+async fn seal_fragment(
+    signer: &MemorySigner,
+    id: SedimentreeId,
+    head: CommitId,
+    blob: Vec<u8>,
+) -> VerifiedMeta<sedimentree_core::fragment::Fragment> {
+    let verified_blob = VerifiedBlobMeta::new(Blob::new(blob));
+    VerifiedMeta::seal::<Sendable, _>(
+        signer,
+        (
+            id,
+            head,
+            BTreeSet::from([CommitId::new([0xF0; 32])]),
+            vec![CommitId::new([0xF1; 32])],
+        ),
+        verified_blob,
+    )
+    .await
+}
+
 /// Save a commit, reload via bulk + point lookups, verify byte identity.
 #[tokio::test]
 async fn save_load_roundtrip() -> testresult::TestResult {
@@ -364,6 +384,181 @@ async fn batch_with_large_blobs_roundtrips() -> testresult::TestResult {
     Ok(())
 }
 
+/// Fragments round-trip with content through their own table: bulk load,
+/// point read, and id listing — byte-identical signed bytes and blob.
+#[tokio::test]
+async fn save_load_fragment_roundtrip() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x95; 32]);
+    let head = CommitId::new([0x20; 32]);
+
+    let verified = seal_fragment(&signer, id, head, vec![6; 48]).await;
+    let original_signed = verified.signed().as_bytes().to_vec();
+    let original_blob = verified.blob().contents().clone();
+
+    Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
+
+    let all = Storage::<Sendable>::load_fragments(&storage, id).await?;
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].signed().as_bytes(), &original_signed[..]);
+    assert_eq!(all[0].blob().contents(), &original_blob);
+
+    let one = Storage::<Sendable>::load_fragment(&storage, id, head)
+        .await?
+        .expect("fragment must be loadable by head");
+    assert_eq!(one.signed().as_bytes(), &original_signed[..]);
+
+    let listed = Storage::<Sendable>::list_fragment_ids(&storage, id).await?;
+    assert_eq!(listed.len(), 1);
+    assert!(listed.contains(&head), "listed ids must include the head");
+
+    Ok(())
+}
+
+/// Fragment deletes remove exactly their targets — and never touch the
+/// commits table, which shares the key shape.
+#[tokio::test]
+async fn fragment_deletes_remove_exactly_targets() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x96; 32]);
+
+    for i in 0..3u8 {
+        let f = seal_fragment(&signer, id, CommitId::new([i; 32]), vec![i; 16]).await;
+        Storage::<Sendable>::save_fragment(&storage, id, f).await?;
+    }
+    // A commit under the same tree id must survive all fragment deletes.
+    let commit_head = CommitId::new([0x0C; 32]);
+    let commit = seal_commit(&signer, id, commit_head, vec![9; 16]).await;
+    Storage::<Sendable>::save_loose_commit(&storage, id, commit).await?;
+
+    Storage::<Sendable>::delete_fragment(&storage, id, CommitId::new([1u8; 32])).await?;
+    let remaining: BTreeSet<_> = Storage::<Sendable>::load_fragments(&storage, id)
+        .await?
+        .iter()
+        .map(|v| v.payload().head())
+        .collect();
+    assert_eq!(
+        remaining,
+        BTreeSet::from([CommitId::new([0u8; 32]), CommitId::new([2u8; 32])]),
+        "delete_fragment must remove exactly the targeted fragment"
+    );
+
+    Storage::<Sendable>::delete_fragments(&storage, id).await?;
+    assert!(
+        Storage::<Sendable>::load_fragments(&storage, id)
+            .await?
+            .is_empty(),
+        "delete_fragments must clear the tree's fragments"
+    );
+
+    let commits = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(
+        commits.len(),
+        1,
+        "fragment deletes must not touch the commits table"
+    );
+    assert_eq!(commits[0].payload().head(), commit_head);
+
+    Ok(())
+}
+
+/// Over-threshold fragment blobs take the external-file path too (the
+/// hybrid dispatch is per-item, not per-table) and round-trip across a
+/// reopen with a different threshold.
+#[tokio::test]
+async fn large_fragment_blob_externalized_and_roundtrips() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x97; 32]);
+    let head = CommitId::new([0x21; 32]);
+    let big_blob = vec![0xFA; 1024];
+
+    {
+        let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+        let verified = seal_fragment(&signer, id, head, big_blob.clone()).await;
+        Storage::<Sendable>::save_fragment(&storage, id, verified).await?;
+    }
+
+    let files = blob_files(dir.path());
+    assert_eq!(files.len(), 1, "expected exactly one external blob file");
+    assert_eq!(
+        std::fs::read(&files[0])?,
+        big_blob,
+        "external file must hold the raw fragment blob bytes"
+    );
+
+    let reopened = RedbStorage::new(dir.path())?;
+    let loaded = Storage::<Sendable>::load_fragment(&reopened, id, head)
+        .await?
+        .expect("fragment must be loadable");
+    assert_eq!(
+        loaded.blob().contents(),
+        &big_blob,
+        "fragment blob must round-trip through the external file"
+    );
+
+    Ok(())
+}
+
+/// Per-tree range scans must not bleed into a tree whose 32-byte id is
+/// *key-adjacent* (differs only in the last byte). The existing isolation
+/// test (`0xAA…` vs `0xBB…`) cannot catch an off-by-one in the 96-byte
+/// `tree_range` bounds; ids that sort immediately before and after can.
+#[tokio::test]
+async fn adjacent_tree_ids_do_not_leak() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let signer = test_signer();
+
+    let mut below_bytes = [0x50u8; 32];
+    below_bytes[31] = 0x00;
+    let mut mid_bytes = [0x50u8; 32];
+    mid_bytes[31] = 0x01;
+    let mut above_bytes = [0x50u8; 32];
+    above_bytes[31] = 0x02;
+
+    let below = SedimentreeId::new(below_bytes);
+    let mid = SedimentreeId::new(mid_bytes);
+    let above = SedimentreeId::new(above_bytes);
+
+    // Each tree gets a distinct commit (extreme item ids stress the range
+    // ends: all-zero and all-0xFF sort first/last within a tree's range).
+    for (tree, item, fill) in [
+        (below, [0xFFu8; 32], 1u8), // last key of `below`'s range
+        (mid, [0x00u8; 32], 2u8),   // first key of `mid`'s range
+        (mid, [0xFFu8; 32], 3u8),   // last key of `mid`'s range
+        (above, [0x00u8; 32], 4u8), // first key of `above`'s range
+    ] {
+        let commit = seal_commit(&signer, tree, CommitId::new(item), vec![fill; 8]).await;
+        Storage::<Sendable>::save_loose_commit(&storage, tree, commit).await?;
+    }
+
+    let mid_loaded: BTreeSet<_> = Storage::<Sendable>::load_loose_commits(&storage, mid)
+        .await?
+        .iter()
+        .map(|v| v.payload().head())
+        .collect();
+    assert_eq!(
+        mid_loaded,
+        BTreeSet::from([CommitId::new([0x00; 32]), CommitId::new([0xFF; 32])]),
+        "mid tree must see exactly its own commits — no bleed from key-adjacent trees"
+    );
+
+    let below_loaded = Storage::<Sendable>::load_loose_commits(&storage, below).await?;
+    assert_eq!(below_loaded.len(), 1);
+    assert_eq!(below_loaded[0].blob().contents(), &vec![1u8; 8]);
+
+    let above_loaded = Storage::<Sendable>::load_loose_commits(&storage, above).await?;
+    assert_eq!(above_loaded.len(), 1);
+    assert_eq!(above_loaded[0].blob().contents(), &vec![4u8; 8]);
+
+    Ok(())
+}
+
 /// The inline/external dispatch boundary sits exactly at the configured
 /// threshold: `blob.len() > inline_threshold` goes external. At the
 /// production default (16 KiB), a 16,384-byte blob must stay inline and a
@@ -509,4 +704,60 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
     assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, batch_tree).await?);
 
     Ok(())
+}
+
+/// Property: inline/external dispatch is exactly `blob_len > threshold`,
+/// and the blob round-trips byte-identically on both sides of the
+/// boundary.
+///
+/// ```text
+/// forall (threshold ∈ 1..=64, blob_len ∈ 0..=128).
+///   external_file_count(save(blob)) == usize::from(blob_len > threshold)
+///   ∧ load(save(blob)).blob == blob
+/// ```
+///
+/// Small thresholds keep each iteration cheap; the production default
+/// (16 KiB) is pinned separately by `default_threshold_boundary_dispatch`
+/// since 16 KiB blobs are too heavy for a generator sweep.
+#[test]
+fn prop_inline_external_dispatch_at_threshold() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime");
+    let signer = test_signer();
+
+    bolero::check!()
+        .with_generator((1usize..=64, 0usize..=128))
+        .for_each(|&(threshold, blob_len)| {
+            rt.block_on(async {
+                let dir = tempfile::tempdir().expect("tempdir");
+                let storage = RedbStorage::with_inline_threshold(dir.path(), threshold)
+                    .expect("open storage");
+                let id = SedimentreeId::new([0x98; 32]);
+                let head = CommitId::new([0x01; 32]);
+                let blob = vec![0xAB; blob_len];
+
+                let verified = seal_commit(&signer, id, head, blob.clone()).await;
+                Storage::<Sendable>::save_loose_commit(&storage, id, verified)
+                    .await
+                    .expect("save");
+
+                assert_eq!(
+                    blob_files(dir.path()).len(),
+                    usize::from(blob_len > threshold),
+                    "external file iff blob_len ({blob_len}) > threshold ({threshold})"
+                );
+
+                let loaded = Storage::<Sendable>::load_loose_commit(&storage, id, head)
+                    .await
+                    .expect("load")
+                    .expect("present");
+                assert_eq!(
+                    loaded.blob().contents(),
+                    &blob,
+                    "blob must round-trip on either side of the dispatch boundary"
+                );
+            });
+        });
 }

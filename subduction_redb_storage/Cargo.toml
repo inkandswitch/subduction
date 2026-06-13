@@ -24,9 +24,9 @@ tokio = { workspace = true, features = ["rt"] }
 tracing = { workspace = true, default-features = true }
 
 [dev-dependencies]
+bolero = { workspace = true }
 criterion = { workspace = true }
 futures = { workspace = true }
-redb = { workspace = true }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
 tempfile = { workspace = true }

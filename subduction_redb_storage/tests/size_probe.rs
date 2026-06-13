@@ -43,6 +43,71 @@ use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
 use subduction_redb_storage::RedbStorage;
 
+/// Build an inline-only store holding `records` commits of `blob_size`
+/// bytes each, returning the db file's length.
+async fn inline_db_size(records: u32, blob_size: usize) -> u64 {
+    let signer = MemorySigner::from_bytes(&[42u8; 32]);
+    let id = SedimentreeId::new([0xAB; 32]);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let storage =
+        RedbStorage::with_inline_threshold(dir.path(), usize::MAX).expect("create inline storage");
+
+    let mut commits = Vec::new();
+    for i in 0..records {
+        let mut head = [0u8; 32];
+        head[..4].copy_from_slice(&i.to_be_bytes());
+        let mut blob = vec![0u8; blob_size];
+        blob[..4].copy_from_slice(&i.to_be_bytes());
+        commits.push(
+            VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                &signer,
+                (id, CommitId::new(head), BTreeSet::new()),
+                VerifiedBlobMeta::new(Blob::new(blob)),
+            )
+            .await,
+        );
+    }
+    Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new())
+        .await
+        .expect("save batch");
+    drop(storage);
+
+    std::fs::metadata(dir.path().join(subduction_redb_storage::DB_FILE_NAME))
+        .expect("metadata")
+        .len()
+}
+
+/// CI tripwire for the buddy-allocator conclusion behind
+/// `DEFAULT_INLINE_THRESHOLD`: an inline value just *past* a power-of-two
+/// boundary allocates double, one just *under* allocates snugly. 100
+/// records (~6–13 MiB of I/O) keep this cheap enough to run on every
+/// `cargo test`; the full five-point sweep lives in the `#[ignore]`d
+/// probe below. If redb's allocation strategy changes, this fails and the
+/// threshold analysis in `.ignore/DECISIONS.md` needs redoing.
+#[tokio::test]
+async fn buddy_allocation_doubles_past_power_of_two_boundary() {
+    const RECORDS: u32 = 100;
+
+    // Blob + ~245 B record overhead lands just under / just over 64 Ki.
+    let under = inline_db_size(RECORDS, 65_024).await;
+    let over = inline_db_size(RECORDS, 65_536).await;
+
+    let amp_under = under as f64 / (u64::from(RECORDS) * 65_024) as f64;
+    let amp_over = over as f64 / (u64::from(RECORDS) * 65_536) as f64;
+    eprintln!("amp just under 64 Ki: {amp_under:.2}x; just over: {amp_over:.2}x");
+
+    assert!(
+        amp_over >= 1.8,
+        "expected ~2x amplification just past the 64 Ki boundary, got {amp_over:.2}x \
+         — redb's allocation behavior has changed; revisit the inline threshold analysis"
+    );
+    assert!(
+        amp_under <= 1.25,
+        "expected near-1x amplification just under the 64 Ki boundary, got {amp_under:.2}x \
+         — redb's allocation behavior has changed; revisit the inline threshold analysis"
+    );
+}
+
 #[tokio::test]
 #[ignore = "diagnostic probe, run manually"]
 async fn inline_size_amplification_probe() {
