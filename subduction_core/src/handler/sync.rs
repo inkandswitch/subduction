@@ -874,10 +874,21 @@ impl<
                     )
                     .await;
 
-                    for result in results {
+                    for (commit_id, result) in chunk.iter().zip(results) {
                         if let Some(verified) = result.map_err(IoError::Storage)? {
                             let (signed, _, blob) = verified.into_full_parts();
                             commits.push((signed, blob));
+                        } else {
+                            // Cache-ahead-of-storage window: the resident
+                            // tree claims an item storage no longer holds
+                            // (e.g. a racing delete). The item is silently
+                            // omitted — the next sync round self-corrects —
+                            // but the condition should be observable.
+                            tracing::debug!(
+                                tree = ?id,
+                                ?commit_id,
+                                "cached commit missing from storage; omitting from sync response"
+                            );
                         }
                     }
                 }
@@ -891,10 +902,18 @@ impl<
                     )
                     .await;
 
-                    for result in results {
+                    for (fragment_id, result) in chunk.iter().zip(results) {
                         if let Some(verified) = result.map_err(IoError::Storage)? {
                             let (signed, _, blob) = verified.into_full_parts();
                             fragments.push((signed, blob));
+                        } else {
+                            // Same cache-ahead-of-storage window as the
+                            // commit loop above.
+                            tracing::debug!(
+                                tree = ?id,
+                                ?fragment_id,
+                                "cached fragment missing from storage; omitting from sync response"
+                            );
                         }
                     }
                 }

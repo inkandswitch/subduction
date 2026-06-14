@@ -712,6 +712,57 @@ async fn bulk_load_fans_out_beyond_chunk_size_correctly() -> testresult::TestRes
     Ok(())
 }
 
+/// Concurrent saves through cloned handles all land intact: the
+/// `TMP_NONCE`-suffixed temp names keep racing writers of the *same* item
+/// from clobbering each other's staging files, and the rename is atomic.
+/// 16 tasks write 8 distinct items, each item twice; afterwards every
+/// item loads byte-identically and no `.tmp` files remain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x76);
+
+    let mut handles = Vec::new();
+    for task in 0..16u8 {
+        let item = task % 8; // every item saved by two racing tasks
+        let storage = storage.clone();
+        let signer = signer.clone();
+        handles.push(tokio::spawn(async move {
+            let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                &signer,
+                (id, CommitId::new([item; 32]), BTreeSet::new()),
+                VerifiedBlobMeta::new(Blob::new(vec![item; 32])),
+            )
+            .await;
+            Storage::<Sendable>::save_loose_commit(&storage, id, verified).await
+        }));
+    }
+    for handle in handles {
+        handle.await??;
+    }
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    let heads: std::collections::BTreeSet<_> =
+        loaded.iter().map(|v| v.payload().head()).collect();
+    let expected: std::collections::BTreeSet<_> =
+        (0..8u8).map(|i| CommitId::new([i; 32])).collect();
+    assert_eq!(heads, expected, "every distinct item must land exactly once");
+    for vm in &loaded {
+        let fill = vm.payload().head().as_bytes()[0];
+        assert_eq!(vm.blob().contents(), &vec![fill; 32], "blob must be intact");
+    }
+
+    assert_eq!(
+        find_tmp_files(dir.path()),
+        Vec::<std::path::PathBuf>::new(),
+        "racing saves must not strand .tmp files"
+    );
+
+    Ok(())
+}
+
 /// Byzantine equivocation: two payloads sharing one `CommitId` (different
 /// blobs ⇒ different content digests ⇒ two `.meta`/`.blob` pairs in one
 /// commit dir). The fs backend resolves the commit dir to a *single*
@@ -848,4 +899,125 @@ async fn failed_batch_does_not_register_tree_id() -> testresult::TestResult {
     );
 
     Ok(())
+}
+
+/// Zero-byte blobs are legal payloads: the pair-validating CAS, load
+/// path, and byte-identity all hold at the empty boundary (a 0-byte
+/// `.blob` file must not be confused with a missing or truncated one).
+#[tokio::test]
+async fn empty_blob_roundtrips() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x77);
+    let head = CommitId::new([0xE0; 32]);
+
+    let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, head, BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(Vec::new())),
+    )
+    .await;
+    let original_signed = verified.signed().as_bytes().to_vec();
+
+    Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(loaded.len(), 1, "the empty-blob commit must load");
+    assert_eq!(loaded[0].signed().as_bytes(), &original_signed[..]);
+    assert!(
+        loaded[0].blob().contents().is_empty(),
+        "the empty blob must round-trip as empty"
+    );
+
+    // Idempotent re-save: the CAS must treat the intact 0-byte `.blob` as
+    // present, not as a crash artifact to rewrite.
+    let again = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, head, BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(Vec::new())),
+    )
+    .await;
+    Storage::<Sendable>::save_loose_commit(&storage, id, again).await?;
+    assert_eq!(
+        Storage::<Sendable>::load_loose_commits(&storage, id)
+            .await?
+            .len(),
+        1
+    );
+
+    Ok(())
+}
+
+/// Property (P1): batch save/load is a multiset roundtrip over signed
+/// bytes and blob contents.
+///
+/// ```text
+/// forall specs (deduped by head).
+///   load_loose_commits(save_batch(specs)) ≅ specs
+///     as multisets of (signed_bytes, blob_bytes)
+/// ```
+///
+/// Heads are deduplicated up front because the fs backend deliberately
+/// resolves equivocating payloads (same head, different content) to a
+/// single readdir-order pair — see `equivocating_commits_resolve_to_one_item`.
+#[test]
+fn prop_batch_save_load_roundtrip() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime");
+    let signer = test_signer();
+
+    bolero::check!()
+        .with_arbitrary::<Vec<([u8; 32], Vec<u8>)>>()
+        .for_each(|specs| {
+            rt.block_on(async {
+                let dir = tempfile::tempdir().expect("tempdir");
+                let storage = FsStorage::new(dir.path().to_path_buf()).expect("storage");
+                let id = make_sedimentree_id(0xA1);
+
+                let mut by_head = std::collections::BTreeMap::new();
+                for (head, blob) in specs {
+                    by_head.entry(*head).or_insert_with(|| blob.clone());
+                }
+
+                let mut commits = Vec::with_capacity(by_head.len());
+                let mut expected = std::collections::BTreeSet::new();
+                for (head, blob) in by_head {
+                    let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                        &signer,
+                        (id, CommitId::new(head), BTreeSet::new()),
+                        VerifiedBlobMeta::new(Blob::new(blob)),
+                    )
+                    .await;
+                    expected.insert((
+                        verified.signed().as_bytes().to_vec(),
+                        verified.blob().contents().clone(),
+                    ));
+                    commits.push(verified);
+                }
+
+                if commits.is_empty() {
+                    return;
+                }
+                Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new())
+                    .await
+                    .expect("save_batch");
+
+                let loaded: std::collections::BTreeSet<_> =
+                    Storage::<Sendable>::load_loose_commits(&storage, id)
+                        .await
+                        .expect("load")
+                        .iter()
+                        .map(|v| {
+                            (
+                                v.signed().as_bytes().to_vec(),
+                                v.blob().contents().clone(),
+                            )
+                        })
+                        .collect();
+                assert_eq!(loaded, expected, "batch save/load must be a multiset roundtrip");
+            });
+        });
 }

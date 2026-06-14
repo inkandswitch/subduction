@@ -525,6 +525,80 @@ async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
     Ok(())
 }
 
+/// Cache-ahead-of-storage: when the resident tree claims an item that
+/// storage no longer holds (e.g. a racing direct delete), the responder
+/// *silently omits* it from the response — the sync still succeeds, the
+/// requestor simply doesn't receive the phantom item, and no error
+/// surfaces. Pins the documented degraded-mode behavior of the point-read
+/// fast path.
+#[tokio::test]
+async fn cache_ahead_of_storage_omits_phantom_items() -> TestResult {
+    let alice_signer = MemorySigner::from_bytes(&[68u8; 32]);
+    let bob_signer = MemorySigner::from_bytes(&[69u8; 32]);
+
+    let alice_storage = CallCountingStorage::new();
+    let bob_storage = CallCountingStorage::new();
+
+    let alice = make_node(alice_signer.clone(), alice_storage.clone());
+    let bob = make_node(bob_signer.clone(), bob_storage.clone());
+
+    let sed_id = SedimentreeId::new([0x7B; 32]);
+
+    let kept_head = CommitId::new([0xC1; 32]);
+    let phantom_head = CommitId::new([0xC2; 32]);
+
+    // Both commits go through the node: storage + resident cache.
+    for head in [kept_head, phantom_head] {
+        bob.add_commit(sed_id, head, BTreeSet::new(), Blob::new(vec![3; 32]))
+            .await?;
+    }
+
+    // Delete the phantom from *storage only* (the Storage trait bypasses
+    // the node entirely), leaving the resident tree claiming it.
+    Storage::<Sendable>::delete_loose_commit(&bob_storage, sed_id, phantom_head).await?;
+
+    connect_pair(&alice, &alice_signer, &bob, &bob_signer).await?;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let bob_bulk_before = bob_storage.bulk_loads();
+
+    let bob_peer_id = PeerId::from(bob_signer.verifying_key());
+    let (synced, _stats, send_errors) = alice
+        .sync_with_peer(
+            &bob_peer_id,
+            sed_id,
+            false,
+            CallTimeout::TimeoutMillis(2_000),
+        )
+        .await?;
+    assert!(synced, "sync must succeed despite the phantom item");
+    assert!(send_errors.is_empty(), "no send errors expected");
+
+    // The kept commit arrives; the phantom never can.
+    wait_for_commit_count(&alice, sed_id, 1).await;
+
+    assert_eq!(
+        bob_storage.bulk_loads() - bob_bulk_before,
+        0,
+        "the resident tree must still be served via the fast path"
+    );
+
+    let alice_commits = alice
+        .get_commits(sed_id)
+        .await
+        .expect("Alice's tree must exist");
+    assert!(
+        alice_commits.iter().any(|c| c.head() == kept_head),
+        "the storage-backed commit must transfer"
+    );
+    assert!(
+        !alice_commits.iter().any(|c| c.head() == phantom_head),
+        "the phantom (cache-only) commit must be silently omitted"
+    );
+
+    Ok(())
+}
+
 /// A moderate diff on a large tree must stay on point reads: the scan
 /// fallback is a *fraction* of tree size (total/4, floor 32), not an
 /// absolute count. A fixed threshold here would bulk-scan 800 records to

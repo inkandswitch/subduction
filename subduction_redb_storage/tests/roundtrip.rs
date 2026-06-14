@@ -353,6 +353,60 @@ async fn identical_large_blobs_deduplicate() -> testresult::TestResult {
     Ok(())
 }
 
+/// Deleting a record does *not* remove its external blob file (the
+/// documented GC leak: content-addressed files may be shared across
+/// records) — and a later save of the same content *adopts* the orphan
+/// instead of duplicating it. Pins both halves of the documented
+/// behavior, and that adoption restores loadability.
+#[tokio::test]
+async fn deleted_record_orphans_blob_file_and_resave_adopts_it() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x8F; 32]);
+    let head = CommitId::new([0x30; 32]);
+    let blob = vec![0xDA; 512];
+
+    let make = || seal_commit(&signer, id, head, blob.clone());
+
+    Storage::<Sendable>::save_loose_commit(&storage, id, make().await).await?;
+    assert_eq!(blob_files(dir.path()).len(), 1);
+
+    // Delete the record: the external file becomes an orphan (kept — it
+    // could be shared by other records).
+    Storage::<Sendable>::delete_loose_commit(&storage, id, head).await?;
+    assert!(
+        Storage::<Sendable>::load_loose_commit(&storage, id, head)
+            .await?
+            .is_none(),
+        "the record must be gone after delete"
+    );
+    assert_eq!(
+        blob_files(dir.path()).len(),
+        1,
+        "deletes must not remove content-addressed blob files (documented leak)"
+    );
+
+    // A later save of the same content adopts the orphan: no second file.
+    Storage::<Sendable>::save_loose_commit(&storage, id, make().await).await?;
+    assert_eq!(
+        blob_files(dir.path()).len(),
+        1,
+        "re-saving identical content must adopt the orphaned file, not duplicate it"
+    );
+
+    let restored = Storage::<Sendable>::load_loose_commit(&storage, id, head)
+        .await?
+        .expect("commit must be loadable after re-save");
+    assert_eq!(
+        restored.blob().contents(),
+        &blob,
+        "the adopted blob must hold the original bytes"
+    );
+
+    Ok(())
+}
+
 /// Large blobs flow through `save_batch` too: files written before the
 /// transaction commits, and the batch loads back complete.
 #[tokio::test]
@@ -500,6 +554,44 @@ async fn large_fragment_blob_externalized_and_roundtrips() -> testresult::TestRe
         &big_blob,
         "fragment blob must round-trip through the external file"
     );
+
+    Ok(())
+}
+
+/// Concurrent saves through cloned handles all land: redb's MVCC
+/// single-writer serializes the transactions, and concurrent saves of the
+/// *same* item resolve via the key-level CAS instead of corrupting or
+/// erroring. 16 tasks write 8 distinct items, each item twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x99; 32]);
+
+    let mut handles = Vec::new();
+    for task in 0..16u8 {
+        let item = task % 8; // every item saved by two racing tasks
+        let storage = storage.clone();
+        let signer = signer.clone();
+        handles.push(tokio::spawn(async move {
+            let commit = seal_commit(&signer, id, CommitId::new([item; 32]), vec![item; 32]).await;
+            Storage::<Sendable>::save_loose_commit(&storage, id, commit).await
+        }));
+    }
+    for handle in handles {
+        handle.await??;
+    }
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    let heads: BTreeSet<_> = loaded.iter().map(|v| v.payload().head()).collect();
+    let expected: BTreeSet<_> = (0..8u8).map(|i| CommitId::new([i; 32])).collect();
+    assert_eq!(heads, expected, "every distinct item must land exactly once");
+    assert_eq!(loaded.len(), 8, "racing duplicate saves must not duplicate records");
+    for vm in &loaded {
+        let fill = vm.payload().head().as_bytes()[0];
+        assert_eq!(vm.blob().contents(), &vec![fill; 32], "blob must be intact");
+    }
 
     Ok(())
 }
