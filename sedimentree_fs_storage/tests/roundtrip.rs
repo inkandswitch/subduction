@@ -367,3 +367,657 @@ async fn empty_registered_tree_survives_reopen() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// Recursively collect every `.meta` file under `dir`.
+fn find_meta_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(find_meta_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "meta") {
+            out.push(path);
+        }
+    }
+
+    out
+}
+
+/// A truncated `.meta` (e.g. left visible-but-empty by a crash before its
+/// data blocks reached disk) must be *rewritten* by the next save of the
+/// same content — the CAS skip validates the existing file's size instead
+/// of trusting bare existence. Guards against the corruption trap where a
+/// crash artifact is preserved forever because re-saves no-op and loads
+/// skip-and-warn.
+#[tokio::test]
+async fn corrupt_meta_self_heals_on_resave() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6C);
+    let head = CommitId::new([0x77; 32]);
+
+    let make_verified = || async {
+        let blob = Blob::new(vec![3; 64]);
+        let verified_blob = VerifiedBlobMeta::new(blob);
+        VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, head, BTreeSet::new()),
+            verified_blob,
+        )
+        .await
+    };
+
+    Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+    let original = make_verified().await;
+    let expected_signed_bytes = original.signed().as_bytes().to_vec();
+    Storage::<Sendable>::save_loose_commit(&storage, id, original).await?;
+
+    // Simulate the crash artifact: the `.meta` exists but is empty.
+    let metas = find_meta_files(dir.path());
+    assert_eq!(metas.len(), 1, "expected exactly one .meta on disk");
+    std::fs::write(&metas[0], [])?;
+
+    // The corrupt entry is skipped on load (not returned, not an error)...
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert!(
+        loaded.is_empty(),
+        "truncated .meta must be skipped on load, got {} items",
+        loaded.len()
+    );
+
+    // ...and a re-save of the same content must rewrite it, not no-op.
+    Storage::<Sendable>::save_loose_commit(&storage, id, make_verified().await).await?;
+
+    let healed = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(healed.len(), 1, "commit must be loadable after re-save");
+    assert_eq!(
+        healed[0].signed().as_bytes(),
+        &expected_signed_bytes[..],
+        "healed .meta must hold the original signed bytes"
+    );
+
+    Ok(())
+}
+
+/// Find the first directory named `name` under `dir` (recursive).
+fn find_dir_named(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == name) {
+                return Some(path);
+            }
+            if let Some(found) = find_dir_named(&path, name) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
+/// Recursively collect every `.tmp` file under `dir`.
+fn find_tmp_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(find_tmp_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "tmp") {
+            out.push(path);
+        }
+    }
+
+    out
+}
+
+/// A batch save that fails partway must not strand `.tmp` files: staged
+/// writes clean their temps on drop. (The realistic trigger is ENOSPC,
+/// where stranded temps would worsen the disk-full condition on every
+/// retry; here the failure is forced by pre-creating a regular FILE where
+/// the second commit's directory must go.)
+#[tokio::test]
+async fn failed_batch_leaves_no_temp_files() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6D);
+
+    // Register the tree so the commits/ dir exists.
+    Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
+
+    let good_head = CommitId::new([0x01; 32]);
+    let blocked_head = CommitId::new([0x02; 32]);
+
+    // Block the second commit's id_dir with a regular file
+    // (trees/{bucket}/{leaf}/commits/{commit_id_hex}).
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after registration");
+    let mut blocked_hex = String::with_capacity(64);
+    for byte in blocked_head.as_bytes() {
+        use std::fmt::Write as _;
+        let _unused = write!(blocked_hex, "{byte:02x}");
+    }
+    std::fs::write(commits_dir.join(blocked_hex), b"roadblock")?;
+
+    let make = |head: CommitId| {
+        let signer = &signer;
+        async move {
+            let verified_blob = VerifiedBlobMeta::new(Blob::new(vec![9; 32]));
+            VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                signer,
+                (id, head, BTreeSet::new()),
+                verified_blob,
+            )
+            .await
+        }
+    };
+
+    let commits = vec![make(good_head).await, make(blocked_head).await];
+    let result = Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await;
+    assert!(result.is_err(), "batch must fail on the blocked id_dir");
+
+    assert_eq!(
+        find_tmp_files(dir.path()),
+        Vec::<std::path::PathBuf>::new(),
+        "failed batch must not strand .tmp files"
+    );
+
+    Ok(())
+}
+
+/// Cross-backend `Storage` contract: persisting any item registers its
+/// sedimentree id — including across a reopen (recovered from the on-disk
+/// layout).
+#[tokio::test]
+async fn saves_register_tree_id_conformance() -> testresult::TestResult {
+    use subduction_core::storage::conformance;
+
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+
+    let commit_tree = make_sedimentree_id(0x70);
+    let commit: VerifiedMeta<LooseCommit> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (commit_tree, CommitId::new([0x10; 32]), BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(vec![1; 16])),
+    )
+    .await;
+    conformance::assert_commit_save_registers_tree_id::<Sendable, _>(&storage, commit).await;
+
+    let fragment_tree = make_sedimentree_id(0x71);
+    let fragment: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (
+            fragment_tree,
+            CommitId::new([0x11; 32]),
+            BTreeSet::from([CommitId::new([0x12; 32])]),
+            vec![CommitId::new([0x13; 32])],
+        ),
+        VerifiedBlobMeta::new(Blob::new(vec![2; 16])),
+    )
+    .await;
+    conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&storage, fragment).await;
+
+    let batch_tree = make_sedimentree_id(0x72);
+    let batch_commit: VerifiedMeta<LooseCommit> = VerifiedMeta::seal::<Sendable, _>(
+        &signer,
+        (batch_tree, CommitId::new([0x14; 32]), BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(vec![3; 16])),
+    )
+    .await;
+    conformance::assert_batch_save_registers_tree_id::<Sendable, _>(
+        &storage,
+        batch_tree,
+        vec![batch_commit],
+        Vec::new(),
+    )
+    .await;
+
+    // Registration survives reopen (rediscovered from the directory layout).
+    drop(storage);
+    let reopened = FsStorage::new(dir.path().to_path_buf())?;
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, commit_tree).await?);
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, fragment_tree).await?);
+    assert!(Storage::<Sendable>::contains_sedimentree_id(&reopened, batch_tree).await?);
+
+    Ok(())
+}
+
+/// A missing `.blob` beside an intact `.meta` (e.g. a partially lost crash
+/// state) must be healed by a re-save of the same content: the CAS check
+/// validates the *pair*, not just the meta. A bare-meta check would skip
+/// every re-save, leaving the item permanently unrestorable even when a
+/// peer re-sends it.
+#[tokio::test]
+async fn missing_blob_self_heals_on_resave() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6E);
+    let head = CommitId::new([0x88; 32]);
+
+    let make = || async {
+        let verified_blob = VerifiedBlobMeta::new(Blob::new(vec![5; 64]));
+        VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, head, BTreeSet::new()),
+            verified_blob,
+        )
+        .await
+    };
+
+    let original = make().await;
+    let expected_blob = original.blob().contents().clone();
+    Storage::<Sendable>::save_loose_commit(&storage, id, original).await?;
+
+    // Simulate the crash artifact: the `.blob` vanishes, the `.meta` stays.
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after save");
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&commits_dir)?.flatten() {
+        if entry.path().is_dir() {
+            for file in std::fs::read_dir(entry.path())?.flatten() {
+                if file.path().extension().is_some_and(|e| e == "blob") {
+                    std::fs::remove_file(file.path())?;
+                    removed += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(removed, 1, "expected exactly one .blob to remove");
+
+    // The incomplete pair is skipped on load...
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert!(
+        loaded.is_empty(),
+        "meta-without-blob must be skipped on load"
+    );
+
+    // ...and a re-save of the same content must restore it, not no-op.
+    Storage::<Sendable>::save_loose_commit(&storage, id, make().await).await?;
+
+    let healed = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(healed.len(), 1, "commit must be loadable after re-save");
+    assert_eq!(
+        healed[0].blob().contents(),
+        &expected_blob,
+        "healed pair must hold the original blob bytes"
+    );
+
+    Ok(())
+}
+
+/// Bulk loads beyond `READ_CHUNK_SIZE` (128) take the parallel fan-out
+/// path (per-item reads spread across blocking tasks) instead of the
+/// single-hop path. That path is otherwise exercised only by benches —
+/// this pins its *correctness*: every item loads back byte-identically.
+#[tokio::test]
+async fn bulk_load_fans_out_beyond_chunk_size_correctly() -> testresult::TestResult {
+    const N: usize = 150; // > READ_CHUNK_SIZE = 128
+
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x73);
+
+    let mut commits = Vec::with_capacity(N);
+    let mut expected = std::collections::BTreeSet::new();
+    for i in 0..N {
+        let mut head = [0u8; 32];
+        head[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, CommitId::new(head), BTreeSet::new()),
+            VerifiedBlobMeta::new(Blob::new(i.to_le_bytes().to_vec())),
+        )
+        .await;
+        expected.insert((
+            verified.signed().as_bytes().to_vec(),
+            verified.blob().contents().clone(),
+        ));
+        commits.push(verified);
+    }
+
+    Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
+
+    let loaded: std::collections::BTreeSet<_> =
+        Storage::<Sendable>::load_loose_commits(&storage, id)
+            .await?
+            .iter()
+            .map(|v| {
+                (
+                    v.signed().as_bytes().to_vec(),
+                    v.blob().contents().clone(),
+                )
+            })
+            .collect();
+    assert_eq!(
+        loaded, expected,
+        "the fan-out path must return every item byte-identically"
+    );
+
+    Ok(())
+}
+
+/// Concurrent saves through cloned handles all land intact: the
+/// `TMP_NONCE`-suffixed temp names keep racing writers of the *same* item
+/// from clobbering each other's staging files, and the rename is atomic.
+/// 16 tasks write 8 distinct items, each item twice; afterwards every
+/// item loads byte-identically and no `.tmp` files remain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x76);
+
+    let mut handles = Vec::new();
+    for task in 0..16u8 {
+        let item = task % 8; // every item saved by two racing tasks
+        let storage = storage.clone();
+        let signer = signer.clone();
+        handles.push(tokio::spawn(async move {
+            let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                &signer,
+                (id, CommitId::new([item; 32]), BTreeSet::new()),
+                VerifiedBlobMeta::new(Blob::new(vec![item; 32])),
+            )
+            .await;
+            Storage::<Sendable>::save_loose_commit(&storage, id, verified).await
+        }));
+    }
+    for handle in handles {
+        handle.await??;
+    }
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    let heads: std::collections::BTreeSet<_> =
+        loaded.iter().map(|v| v.payload().head()).collect();
+    let expected: std::collections::BTreeSet<_> =
+        (0..8u8).map(|i| CommitId::new([i; 32])).collect();
+    assert_eq!(heads, expected, "every distinct item must land exactly once");
+    for vm in &loaded {
+        let fill = vm.payload().head().as_bytes()[0];
+        assert_eq!(vm.blob().contents(), &vec![fill; 32], "blob must be intact");
+    }
+
+    assert_eq!(
+        find_tmp_files(dir.path()),
+        Vec::<std::path::PathBuf>::new(),
+        "racing saves must not strand .tmp files"
+    );
+
+    Ok(())
+}
+
+/// Byzantine equivocation: two payloads sharing one `CommitId` (different
+/// blobs ⇒ different content digests ⇒ two `.meta`/`.blob` pairs in one
+/// commit dir). The fs backend resolves the commit dir to a *single*
+/// (readdir-order) pair — this pins that semantic, which deliberately
+/// diverges from the redb backend where both payloads coexist (see
+/// `subduction_redb_storage/tests/roundtrip.rs::equivocating_commits_coexist`).
+#[tokio::test]
+async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x74);
+    let head = CommitId::new([0x77; 32]);
+
+    let blob_a = vec![0xAA; 16];
+    let blob_b = vec![0xBB; 16];
+    for blob in [blob_a.clone(), blob_b.clone()] {
+        let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, head, BTreeSet::new()),
+            VerifiedBlobMeta::new(Blob::new(blob)),
+        )
+        .await;
+        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+    }
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(
+        loaded.len(),
+        1,
+        "the fs backend must resolve an equivocating commit dir to one item"
+    );
+    let got = loaded[0].blob().contents();
+    assert!(
+        got == &blob_a || got == &blob_b,
+        "the resolved item must be one of the stored payloads"
+    );
+
+    Ok(())
+}
+
+/// Negative registration contract via the shared conformance helper: a
+/// single-item save that fails must not register the tree id (the batch
+/// twin is `failed_batch_does_not_register_tree_id`).
+#[tokio::test]
+async fn failed_single_save_does_not_register_tree_id() -> testresult::TestResult {
+    use subduction_core::storage::conformance;
+
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x75);
+
+    // Same poison as the batch twin: register via a helper instance so the
+    // on-disk commits/ dir exists, plant a roadblock file at the commit's
+    // id_dir, and keep the instance under test's id cache clean.
+    let helper = FsStorage::new(dir.path().to_path_buf())?;
+    Storage::<Sendable>::save_sedimentree_id(&helper, id).await?;
+
+    let blocked_head = CommitId::new([0x04; 32]);
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after registration");
+    let mut blocked_hex = String::with_capacity(64);
+    for byte in blocked_head.as_bytes() {
+        use std::fmt::Write as _;
+        let _unused = write!(blocked_hex, "{byte:02x}");
+    }
+    std::fs::write(commits_dir.join(blocked_hex), b"roadblock")?;
+
+    let commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, blocked_head, BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(vec![7; 16])),
+    )
+    .await;
+
+    conformance::assert_failed_commit_save_does_not_register_tree_id::<Sendable, _>(
+        &storage, commit,
+    )
+    .await;
+
+    Ok(())
+}
+
+/// A batch that fails mid-write must not leave the tree id registered:
+/// `save_batch` registers the id *after* the durable writes (mirroring the
+/// single-item saves), so a failed batch can't strand a
+/// registered-but-empty tree.
+///
+/// Setup uses two instances over the same root: `helper` registers the
+/// tree on disk (so the roadblock can be planted in its `commits/` dir),
+/// while `storage` — constructed before those directories existed — keeps
+/// a clean in-memory id cache. The failed batch must leave that cache
+/// clean.
+#[tokio::test]
+async fn failed_batch_does_not_register_tree_id() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x6F);
+
+    // Register via a *separate* instance so `storage`'s id cache stays
+    // empty while the on-disk commits/ dir exists for the roadblock.
+    let helper = FsStorage::new(dir.path().to_path_buf())?;
+    Storage::<Sendable>::save_sedimentree_id(&helper, id).await?;
+
+    let blocked_head = CommitId::new([0x03; 32]);
+
+    // Block the commit's id_dir with a regular file
+    // (trees/{bucket}/{leaf}/commits/{commit_id_hex}).
+    let commits_dir =
+        find_dir_named(dir.path(), "commits").expect("commits dir must exist after registration");
+    let mut blocked_hex = String::with_capacity(64);
+    for byte in blocked_head.as_bytes() {
+        use std::fmt::Write as _;
+        let _unused = write!(blocked_hex, "{byte:02x}");
+    }
+    std::fs::write(commits_dir.join(blocked_hex), b"roadblock")?;
+
+    let verified_blob = VerifiedBlobMeta::new(Blob::new(vec![7; 32]));
+    let commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, blocked_head, BTreeSet::new()),
+        verified_blob,
+    )
+    .await;
+
+    let result = Storage::<Sendable>::save_batch(&storage, id, vec![commit], Vec::new()).await;
+    assert!(result.is_err(), "batch must fail on the blocked id_dir");
+
+    assert!(
+        !Storage::<Sendable>::contains_sedimentree_id(&storage, id).await?,
+        "failed batch must not register the tree id"
+    );
+
+    Ok(())
+}
+
+/// Zero-byte blobs are legal payloads: the pair-validating CAS, load
+/// path, and byte-identity all hold at the empty boundary (a 0-byte
+/// `.blob` file must not be confused with a missing or truncated one).
+#[tokio::test]
+async fn empty_blob_roundtrips() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x77);
+    let head = CommitId::new([0xE0; 32]);
+
+    let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, head, BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(Vec::new())),
+    )
+    .await;
+    let original_signed = verified.signed().as_bytes().to_vec();
+
+    Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+
+    let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(loaded.len(), 1, "the empty-blob commit must load");
+    assert_eq!(loaded[0].signed().as_bytes(), &original_signed[..]);
+    assert!(
+        loaded[0].blob().contents().is_empty(),
+        "the empty blob must round-trip as empty"
+    );
+
+    // Idempotent re-save: the CAS must treat the intact 0-byte `.blob` as
+    // present, not as a crash artifact to rewrite.
+    let again = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+        &signer,
+        (id, head, BTreeSet::new()),
+        VerifiedBlobMeta::new(Blob::new(Vec::new())),
+    )
+    .await;
+    Storage::<Sendable>::save_loose_commit(&storage, id, again).await?;
+    assert_eq!(
+        Storage::<Sendable>::load_loose_commits(&storage, id)
+            .await?
+            .len(),
+        1
+    );
+
+    Ok(())
+}
+
+/// Property (P1): batch save/load is a multiset roundtrip over signed
+/// bytes and blob contents.
+///
+/// ```text
+/// forall specs (deduped by head).
+///   load_loose_commits(save_batch(specs)) ≅ specs
+///     as multisets of (signed_bytes, blob_bytes)
+/// ```
+///
+/// Heads are deduplicated up front because the fs backend deliberately
+/// resolves equivocating payloads (same head, different content) to a
+/// single readdir-order pair — see `equivocating_commits_resolve_to_one_item`.
+#[test]
+fn prop_batch_save_load_roundtrip() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime");
+    let signer = test_signer();
+
+    bolero::check!()
+        .with_arbitrary::<Vec<([u8; 32], Vec<u8>)>>()
+        .for_each(|specs| {
+            rt.block_on(async {
+                let dir = tempfile::tempdir().expect("tempdir");
+                let storage = FsStorage::new(dir.path().to_path_buf()).expect("storage");
+                let id = make_sedimentree_id(0xA1);
+
+                let mut by_head = std::collections::BTreeMap::new();
+                for (head, blob) in specs {
+                    by_head.entry(*head).or_insert_with(|| blob.clone());
+                }
+
+                let mut commits = Vec::with_capacity(by_head.len());
+                let mut expected = std::collections::BTreeSet::new();
+                for (head, blob) in by_head {
+                    let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                        &signer,
+                        (id, CommitId::new(head), BTreeSet::new()),
+                        VerifiedBlobMeta::new(Blob::new(blob)),
+                    )
+                    .await;
+                    expected.insert((
+                        verified.signed().as_bytes().to_vec(),
+                        verified.blob().contents().clone(),
+                    ));
+                    commits.push(verified);
+                }
+
+                if commits.is_empty() {
+                    return;
+                }
+                Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new())
+                    .await
+                    .expect("save_batch");
+
+                let loaded: std::collections::BTreeSet<_> =
+                    Storage::<Sendable>::load_loose_commits(&storage, id)
+                        .await
+                        .expect("load")
+                        .iter()
+                        .map(|v| {
+                            (
+                                v.signed().as_bytes().to_vec(),
+                                v.blob().contents().clone(),
+                            )
+                        })
+                        .collect();
+                assert_eq!(loaded, expected, "batch save/load must be a multiset roundtrip");
+            });
+        });
+}

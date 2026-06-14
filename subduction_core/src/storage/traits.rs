@@ -111,6 +111,17 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// The commit and blob are stored atomically. The content hash
     /// (`Digest<LooseCommit>`) is computed internally and used as the
     /// storage key (CAS). Saving the same content twice is a no-op.
+    ///
+    /// # Contract
+    ///
+    /// Implementations **must** register `sedimentree_id` (the moral
+    /// equivalent of [`save_sedimentree_id`](Self::save_sedimentree_id)) as
+    /// part of the save: after this call,
+    /// [`contains_sedimentree_id`](Self::contains_sedimentree_id) and
+    /// [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids) must
+    /// reflect the tree, including after a reopen. Backends can verify this
+    /// with the conformance helpers in `storage::conformance` (behind the
+    /// `test_utils` feature).
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -170,6 +181,11 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     ///
     /// The fragment and blob are stored atomically. The digest is computed from
     /// the fragment payload and used as the key.
+    ///
+    /// # Contract
+    ///
+    /// Implementations **must** register `sedimentree_id` as part of the
+    /// save — see [`save_loose_commit`](Self::save_loose_commit).
     fn save_fragment(
         &self,
         sedimentree_id: SedimentreeId,
