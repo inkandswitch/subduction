@@ -1,7 +1,5 @@
 //! Error types for the top-level `Subduction`.
 
-use alloc::vec::Vec;
-
 use future_form::FutureForm;
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
@@ -73,23 +71,6 @@ pub enum IoError<
     /// The blob content doesn't match the claimed metadata.
     #[error(transparent)]
     BlobMismatch(#[from] BlobMismatch),
-}
-
-/// An error that can occur while handling a blob request.
-#[derive(Debug, Error)]
-pub enum BlobRequestErr<
-    Async: FutureForm,
-    Store: Storage<Async>,
-    Conn: Connection<Async, WireMsg>,
-    WireMsg: Encode + Decode,
-> {
-    /// An IO error occurred while handling the blob request.
-    #[error("IO error: {0}")]
-    IoError(#[from] IoError<Async, Store, Conn, WireMsg>),
-
-    /// Some requested blobs were missing locally.
-    #[error("Missing blobs: {0:?}")]
-    MissingBlobs(Vec<Digest<Blob>>),
 }
 
 /// An error that can occur while handling a batch sync request.

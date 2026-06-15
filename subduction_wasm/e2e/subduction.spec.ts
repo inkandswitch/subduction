@@ -921,28 +921,4 @@ test.describe("Subduction", () => {
       expect(result.commitCount).toBeGreaterThanOrEqual(1);
     });
   });
-
-  test.describe("API Smoke Tests", () => {
-    test("should call requestBlobs without throwing", async ({ page }) => {
-      const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, Digest, SedimentreeId, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.setup();
-        const storage = new MemoryStorage();
-        const syncer = new Subduction({ signer, storage });
-
-        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
-        const digest1 = new Digest(new Uint8Array(32));
-        const digest2 = new Digest(new Uint8Array(32).fill(1));
-
-        try {
-          await syncer.requestBlobs(sedimentreeId, [digest1, digest2]);
-          return { error: null };
-        } catch (error) {
-          return { error: error.message };
-        }
-      });
-
-      expect(result.error).toBeNull();
-    });
-  });
 });

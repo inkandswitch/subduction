@@ -568,7 +568,10 @@ async fn load_tree_via_putter<Async: FutureForm, Store: Storage<Async>>(
 /// Look up a blob from local storage by its digest.
 ///
 /// Searches through both loose commits and fragments for the given
-/// sedimentree, returning the first blob whose digest matches.
+/// sedimentree, returning the first blob whose digest matches. Matching is
+/// by blob *content digest*, so it returns the correct blob even under
+/// Byzantine equivocation (two payloads sharing a head but carrying
+/// different blobs).
 pub(crate) async fn get_blob<
     Async: FutureForm,
     Store: Storage<Async>,

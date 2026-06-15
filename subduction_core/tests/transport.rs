@@ -162,9 +162,9 @@ mod message_transport {
     async fn send_recv_roundtrip() -> TestResult {
         let (sender, receiver) = make_pair();
 
-        let msg = SyncMessage::BlobsRequest {
+        let msg = SyncMessage::HeadsUpdate {
             id: SedimentreeId::new([3u8; 32]),
-            digests: vec![],
+            heads: RemoteHeads::default(),
         };
 
         Connection::<Sendable, SyncMessage>::send(&sender, &msg).await?;

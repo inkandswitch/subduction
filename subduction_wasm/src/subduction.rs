@@ -35,11 +35,7 @@ use subduction_core::{
     nonce_cache::NonceCache,
     peer::id::PeerId,
     storage::powerbox::StoragePowerbox,
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-        per_peer_sync::PerPeerSync,
-    },
+    subduction::{Subduction, per_peer_sync::PerPeerSync},
     timeout::call::CallTimeout,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
@@ -77,7 +73,7 @@ use crate::{
 use sedimentree_wasm::{
     commit_id::{JsCommitId, WasmCommitId},
     depth::{JsToDepth, WasmDepth},
-    digest::{JsDigest, WasmDigest},
+    digest::WasmDigest,
     fragment::WasmFragment,
     loose_commit::WasmLooseCommit,
     sedimentree::WasmSedimentree,
@@ -212,9 +208,6 @@ impl WasmSubduction {
             .service_name()
             .map(|name| DiscoveryId::new(name.as_bytes()));
         let depth_metric = WasmHashMetric(raw_fn);
-        let max_pending = opts
-            .max_pending_blob_requests()
-            .map_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS, |n| n as usize);
         // `None` or an explicit `0` falls back to the default cap.
         let max_resident = match opts.max_resident_trees() {
             Some(n) if n > 0 => n as usize,
@@ -226,7 +219,6 @@ impl WasmSubduction {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
-        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
         let powerbox = StoragePowerbox::new(opts_storage, Arc::new(policy));
 
         let observer = match opts.on_remote_heads() {
@@ -238,7 +230,6 @@ impl WasmSubduction {
             connections.clone(),
             subscriptions.clone(),
             powerbox.clone(),
-            pending_blob_requests.clone(),
             depth_metric.clone(),
             observer.clone(),
         );
@@ -270,7 +261,6 @@ impl WasmSubduction {
             connections,
             subscriptions,
             powerbox,
-            pending_blob_requests,
             send_counter,
             NonceCache::default(),
             JsTimeout,
@@ -1222,16 +1212,6 @@ impl WasmSubduction {
         self.core.commit_depth(CommitId::from(commit_id)).into()
     }
 
-    /// Request blobs by their digests from connected peers for a specific sedimentree.
-    #[wasm_bindgen(js_name = requestBlobs)]
-    pub async fn request_blobs(&self, id: &WasmSedimentreeId, digests: Vec<JsDigest>) {
-        let digests: Vec<_> = digests
-            .iter()
-            .map(|js_digest| WasmDigest::from(js_digest).into())
-            .collect();
-        self.core.request_blobs(id.clone().into(), digests).await;
-    }
-
     /// Request batch sync for a given Sedimentree ID from a specific peer.
     ///
     /// # Arguments
@@ -1763,8 +1743,6 @@ export interface SubductionOptions {
     serviceName?: string;
     /** Custom depth metric function. */
     hashMetricOverride?: (digest: Digest) => Depth;
-    /** Maximum number of pending blob requests (default: 10,000). */
-    maxPendingBlobRequests?: number;
     /**
      * Cap on the number of sedimentrees kept resident in memory (default:
      * 1024). `0` or omitted uses the default.
@@ -1812,9 +1790,6 @@ extern "C" {
 
     #[wasm_bindgen(method, getter, js_name = hashMetricOverride)]
     fn hash_metric_override(this: &JsSubductionOptions) -> Option<JsToDepth>;
-
-    #[wasm_bindgen(method, getter, js_name = maxPendingBlobRequests)]
-    fn max_pending_blob_requests(this: &JsSubductionOptions) -> Option<u32>;
 
     #[wasm_bindgen(method, getter, js_name = maxResidentTrees)]
     fn max_resident_trees(this: &JsSubductionOptions) -> Option<u32>;

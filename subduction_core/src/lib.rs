@@ -39,7 +39,6 @@
 //!     .spawner(TokioSpawn)
 //!     .discovery_id(DiscoveryId::new(b"sync.example.com"))
 //!     .nonce_cache(NonceCache::new(Duration::from_secs(300)))
-//!     .max_pending_blob_requests(20_000)
 //!     .build();
 //! ```
 //!

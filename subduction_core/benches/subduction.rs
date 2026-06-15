@@ -33,7 +33,7 @@ mod generators {
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
-        crypto::{digest::Digest, fingerprint::FingerprintSeed},
+        crypto::fingerprint::FingerprintSeed,
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::{LooseCommit, id::CommitId},
@@ -55,14 +55,6 @@ mod generators {
         let mut bytes = [0u8; 32];
         rng.fill(&mut bytes);
         CommitId::new(bytes)
-    }
-
-    /// Generate a deterministic blob digest from a seed.
-    pub(super) fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut bytes = [0u8; 32];
-        rng.fill(&mut bytes);
-        Digest::force_from_bytes(bytes)
     }
 
     /// Generate a peer ID from a seed.
@@ -368,9 +360,8 @@ mod message {
     use subduction_core::{connection::message::SyncMessage, remote_heads::RemoteHeads};
 
     use super::generators::{
-        batch_sync_request_from_seed, batch_sync_response_from_seed, blob_digest_from_seed,
-        blob_from_seed, sedimentree_id_from_seed, signed_fragment_from_seed,
-        signed_loose_commit_from_seed,
+        batch_sync_request_from_seed, batch_sync_response_from_seed, blob_from_seed,
+        sedimentree_id_from_seed, signed_fragment_from_seed, signed_loose_commit_from_seed,
     };
 
     /// Benchmark `SyncMessage` enum construction with various payloads.
@@ -425,43 +416,6 @@ mod message {
             );
         }
 
-        // BlobsRequest message (varying number of digests)
-        #[allow(clippy::cast_sign_loss)]
-        for num_digests in [1, 10, 50, 100, 500] {
-            group.throughput(Throughput::Elements(num_digests as u64));
-
-            group.bench_with_input(
-                BenchmarkId::new("blobs_request", num_digests),
-                &num_digests,
-                |b, &n| {
-                    let digests: Vec<_> = (0..n).map(|i| blob_digest_from_seed(i as u64)).collect();
-                    b.iter(|| SyncMessage::BlobsRequest {
-                        id: black_box(sedimentree_id_from_seed(1)),
-                        digests: black_box(digests.clone()),
-                    });
-                },
-            );
-        }
-
-        // BlobsResponse message (varying number and size of blobs)
-        #[allow(clippy::cast_sign_loss)]
-        for (num_blobs, blob_size) in [(1, 256), (10, 256), (50, 256), (10, 4096), (50, 4096)] {
-            let total_bytes = num_blobs * blob_size;
-            group.throughput(Throughput::Bytes(total_bytes as u64));
-
-            group.bench_with_input(
-                BenchmarkId::new("blobs_response", format!("{num_blobs}x{blob_size}")),
-                &(num_blobs, blob_size),
-                |b, &(n, size)| {
-                    let blobs: Vec<_> = (0..n).map(|i| blob_from_seed(i as u64, size)).collect();
-                    b.iter(|| SyncMessage::BlobsResponse {
-                        id: black_box(sedimentree_id_from_seed(1)),
-                        blobs: black_box(blobs.clone()),
-                    });
-                },
-            );
-        }
-
         group.finish();
     }
 
@@ -483,14 +437,6 @@ mod message {
         };
         group.bench_function("loose_commit_none", |b| {
             b.iter(|| black_box(&msg_loose).request_id());
-        });
-
-        let msg_blobs_req = SyncMessage::BlobsRequest {
-            id: sedimentree_id_from_seed(1),
-            digests: vec![blob_digest_from_seed(1)],
-        };
-        group.bench_function("blobs_request_none", |b| {
-            b.iter(|| black_box(&msg_blobs_req).request_id());
         });
 
         // Messages with request IDs

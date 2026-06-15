@@ -41,7 +41,7 @@ use testresult::TestResult;
 type Conn = ChannelMockConnection<SyncMessage>;
 type InnerHandler = SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
 
-/// The sedimentree id whose `BlobsRequest` makes the handler panic.
+/// The sedimentree id whose `HeadsUpdate` makes the handler panic.
 const POISON_ID: SedimentreeId = SedimentreeId::new([0xFFu8; 32]);
 
 /// A handler that panics on a designated poison message and otherwise delegates
@@ -62,7 +62,7 @@ impl subduction_core::handler::Handler<Sendable, Conn> for PanicHandler {
         message: Self::Message,
     ) -> <Sendable as future_form::FutureForm>::Future<'a, Result<(), Self::HandlerError>> {
         <Sendable as future_form::FutureForm>::from_future(async move {
-            if matches!(&message, SyncMessage::BlobsRequest { id, .. } if *id == POISON_ID) {
+            if matches!(&message, SyncMessage::HeadsUpdate { id, .. } if *id == POISON_ID) {
                 panic!("poison message: simulated dispatch-task panic");
             }
 
@@ -136,9 +136,9 @@ async fn panicking_dispatch_tasks_do_not_wedge_the_listener() -> TestResult {
     for _ in 0..POISON_COUNT {
         handle
             .inbound_tx
-            .send(SyncMessage::BlobsRequest {
+            .send(SyncMessage::HeadsUpdate {
                 id: POISON_ID,
-                digests: Vec::new(),
+                heads: RemoteHeads::default(),
             })
             .await?;
     }
@@ -147,9 +147,9 @@ async fn panicking_dispatch_tasks_do_not_wedge_the_listener() -> TestResult {
     let normal_id = SedimentreeId::new([7u8; 32]);
     handle
         .inbound_tx
-        .send(SyncMessage::BlobsRequest {
+        .send(SyncMessage::HeadsUpdate {
             id: normal_id,
-            digests: Vec::new(),
+            heads: RemoteHeads::default(),
         })
         .await?;
 

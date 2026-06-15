@@ -292,43 +292,6 @@ test.describe("Peer Connection Tests", () => {
     expect(result.disconnected).toBe(true);
   });
 
-  test("should request blobs from connected peer", async ({ page }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, Digest, SedimentreeId } = window.subduction;
-
-      try {
-        const signer = await WebCryptoSigner.setup();
-        const storage = new MemoryStorage();
-        const syncer = new Subduction({ signer, storage });
-
-        const url = new URL(wsUrl);
-        await syncer.connectDiscover(
-          url,
-          wsUrl.replace("ws://", "")
-        );
-
-        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
-        const digest1 = new Digest(new Uint8Array(32).fill(1));
-        const digest2 = new Digest(new Uint8Array(32).fill(2));
-
-        await syncer.requestBlobs(sedimentreeId, [digest1, digest2]);
-
-        return {
-          requested: true,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          requested: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    expect(result.requested).toBe(true);
-  });
-
   test("should handle multiple concurrent connections", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
       const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;

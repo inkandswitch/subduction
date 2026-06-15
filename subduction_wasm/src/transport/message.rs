@@ -5,17 +5,14 @@ use alloc::{
     vec::Vec,
 };
 use js_sys::Uint8Array;
-use sedimentree_core::{blob::Blob, codec::error::DecodeError};
+use sedimentree_core::codec::error::DecodeError;
 use subduction_core::connection::message::SyncMessage;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 use sedimentree_wasm::{
-    digest::{JsDigest, WasmDigest},
-    fragment::WasmFragment,
-    loose_commit::WasmLooseCommit,
-    sedimentree_id::WasmSedimentreeId,
+    fragment::WasmFragment, loose_commit::WasmLooseCommit, sedimentree_id::WasmSedimentreeId,
 };
 
 use super::{WasmBatchSyncRequest, WasmBatchSyncResponse};
@@ -44,30 +41,6 @@ impl WasmMessage {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, JsMessageDeserializationError> {
         let msg = SyncMessage::try_decode(bytes).map_err(JsMessageDeserializationError)?;
         Ok(msg.into())
-    }
-
-    /// Create a [`SyncMessage::BlobsRequest`] message.
-    #[wasm_bindgen(js_name = blobsRequest)]
-    #[must_use]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn blobs_request(id: &WasmSedimentreeId, digests: Vec<JsDigest>) -> Self {
-        SyncMessage::BlobsRequest {
-            id: id.clone().into(),
-            digests: digests.iter().map(|d| WasmDigest::from(d).into()).collect(),
-        }
-        .into()
-    }
-
-    /// Create a [`SyncMessage::BlobsResponse`] message.
-    #[wasm_bindgen(js_name = blobsResponse)]
-    #[must_use]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn blobs_response(id: &WasmSedimentreeId, blobs: Vec<Uint8Array>) -> Self {
-        SyncMessage::BlobsResponse {
-            id: id.clone().into(),
-            blobs: blobs.iter().map(|b| Blob::from(b.to_vec())).collect(),
-        }
-        .into()
     }
 
     /// Create a [`SyncMessage::BatchSyncRequest`] message.
@@ -110,8 +83,6 @@ impl WasmMessage {
                 .ok()
                 .map(WasmLooseCommit::from),
             SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
@@ -132,8 +103,6 @@ impl WasmMessage {
                 .ok()
                 .map(WasmFragment::from),
             SyncMessage::LooseCommit { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
@@ -150,50 +119,7 @@ impl WasmMessage {
             SyncMessage::LooseCommit { blob, .. } | SyncMessage::Fragment { blob, .. } => {
                 Some(Uint8Array::from(blob.as_slice()))
             }
-            SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
-            | SyncMessage::BatchSyncRequest(_)
-            | SyncMessage::BatchSyncResponse(_)
-            | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
-        }
-    }
-
-    /// The requested [`Digest`]s for a [`SyncMessage::BlobsRequest`], if applicable.
-    #[wasm_bindgen(getter, js_name = digests)]
-    #[must_use]
-    pub fn digests(&self) -> Option<Vec<WasmDigest>> {
-        match &self.0 {
-            SyncMessage::BlobsRequest { digests, .. } => {
-                Some(digests.iter().copied().map(WasmDigest::from).collect())
-            }
-            SyncMessage::LooseCommit { .. }
-            | SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsResponse { .. }
-            | SyncMessage::BatchSyncRequest(_)
-            | SyncMessage::BatchSyncResponse(_)
-            | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
-        }
-    }
-
-    /// The [`Blob`]s for a [`SyncMessage::BlobsResponse`], if applicable.
-    #[wasm_bindgen(getter, js_name = blobs)]
-    #[must_use]
-    pub fn blobs(&self) -> Option<Vec<Uint8Array>> {
-        match &self.0 {
-            SyncMessage::BlobsResponse { blobs, .. } => Some(
-                blobs
-                    .iter()
-                    .map(|b| Uint8Array::from(b.as_slice()))
-                    .collect(),
-            ),
-            SyncMessage::LooseCommit { .. }
-            | SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BatchSyncRequest(_)
+            SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
@@ -209,8 +135,6 @@ impl WasmMessage {
             SyncMessage::BatchSyncRequest(req) => Some(req.clone().into()),
             SyncMessage::LooseCommit { .. }
             | SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
@@ -226,8 +150,6 @@ impl WasmMessage {
             SyncMessage::BatchSyncResponse(resp) => Some(resp.clone().into()),
             SyncMessage::LooseCommit { .. }
             | SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)

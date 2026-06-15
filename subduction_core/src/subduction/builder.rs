@@ -22,7 +22,6 @@
 //! | `discovery_id` | [`.discovery_id()`] | `None` |
 //! | `depth_metric` | [`.depth_metric()`] | [`CountLeadingZeroBytes`] |
 //! | `nonce_cache` | [`.nonce_cache()`] | [`NonceCache::default()`] |
-//! | `max_pending_blob_requests` | [`.max_pending_blob_requests()`] | `10_000` |
 //! | `sedimentrees` | [`.sedimentrees()`] | Empty [`BoundedShardedMap::new()`] |
 //!
 //! # Example
@@ -49,7 +48,6 @@
 //! [`.discovery_id()`]: SubductionBuilder::discovery_id
 //! [`.depth_metric()`]: SubductionBuilder::depth_metric
 //! [`.nonce_cache()`]: SubductionBuilder::nonce_cache
-//! [`.max_pending_blob_requests()`]: SubductionBuilder::max_pending_blob_requests
 //! [`.sedimentrees()`]: SubductionBuilder::sedimentrees
 //! [`CountLeadingZeroBytes`]: sedimentree_core::depth::CountLeadingZeroBytes
 //! [`NonceCache::default()`]: crate::nonce_cache::NonceCache
@@ -88,10 +86,8 @@ use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    StartListener, Subduction, SubductionFutureForm,
-    error::ListenError,
+    StartListener, Subduction, SubductionFutureForm, error::ListenError,
     listener_future::ListenerFuture,
-    pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
 };
 
 /// Marker for a required builder field that hasn't been set yet.
@@ -129,7 +125,6 @@ pub struct SubductionBuilder<
     default_roundtrip_timeout: Option<Duration>,
     depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
-    max_pending_blob_requests: usize,
     max_resident_trees: Option<usize>,
     sedimentrees: SedimentreesOption<SHARDS>,
 }
@@ -175,7 +170,6 @@ impl<const SHARDS: usize>
             default_roundtrip_timeout: None,
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
-            max_pending_blob_requests: DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             max_resident_trees: None,
             sedimentrees: SedimentreesOption::default(),
         }
@@ -209,7 +203,6 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
-            max_pending_blob_requests: self.max_pending_blob_requests,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -237,7 +230,6 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
-            max_pending_blob_requests: self.max_pending_blob_requests,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -265,7 +257,6 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
-            max_pending_blob_requests: self.max_pending_blob_requests,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -290,7 +281,6 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
-            max_pending_blob_requests: self.max_pending_blob_requests,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -346,7 +336,6 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: metric,
             nonce_cache: self.nonce_cache,
-            max_pending_blob_requests: self.max_pending_blob_requests,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -358,15 +347,6 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     #[must_use]
     pub fn nonce_cache(mut self, cache: NonceCache) -> Self {
         self.nonce_cache = Some(cache);
-        self
-    }
-
-    /// Override the maximum number of pending blob requests.
-    ///
-    /// Defaults to [`DEFAULT_MAX_PENDING_BLOB_REQUESTS`] (10,000).
-    #[must_use]
-    pub const fn max_pending_blob_requests(mut self, max: usize) -> Self {
-        self.max_pending_blob_requests = max;
         self
     }
 
@@ -488,9 +468,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
-        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
-            self.max_pending_blob_requests,
-        )));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
         let handler = Arc::new(SyncHandler::new(
@@ -498,7 +475,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             connections.clone(),
             subscriptions.clone(),
             self.storage.clone(),
-            pending_blob_requests.clone(),
             self.depth_metric.clone(),
         ));
 
@@ -512,7 +488,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             connections,
             subscriptions,
             self.storage,
-            pending_blob_requests,
             send_counter,
             nonce_cache,
             self.timer,
@@ -595,9 +570,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
-        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
-            self.max_pending_blob_requests,
-        )));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
         Subduction::new(
@@ -608,7 +580,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             connections,
             subscriptions,
             self.storage,
-            pending_blob_requests,
             PeerCounter::default(),
             nonce_cache,
             self.timer,
@@ -688,9 +659,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
-        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
-            self.max_pending_blob_requests,
-        )));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
         let sync_handler = Arc::new(SyncHandler::new(
@@ -698,7 +666,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             connections.clone(),
             subscriptions.clone(),
             self.storage.clone(),
-            pending_blob_requests.clone(),
             self.depth_metric.clone(),
         ));
 
@@ -713,7 +680,6 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             connections,
             subscriptions,
             self.storage,
-            pending_blob_requests,
             send_counter,
             nonce_cache,
             self.timer,

@@ -9,7 +9,7 @@ All Subduction messages use a custom canonical binary codec:
 | Category            | Examples                                                |
 |---------------------|---------------------------------------------------------|
 | **Signed payloads** | `LooseCommit`, `Fragment`, `Challenge`, `Response`      |
-| **Sync messages**   | `BatchSyncRequest`, `BatchSyncResponse`, `BlobsRequest` |
+| **Sync messages**   | `BatchSyncRequest`, `BatchSyncResponse`, `HeadsUpdate`  |
 
 The codec is designed for:
 - **Determinism** — Required for signature verification
@@ -162,8 +162,6 @@ See [`handshake.md`](./handshake.md) for details.
 enum Message {
     LooseCommit { id, commit, blob },
     Fragment { id, fragment, blob },
-    BlobsRequest { id, digests },
-    BlobsResponse { id, blobs },
     BatchSyncRequest(BatchSyncRequest),
     BatchSyncResponse(BatchSyncResponse),
     RemoveSubscriptions(RemoveSubscriptions),
@@ -469,12 +467,18 @@ All sync messages use the envelope format with schema `SUM\x00`:
 |--------|---------------------|
 | `0x00` | LooseCommit         |
 | `0x01` | Fragment            |
-| `0x02` | BlobsRequest        |
-| `0x03` | BlobsResponse       |
+| `0x02` | _(retired: was BlobsRequest)_ |
+| `0x03` | _(retired: was BlobsResponse)_ |
 | `0x04` | BatchSyncRequest    |
 | `0x05` | BatchSyncResponse   |
 | `0x06` | RemoveSubscriptions |
 | `0x07` | DataRequestRejected |
+| `0x08` | HeadsUpdate         |
+
+Tags `0x02`/`0x03` once carried an explicit blob-pull request/response. That
+mechanism was removed — blobs travel inline with their `LooseCommit` /
+`Fragment` data messages during normal sync — and the tag values are left
+unused so the remaining tags stay stable.
 
 ### LooseCommit Message (Tag 0x00)
 
@@ -497,26 +501,6 @@ BlobLen is encoded as [`bijou64`](https://github.com/inkandswitch/bijou/blob/mai
 ```
 
 BlobLen is encoded as [`bijou64`](https://github.com/inkandswitch/bijou/blob/main/bijou64/SPEC.md).
-
-### BlobsRequest (Tag 0x02)
-
-```
-╔═══════════════╦═══════╦════════════╗
-║ SedimentreeId ║ Count ║ Digests... ║
-║      32B      ║  2B   ║  N × 32B   ║
-╚═══════════════╩═══════╩════════════╝
-```
-
-### BlobsResponse (Tag 0x03)
-
-```
-╔═══════════════╦═══════╦══════════════════════════╗
-║ SedimentreeId ║ Count ║    (BlobLen + Blob)...   ║
-║      32B      ║  2B   ║ N × (bijou64 + variable) ║
-╚═══════════════╩═══════╩══════════════════════════╝
-```
-
-Each blob is encoded as `bijou64(size) || bytes[0..size]`.
 
 ### BatchSyncRequest (Tag 0x04)
 

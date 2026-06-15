@@ -46,9 +46,8 @@ use crate::{
     policy::storage::StoragePolicy,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     subduction::{
-        error::{BlobRequestErr, IoError, ListenError},
+        error::{IoError, ListenError},
         ingest, peers,
-        pending_blob_requests::PendingBlobRequests,
     },
 };
 
@@ -89,7 +88,6 @@ pub struct SyncHandler<
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     storage: StoragePowerbox<Store, Auth>,
-    pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
     depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
@@ -126,7 +124,6 @@ impl<
             connections: self.connections.clone(),
             subscriptions: self.subscriptions.clone(),
             storage: self.storage.clone(),
-            pending_blob_requests: self.pending_blob_requests.clone(),
             depth_metric: self.depth_metric.clone(),
             heads_notifier: self.heads_notifier.clone(),
             send_counter: self.send_counter.clone(),
@@ -156,7 +153,6 @@ impl<
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
-        pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
         depth_metric: Metric,
     ) -> Self {
         Self {
@@ -164,7 +160,6 @@ impl<
             connections,
             subscriptions,
             storage,
-            pending_blob_requests,
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
             send_counter: PeerCounter::default(),
@@ -189,7 +184,6 @@ impl<
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
-        pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
         depth_metric: Metric,
         remote_heads_observer: R,
     ) -> Self {
@@ -198,7 +192,6 @@ impl<
             connections,
             subscriptions,
             storage,
-            pending_blob_requests,
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
             send_counter: PeerCounter::default(),
@@ -401,38 +394,6 @@ impl<
                         tracing::debug!(peer = %from, tree = ?id, "peer reports we are unauthorized for sedimentree");
                     }
                 }
-            }
-            SyncMessage::BlobsRequest { id, digests } => {
-                match self.recv_blob_request(conn, id, &digests).await {
-                    Ok(()) => {
-                        tracing::debug!(peer = %from, tree = ?id, "handled blob request");
-                    }
-                    Err(BlobRequestErr::IoError(e)) => Err(e)?,
-                    Err(BlobRequestErr::MissingBlobs(missing)) => {
-                        tracing::warn!(peer = %from, tree = ?id, missing = ?missing, "missing blobs for request");
-                    }
-                }
-            }
-            SyncMessage::BlobsResponse { id, blobs } => {
-                let accepted_count = {
-                    let mut pending = self.pending_blob_requests.lock().await;
-                    let mut count = 0usize;
-                    for blob in &blobs {
-                        let digest = Digest::hash(blob);
-                        if pending.remove(id, digest) {
-                            count += 1;
-                        }
-                    }
-                    count
-                };
-
-                tracing::debug!(
-                    peer = %from,
-                    tree = ?id,
-                    accepted = accepted_count,
-                    total = blobs.len(),
-                    "blob response acknowledged (compound storage)"
-                );
             }
             SyncMessage::RemoveSubscriptions(crate::connection::message::RemoveSubscriptions {
                 ids,
@@ -1064,44 +1025,9 @@ impl<
         Ok(())
     }
 
-    async fn recv_blob_request(
-        &self,
-        conn: &Authenticated<Conn, Async>,
-        id: SedimentreeId,
-        digests: &[Digest<Blob>],
-    ) -> Result<(), BlobRequestErr<Async, Store, Conn, SyncMessage>> {
-        let mut blobs = Vec::new();
-        let mut missing = Vec::new();
-        for digest in digests {
-            if let Some(blob) = self.get_blob(id, *digest).await.map_err(IoError::Storage)? {
-                blobs.push(blob);
-            } else {
-                missing.push(*digest);
-            }
-        }
-
-        conn.send(&SyncMessage::BlobsResponse { id, blobs })
-            .await
-            .map_err(IoError::ConnSend)?;
-
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(BlobRequestErr::MissingBlobs(missing))
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Delegating helpers — logic lives in `ingest` and `peers` modules
     // -----------------------------------------------------------------------
-
-    async fn get_blob(
-        &self,
-        id: SedimentreeId,
-        digest: Digest<Blob>,
-    ) -> Result<Option<Blob>, Store::Error> {
-        ingest::get_blob(&self.storage, id, digest).await
-    }
 
     async fn insert_commit_locally(
         &self,
