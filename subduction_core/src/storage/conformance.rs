@@ -130,8 +130,11 @@ pub async fn assert_fragment_save_registers_tree_id<Async, Store>(
 ///
 /// Every item in `commits` / `fragments` must target `id`, which must
 /// **not** be registered on `storage` yet (the check is vacuous
-/// otherwise). At least one item must be supplied — registering an id for
-/// an *empty* batch is backend-specific and not part of the contract.
+/// otherwise). At least one item must be supplied so the assertion is
+/// non-vacuous: an empty batch could not distinguish "registered because
+/// of the items" from a no-op. (The trait contract *does* require an
+/// empty batch to register `id` too — that case is exercised separately,
+/// not by this helper.)
 ///
 /// # Panics
 ///

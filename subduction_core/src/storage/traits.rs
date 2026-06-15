@@ -115,13 +115,14 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// # Contract
     ///
     /// Implementations **must** register `sedimentree_id` (the moral
-    /// equivalent of [`save_sedimentree_id`](Self::save_sedimentree_id)) as
-    /// part of the save: after this call,
+    /// equivalent of [`save_sedimentree_id`](Self::save_sedimentree_id)) on
+    /// a successful save: afterwards,
     /// [`contains_sedimentree_id`](Self::contains_sedimentree_id) and
     /// [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids) must
-    /// reflect the tree, including after a reopen. Backends can verify this
-    /// with the conformance helpers in `storage::conformance` (behind the
-    /// `test_utils` feature).
+    /// reflect the tree, including after a reopen. Conversely, a **failed**
+    /// save must **not** register the id — no registered-but-empty trees.
+    /// Backends can verify both directions with the conformance helpers in
+    /// `storage::conformance` (behind the `test_utils` feature).
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -244,7 +245,9 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     ///
     /// Implementations **must** register `sedimentree_id` for the writes
     /// (the moral equivalent of [`save_sedimentree_id`](Self::save_sedimentree_id))
-    /// before — or as part of — persisting any commits or fragments. Callers
+    /// before, as part of, or immediately after a successful persist of the
+    /// commits or fragments — but **never on a failed write** (a failed
+    /// batch must not leave a registered-but-empty tree behind). Callers
     /// rely on this so that
     /// [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids) sees
     /// sedimentrees created exclusively via batch insert. Both an empty
