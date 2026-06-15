@@ -697,12 +697,7 @@ async fn bulk_load_fans_out_beyond_chunk_size_correctly() -> testresult::TestRes
         Storage::<Sendable>::load_loose_commits(&storage, id)
             .await?
             .iter()
-            .map(|v| {
-                (
-                    v.signed().as_bytes().to_vec(),
-                    v.blob().contents().clone(),
-                )
-            })
+            .map(|v| (v.signed().as_bytes().to_vec(), v.blob().contents().clone()))
             .collect();
     assert_eq!(
         loaded, expected,
@@ -744,11 +739,13 @@ async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestR
     }
 
     let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
-    let heads: std::collections::BTreeSet<_> =
-        loaded.iter().map(|v| v.payload().head()).collect();
+    let heads: std::collections::BTreeSet<_> = loaded.iter().map(|v| v.payload().head()).collect();
     let expected: std::collections::BTreeSet<_> =
         (0..8u8).map(|i| CommitId::new([i; 32])).collect();
-    assert_eq!(heads, expected, "every distinct item must land exactly once");
+    assert_eq!(
+        heads, expected,
+        "every distinct item must land exactly once"
+    );
     for vm in &loaded {
         let fill = vm.payload().head().as_bytes()[0];
         assert_eq!(vm.blob().contents(), &vec![fill; 32], "blob must be intact");
@@ -1010,14 +1007,12 @@ fn prop_batch_save_load_roundtrip() {
                         .await
                         .expect("load")
                         .iter()
-                        .map(|v| {
-                            (
-                                v.signed().as_bytes().to_vec(),
-                                v.blob().contents().clone(),
-                            )
-                        })
+                        .map(|v| (v.signed().as_bytes().to_vec(), v.blob().contents().clone()))
                         .collect();
-                assert_eq!(loaded, expected, "batch save/load must be a multiset roundtrip");
+                assert_eq!(
+                    loaded, expected,
+                    "batch save/load must be a multiset roundtrip"
+                );
             });
         });
 }

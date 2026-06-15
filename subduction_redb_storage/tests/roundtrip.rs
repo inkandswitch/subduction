@@ -586,8 +586,15 @@ async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestR
     let loaded = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
     let heads: BTreeSet<_> = loaded.iter().map(|v| v.payload().head()).collect();
     let expected: BTreeSet<_> = (0..8u8).map(|i| CommitId::new([i; 32])).collect();
-    assert_eq!(heads, expected, "every distinct item must land exactly once");
-    assert_eq!(loaded.len(), 8, "racing duplicate saves must not duplicate records");
+    assert_eq!(
+        heads, expected,
+        "every distinct item must land exactly once"
+    );
+    assert_eq!(
+        loaded.len(),
+        8,
+        "racing duplicate saves must not duplicate records"
+    );
     for vm in &loaded {
         let fill = vm.payload().head().as_bytes()[0];
         assert_eq!(vm.blob().contents(), &vec![fill; 32], "blob must be intact");
@@ -779,7 +786,8 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
     conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&storage, fragment).await;
 
     let batch_tree = SedimentreeId::new([0x72; 32]);
-    let batch_commit = seal_commit(&signer, batch_tree, CommitId::new([0x14; 32]), vec![3; 16]).await;
+    let batch_commit =
+        seal_commit(&signer, batch_tree, CommitId::new([0x14; 32]), vec![3; 16]).await;
     conformance::assert_batch_save_registers_tree_id::<Sendable, _>(
         &storage,
         batch_tree,
