@@ -861,3 +861,34 @@ fn prop_inline_external_dispatch_at_threshold() {
             });
         });
 }
+
+/// Metadata-only loads must return the same payload set as the full loads,
+/// across a mix of inline (small) and external (large) blobs — the contract
+/// the hydration path relies on.
+#[tokio::test]
+async fn metas_match_full_load() -> testresult::TestResult {
+    use subduction_core::storage::conformance;
+
+    let dir = tempfile::tempdir()?;
+    // 64 B threshold so the large items spill to external files.
+    let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x9A; 32]);
+
+    // Mix of inline (32 B) and external (512 B) commits.
+    for i in 0..6u8 {
+        let size = if i % 2 == 0 { 32 } else { 512 };
+        let commit = seal_commit(&signer, id, CommitId::new([i; 32]), vec![i; size]).await;
+        Storage::<Sendable>::save_loose_commit(&storage, id, commit).await?;
+    }
+    // Mix of inline and external fragments.
+    for i in 0..4u8 {
+        let size = if i % 2 == 0 { 16 } else { 768 };
+        let f = seal_fragment(&signer, id, CommitId::new([0xB0 + i; 32]), vec![i; size]).await;
+        Storage::<Sendable>::save_fragment(&storage, id, f).await?;
+    }
+
+    conformance::assert_metas_match_full_load::<Sendable, _>(&storage, id).await;
+
+    Ok(())
+}

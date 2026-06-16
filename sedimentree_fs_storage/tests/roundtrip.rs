@@ -1016,3 +1016,44 @@ fn prop_batch_save_load_roundtrip() {
             });
         });
 }
+
+/// Metadata-only loads must return the same payload set as the full loads —
+/// the contract the hydration path relies on. Includes an empty blob and a
+/// large blob to exercise the size range.
+#[tokio::test]
+async fn metas_match_full_load() -> testresult::TestResult {
+    use subduction_core::storage::conformance;
+
+    let dir = tempfile::tempdir()?;
+    let storage = FsStorage::new(dir.path().to_path_buf())?;
+    let signer = test_signer();
+    let id = make_sedimentree_id(0x78);
+
+    for (i, size) in [0usize, 32, 4096].into_iter().enumerate() {
+        let head = CommitId::new([u8::try_from(i).unwrap_or(0) + 1; 32]);
+        let verified = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+            &signer,
+            (id, head, BTreeSet::new()),
+            VerifiedBlobMeta::new(Blob::new(vec![7u8; size])),
+        )
+        .await;
+        Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
+    }
+
+    let fragment = VerifiedMeta::<Fragment>::seal::<Sendable, _>(
+        &signer,
+        (
+            id,
+            CommitId::new([0xF7; 32]),
+            BTreeSet::from([CommitId::new([0xF8; 32])]),
+            vec![CommitId::new([0xF9; 32])],
+        ),
+        VerifiedBlobMeta::new(Blob::new(vec![3u8; 2048])),
+    )
+    .await;
+    Storage::<Sendable>::save_fragment(&storage, id, fragment).await?;
+
+    conformance::assert_metas_match_full_load::<Sendable, _>(&storage, id).await;
+
+    Ok(())
+}

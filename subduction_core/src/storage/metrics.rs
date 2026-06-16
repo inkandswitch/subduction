@@ -194,6 +194,18 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         })
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        Async::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.load_loose_commit_metas(sedimentree_id).await;
+            observe("load_loose_commit_metas", start, &result);
+            result
+        })
+    }
+
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -295,6 +307,18 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
             let start = Instant::now();
             let result = self.inner.load_fragments(sedimentree_id).await;
             observe("load_fragments", start, &result);
+            result
+        })
+    }
+
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<Fragment>, Self::Error>> {
+        Async::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.load_fragment_metas(sedimentree_id).await;
+            observe("load_fragment_metas", start, &result);
             result
         })
     }

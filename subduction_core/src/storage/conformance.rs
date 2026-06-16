@@ -15,10 +15,12 @@
 //! conformance::assert_commit_save_registers_tree_id(&storage, commit).await;
 //! ```
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use future_form::FutureForm;
-use sedimentree_core::{fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit};
+use sedimentree_core::{
+    crypto::digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
+};
 use subduction_crypto::verified_meta::VerifiedMeta;
 
 use super::traits::Storage;
@@ -228,6 +230,66 @@ pub async fn assert_failed_commit_save_does_not_register_tree_id<Async, Store>(
                 .await
                 .expect("contains_sedimentree_id failed"),
             "contract violation: a failed save must not register the sedimentree id"
+        );
+    }
+}
+
+/// Assert that the metadata-only loads
+/// ([`load_loose_commit_metas`](Storage::load_loose_commit_metas) /
+/// [`load_fragment_metas`](Storage::load_fragment_metas)) return exactly the
+/// same payload set as the full loads — the contract the hydration path
+/// relies on. Compared by content digest, so it holds under Byzantine
+/// equivocation (multiple payloads per id).
+///
+/// `id`'s commits and fragments must already be stored; mix inline and
+/// external (large) blobs to exercise both blob paths.
+///
+/// # Panics
+///
+/// Panics when the metadata-only load disagrees with the full load (or errors).
+pub async fn assert_metas_match_full_load<Async, Store>(storage: &Store, id: SedimentreeId)
+where
+    Async: FutureForm,
+    Store: Storage<Async>,
+{
+    #[allow(clippy::expect_used)]
+    {
+        let full_commits: BTreeSet<Digest<LooseCommit>> = storage
+            .load_loose_commits(id)
+            .await
+            .expect("load_loose_commits failed")
+            .iter()
+            .map(|vm| Digest::hash(vm.payload()))
+            .collect();
+        let meta_commits: BTreeSet<Digest<LooseCommit>> = storage
+            .load_loose_commit_metas(id)
+            .await
+            .expect("load_loose_commit_metas failed")
+            .iter()
+            .map(Digest::hash)
+            .collect();
+        assert_eq!(
+            meta_commits, full_commits,
+            "load_loose_commit_metas must return the same payload set as load_loose_commits"
+        );
+
+        let full_fragments: BTreeSet<Digest<Fragment>> = storage
+            .load_fragments(id)
+            .await
+            .expect("load_fragments failed")
+            .iter()
+            .map(|vm| Digest::hash(vm.payload()))
+            .collect();
+        let meta_fragments: BTreeSet<Digest<Fragment>> = storage
+            .load_fragment_metas(id)
+            .await
+            .expect("load_fragment_metas failed")
+            .iter()
+            .map(Digest::hash)
+            .collect();
+        assert_eq!(
+            meta_fragments, full_fragments,
+            "load_fragment_metas must return the same payload set as load_fragments"
         );
     }
 }

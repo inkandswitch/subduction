@@ -126,6 +126,14 @@ impl Storage<Sendable> for CallCountingStorage {
         Storage::<Sendable>::load_loose_commits(&self.inner, id)
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        // Hydration path — not the bulk-scan the responder tests probe.
+        Storage::<Sendable>::load_loose_commit_metas(&self.inner, id)
+    }
+
     fn load_loose_commit(
         &self,
         id: SedimentreeId,
@@ -177,6 +185,13 @@ impl Storage<Sendable> for CallCountingStorage {
     ) -> BoxFuture<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         self.bulk_loads.fetch_add(1, Ordering::SeqCst);
         Storage::<Sendable>::load_fragments(&self.inner, id)
+    }
+
+    fn load_fragment_metas(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+        Storage::<Sendable>::load_fragment_metas(&self.inner, id)
     }
 
     fn delete_fragment(

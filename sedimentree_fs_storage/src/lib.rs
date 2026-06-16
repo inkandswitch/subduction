@@ -471,6 +471,126 @@ fn read_first_meta_blob_pair_sync(dir: &Path) -> Result<Option<MetaBlobPair>, Fs
     Ok(None)
 }
 
+/// Synchronously read the first `.meta` from `dir` whose sibling `.blob`
+/// also exists — **without reading the blob's contents**. Returns `None` if
+/// the directory is absent or holds no complete pair.
+///
+/// The blob-existence check (a `stat`, not a read) preserves the item-set
+/// parity with [`read_first_meta_blob_pair_sync`]: an incomplete
+/// meta-without-blob pair is skipped on both paths, so metadata-only
+/// hydration sees exactly the items the full load would. Must be called from
+/// a blocking context.
+fn read_first_meta_only_sync(dir: &Path) -> Result<Option<Vec<u8>>, FsStorageError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        if let Ok(name) = entry.file_name().into_string()
+            && let Some(stem) = name.strip_suffix(".meta")
+        {
+            let blob_path = dir.join(format!("{stem}.blob"));
+            // Parity with the pair-read: skip a meta whose blob is missing,
+            // but never read the (potentially large) blob bytes.
+            if !std::fs::metadata(&blob_path).is_ok_and(|m| m.is_file()) {
+                continue;
+            }
+
+            let signed_data = match std::fs::read(dir.join(&name)) {
+                Ok(data) => data,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+
+            return Ok(Some(signed_data));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Synchronously read the first `.meta` (blob existence checked, contents
+/// not read) from each listed directory. Must be called from a blocking
+/// context.
+fn read_metas_chunk_sync(
+    dirs: &[(String, PathBuf)],
+) -> Result<Vec<(String, Vec<u8>)>, FsStorageError> {
+    let mut out = Vec::with_capacity(dirs.len());
+    for (name, path) in dirs {
+        if let Some(signed_data) = read_first_meta_only_sync(path)? {
+            out.push((name.clone(), signed_data));
+        }
+    }
+    Ok(out)
+}
+
+/// Read every item's `.meta` bytes under `parent`, skipping blob contents.
+///
+/// Mirrors [`read_all_compound_parallel`]'s small-tree-single-hop /
+/// large-tree-fan-out structure, but reads only metadata — the
+/// metadata-only hydration path.
+async fn read_all_metas_parallel(
+    parent: PathBuf,
+) -> Result<Vec<(String, Vec<u8>)>, FsStorageError> {
+    enum MetasFirstHop {
+        Done(Vec<(String, Vec<u8>)>),
+        FanOut(Vec<(String, PathBuf)>),
+    }
+
+    let first = tokio::task::spawn_blocking(move || -> Result<MetasFirstHop, FsStorageError> {
+        let dirs = list_compound_dirs_sync(&parent)?;
+        if dirs.len() <= READ_CHUNK_SIZE {
+            Ok(MetasFirstHop::Done(read_metas_chunk_sync(&dirs)?))
+        } else {
+            Ok(MetasFirstHop::FanOut(dirs))
+        }
+    })
+    .await??;
+
+    let dirs = match first {
+        MetasFirstHop::Done(out) => return Ok(out),
+        MetasFirstHop::FanOut(dirs) => dirs,
+    };
+
+    let handles: Vec<_> = dirs
+        .chunks(READ_CHUNK_SIZE)
+        .map(|chunk| {
+            let chunk = chunk.to_vec();
+            tokio::task::spawn_blocking(move || read_metas_chunk_sync(&chunk))
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(dirs.len());
+    for handle in handles {
+        out.extend(handle.await??);
+    }
+    Ok(out)
+}
+
+/// Decode metadata-only `(dir_name, signed_bytes)` pairs into payloads,
+/// skipping corrupt items with a warning (mirroring the full-load
+/// tolerance).
+fn decode_metas<T>(raw: Vec<(String, Vec<u8>)>, what: &str) -> Vec<T>
+where
+    T: sedimentree_core::codec::schema::Schema
+        + sedimentree_core::codec::encode::EncodeFields
+        + sedimentree_core::codec::decode::DecodeFields,
+{
+    let mut out = Vec::with_capacity(raw.len());
+    for (name, signed_data) in raw {
+        match Signed::<T>::try_decode(signed_data)
+            .and_then(|s| s.try_decode_trusted_payload())
+        {
+            Ok(payload) => out.push(payload),
+            Err(e) => tracing::warn!(dir = %name, "skipping corrupt stored {what}: {e}"),
+        }
+    }
+    out
+}
+
 /// Number of leading [`SedimentreeId`] bytes used as the on-disk bucket name
 /// under `trees/`. Two bytes give 65,536 buckets (`0000`..`ffff`).
 ///
@@ -1005,6 +1125,19 @@ impl Storage<Sendable> for FsStorage {
         })
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        Sendable::from_future(async move {
+            tracing::trace!(?sedimentree_id, "FsStorage::load_loose_commit_metas");
+            // Read only `.meta` files (blob existence checked, contents not
+            // read), then decode payloads — the metadata-only hydration read.
+            let raw = read_all_metas_parallel(self.commits_dir(sedimentree_id)).await?;
+            Ok(decode_metas::<LooseCommit>(raw, "loose commit"))
+        })
+    }
+
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
@@ -1150,6 +1283,17 @@ impl Storage<Sendable> for FsStorage {
             }
 
             Ok(results)
+        })
+    }
+
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<Fragment>, Self::Error>> {
+        Sendable::from_future(async move {
+            tracing::trace!(?sedimentree_id, "FsStorage::load_fragment_metas");
+            let raw = read_all_metas_parallel(self.fragments_dir(sedimentree_id)).await?;
+            Ok(decode_metas::<Fragment>(raw, "fragment"))
         })
     }
 
@@ -1381,6 +1525,16 @@ impl Storage<Local> for FsStorage {
         ))
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::load_loose_commit_metas(
+            self,
+            sedimentree_id,
+        ))
+    }
+
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
@@ -1431,6 +1585,16 @@ impl Storage<Local> for FsStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Local as FutureForm>::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_fragments(
+            self,
+            sedimentree_id,
+        ))
+    }
+
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<Fragment>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::load_fragment_metas(
             self,
             sedimentree_id,
         ))

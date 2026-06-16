@@ -150,6 +150,14 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
         })
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        // Hydration path — not the sync bulk-scan this harness tracks.
+        Storage::<Sendable>::load_loose_commit_metas(&self.inner, id)
+    }
+
     fn load_loose_commit(
         &self,
         id: SedimentreeId,
@@ -229,6 +237,13 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
             exit_tracking(&in_flight);
             result
         })
+    }
+
+    fn load_fragment_metas(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+        Storage::<Sendable>::load_fragment_metas(&self.inner, id)
     }
 
     fn delete_fragment(

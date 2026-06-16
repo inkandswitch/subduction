@@ -687,10 +687,71 @@ fn bench_save<S: Storage<Sendable> + 'static>(
     group.finish();
 }
 
+/// Hydration read cost: the full `load_loose_commits` (reads every blob)
+/// vs the metadata-only `load_loose_commit_metas` (skips blob bytes — no
+/// inline copy on redb, no external/`.blob` file read on either backend).
+///
+/// Hydration rebuilds the in-memory tree from payloads and discards the
+/// blobs, so the delta here is pure wasted I/O avoided. The win is
+/// negligible for tiny blobs and large for production-sized external blobs.
+fn bench_hydrate_metas<S: Storage<Sendable> + 'static>(
+    c: &mut Criterion,
+    rt: &Runtime,
+    backend: &Backend<S>,
+) {
+    const N: usize = 1_000;
+
+    let mut group = c.benchmark_group("hydrate");
+    group.sample_size(10);
+    let id = SedimentreeId::new(TREE);
+
+    // 256 B: blobs inline/tiny (win should be marginal). 192 KiB: the
+    // production external-blob average (the case the optimization targets).
+    for &blob_size in &[256usize, 196_608] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = (backend.make)(dir.path());
+        populate(rt, &storage, N, blob_size);
+
+        group.throughput(Throughput::Elements(N as u64));
+        group.bench_function(
+            BenchmarkId::new(format!("full/{}", backend.name), blob_size),
+            |b| {
+                b.iter(|| {
+                    // Match the hydration path: full load, then extract
+                    // payloads and drop blobs (what `load_tree` does today).
+                    let payloads: Vec<LooseCommit> = rt
+                        .block_on(storage.load_loose_commits(id))
+                        .unwrap_or_else(|e| panic!("full load: {e}"))
+                        .into_iter()
+                        .map(|vm| vm.into_full_parts().1)
+                        .collect();
+                    assert_eq!(payloads.len(), N);
+                });
+            },
+        );
+        group.bench_function(
+            BenchmarkId::new(format!("metas/{}", backend.name), blob_size),
+            |b| {
+                b.iter(|| {
+                    let metas = rt
+                        .block_on(storage.load_loose_commit_metas(id))
+                        .unwrap_or_else(|e| panic!("metas load: {e}"));
+                    assert_eq!(metas.len(), N);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn all_benches(c: &mut Criterion) {
     let rt = Runtime::new().expect("create tokio runtime");
 
     report_sizes(&rt);
+
+    bench_hydrate_metas(c, &rt, &FS);
+    bench_hydrate_metas(c, &rt, &REDB);
 
     bench_load_count(c, &rt, &FS);
     bench_load_count(c, &rt, &REDB);

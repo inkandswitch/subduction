@@ -225,6 +225,28 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
         })
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        Async::from_future(async move {
+            tracing::trace!(?sedimentree_id, "MemoryStorage::load_loose_commit_metas");
+            // Clone only the signed metas under the read lock — never the
+            // (potentially large) blobs — then decode payloads after release.
+            let signed: Vec<Signed<LooseCommit>> = {
+                let shard = self.commits.shard(&sedimentree_id).read().await;
+                shard.get(&sedimentree_id).map_or_else(Vec::new, |map| {
+                    map.values().map(|(_, signed, _)| signed.clone()).collect()
+                })
+            };
+            signed
+                .iter()
+                .map(Signed::try_decode_trusted_payload)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(MemoryStorageError::from)
+        })
+    }
+
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -374,6 +396,27 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
             };
             raw.into_iter()
                 .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed, blob))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(MemoryStorageError::from)
+        })
+    }
+
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<Fragment>, Self::Error>> {
+        Async::from_future(async move {
+            tracing::trace!(?sedimentree_id, "MemoryStorage::load_fragment_metas");
+            // Clone only the signed metas under the read lock — never blobs.
+            let signed: Vec<Signed<Fragment>> = {
+                let shard = self.fragments.shard(&sedimentree_id).read().await;
+                shard.get(&sedimentree_id).map_or_else(Vec::new, |map| {
+                    map.values().map(|(_, signed, _)| signed.clone()).collect()
+                })
+            };
+            signed
+                .iter()
+                .map(Signed::try_decode_trusted_payload)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(MemoryStorageError::from)
         })
@@ -579,6 +622,50 @@ mod tests {
             Vec::new(),
         )
         .await;
+    }
+
+    /// Metadata-only loads return the same payload set as the full loads.
+    #[cfg(feature = "test_utils")]
+    #[tokio::test]
+    async fn metas_match_full_load_conformance() {
+        use alloc::{collections::BTreeSet, vec};
+
+        use sedimentree_core::blob::{Blob, verified::VerifiedBlobMeta};
+        use subduction_crypto::signer::memory::MemorySigner;
+
+        use crate::storage::conformance;
+
+        let signer = MemorySigner::from_bytes(&[42u8; 32]);
+        let store = MemoryStorage::new();
+        let id = sid(0x24);
+
+        for i in 0..4u8 {
+            let commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
+                &signer,
+                (id, CommitId::new([i; 32]), BTreeSet::new()),
+                VerifiedBlobMeta::new(Blob::new(vec![i; 64])),
+            )
+            .await;
+            Storage::<Sendable>::save_loose_commit(&store, id, commit)
+                .await
+                .expect("save commit");
+        }
+        let fragment = VerifiedMeta::<Fragment>::seal::<Sendable, _>(
+            &signer,
+            (
+                id,
+                CommitId::new([0xAA; 32]),
+                BTreeSet::from([CommitId::new([0xBB; 32])]),
+                vec![CommitId::new([0xCC; 32])],
+            ),
+            VerifiedBlobMeta::new(Blob::new(vec![9; 128])),
+        )
+        .await;
+        Storage::<Sendable>::save_fragment(&store, id, fragment)
+            .await
+            .expect("save fragment");
+
+        conformance::assert_metas_match_full_load::<Sendable, _>(&store, id).await;
     }
 
     /// Property tests for the `SedimentreeId`-sharded commit/fragment stores.

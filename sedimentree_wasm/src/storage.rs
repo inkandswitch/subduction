@@ -16,7 +16,9 @@ use sedimentree_core::{
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::{LooseCommit, id::CommitId},
 };
-use subduction_core::storage::traits::Storage;
+use subduction_core::storage::traits::{
+    Storage, load_fragment_metas_via_full, load_loose_commit_metas_via_full,
+};
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -344,6 +346,16 @@ impl Storage<Local> for JsStorage {
         })
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        // No JS-side metadata-only read: fall back to the full load and drop
+        // blobs. JS hosts store small blobs inline, so the wasted bytes are
+        // bounded.
+        Local::from_future(load_loose_commit_metas_via_full(self, sedimentree_id))
+    }
+
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -533,6 +545,13 @@ impl Storage<Local> for JsStorage {
 
             Ok(result)
         })
+    }
+
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+        Local::from_future(load_fragment_metas_via_full(self, sedimentree_id))
     }
 
     fn delete_fragment(

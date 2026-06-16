@@ -504,6 +504,57 @@ fn scan_decoded(
     Ok(out)
 }
 
+/// Copy out just the `meta` (`Signed<T>` wire bytes) of a compound value,
+/// ignoring any inline blob. `None` on a malformed buffer.
+fn meta_bytes_of(bytes: &[u8]) -> Option<Vec<u8>> {
+    let tag = *bytes.first()?;
+    match tag {
+        TAG_INLINE => {
+            let len_bytes: [u8; 4] = bytes.get(1..5)?.try_into().ok()?;
+            let meta_len = u32::from_be_bytes(len_bytes) as usize;
+            bytes.get(5..5 + meta_len).map(<[u8]>::to_vec)
+        }
+        TAG_EXTERNAL => bytes.get(1..).map(<[u8]>::to_vec),
+        _ => None,
+    }
+}
+
+/// Scan the compound values in `range` and decode each one to its payload
+/// `T`, **without** touching blobs: inline blob bytes are not copied off the
+/// page and external blob files are never read. This is the metadata-only
+/// hydration read — `O(items)` small meta copies + decodes, no file I/O.
+///
+/// Malformed or corrupt items are skipped with a warning (mirroring the
+/// blob-resolving path's tolerance). Runs entirely in the blocking closure.
+fn scan_payloads<T>(
+    table: &impl ReadableTable<&'static [u8; 96], &'static [u8]>,
+    lo: &Key96,
+    hi: &Key96,
+    what: &str,
+) -> Result<Vec<T>, RedbStorageError>
+where
+    T: sedimentree_core::codec::schema::Schema
+        + sedimentree_core::codec::encode::EncodeFields
+        + sedimentree_core::codec::decode::DecodeFields,
+{
+    let mut out = Vec::new();
+    for entry in table.range::<&[u8; 96]>(lo..=hi)? {
+        let (_, value) = entry?;
+        let Some(meta) = meta_bytes_of(value.value()) else {
+            tracing::warn!("skipping malformed compound value");
+            continue;
+        };
+        match Signed::<T>::try_decode(meta) {
+            Ok(signed) => match signed.try_decode_trusted_payload() {
+                Ok(payload) => out.push(payload),
+                Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
+            },
+            Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
+        }
+    }
+    Ok(out)
+}
+
 /// Decode scanned compound values into [`VerifiedMeta`]s, resolving
 /// external blobs via parallel chunked file reads.
 ///
@@ -875,6 +926,23 @@ impl Storage<Sendable> for RedbStorage {
         })
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        Sendable::from_future(async move {
+            tracing::trace!(?sedimentree_id, "RedbStorage::load_loose_commit_metas");
+            // One blocking hop: B+tree range scan decoding payloads only — no
+            // inline blob copies, no external blob file reads.
+            self.with_db(move |db, _blobs_dir| {
+                let (lo, hi) = tree_range(sedimentree_id);
+                let txn = db.begin_read()?;
+                scan_payloads::<LooseCommit>(&txn.open_table(COMMITS)?, &lo, &hi, "loose commit")
+            })
+            .await
+        })
+    }
+
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -1036,6 +1104,21 @@ impl Storage<Sendable> for RedbStorage {
                 .await?;
 
             resolve_items(Arc::clone(&self.blobs_dir), raw, "fragment").await
+        })
+    }
+
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<Fragment>, Self::Error>> {
+        Sendable::from_future(async move {
+            tracing::trace!(?sedimentree_id, "RedbStorage::load_fragment_metas");
+            self.with_db(move |db, _blobs_dir| {
+                let (lo, hi) = tree_range(sedimentree_id);
+                let txn = db.begin_read()?;
+                scan_payloads::<Fragment>(&txn.open_table(FRAGMENTS)?, &lo, &hi, "fragment")
+            })
+            .await
         })
     }
 
@@ -1213,6 +1296,16 @@ impl Storage<Local> for RedbStorage {
         ))
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::load_loose_commit_metas(
+            self,
+            sedimentree_id,
+        ))
+    }
+
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -1288,6 +1381,16 @@ impl Storage<Local> for RedbStorage {
         sedimentree_id: SedimentreeId,
     ) -> <Local as FutureForm>::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_fragments(
+            self,
+            sedimentree_id,
+        ))
+    }
+
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<Fragment>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::load_fragment_metas(
             self,
             sedimentree_id,
         ))

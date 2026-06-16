@@ -167,6 +167,24 @@ pub trait Storage<Async: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>;
 
+    /// Load all loose-commit *payloads* for a sedimentree, **without** their
+    /// blobs.
+    ///
+    /// Hydration rebuilds the in-memory tree from [`LooseCommit`] metadata
+    /// alone — the resident `MinimizedSedimentree` holds no blob bytes — so
+    /// loading the blobs only to discard them is wasted I/O (on backends
+    /// that store large blobs externally, an entire file read per item).
+    ///
+    /// Backends with a cheaper metadata-only read path implement it directly;
+    /// those without can delegate to
+    /// [`load_loose_commit_metas_via_full`] (load full, drop blobs). Same set
+    /// semantics as [`load_loose_commits`](Self::load_loose_commits) (all
+    /// equivocating payloads returned; caller dedups).
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<LooseCommit>, Self::Error>>;
+
     /// Load a single loose commit by [`CommitId`].
     ///
     /// Returns `None` if no commit exists with the given identity.
@@ -237,6 +255,17 @@ pub trait Storage<Async: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>;
 
+    /// Load all fragment *payloads* for a sedimentree, **without** their
+    /// blobs — the fragment-side twin of
+    /// [`load_loose_commit_metas`](Self::load_loose_commit_metas).
+    ///
+    /// Backends without a cheaper metadata-only read path can delegate to
+    /// [`load_fragment_metas_via_full`].
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<Fragment>, Self::Error>>;
+
     /// Delete a fragment and its blob by fragment head [`CommitId`].
     fn delete_fragment(
         &self,
@@ -285,4 +314,53 @@ pub trait Storage<Async: FutureForm + ?Sized> {
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
     ) -> Async::Future<'_, Result<usize, Self::Error>>;
+}
+
+/// Fallback for [`Storage::load_loose_commit_metas`]: load the full commits
+/// and drop their blobs.
+///
+/// Backends without a cheaper metadata-only read path (e.g. `JsStorage`, or
+/// delegating wrappers) implement the trait method as a one-line call to
+/// this. There is no I/O win — the blobs are still read — but it keeps the
+/// fallback in one place and matches the optimized backends' set semantics.
+///
+/// # Errors
+///
+/// Propagates the backend's load error.
+pub async fn load_loose_commit_metas_via_full<Async, S>(
+    storage: &S,
+    sedimentree_id: SedimentreeId,
+) -> Result<Vec<LooseCommit>, S::Error>
+where
+    Async: FutureForm,
+    S: Storage<Async>,
+{
+    Ok(storage
+        .load_loose_commits(sedimentree_id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.into_full_parts().1)
+        .collect())
+}
+
+/// Fallback for [`Storage::load_fragment_metas`] — the fragment-side twin of
+/// [`load_loose_commit_metas_via_full`].
+///
+/// # Errors
+///
+/// Propagates the backend's load error.
+pub async fn load_fragment_metas_via_full<Async, S>(
+    storage: &S,
+    sedimentree_id: SedimentreeId,
+) -> Result<Vec<Fragment>, S::Error>
+where
+    Async: FutureForm,
+    S: Storage<Async>,
+{
+    Ok(storage
+        .load_fragments(sedimentree_id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.into_full_parts().1)
+        .collect())
 }
