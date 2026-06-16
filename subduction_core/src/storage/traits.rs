@@ -120,9 +120,24 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// [`contains_sedimentree_id`](Self::contains_sedimentree_id) and
     /// [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids) must
     /// reflect the tree, including after a reopen. Conversely, a **failed**
-    /// save must **not** register the id — no registered-but-empty trees.
-    /// Backends can verify both directions with the conformance helpers in
-    /// `storage::conformance` (behind the `test_utils` feature).
+    /// save must **not** register the id in the backend's *observable* view
+    /// (the in-memory / same-transaction state queried immediately
+    /// afterwards) — no registered-but-empty trees.
+    ///
+    /// One caveat for backends that derive registration from durable layout
+    /// rather than an explicit record (e.g. `FsStorage` rediscovers tree
+    /// ids by scanning directories on reopen): a save that fails *after*
+    /// creating the tree's directory but *before* writing any item can
+    /// leave an empty tree directory that reopen rediscovers. This is
+    /// benign — the sync handler never caches empty trees, so the effect is
+    /// limited to id enumeration — but it means the "failed save does not
+    /// register" guarantee is exact only for the observable view, not
+    /// necessarily across an interrupted-first-write then restart.
+    /// Transactional backends (e.g. `RedbStorage` registers in the same
+    /// write transaction as the item) have no such window.
+    ///
+    /// Backends can verify the observable contract with the conformance
+    /// helpers in `storage::conformance` (behind the `test_utils` feature).
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,

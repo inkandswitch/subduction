@@ -179,10 +179,14 @@ pub async fn assert_batch_save_registers_tree_id<Async, Store>(
 }
 
 /// Assert that a *failing* [`Storage::save_loose_commit`] does **not**
-/// register the commit's sedimentree id — the negative half of the
-/// registration contract. A failed write that leaves a registered-but-empty
-/// tree behind misleads every consumer of
+/// register the commit's sedimentree id in the backend's *observable* view
+/// — the negative half of the registration contract. A failed write that
+/// leaves a registered-but-empty tree behind misleads every consumer of
 /// [`load_all_sedimentree_ids`](Storage::load_all_sedimentree_ids).
+///
+/// This checks the observable view (queried immediately, no reopen); see
+/// [`save_loose_commit`](Storage::save_loose_commit) for the across-reopen
+/// caveat that applies to layout-derived backends.
 ///
 /// The caller must hand over a `storage` that has been *poisoned* so the
 /// save is guaranteed to fail (e.g. a roadblock file where the backend

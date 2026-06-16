@@ -590,16 +590,25 @@ where
         };
 
         // Size-validate against the signed `BlobMeta` (the same check the
-        // save-side CAS applies): a truncated or tampered-with external
-        // file must be skipped, not paired silently with the meta and
-        // propagated to peers. A re-save of the same content heals it via
-        // the size-mismatch rewrite in `write_blob_file_sync`.
+        // save-side CAS applies): a size-changed external file — a
+        // truncated or extended crash artifact — must be skipped, not
+        // paired silently with the meta. Such a file self-heals on the
+        // next save of the same content via the size-mismatch rewrite in
+        // `write_blob_file_sync`.
+        //
+        // This catches size changes, not same-length content corruption:
+        // a same-size-corrupted file passes here (and `try_from_trusted`,
+        // which does not recompute the blob digest) and is served. That is
+        // not a propagation hole — the receiving peer re-verifies via
+        // `VerifiedMeta::new` and rejects the blob on digest mismatch — but
+        // such a file does not self-heal (its size matches, so
+        // `write_blob_file_sync` won't rewrite it).
         if blob.len() as u64 != expected_size {
             tracing::warn!(
                 digest = %hex_encode(&digest),
                 have = blob.len(),
                 need = expected_size,
-                "external blob file size mismatch (crash artifact or tampering); skipping {what}"
+                "external blob file size mismatch (crash artifact); skipping {what}"
             );
             continue;
         }
