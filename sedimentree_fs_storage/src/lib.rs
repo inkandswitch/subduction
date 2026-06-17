@@ -475,9 +475,11 @@ fn read_first_meta_blob_pair_sync(dir: &Path) -> Result<Option<MetaBlobPair>, Fs
 /// also exists — **without reading the blob's contents**. Returns `None` if
 /// the directory is absent or holds no complete pair.
 ///
-/// The blob-existence check (a `stat`, not a read) preserves the item-set
-/// parity with [`read_first_meta_blob_pair_sync`]: an incomplete
-/// meta-without-blob pair is skipped on both paths, so metadata-only
+/// Blob existence is checked from the directory listing itself (the `.meta`
+/// and `.blob` live in the same `<id>/` dir we already `read_dir`), so the
+/// parity check costs no extra syscall — no per-item `stat`, no blob-inode
+/// fault on a cold cache. An incomplete meta-without-blob pair is skipped on
+/// both this path and [`read_first_meta_blob_pair_sync`], so metadata-only
 /// hydration sees exactly the items the full load would. Must be called from
 /// a blocking context.
 fn read_first_meta_only_sync(dir: &Path) -> Result<Option<Vec<u8>>, FsStorageError> {
@@ -487,19 +489,26 @@ fn read_first_meta_only_sync(dir: &Path) -> Result<Option<Vec<u8>>, FsStorageErr
         Err(e) => return Err(e.into()),
     };
 
+    // The directory is tiny (one `.meta` + `.blob` pair, or a handful under
+    // Byzantine equivocation), so collecting names up front is cheap and
+    // lets us answer "is the sibling blob present?" from memory.
+    let mut names = Vec::new();
     for entry in entries {
-        let entry = entry?;
-        if let Ok(name) = entry.file_name().into_string()
-            && let Some(stem) = name.strip_suffix(".meta")
-        {
-            let blob_path = dir.join(format!("{stem}.blob"));
+        if let Ok(name) = entry?.file_name().into_string() {
+            names.push(name);
+        }
+    }
+
+    for name in &names {
+        if let Some(stem) = name.strip_suffix(".meta") {
+            let blob_name = format!("{stem}.blob");
             // Parity with the pair-read: skip a meta whose blob is missing,
-            // but never read the (potentially large) blob bytes.
-            if !std::fs::metadata(&blob_path).is_ok_and(|m| m.is_file()) {
+            // but never read (or even stat) the blob.
+            if !names.iter().any(|n| n == &blob_name) {
                 continue;
             }
 
-            let signed_data = match std::fs::read(dir.join(&name)) {
+            let signed_data = match std::fs::read(dir.join(name)) {
                 Ok(data) => data,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(e.into()),

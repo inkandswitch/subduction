@@ -505,52 +505,94 @@ fn scan_decoded(
 }
 
 /// Copy out just the `meta` (`Signed<T>` wire bytes) of a compound value,
-/// ignoring any inline blob. `None` on a malformed buffer.
-fn meta_bytes_of(bytes: &[u8]) -> Option<Vec<u8>> {
+/// ignoring any inline blob, and report whether the blob is stored
+/// externally (`true`) or inline (`false`). `None` on a malformed buffer.
+fn split_meta(bytes: &[u8]) -> Option<(bool, Vec<u8>)> {
     let tag = *bytes.first()?;
     match tag {
         TAG_INLINE => {
             let len_bytes: [u8; 4] = bytes.get(1..5)?.try_into().ok()?;
             let meta_len = u32::from_be_bytes(len_bytes) as usize;
-            bytes.get(5..5 + meta_len).map(<[u8]>::to_vec)
+            bytes.get(5..5 + meta_len).map(|m| (false, m.to_vec()))
         }
-        TAG_EXTERNAL => bytes.get(1..).map(<[u8]>::to_vec),
+        TAG_EXTERNAL => bytes.get(1..).map(|m| (true, m.to_vec())),
         _ => None,
     }
 }
 
 /// Scan the compound values in `range` and decode each one to its payload
-/// `T`, **without** touching blobs: inline blob bytes are not copied off the
-/// page and external blob files are never read. This is the metadata-only
-/// hydration read — `O(items)` small meta copies + decodes, no file I/O.
+/// `T`, **without reading blob bytes**: inline blob bytes are not copied off
+/// the page, and external blob files are only `stat`-ed (existence + size),
+/// never read. This is the metadata-only hydration read — `O(items)` small
+/// meta copies + decodes, plus one cheap `stat` per *external* item.
 ///
-/// Malformed or corrupt items are skipped with a warning (mirroring the
-/// blob-resolving path's tolerance). Runs entirely in the blocking closure.
+/// Item-set parity with the blob-resolving load: an external item whose file
+/// is missing or size-mismatched is skipped, exactly as `resolve_items`
+/// would skip it after a full read — so metadata-only hydration sees the
+/// same items as the full load. Inline items need no check (their blob is in
+/// the scanned value). Malformed or corrupt items are skipped with a
+/// warning. Runs entirely in the blocking closure.
 fn scan_payloads<T>(
     table: &impl ReadableTable<&'static [u8; 96], &'static [u8]>,
     lo: &Key96,
     hi: &Key96,
+    blobs_dir: &Path,
     what: &str,
 ) -> Result<Vec<T>, RedbStorageError>
 where
-    T: sedimentree_core::codec::schema::Schema
+    T: HasBlobMeta
+        + sedimentree_core::codec::schema::Schema
         + sedimentree_core::codec::encode::EncodeFields
         + sedimentree_core::codec::decode::DecodeFields,
 {
     let mut out = Vec::new();
     for entry in table.range::<&[u8; 96]>(lo..=hi)? {
         let (_, value) = entry?;
-        let Some(meta) = meta_bytes_of(value.value()) else {
+        let Some((is_external, meta)) = split_meta(value.value()) else {
             tracing::warn!("skipping malformed compound value");
             continue;
         };
-        match Signed::<T>::try_decode(meta) {
-            Ok(signed) => match signed.try_decode_trusted_payload() {
-                Ok(payload) => out.push(payload),
-                Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
-            },
-            Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
+
+        let payload = match Signed::<T>::try_decode(meta)
+            .and_then(|signed| signed.try_decode_trusted_payload())
+        {
+            Ok(payload) => payload,
+            Err(e) => {
+                tracing::warn!("skipping corrupt stored {what}: {e}");
+                continue;
+            }
+        };
+
+        // Inline blobs are present by construction (they live in the scanned
+        // value). External blobs are separate files — `stat` (not read) to
+        // confirm the file exists with the signed size, matching the full
+        // load's skip-on-missing / skip-on-size-mismatch behaviour.
+        if is_external {
+            let blob_meta = payload.blob_meta();
+            let path = blob_file_path(blobs_dir, blob_meta.digest().as_bytes());
+            match std::fs::metadata(&path) {
+                Ok(m) if m.len() == blob_meta.size_bytes() => {}
+                Ok(m) => {
+                    tracing::warn!(
+                        digest = %hex_encode(blob_meta.digest().as_bytes()),
+                        have = m.len(),
+                        need = blob_meta.size_bytes(),
+                        "external blob file size mismatch (crash artifact); skipping {what}"
+                    );
+                    continue;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::warn!(
+                        digest = %hex_encode(blob_meta.digest().as_bytes()),
+                        "external blob file missing; skipping {what}"
+                    );
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
+
+        out.push(payload);
     }
     Ok(out)
 }
@@ -933,11 +975,17 @@ impl Storage<Sendable> for RedbStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::load_loose_commit_metas");
             // One blocking hop: B+tree range scan decoding payloads only — no
-            // inline blob copies, no external blob file reads.
-            self.with_db(move |db, _blobs_dir| {
+            // inline blob copies; external blobs only `stat`-ed, never read.
+            self.with_db(move |db, blobs_dir| {
                 let (lo, hi) = tree_range(sedimentree_id);
                 let txn = db.begin_read()?;
-                scan_payloads::<LooseCommit>(&txn.open_table(COMMITS)?, &lo, &hi, "loose commit")
+                scan_payloads::<LooseCommit>(
+                    &txn.open_table(COMMITS)?,
+                    &lo,
+                    &hi,
+                    blobs_dir,
+                    "loose commit",
+                )
             })
             .await
         })
@@ -1113,10 +1161,16 @@ impl Storage<Sendable> for RedbStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<Fragment>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::load_fragment_metas");
-            self.with_db(move |db, _blobs_dir| {
+            self.with_db(move |db, blobs_dir| {
                 let (lo, hi) = tree_range(sedimentree_id);
                 let txn = db.begin_read()?;
-                scan_payloads::<Fragment>(&txn.open_table(FRAGMENTS)?, &lo, &hi, "fragment")
+                scan_payloads::<Fragment>(
+                    &txn.open_table(FRAGMENTS)?,
+                    &lo,
+                    &hi,
+                    blobs_dir,
+                    "fragment",
+                )
             })
             .await
         })

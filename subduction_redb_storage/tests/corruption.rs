@@ -159,6 +159,14 @@ async fn missing_external_blob_skipped_then_healed_on_resave() -> testresult::Te
             .is_none(),
         "a record whose external blob is missing must point-read as absent"
     );
+    // Item-set parity: the metadata-only load must skip it too (its external
+    // `stat` finds the file absent), so hydration sees the same items.
+    assert!(
+        Storage::<Sendable>::load_loose_commit_metas(&storage, id)
+            .await?
+            .is_empty(),
+        "metadata-only load must skip a record whose external blob is missing"
+    );
 
     // Re-saving the same content restores the file...
     Storage::<Sendable>::save_loose_commit(&storage, id, make().await).await?;
@@ -202,6 +210,14 @@ async fn truncated_external_blob_skipped_then_healed_on_resave() -> testresult::
             .await?
             .is_empty(),
         "a record whose external blob is truncated must be skipped on load"
+    );
+    // Item-set parity: the metadata-only load `stat`s the file, sees the size
+    // mismatch, and skips it too — same items as the full load.
+    assert!(
+        Storage::<Sendable>::load_loose_commit_metas(&storage, id)
+            .await?
+            .is_empty(),
+        "metadata-only load must skip a record whose external blob is size-mismatched"
     );
 
     // Re-save: the size-mismatch CAS rewrites the file instead of skipping.
