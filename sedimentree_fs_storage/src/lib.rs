@@ -224,10 +224,10 @@ fn fsync_file_sync(path: &Path) -> Result<(), FsStorageError> {
 
 /// Fsync many paths (files or directories), fanned across scoped threads.
 ///
-/// A sequential fsync loop pays one device flush per call (~0.5 ms each on
-/// consumer `NVMe`), which makes large batches scale linearly with item count.
-/// Concurrent fsyncs let the journal's group commit (e.g. ext4's jbd2)
-/// coalesce many waiters into shared transactions, amortizing the flushes.
+/// A sequential fsync loop pays one device flush per call, which makes large
+/// batches scale linearly with item count. Concurrent fsyncs let the
+/// journal's group commit (e.g. ext4's jbd2) coalesce many waiters into
+/// shared transactions, amortizing the flushes.
 /// Must be called from a blocking context.
 fn fsync_paths_parallel_sync(paths: &[&Path]) -> Result<(), FsStorageError> {
     const MAX_FSYNC_THREADS: usize = 16;
@@ -389,19 +389,18 @@ fn read_compound_chunk_sync(
 enum FirstHop {
     /// Tree fit in one chunk and was fully read.
     Done(Vec<RawCompound>),
-    /// Tree is large; here is the listing to fan out over.
+    /// Tree is large; the listing to fan out over.
     FanOut(Vec<(String, PathBuf)>),
 }
 
 /// Read every compound item under `parent`.
 ///
 /// Small trees (≤ [`READ_CHUNK_SIZE`] items) are listed *and* read in a
-/// single blocking hop — the common case pays exactly what the old
-/// sequential implementation did. Larger trees return the listing from the
-/// first hop and fan the per-directory `readdir` + 2 reads across blocking
-/// tasks in chunks of [`READ_CHUNK_SIZE`], so a big tree's load is no longer
-/// bound by one thread's sequential syscall throughput (and seeks overlap on
-/// cold caches).
+/// single blocking hop — the common case pays exactly one hop. Larger trees
+/// return the listing from the first hop and fan the per-directory reads
+/// (one `readdir` + two file reads) across blocking tasks in chunks of
+/// [`READ_CHUNK_SIZE`], so a big tree's load isn't bound by one thread's
+/// sequential syscall throughput (and seeks overlap on cold caches).
 async fn read_all_compound_parallel(parent: PathBuf) -> Result<Vec<RawCompound>, FsStorageError> {
     let first = tokio::task::spawn_blocking(move || -> Result<FirstHop, FsStorageError> {
         let dirs = list_compound_dirs_sync(&parent)?;

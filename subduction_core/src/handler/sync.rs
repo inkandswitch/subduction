@@ -744,18 +744,15 @@ impl<
 
         // Fast path: diff against the resident minimized tree (recording an
         // LRU touch), then fetch only the items the peer is actually missing
-        // as targeted point reads. For a cache-resident tree this replaces
-        // the full commit+fragment storage scan that previously ran on every
-        // request. The cached tree holds payload metadata only, so the wire
-        // data (signed bytes + blobs) still comes from storage — but only
-        // for the (typically small) local-only set.
+        // as targeted point reads. For a cache-resident tree this avoids a
+        // full commit+fragment storage scan. The cached tree holds payload
+        // metadata only, so the wire data (signed bytes + blobs) still comes
+        // from storage — but only for the (typically small) local-only set.
         //
         // Coherence note: writes persist to storage *before* updating the
         // resident tree, so a commit that is durable but not yet cached is
         // omitted from this response. That brief lag is benign — the next
-        // sync round picks it up, and the protocol tolerates stale views —
-        // but it is a (deliberate) change from the pre-cache behavior of
-        // rebuilding from a storage scan per request.
+        // sync round picks it up, and the protocol tolerates stale views.
         let cached = self
             .sedimentrees
             .with_entry(&id, |tree| {
@@ -1123,12 +1120,10 @@ const POINT_READ_CHUNK: usize = 32;
 /// round-trips where one bulk scan does the same work.
 ///
 /// The crossover is a *fraction* of tree size, not a constant, because the
-/// two costs scale differently — scans with the tree, point reads with the
-/// missing set. Measured (backends bench, `load/point_reads` vs
-/// `load/count`, within-run): point reads ≈ 15–22 µs each on both
-/// backends; scans ≈ 5–8 µs/item; intersection at ~0.24–0.38 × tree size
-/// across backends at 1k and 10k items. `1/4` sits at the conservative edge
-/// of that band.
+/// two costs scale differently: a bulk scan grows with the whole tree, a
+/// point-read pass with the missing set. Benchmarking put the break-even
+/// between roughly a quarter and a third of tree size; `1/4` sits at the
+/// conservative edge, favouring point reads.
 const SCAN_FRACTION_DENOMINATOR: usize = 4;
 
 /// Absolute floor for the scan fallback: below this many missing items,

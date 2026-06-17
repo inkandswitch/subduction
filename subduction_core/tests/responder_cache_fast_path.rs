@@ -1,12 +1,11 @@
 //! Verifies that the sync responder serves cache-resident trees without
 //! bulk storage scans.
 //!
-//! `recv_batch_sync_request` previously reloaded *every* commit and fragment
-//! for the tree from storage on every request, even when the tree was
-//! resident in the sedimentree cache (the cache holds payload metadata only,
-//! and the response needs signed bytes + blobs). The fix diffs against the
-//! cached minimized tree and fetches only the items the requestor is missing
-//! via targeted point reads.
+//! For a cache-resident tree, `recv_batch_sync_request` diffs against the
+//! cached minimized tree and fetches only the items the requestor is
+//! missing via targeted point reads, rather than bulk-reloading every
+//! commit and fragment from storage. (The cache holds payload metadata
+//! only, so the response's signed bytes + blobs still come from storage.)
 //!
 //! This test counts bulk loads (`load_loose_commits` / `load_fragments`) vs
 //! point reads (`load_loose_commit` / `load_fragment`) on the responder's
@@ -617,7 +616,7 @@ async fn cache_ahead_of_storage_omits_phantom_items() -> TestResult {
 /// A moderate diff on a large tree must stay on point reads: the scan
 /// fallback is a *fraction* of tree size (total/4, floor 32), not an
 /// absolute count. A fixed threshold here would bulk-scan 800 records to
-/// serve 150 — measured ~9–12x slower than the point reads.
+/// serve 150.
 #[tokio::test]
 async fn moderate_diff_on_large_tree_stays_on_point_reads() -> TestResult {
     const SHARED: usize = 650;

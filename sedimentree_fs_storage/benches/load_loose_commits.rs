@@ -24,7 +24,7 @@
 //! - `load_loose_commits/blob_size`: bytes vs. metadata-ops sensitivity at
 //!   a fixed commit count.
 //! - `phases/*`: isolates a *sequential* raw filesystem read
-//!   (`fs_read_only` — the pre-parallelization baseline) from decoding
+//!   (`fs_read_only` — a sequential read baseline) from decoding
 //!   (`decode_only`), against the same `end_to_end` call (which fans reads
 //!   across blocking tasks, so it may beat the sequential baseline).
 //! - `save/*`: write-path cost with full durability (temp files fsynced
