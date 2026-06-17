@@ -394,33 +394,14 @@ test.describe("Subduction", () => {
   });
 
   test.describe("SyncMessage Serialization", () => {
-    test("should round-trip SyncMessage through binary codec", async ({ page }) => {
-      const result = await page.evaluate(async () => {
-        const { SyncMessage, SedimentreeId, Digest } = window.subduction;
-
-        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
-        const digestBytes = new Uint8Array(32);
-        digestBytes[0] = 42;
-        const digest = new Digest(digestBytes);
-        const original = SyncMessage.blobsRequest(sedimentreeId, [digest]);
-        const bytes = original.toBytes();
-        const restored = SyncMessage.fromBytes(bytes);
-
-        return {
-          hasBytes: bytes instanceof Uint8Array,
-          bytesLength: bytes.length,
-          hasRestored: !!restored,
-          typeMatches: original.type === restored.type,
-          originalType: original.type,
-          restoredType: restored.type,
-        };
-      });
-
-      expect(result.hasBytes).toBe(true);
-      expect(result.bytesLength).toBeGreaterThan(0);
-      expect(result.hasRestored).toBe(true);
-      expect(result.typeMatches).toBe(true);
-    });
+    // NOTE: a JS-side encode→decode round-trip test previously lived here,
+    // built on `SyncMessage.blobsRequest`. The blob-pull messages were
+    // removed, and the surviving `SyncMessage` variants
+    // (`batchSyncRequest`/`batchSyncResponse`) are not constructible from JS
+    // (they need a `FingerprintSummary`), so there is no JS-constructible
+    // message to round-trip. Codec round-trips are covered exhaustively by
+    // the Rust property tests in `subduction_core::connection::message`.
+    // The `fromBytes` error path is still exercised below.
 
     test("should throw MessageDeserializationError for invalid bytes", async ({ page }) => {
       const result = await page.evaluate(async () => {

@@ -281,6 +281,16 @@ impl Storage<Local> for JsStorage {
             JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::JsError)?;
+
+            // Contract: persisting an item registers its sedimentree id —
+            // after the durable item write, so a failed save never leaves a
+            // registered-but-empty tree (see `Storage::save_loose_commit`).
+            JsFuture::from(
+                self.js_save_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into()),
+            )
+            .await
+            .map_err(JsStorageError::JsError)?;
+
             Ok(())
         })
     }
@@ -448,6 +458,15 @@ impl Storage<Local> for JsStorage {
             JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::JsError)?;
+
+            // Contract: persisting an item registers its sedimentree id —
+            // after the durable item write (see `Storage::save_loose_commit`).
+            JsFuture::from(
+                self.js_save_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into()),
+            )
+            .await
+            .map_err(JsStorageError::JsError)?;
+
             Ok(())
         })
     }
