@@ -590,9 +590,7 @@ where
 {
     let mut out = Vec::with_capacity(raw.len());
     for (name, signed_data) in raw {
-        match Signed::<T>::try_decode(signed_data)
-            .and_then(|s| s.try_decode_trusted_payload())
-        {
+        match Signed::<T>::try_decode(signed_data).and_then(|s| s.try_decode_trusted_payload()) {
             Ok(payload) => out.push(payload),
             Err(e) => tracing::warn!(dir = %name, "skipping corrupt stored {what}: {e}"),
         }

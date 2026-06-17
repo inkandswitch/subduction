@@ -114,9 +114,7 @@ impl<Async: FutureForm, Store: Storage<Async>> Fetcher<Async, Store> {
     /// metadata-only hydration read. See
     /// [`Storage::load_fragment_metas`](super::traits::Storage::load_fragment_metas).
     #[must_use]
-    pub fn load_fragment_metas(
-        &self,
-    ) -> Async::Future<'_, Result<Vec<Fragment>, Store::Error>> {
+    pub fn load_fragment_metas(&self) -> Async::Future<'_, Result<Vec<Fragment>, Store::Error>> {
         self.storage.load_fragment_metas(self.sedimentree_id)
     }
 }
