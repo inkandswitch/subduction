@@ -6,8 +6,8 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_lock::Mutex;
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, collections::Map, crypto::digest::Digest, depth::CountLeadingZeroBytes,
-    id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, collections::Map, depth::CountLeadingZeroBytes, id::SedimentreeId,
+    loose_commit::id::CommitId,
 };
 use subduction_core::{
     collections::bounded_sharded_map::BoundedShardedMap,
@@ -17,10 +17,7 @@ use subduction_core::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::open::OpenPolicy,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    subduction::Subduction,
 };
 use testresult::TestResult;
 
@@ -46,16 +43,12 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
 
     let handler = Arc::new(SyncHandler::new(
         sedimentrees.clone(),
         connections.clone(),
         subscriptions.clone(),
         storage.clone(),
-        pending.clone(),
         CountLeadingZeroBytes,
     ));
 
@@ -68,7 +61,6 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
             connections,
             subscriptions,
             storage,
-            pending,
             PeerCounter::default(),
             NonceCache::default(),
             InstantTimeout,
@@ -105,16 +97,12 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
 
     let handler = Arc::new(SyncHandler::new(
         sedimentrees.clone(),
         connections.clone(),
         subscriptions.clone(),
         storage.clone(),
-        pending.clone(),
         CountLeadingZeroBytes,
     ));
 
@@ -127,7 +115,6 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
             connections,
             subscriptions,
             storage,
-            pending,
             PeerCounter::default(),
             NonceCache::default(),
             InstantTimeout,
@@ -165,80 +152,17 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
 // src/subduction.rs as unit tests because they use the private add_subscription method.
 
 #[tokio::test]
-async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResult {
-    let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            PeerCounter::default(),
-            NonceCache::default(),
-            InstantTimeout,
-            Duration::from_secs(30),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
-
-    // Add a failing connection
-    let peer_id = PeerId::new([1u8; 32]);
-    let conn = FailingSendMockConnection::with_peer_id(peer_id);
-    let _fresh = subduction.add_connection(conn.authenticated()).await?;
-    assert_eq!(subduction.connected_peer_ids().await.len(), 1);
-
-    // Request blobs - the send will fail
-    let digests = vec![Digest::<Blob>::force_from_bytes([1u8; 32])];
-    subduction
-        .request_blobs(SedimentreeId::new([42u8; 32]), digests)
-        .await;
-
-    // Connection should be unregistered after send failure
-    assert_eq!(
-        subduction.connected_peer_ids().await.len(),
-        0,
-        "Connection should be unregistered after send failure"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
     let connections = Arc::new(Mutex::new(Map::new()));
     let subscriptions = Arc::new(Mutex::new(Map::new()));
     let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
 
     let handler = Arc::new(SyncHandler::new(
         sedimentrees.clone(),
         connections.clone(),
         subscriptions.clone(),
         storage.clone(),
-        pending.clone(),
         CountLeadingZeroBytes,
     ));
 
@@ -251,7 +175,6 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             connections,
             subscriptions,
             storage,
-            pending,
             PeerCounter::default(),
             NonceCache::default(),
             InstantTimeout,

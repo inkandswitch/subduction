@@ -263,9 +263,9 @@ async fn dispatch_sync_message_to_sync_handler() -> TestResult {
     let (composed, sync_rx, eph_rx, _, _) = make_handler();
     let auth = make_auth_conn(peer(1));
 
-    let sync_msg = SyncMessage::BlobsRequest {
+    let sync_msg = SyncMessage::HeadsUpdate {
         id: SedimentreeId::new([0xAA; 32]),
-        digests: vec![],
+        heads: RemoteHeads::default(),
     };
     let wire: TestWireMessage = sync_msg.clone().into();
 
@@ -325,9 +325,9 @@ fn try_as_batch_sync_response_extracts_from_sync() {
 
 #[test]
 fn try_as_batch_sync_response_returns_none_for_other_sync() {
-    let wire = TestWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
+    let wire = TestWireMessage::Sync(Box::new(SyncMessage::HeadsUpdate {
         id: SedimentreeId::new([0xCC; 32]),
-        digests: vec![],
+        heads: RemoteHeads::default(),
     }));
 
     assert_eq!(wire.try_as_batch_sync_response(), None);
@@ -382,9 +382,9 @@ fn try_as_subscribe_request_returns_none_for_non_subscribe_sync() {
     assert_eq!(wire.try_as_subscribe_request(), None);
 
     // Any other sync variant must also return None.
-    let other = TestWireMessage::Sync(Box::new(SyncMessage::BlobsRequest {
+    let other = TestWireMessage::Sync(Box::new(SyncMessage::HeadsUpdate {
         id: SedimentreeId::new([0xCC; 32]),
-        digests: vec![],
+        heads: RemoteHeads::default(),
     }));
     assert_eq!(other.try_as_subscribe_request(), None);
 }

@@ -83,6 +83,20 @@ impl<Store> LocalStorageAccess<Store> {
         self.storage.load_loose_commits(sedimentree_id)
     }
 
+    /// Load all loose-commit payloads (no blobs) for a sedimentree — the
+    /// metadata-only hydration read. See
+    /// [`Storage::load_loose_commit_metas`].
+    #[must_use]
+    pub fn load_loose_commit_metas<Async: FutureForm>(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<LooseCommit>, Store::Error>>
+    where
+        Store: Storage<Async>,
+    {
+        self.storage.load_loose_commit_metas(sedimentree_id)
+    }
+
     /// Load all fragments with their blobs for a sedimentree.
     ///
     /// Used for hydration at startup.
@@ -95,6 +109,19 @@ impl<Store> LocalStorageAccess<Store> {
         Store: Storage<Async>,
     {
         self.storage.load_fragments(sedimentree_id)
+    }
+
+    /// Load all fragment payloads (no blobs) for a sedimentree — the
+    /// metadata-only hydration read. See [`Storage::load_fragment_metas`].
+    #[must_use]
+    pub fn load_fragment_metas<Async: FutureForm>(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<Fragment>, Store::Error>>
+    where
+        Store: Storage<Async>,
+    {
+        self.storage.load_fragment_metas(sedimentree_id)
     }
 }
 

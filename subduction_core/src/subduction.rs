@@ -57,7 +57,6 @@ pub mod builder;
 pub mod error;
 pub mod fragment_batch_item;
 pub mod listener_future;
-pub mod pending_blob_requests;
 pub mod per_peer_sync;
 pub mod request;
 
@@ -128,8 +127,6 @@ use spawn_guard::AbortOnDrop;
 use subduction_crypto::{
     signed::Signed, signer::Signer, verified_author::VerifiedAuthor, verified_meta::VerifiedMeta,
 };
-
-use pending_blob_requests::PendingBlobRequests;
 
 /// Maximum number of inbound handler-dispatch tasks the listener keeps in
 /// flight at once.
@@ -217,14 +214,6 @@ pub struct Subduction<
     /// Used to restore subscriptions after reconnection.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
 
-    /// Blob digests we have requested and are expecting to receive.
-    ///
-    /// Used to reject unsolicited [`BlobsResponse`] messages — only blobs
-    /// whose `(SedimentreeId, Digest)` pairs appear in this set are saved.
-    /// Uses LRU eviction when capacity is exceeded (safety valve).
-    /// Primary cleanup happens on sync completion.
-    pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
-
     /// Shared monotonic counter for outgoing messages, per peer.
     ///
     /// Shared with all handlers so that every message to a given peer
@@ -273,7 +262,7 @@ where
     /// Initialize a new `Subduction` instance.
     ///
     /// The caller constructs all shared state (`sedimentrees`, `connections`,
-    /// `subscriptions`, `storage`, `pending_blob_requests`) and the `handler`
+    /// `subscriptions`, `storage`) and the `handler`
     /// externally, then passes them in. This lets the handler hold its own
     /// `Arc` clones of whatever shared state it needs.
     ///
@@ -287,14 +276,12 @@ where
     /// let connections = Arc::new(Mutex::new(Map::new()));
     /// let subscriptions = Arc::new(Mutex::new(Map::new()));
     /// let storage = StoragePowerbox::new(storage, Arc::new(policy));
-    /// let pending = Arc::new(Mutex::new(PendingBlobRequests::new(1024)));
     ///
     /// let handler = Arc::new(SyncHandler::new(
     ///     sedimentrees.clone(),
     ///     connections.clone(),
     ///     subscriptions.clone(),
     ///     storage.clone(),
-    ///     pending.clone(),
     ///     depth_metric.clone(),
     /// ));
     ///
@@ -306,7 +293,6 @@ where
     ///     connections,
     ///     subscriptions,
     ///     storage,
-    ///     pending,
     ///     nonce_cache,
     ///     depth_metric,
     ///     spawner,
@@ -321,7 +307,6 @@ where
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
-        pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
         send_counter: PeerCounter,
         nonce_cache: NonceCache,
         timer: Timer,
@@ -373,7 +358,6 @@ where
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
-            pending_blob_requests,
             send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
@@ -1702,27 +1686,6 @@ where
         ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
         self.minimize_tree(id).await;
         Ok(())
-    }
-
-    /// Find blobs from connected peers for a specific sedimentree.
-    pub async fn request_blobs(&self, id: SedimentreeId, digests: Vec<Digest<Blob>>) {
-        {
-            let mut pending = self.pending_blob_requests.lock().await;
-            for digest in &digests {
-                pending.insert(id, *digest);
-            }
-        }
-
-        let msg: Hdl::Message = SyncMessage::BlobsRequest { id, digests }.into();
-        let conns = self.all_connections().await;
-        for conn in conns {
-            let peer_id = conn.peer_id();
-            if let Err(e) = conn.send(&msg).await {
-                tracing::warn!(peer = %peer_id, error = %e, "peer disconnected");
-                // `remove_connection` runs the full teardown on the last connection.
-                self.remove_connection(&conn).await;
-            }
-        }
     }
 
     /// Persist a whole sedimentree (its commits and fragments, paired with
@@ -4001,9 +3964,6 @@ mod tests {
         nonce_cache::NonceCache,
         policy::open::OpenPolicy,
         storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-        subduction::pending_blob_requests::{
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests,
-        },
     };
     use alloc::collections::BTreeSet;
     use async_lock::Mutex;
@@ -4057,16 +4017,11 @@ mod tests {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        )));
-
         let handler = Arc::new(SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
-            pending.clone(),
             CountLeadingZeroBytes,
         ));
 
@@ -4088,7 +4043,6 @@ mod tests {
             connections,
             subscriptions,
             storage,
-            pending,
             PeerCounter::default(),
             NonceCache::default(),
             InstantTimeout,
@@ -4135,16 +4089,11 @@ mod tests {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        )));
-
         let handler = Arc::new(SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
-            pending.clone(),
             CountLeadingZeroBytes,
         ));
 
@@ -4166,7 +4115,6 @@ mod tests {
             connections,
             subscriptions,
             storage,
-            pending,
             PeerCounter::default(),
             NonceCache::default(),
             InstantTimeout,
@@ -4230,16 +4178,11 @@ mod tests {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        )));
-
         let handler = Arc::new(SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
-            pending.clone(),
             CountLeadingZeroBytes,
         ));
 
@@ -4261,7 +4204,6 @@ mod tests {
             connections,
             subscriptions,
             storage.clone(),
-            pending,
             PeerCounter::default(),
             NonceCache::default(),
             InstantTimeout,

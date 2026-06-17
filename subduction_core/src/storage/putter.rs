@@ -5,12 +5,7 @@ use core::marker::PhantomData;
 use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
-use sedimentree_core::{
-    collections::Set,
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
-};
+use sedimentree_core::{fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit};
 use subduction_crypto::verified_meta::VerifiedMeta;
 
 use super::{fetcher::Fetcher, traits::Storage};
@@ -74,20 +69,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
             .save_loose_commit(self.sedimentree_id, verified)
     }
 
-    /// List all commit IDs for this sedimentree.
-    #[must_use]
-    pub fn list_commit_ids(&self) -> Async::Future<'_, Result<Set<CommitId>, Store::Error>> {
-        self.storage.list_commit_ids(self.sedimentree_id)
-    }
-
-    /// Load all loose commits with their blobs for this sedimentree.
-    #[must_use]
-    pub fn load_loose_commits(
-        &self,
-    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Store::Error>> {
-        self.storage.load_loose_commits(self.sedimentree_id)
-    }
-
     // ==================== Fragments ====================
 
     /// Save a fragment with verified blob metadata.
@@ -103,32 +84,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
         verified: VerifiedMeta<Fragment>,
     ) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.save_fragment(self.sedimentree_id, verified)
-    }
-
-    /// Load a fragment with its blob by fragment head [`CommitId`].
-    ///
-    /// Returns `None` if no fragment exists with the given identity.
-    #[must_use]
-    pub fn load_fragment(
-        &self,
-        fragment_head: CommitId,
-    ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Store::Error>> {
-        self.storage
-            .load_fragment(self.sedimentree_id, fragment_head)
-    }
-
-    /// List all fragment head [`CommitId`] values for this sedimentree.
-    #[must_use]
-    pub fn list_fragment_ids(&self) -> Async::Future<'_, Result<Set<CommitId>, Store::Error>> {
-        self.storage.list_fragment_ids(self.sedimentree_id)
-    }
-
-    /// Load all fragments with their blobs for this sedimentree.
-    #[must_use]
-    pub fn load_fragments(
-        &self,
-    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Store::Error>> {
-        self.storage.load_fragments(self.sedimentree_id)
     }
 
     // ==================== Batch Operations ====================

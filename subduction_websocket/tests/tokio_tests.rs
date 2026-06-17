@@ -18,6 +18,7 @@ use subduction_core::{
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder, listener_future::ListenerFuture},
     timeout::call::CallTimeout,
@@ -253,9 +254,9 @@ async fn client_reconnect() -> TestResult {
     let initial_peer_id = client_ws.peer_id();
 
     // Send a message to verify connection works
-    let test_msg = SyncMessage::BlobsRequest {
+    let test_msg = SyncMessage::HeadsUpdate {
         id: sedimentree_core::id::SedimentreeId::new([0u8; 32]),
-        digests: vec![],
+        heads: RemoteHeads::default(),
     };
     client_ws.send(&test_msg).await?;
 

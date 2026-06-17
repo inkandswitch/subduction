@@ -2,7 +2,7 @@
 //! rather than sequentially, avoiding head-of-line blocking.
 //!
 //! Uses a storage wrapper that tracks the high-water mark of concurrent
-//! storage load calls across `load_loose_commits` and `load_fragments`.
+//! tracked storage load calls (bulk scans and targeted point reads).
 //! If documents are synced concurrently, multiple handler invocations will
 //! perform those loads simultaneously, pushing the high-water mark above 1.
 
@@ -53,8 +53,9 @@ type Conn = MessageTransport<ChannelTransport>;
 // ---------------------------------------------------------------------------
 
 /// A storage wrapper that tracks the peak number of concurrent
-/// storage load calls (`load_loose_commits` and `load_fragments`)
-/// via an atomic high-water mark.
+/// storage load calls (bulk `load_loose_commits` / `load_fragments` and the
+/// targeted `load_loose_commit` / `load_fragment` point reads the sync
+/// responder uses for cache-resident trees) via an atomic high-water mark.
 ///
 /// Each tracked load call:
 /// 1. Increments the in-flight counter
@@ -78,7 +79,7 @@ impl ConcurrencyTrackingStorage {
         }
     }
 
-    /// The peak number of concurrent `load_loose_commits` calls observed.
+    /// The peak number of concurrent tracked storage load calls observed.
     fn high_water_mark(&self) -> usize {
         self.high_water.load(Ordering::SeqCst)
     }
@@ -149,12 +150,32 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
         })
     }
 
+    fn load_loose_commit_metas(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        // Hydration path — not the sync bulk-scan this harness tracks.
+        Storage::<Sendable>::load_loose_commit_metas(&self.inner, id)
+    }
+
     fn load_loose_commit(
         &self,
         id: SedimentreeId,
         commit_id: CommitId,
     ) -> BoxFuture<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
-        Storage::<Sendable>::load_loose_commit(&self.inner, id, commit_id)
+        // Tracked: the sync responder serves cache-resident trees via
+        // targeted point reads instead of bulk scans, so concurrency on this
+        // path is what proves concurrent handler execution.
+        let in_flight = self.in_flight.clone();
+        let high_water = self.high_water.clone();
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            enter_tracking(&in_flight, &high_water);
+            tokio::task::yield_now().await;
+            let result = Storage::<Sendable>::load_loose_commit(&inner, id, commit_id).await;
+            exit_tracking(&in_flight);
+            result
+        })
     }
 
     fn delete_loose_commit(
@@ -182,7 +203,17 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
         id: SedimentreeId,
         fragment_head: CommitId,
     ) -> BoxFuture<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
-        Storage::<Sendable>::load_fragment(&self.inner, id, fragment_head)
+        // Tracked for the same reason as `load_loose_commit`.
+        let in_flight = self.in_flight.clone();
+        let high_water = self.high_water.clone();
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            enter_tracking(&in_flight, &high_water);
+            tokio::task::yield_now().await;
+            let result = Storage::<Sendable>::load_fragment(&inner, id, fragment_head).await;
+            exit_tracking(&in_flight);
+            result
+        })
     }
 
     fn list_fragment_ids(
@@ -206,6 +237,13 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
             exit_tracking(&in_flight);
             result
         })
+    }
+
+    fn load_fragment_metas(
+        &self,
+        id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+        Storage::<Sendable>::load_fragment_metas(&self.inner, id)
     }
 
     fn delete_fragment(
@@ -307,7 +345,7 @@ async fn connect_pair(
 ///
 /// The test creates two nodes, adds one commit to each of N different
 /// sedimentree IDs on Alice, then syncs with Bob. The storage on Bob's
-/// side tracks the high-water mark of concurrent `load_loose_commits`
+/// side tracks the high-water mark of concurrent tracked storage load
 /// calls. If sync is concurrent, multiple handler invocations will be
 /// active simultaneously, pushing the high-water mark above 1.
 ///
@@ -378,7 +416,7 @@ async fn full_sync_with_peer_is_concurrent() -> TestResult {
     let bob_hwm = bob_storage.high_water_mark();
     assert!(
         bob_hwm > 1,
-        "Bob's storage should see concurrent load_loose_commits calls \
+        "Bob's storage should see concurrent storage load calls \
          (high-water mark = {bob_hwm}, expected > 1). \
          If this is 1, full_sync_with_peer is sequential."
     );
@@ -485,7 +523,7 @@ async fn many_independent_sync_with_peer_calls_are_concurrent() -> TestResult {
     let bob_hwm = bob_storage.high_water_mark();
     assert!(
         bob_hwm > 1,
-        "Bob's storage should see concurrent load_loose_commits calls \
+        "Bob's storage should see concurrent storage load calls \
          from independent sync_with_peer requests \
          (high-water mark = {bob_hwm}, expected > 1). \
          If this is 1, responses are being serialized."

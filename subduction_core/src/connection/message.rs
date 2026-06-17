@@ -26,10 +26,7 @@ use sedimentree_core::{
             ReadingType, SizeMismatch,
         },
     },
-    crypto::{
-        digest::Digest,
-        fingerprint::{Fingerprint, FingerprintSeed},
-    },
+    crypto::fingerprint::{Fingerprint, FingerprintSeed},
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
@@ -75,22 +72,6 @@ pub enum SyncMessage {
         sender_heads: RemoteHeads,
     },
 
-    /// A request for blobs by their [`Digest`]s within a specific sedimentree.
-    BlobsRequest {
-        /// The sedimentree to fetch blobs from.
-        id: SedimentreeId,
-        /// The blob digests being requested.
-        digests: Vec<Digest<Blob>>,
-    },
-
-    /// A response to a [`BlobsRequest`] with blobs for a specific sedimentree.
-    BlobsResponse {
-        /// The sedimentree these blobs belong to.
-        id: SedimentreeId,
-        /// The requested blobs.
-        blobs: Vec<Blob>,
-    },
-
     /// A request to "batch sync" an entire [`Sedimentree`].
     BatchSyncRequest(BatchSyncRequest),
 
@@ -125,8 +106,6 @@ impl SyncMessage {
             | SyncMessage::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
             SyncMessage::LooseCommit { .. }
             | SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
             | SyncMessage::HeadsUpdate { .. } => None,
@@ -139,8 +118,6 @@ impl SyncMessage {
         match self {
             SyncMessage::LooseCommit { .. } => "LooseCommit",
             SyncMessage::Fragment { .. } => "Fragment",
-            SyncMessage::BlobsRequest { .. } => "BlobsRequest",
-            SyncMessage::BlobsResponse { .. } => "BlobsResponse",
             SyncMessage::BatchSyncRequest(_) => "BatchSyncRequest",
             SyncMessage::BatchSyncResponse(_) => "BatchSyncResponse",
             SyncMessage::RemoveSubscriptions(_) => "RemoveSubscriptions",
@@ -155,8 +132,6 @@ impl SyncMessage {
         match self {
             SyncMessage::LooseCommit { id, .. }
             | SyncMessage::Fragment { id, .. }
-            | SyncMessage::BlobsRequest { id, .. }
-            | SyncMessage::BlobsResponse { id, .. }
             | SyncMessage::BatchSyncRequest(BatchSyncRequest { id, .. })
             | SyncMessage::BatchSyncResponse(BatchSyncResponse { id, .. })
             | SyncMessage::DataRequestRejected(DataRequestRejected { id })
@@ -257,8 +232,6 @@ impl TryAsBatchSyncResponse for SyncMessage {
         match self {
             SyncMessage::BatchSyncResponse(resp) => Some(resp),
             SyncMessage::BatchSyncRequest(_)
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
             | SyncMessage::DataRequestRejected(_)
             | SyncMessage::Fragment { .. }
             | SyncMessage::LooseCommit { .. }
@@ -286,8 +259,6 @@ impl TryAsSubscribeRequest for SyncMessage {
             SyncMessage::BatchSyncRequest(req) if req.subscribe => Some(req.id),
             SyncMessage::BatchSyncRequest(_)
             | SyncMessage::BatchSyncResponse(_)
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
             | SyncMessage::DataRequestRejected(_)
             | SyncMessage::Fragment { .. }
             | SyncMessage::LooseCommit { .. }
@@ -410,8 +381,8 @@ const ENVELOPE_HEADER_SIZE: usize = 4 + 4 + 1; // 9 bytes
 mod tags {
     pub(super) const LOOSE_COMMIT: u8 = 0x00;
     pub(super) const FRAGMENT: u8 = 0x01;
-    pub(super) const BLOBS_REQUEST: u8 = 0x02;
-    pub(super) const BLOBS_RESPONSE: u8 = 0x03;
+    // 0x02 / 0x03 retired: were BlobsRequest / BlobsResponse (removed with the
+    // explicit blob-pull API). Left as gaps so the remaining tags stay stable.
     pub(super) const BATCH_SYNC_REQUEST: u8 = 0x04;
     pub(super) const BATCH_SYNC_RESPONSE: u8 = 0x05;
     pub(super) const REMOVE_SUBSCRIPTIONS: u8 = 0x06;
@@ -423,8 +394,6 @@ mod min_sizes {
     // sed_id(32) + counter(8) + heads_count(4) + Signed<LooseCommit>::MIN_SIZE(166) + blob_len_prefix(bijou64 min=1)
     pub(super) const LOOSE_COMMIT: usize = 32 + 8 + 4 + 166 + 1;
     pub(super) const FRAGMENT: usize = 32 + 8 + 4 + 200 + 1;
-    pub(super) const BLOBS_REQUEST: usize = 32 + 2;
-    pub(super) const BLOBS_RESPONSE: usize = 32 + 2;
     pub(super) const BATCH_SYNC_REQUEST: usize = 32 + 32 + 8 + 1 + 16 + 2 + 2;
     // requestor(32) + nonce(8) + sed_id(32) + result_tag(1) + counter(8) + heads_count(4)
     pub(super) const BATCH_SYNC_RESPONSE: usize = 32 + 8 + 32 + 1 + 8 + 4;
@@ -479,16 +448,6 @@ impl SyncMessage {
                     + bijou64::encoded_len(blob.as_slice().len() as u64)
                     + blob.as_slice().len()
                     + remote_heads_size(sender_heads)
-            }
-            SyncMessage::BlobsRequest { digests, .. } => 32 + 2 + (digests.len() * 32),
-            SyncMessage::BlobsResponse { blobs, .. } => {
-                32 + 2
-                    + blobs
-                        .iter()
-                        .map(|b| {
-                            bijou64::encoded_len(b.as_slice().len() as u64) + b.as_slice().len()
-                        })
-                        .sum::<usize>()
             }
             SyncMessage::BatchSyncRequest(req) => {
                 32 + 32
@@ -612,14 +571,6 @@ fn encode_message(msg: &SyncMessage) -> Vec<u8> {
             bijou64::encode(blob.as_slice().len() as u64, &mut buf);
             buf.extend_from_slice(blob.as_slice());
         }
-        SyncMessage::BlobsRequest { id, digests } => {
-            buf.push(tags::BLOBS_REQUEST);
-            encode_blobs_request(&mut buf, id, digests);
-        }
-        SyncMessage::BlobsResponse { id, blobs } => {
-            buf.push(tags::BLOBS_RESPONSE);
-            encode_blobs_response(&mut buf, id, blobs);
-        }
         SyncMessage::BatchSyncRequest(req) => {
             buf.push(tags::BATCH_SYNC_REQUEST);
             encode_batch_sync_request(&mut buf, req);
@@ -704,8 +655,6 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
     let (min_payload_size, type_name) = match tag {
         tags::LOOSE_COMMIT => (min_sizes::LOOSE_COMMIT, "LooseCommit"),
         tags::FRAGMENT => (min_sizes::FRAGMENT, "Fragment"),
-        tags::BLOBS_REQUEST => (min_sizes::BLOBS_REQUEST, "BlobsRequest"),
-        tags::BLOBS_RESPONSE => (min_sizes::BLOBS_RESPONSE, "BlobsResponse"),
         tags::BATCH_SYNC_REQUEST => (min_sizes::BATCH_SYNC_REQUEST, "BatchSyncRequest"),
         tags::BATCH_SYNC_RESPONSE => (min_sizes::BATCH_SYNC_RESPONSE, "BatchSyncResponse"),
         tags::REMOVE_SUBSCRIPTIONS => (min_sizes::REMOVE_SUBSCRIPTIONS, "RemoveSubscriptions"),
@@ -731,8 +680,6 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
     match tag {
         tags::LOOSE_COMMIT => decode_loose_commit(payload),
         tags::FRAGMENT => decode_fragment(payload),
-        tags::BLOBS_REQUEST => decode_blobs_request(payload),
-        tags::BLOBS_RESPONSE => decode_blobs_response(payload),
         tags::BATCH_SYNC_REQUEST => decode_batch_sync_request(payload),
         tags::BATCH_SYNC_RESPONSE => decode_batch_sync_response(payload),
         tags::REMOVE_SUBSCRIPTIONS => decode_remove_subscriptions(payload),
@@ -766,25 +713,6 @@ fn decode_remote_heads(payload: &[u8], offset: &mut usize) -> Result<RemoteHeads
         heads.push(CommitId::new(read_array::<32>(payload, offset)?));
     }
     Ok(RemoteHeads { counter, heads })
-}
-
-fn encode_blobs_request(buf: &mut Vec<u8>, id: &SedimentreeId, digests: &[Digest<Blob>]) {
-    buf.extend_from_slice(id.as_bytes());
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(digests.len() as u16).to_be_bytes());
-    for digest in digests {
-        buf.extend_from_slice(digest.as_bytes());
-    }
-}
-
-fn encode_blobs_response(buf: &mut Vec<u8>, id: &SedimentreeId, blobs: &[Blob]) {
-    buf.extend_from_slice(id.as_bytes());
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(blobs.len() as u16).to_be_bytes());
-    for blob in blobs {
-        bijou64::encode(blob.as_slice().len() as u64, buf);
-        buf.extend_from_slice(blob.as_slice());
-    }
 }
 
 fn encode_batch_sync_request(buf: &mut Vec<u8>, req: &BatchSyncRequest) {
@@ -955,49 +883,6 @@ fn decode_fragment(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
         blob,
         sender_heads,
     })
-}
-
-fn decode_blobs_request(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
-    let mut offset = 0;
-
-    let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
-    let count = read_u16(payload, &mut offset)? as usize;
-
-    let mut digests = Vec::with_capacity(count);
-    for _ in 0..count {
-        digests.push(Digest::force_from_bytes(read_array::<32>(
-            payload,
-            &mut offset,
-        )?));
-    }
-
-    Ok(SyncMessage::BlobsRequest { id, digests })
-}
-
-fn decode_blobs_response(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
-    let mut offset = 0;
-
-    let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
-    let count = read_u16(payload, &mut offset)? as usize;
-
-    let mut blobs = Vec::with_capacity(count);
-    for _ in 0..count {
-        let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
-        blobs.push(Blob::new(
-            payload
-                .get(offset..offset + blob_size)
-                .ok_or(BufferTooShort {
-                    reading: ReadingType::Slice { len: blob_size },
-                    offset,
-                    need: blob_size,
-                    have: payload.len().saturating_sub(offset),
-                })?
-                .to_vec(),
-        ));
-        offset += blob_size;
-    }
-
-    Ok(SyncMessage::BlobsResponse { id, blobs })
 }
 
 fn decode_batch_sync_request(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
@@ -1353,24 +1238,6 @@ mod tests {
             };
             assert_eq!(msg.request_id(), None);
         }
-
-        #[test]
-        fn test_blobs_request_has_no_request_id() {
-            let msg = SyncMessage::BlobsRequest {
-                id: SedimentreeId::new([0u8; 32]),
-                digests: vec![Digest::force_from_bytes([1u8; 32])],
-            };
-            assert_eq!(msg.request_id(), None);
-        }
-
-        #[test]
-        fn test_blobs_response_has_no_request_id() {
-            let msg = SyncMessage::BlobsResponse {
-                id: SedimentreeId::new([0u8; 32]),
-                blobs: vec![Blob::new(Vec::from([1u8; 16]))],
-            };
-            assert_eq!(msg.request_id(), None);
-        }
     }
 
     mod try_as_batch_sync_response_impl {
@@ -1412,24 +1279,6 @@ mod tests {
                 ),
                 subscribe: false,
             });
-            assert_eq!(msg.try_as_batch_sync_response(), None);
-        }
-
-        #[test]
-        fn blobs_request_returns_none() {
-            let msg = SyncMessage::BlobsRequest {
-                id: SedimentreeId::new([3u8; 32]),
-                digests: vec![Digest::force_from_bytes([4u8; 32])],
-            };
-            assert_eq!(msg.try_as_batch_sync_response(), None);
-        }
-
-        #[test]
-        fn blobs_response_returns_none() {
-            let msg = SyncMessage::BlobsResponse {
-                id: SedimentreeId::new([5u8; 32]),
-                blobs: vec![Blob::new(Vec::from([1u8; 16]))],
-            };
             assert_eq!(msg.try_as_batch_sync_response(), None);
         }
 
@@ -1554,24 +1403,6 @@ mod tests {
                 result: SyncResult::NotFound,
                 responder_heads: RemoteHeads::default(),
             });
-            assert_eq!(msg.try_as_subscribe_request(), None);
-        }
-
-        #[test]
-        fn blobs_request_returns_none() {
-            let msg = SyncMessage::BlobsRequest {
-                id: SedimentreeId::new([3u8; 32]),
-                digests: vec![Digest::force_from_bytes([4u8; 32])],
-            };
-            assert_eq!(msg.try_as_subscribe_request(), None);
-        }
-
-        #[test]
-        fn blobs_response_returns_none() {
-            let msg = SyncMessage::BlobsResponse {
-                id: SedimentreeId::new([5u8; 32]),
-                blobs: vec![Blob::new(Vec::from([1u8; 16]))],
-            };
             assert_eq!(msg.try_as_subscribe_request(), None);
         }
 

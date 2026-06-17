@@ -111,6 +111,33 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// The commit and blob are stored atomically. The content hash
     /// (`Digest<LooseCommit>`) is computed internally and used as the
     /// storage key (CAS). Saving the same content twice is a no-op.
+    ///
+    /// # Contract
+    ///
+    /// Implementations **must** register `sedimentree_id` (the moral
+    /// equivalent of [`save_sedimentree_id`](Self::save_sedimentree_id)) on
+    /// a successful save: afterwards,
+    /// [`contains_sedimentree_id`](Self::contains_sedimentree_id) and
+    /// [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids) must
+    /// reflect the tree, including after a reopen. Conversely, a **failed**
+    /// save must **not** register the id in the backend's *observable* view
+    /// (the in-memory / same-transaction state queried immediately
+    /// afterwards) — no registered-but-empty trees.
+    ///
+    /// One caveat for backends that derive registration from durable layout
+    /// rather than an explicit record (e.g. `FsStorage` rediscovers tree
+    /// ids by scanning directories on reopen): a save that fails *after*
+    /// creating the tree's directory but *before* writing any item can
+    /// leave an empty tree directory that reopen rediscovers. This is
+    /// benign — the sync handler never caches empty trees, so the effect is
+    /// limited to id enumeration — but it means the "failed save does not
+    /// register" guarantee is exact only for the observable view, not
+    /// necessarily across an interrupted-first-write then restart.
+    /// Transactional backends that register a tree id in the same write
+    /// transaction as the item have no such window.
+    ///
+    /// Backends can verify the observable contract with the conformance
+    /// helpers in `storage::conformance` (behind the `test_utils` feature).
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -133,12 +160,36 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// values are reconstructed from trusted storage without re-verification.
     ///
     /// If multiple payloads share the same [`CommitId`] (Byzantine
-    /// equivocation), all are returned. The caller is responsible for
-    /// deduplication (typically first-loaded-wins via `entry().or_insert()`).
+    /// equivocation), a backend returns *at least one* of them. It may return
+    /// all (e.g. `MemoryStorage`) or collapse to a single deterministic
+    /// representative (e.g. `FsStorage` keeps the lowest content-digest pair).
+    /// Either way the caller deduplicates (typically first-loaded-wins via
+    /// `entry().or_insert()`).
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>;
+
+    /// Load all loose-commit *payloads* for a sedimentree, **without** their
+    /// blobs.
+    ///
+    /// Hydration rebuilds the in-memory tree from [`LooseCommit`] metadata
+    /// alone — the resident `MinimizedSedimentree` holds no blob bytes — so
+    /// loading the blobs only to discard them is wasted I/O (on backends
+    /// that store large blobs externally, an entire file read per item).
+    ///
+    /// Backends with a cheaper metadata-only read path implement it directly;
+    /// those without can delegate to
+    /// [`load_loose_commit_metas_via_full`] (load full, drop blobs). This must
+    /// return the *same payload set* as
+    /// [`load_loose_commits`](Self::load_loose_commits) — including the same
+    /// representative(s) under Byzantine equivocation, so a backend that
+    /// collapses equivocating payloads collapses both loads identically. The
+    /// conformance suite pins this with `assert_metas_match_full_load`.
+    fn load_loose_commit_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<LooseCommit>, Self::Error>>;
 
     /// Load a single loose commit by [`CommitId`].
     ///
@@ -170,6 +221,11 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     ///
     /// The fragment and blob are stored atomically. The digest is computed from
     /// the fragment payload and used as the key.
+    ///
+    /// # Contract
+    ///
+    /// Implementations **must** register `sedimentree_id` as part of the
+    /// save — see [`save_loose_commit`](Self::save_loose_commit).
     fn save_fragment(
         &self,
         sedimentree_id: SedimentreeId,
@@ -199,11 +255,26 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// Load all fragments with their blobs for a sedimentree.
     ///
     /// Used for hydration at startup. All returned `VerifiedMeta` values are
-    /// reconstructed from trusted storage without re-verification.
+    /// reconstructed from trusted storage without re-verification. Byzantine
+    /// equivocation is handled as for
+    /// [`load_loose_commits`](Self::load_loose_commits).
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>;
+
+    /// Load all fragment *payloads* for a sedimentree, **without** their
+    /// blobs — the fragment-side twin of
+    /// [`load_loose_commit_metas`](Self::load_loose_commit_metas), with the
+    /// same full-load parity contract (the same representatives under
+    /// equivocation).
+    ///
+    /// Backends without a cheaper metadata-only read path can delegate to
+    /// [`load_fragment_metas_via_full`].
+    fn load_fragment_metas(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> Async::Future<'_, Result<Vec<Fragment>, Self::Error>>;
 
     /// Delete a fragment and its blob by fragment head [`CommitId`].
     fn delete_fragment(
@@ -228,7 +299,9 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     ///
     /// Implementations **must** register `sedimentree_id` for the writes
     /// (the moral equivalent of [`save_sedimentree_id`](Self::save_sedimentree_id))
-    /// before — or as part of — persisting any commits or fragments. Callers
+    /// before, as part of, or immediately after a successful persist of the
+    /// commits or fragments — but **never on a failed write** (a failed
+    /// batch must not leave a registered-but-empty tree behind). Callers
     /// rely on this so that
     /// [`load_all_sedimentree_ids`](Self::load_all_sedimentree_ids) sees
     /// sedimentrees created exclusively via batch insert. Both an empty
@@ -251,4 +324,53 @@ pub trait Storage<Async: FutureForm + ?Sized> {
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
     ) -> Async::Future<'_, Result<usize, Self::Error>>;
+}
+
+/// Fallback for [`Storage::load_loose_commit_metas`]: load the full commits
+/// and drop their blobs.
+///
+/// Backends without a cheaper metadata-only read path (e.g. `JsStorage`, or
+/// delegating wrappers) implement the trait method as a one-line call to
+/// this. There is no I/O win — the blobs are still read — but it keeps the
+/// fallback in one place and matches the optimized backends' set semantics.
+///
+/// # Errors
+///
+/// Propagates the backend's load error.
+pub async fn load_loose_commit_metas_via_full<Async, S>(
+    storage: &S,
+    sedimentree_id: SedimentreeId,
+) -> Result<Vec<LooseCommit>, S::Error>
+where
+    Async: FutureForm,
+    S: Storage<Async>,
+{
+    Ok(storage
+        .load_loose_commits(sedimentree_id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.into_full_parts().1)
+        .collect())
+}
+
+/// Fallback for [`Storage::load_fragment_metas`] — the fragment-side twin of
+/// [`load_loose_commit_metas_via_full`].
+///
+/// # Errors
+///
+/// Propagates the backend's load error.
+pub async fn load_fragment_metas_via_full<Async, S>(
+    storage: &S,
+    sedimentree_id: SedimentreeId,
+) -> Result<Vec<Fragment>, S::Error>
+where
+    Async: FutureForm,
+    S: Storage<Async>,
+{
+    Ok(storage
+        .load_fragments(sedimentree_id)
+        .await?
+        .into_iter()
+        .map(|vm| vm.into_full_parts().1)
+        .collect())
 }
