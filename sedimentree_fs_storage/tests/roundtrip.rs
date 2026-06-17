@@ -758,12 +758,12 @@ async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestR
     Ok(())
 }
 
-/// Byzantine equivocation: two payloads sharing one `CommitId` (different
-/// blobs ⇒ different content digests ⇒ two `.meta`/`.blob` pairs in one
 /// commit dir). The fs backend collapses the dir to a *single, deterministic*
 /// representative — the lowest content-digest pair, independent of
 /// directory-iteration order — and the metadata-only load resolves to that
 /// *same* representative, so hydration parity holds even under equivocation.
+/// (A transactional backend can instead let both payloads coexist — see
+/// `subduction_redb_storage/tests/roundtrip.rs::equivocating_commits_coexist`.)
 #[tokio::test]
 async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
