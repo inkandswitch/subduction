@@ -763,9 +763,9 @@ async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestR
 /// Byzantine equivocation: two payloads sharing one `CommitId` (different
 /// blobs ⇒ different content digests ⇒ two `.meta`/`.blob` pairs in one
 /// commit dir). The fs backend resolves the commit dir to a *single*
-/// (readdir-order) pair — this pins that semantic, which deliberately
-/// diverges from the redb backend where both payloads coexist (see
-/// `subduction_redb_storage/tests/roundtrip.rs::equivocating_commits_coexist`).
+/// (readdir-order) pair — this pins that semantic. A transactional backend
+/// keyed on content digest could instead let both payloads coexist; the fs
+/// layout deliberately collapses them to one.
 #[tokio::test]
 async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;

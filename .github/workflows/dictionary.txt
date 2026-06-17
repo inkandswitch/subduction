@@ -355,7 +355,6 @@ reachability
 reconnection
 recurse
 recv
-redb
 repo
 representable
 reproducibility

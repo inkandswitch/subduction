@@ -133,8 +133,8 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// limited to id enumeration — but it means the "failed save does not
     /// register" guarantee is exact only for the observable view, not
     /// necessarily across an interrupted-first-write then restart.
-    /// Transactional backends (e.g. `RedbStorage` registers in the same
-    /// write transaction as the item) have no such window.
+    /// Transactional backends that register a tree id in the same write
+    /// transaction as the item have no such window.
     ///
     /// Backends can verify the observable contract with the conformance
     /// helpers in `storage::conformance` (behind the `test_utils` feature).

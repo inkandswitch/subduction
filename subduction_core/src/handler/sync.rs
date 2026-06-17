@@ -1127,7 +1127,7 @@ const POINT_READ_CHUNK: usize = 32;
 /// missing set. Measured (backends bench, `load/point_reads` vs
 /// `load/count`, within-run): point reads ≈ 15–22 µs each on both
 /// backends; scans ≈ 5–8 µs/item; intersection at ~0.24–0.38 × tree size
-/// across fs/redb at 1k and 10k items. `1/4` sits at the conservative edge
+/// across backends at 1k and 10k items. `1/4` sits at the conservative edge
 /// of that band.
 const SCAN_FRACTION_DENOMINATOR: usize = 4;
 
