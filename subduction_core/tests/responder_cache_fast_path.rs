@@ -429,9 +429,12 @@ async fn cold_clone_of_resident_tree_uses_bulk_scan() -> TestResult {
     let bob_bulk = bob_storage.bulk_loads() - bob_bulk_before;
     let bob_points = bob_storage.point_reads() - bob_point_before;
 
+    // The bulk-scan branch issues no point reads; at most one trailing sync
+    // round can dip below the crossover and point-read the remainder, so any
+    // point reads are bounded by the crossover (N/4), never the whole tree.
     assert!(
-        bob_points < N,
-        "cold clone must not point-read every item (saw {bob_points} point reads for {N} items)"
+        bob_points <= N / 4,
+        "cold clone must not point-read the tree (saw {bob_points} point reads for {N} items)"
     );
     assert!(
         bob_bulk >= 1,
@@ -620,7 +623,7 @@ async fn cache_ahead_of_storage_omits_phantom_items() -> TestResult {
 #[tokio::test]
 async fn moderate_diff_on_large_tree_stays_on_point_reads() -> TestResult {
     const SHARED: usize = 650;
-    const BOB_ONLY: usize = 150; // > old fixed floor region, ≤ total/4 (= 200)
+    const BOB_ONLY: usize = 150; // above the floor (32), ≤ total/4 (= 200): stays on point reads
 
     let alice_signer = MemorySigner::from_bytes(&[64u8; 32]);
     let bob_signer = MemorySigner::from_bytes(&[65u8; 32]);

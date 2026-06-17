@@ -2,7 +2,7 @@
 //!
 //! [`SyncHandler`] implements the [`Handler`] trait for the standard
 //! Subduction sync protocol. It processes [`SyncMessage`] variants
-//! (commits, fragments, batch sync, blobs, subscriptions) using
+//! (commits, fragments, batch sync, heads updates, subscriptions) using
 //! shared state passed at construction time.
 //!
 //! This handler is self-contained: it holds its own [`Arc`] references
@@ -63,8 +63,8 @@ use crate::{
 /// The default sync protocol handler for Subduction.
 ///
 /// Processes the standard [`SyncMessage`] protocol: commits, fragments,
-/// batch sync requests/responses, blob requests/responses, and
-/// subscription management.
+/// batch sync requests/responses, heads updates, and subscription
+/// management.
 ///
 /// # Construction
 ///

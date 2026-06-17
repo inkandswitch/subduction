@@ -160,8 +160,11 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// values are reconstructed from trusted storage without re-verification.
     ///
     /// If multiple payloads share the same [`CommitId`] (Byzantine
-    /// equivocation), all are returned. The caller is responsible for
-    /// deduplication (typically first-loaded-wins via `entry().or_insert()`).
+    /// equivocation), a backend returns *at least one* of them. It may return
+    /// all (e.g. `MemoryStorage`) or collapse to a single deterministic
+    /// representative (e.g. `FsStorage` keeps the lowest content-digest pair).
+    /// Either way the caller deduplicates (typically first-loaded-wins via
+    /// `entry().or_insert()`).
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
@@ -177,9 +180,12 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     ///
     /// Backends with a cheaper metadata-only read path implement it directly;
     /// those without can delegate to
-    /// [`load_loose_commit_metas_via_full`] (load full, drop blobs). Same set
-    /// semantics as [`load_loose_commits`](Self::load_loose_commits) (all
-    /// equivocating payloads returned; caller dedups).
+    /// [`load_loose_commit_metas_via_full`] (load full, drop blobs). This must
+    /// return the *same payload set* as
+    /// [`load_loose_commits`](Self::load_loose_commits) — including the same
+    /// representative(s) under Byzantine equivocation, so a backend that
+    /// collapses equivocating payloads collapses both loads identically. The
+    /// conformance suite pins this with `assert_metas_match_full_load`.
     fn load_loose_commit_metas(
         &self,
         sedimentree_id: SedimentreeId,
@@ -249,7 +255,9 @@ pub trait Storage<Async: FutureForm + ?Sized> {
     /// Load all fragments with their blobs for a sedimentree.
     ///
     /// Used for hydration at startup. All returned `VerifiedMeta` values are
-    /// reconstructed from trusted storage without re-verification.
+    /// reconstructed from trusted storage without re-verification. Byzantine
+    /// equivocation is handled as for
+    /// [`load_loose_commits`](Self::load_loose_commits).
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
@@ -257,7 +265,9 @@ pub trait Storage<Async: FutureForm + ?Sized> {
 
     /// Load all fragment *payloads* for a sedimentree, **without** their
     /// blobs — the fragment-side twin of
-    /// [`load_loose_commit_metas`](Self::load_loose_commit_metas).
+    /// [`load_loose_commit_metas`](Self::load_loose_commit_metas), with the
+    /// same full-load parity contract (the same representatives under
+    /// equivocation).
     ///
     /// Backends without a cheaper metadata-only read path can delegate to
     /// [`load_fragment_metas_via_full`].

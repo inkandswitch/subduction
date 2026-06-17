@@ -111,7 +111,7 @@ impl WasmMessage {
         }
     }
 
-    /// The [`Blob`] for commit or fragment messages, if applicable.
+    /// The `Blob` for commit or fragment messages, if applicable.
     #[wasm_bindgen(getter, js_name = blob)]
     #[must_use]
     pub fn blob(&self) -> Option<Uint8Array> {

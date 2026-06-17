@@ -433,64 +433,16 @@ async fn read_all_compound_parallel(parent: PathBuf) -> Result<Vec<RawCompound>,
     Ok(out)
 }
 
-/// Synchronously read the first `.meta` + `.blob` pair from `dir`. Returns
-/// `None` if the directory is absent or holds no complete pair. Must be called
-/// from a blocking context.
-fn read_first_meta_blob_pair_sync(dir: &Path) -> Result<Option<MetaBlobPair>, FsStorageError> {
+/// Collect the file names directly under `dir`, or `None` if the directory
+/// is absent. Names that aren't valid UTF-8 are skipped (no such name is a
+/// valid `{digest}.meta`/`.blob`). Must be called from a blocking context.
+fn list_dir_names_sync(dir: &Path) -> Result<Option<Vec<String>>, FsStorageError> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
 
-    for entry in entries {
-        let entry = entry?;
-        if let Ok(name) = entry.file_name().into_string()
-            && let Some(stem) = name.strip_suffix(".meta")
-        {
-            let meta_path = dir.join(&name);
-            let blob_path = dir.join(format!("{stem}.blob"));
-
-            let signed_data = match std::fs::read(&meta_path) {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e.into()),
-            };
-
-            let blob_data = match std::fs::read(&blob_path) {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e.into()),
-            };
-
-            return Ok(Some((signed_data, blob_data)));
-        }
-    }
-
-    Ok(None)
-}
-
-/// Synchronously read the first `.meta` from `dir` whose sibling `.blob`
-/// also exists — **without reading the blob's contents**. Returns `None` if
-/// the directory is absent or holds no complete pair.
-///
-/// Blob existence is checked from the directory listing itself (the `.meta`
-/// and `.blob` live in the same `<id>/` dir we already `read_dir`), so the
-/// parity check costs no extra syscall — no per-item `stat`, no blob-inode
-/// fault on a cold cache. An incomplete meta-without-blob pair is skipped on
-/// both this path and [`read_first_meta_blob_pair_sync`], so metadata-only
-/// hydration sees exactly the items the full load would. Must be called from
-/// a blocking context.
-fn read_first_meta_only_sync(dir: &Path) -> Result<Option<Vec<u8>>, FsStorageError> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
-
-    // The directory is tiny (one `.meta` + `.blob` pair, or a handful under
-    // Byzantine equivocation), so collecting names up front is cheap and
-    // lets us answer "is the sibling blob present?" from memory.
     let mut names = Vec::new();
     for entry in entries {
         if let Ok(name) = entry?.file_name().into_string() {
@@ -498,22 +450,86 @@ fn read_first_meta_only_sync(dir: &Path) -> Result<Option<Vec<u8>>, FsStorageErr
         }
     }
 
-    for name in &names {
-        if let Some(stem) = name.strip_suffix(".meta") {
-            let blob_name = format!("{stem}.blob");
-            // Parity with the pair-read: skip a meta whose blob is missing,
-            // but never read (or even stat) the blob.
-            if !names.iter().any(|n| n == &blob_name) {
-                continue;
-            }
+    Ok(Some(names))
+}
 
-            let signed_data = match std::fs::read(dir.join(name)) {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e.into()),
-            };
+/// Content-digest stems of every *complete* `.meta` + `.blob` pair in a
+/// directory listing, sorted ascending.
+///
+/// The CAS filename stem is the blob's content digest, so the sort is a
+/// deterministic order independent of `readdir`. Both the full
+/// ([`read_first_meta_blob_pair_sync`]) and metadata-only
+/// ([`read_first_meta_only_sync`]) readers take the smallest stem, so they
+/// resolve a Byzantine-equivocating identity dir (≥2 complete pairs sharing
+/// one id) to the *same* representative — keeping metadata-only hydration in
+/// lockstep with the full load regardless of directory-iteration order.
+fn complete_pair_stems_sorted(names: &[String]) -> Vec<&str> {
+    let mut stems: Vec<&str> = names
+        .iter()
+        .filter_map(|name| name.strip_suffix(".meta"))
+        .filter(|stem| {
+            let blob = format!("{stem}.blob");
+            names.contains(&blob)
+        })
+        .collect();
 
-            return Ok(Some(signed_data));
+    stems.sort_unstable();
+    stems
+}
+
+/// Synchronously read the lowest-content-digest complete `.meta` + `.blob`
+/// pair from `dir` (see [`complete_pair_stems_sorted`] for why the choice is
+/// deterministic). Returns `None` if the directory is absent or holds no
+/// complete pair. Must be called from a blocking context.
+fn read_first_meta_blob_pair_sync(dir: &Path) -> Result<Option<MetaBlobPair>, FsStorageError> {
+    let Some(names) = list_dir_names_sync(dir)? else {
+        return Ok(None);
+    };
+
+    for stem in complete_pair_stems_sorted(&names) {
+        let meta_path = dir.join(format!("{stem}.meta"));
+        let blob_path = dir.join(format!("{stem}.blob"));
+
+        let signed_data = match std::fs::read(&meta_path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+
+        let blob_data = match std::fs::read(&blob_path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+
+        return Ok(Some((signed_data, blob_data)));
+    }
+
+    Ok(None)
+}
+
+/// Synchronously read the lowest-content-digest `.meta` from `dir` whose
+/// sibling `.blob` exists — **without reading the blob's contents**. Returns
+/// `None` if the directory is absent or holds no complete pair.
+///
+/// Blob existence is checked from the directory listing itself (the `.meta`
+/// and `.blob` live in the same `<id>/` dir we already `read_dir`), so the
+/// parity check costs no extra syscall — no per-item `stat`, no blob-inode
+/// fault on a cold cache. Selection is deterministic and identical to
+/// [`read_first_meta_blob_pair_sync`] (both take the smallest
+/// [`complete_pair_stems_sorted`] stem), so metadata-only hydration sees
+/// exactly the item the full load would, even under Byzantine equivocation.
+/// Must be called from a blocking context.
+fn read_first_meta_only_sync(dir: &Path) -> Result<Option<Vec<u8>>, FsStorageError> {
+    let Some(names) = list_dir_names_sync(dir)? else {
+        return Ok(None);
+    };
+
+    for stem in complete_pair_stems_sorted(&names) {
+        match std::fs::read(dir.join(format!("{stem}.meta"))) {
+            Ok(data) => return Ok(Some(data)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
     }
 
@@ -996,12 +1012,12 @@ impl Storage<Sendable> for FsStorage {
         Sendable::from_future(async move {
             tracing::trace!(?sedimentree_id, "FsStorage::save_loose_commit");
 
-            // Validate + resolve paths off the filesystem, then collapse the
-            // CAS check + mkdir + 2 writes + 2 renames into a single
-            // blocking-pool hop. With `tokio::fs` each call is its own
-            // `spawn_blocking` round-trip, so a 6-step save pays the scheduling
-            // jitter 6×; doing the whole sequence in one closure pays it once,
-            // tightening the latency tail under concurrent load.
+            // Validate + resolve paths off the filesystem, then run the
+            // CAS check + mkdir + 2 writes + 2 renames in a single
+            // blocking-pool hop. Doing the whole sequence in one closure pays
+            // the spawn-scheduling cost once instead of per syscall (as a
+            // `tokio::fs` call chain would), tightening the latency tail under
+            // concurrent load.
             let item = self.build_commit_write(sedimentree_id, &verified)?;
             tokio::task::spawn_blocking(move || write_compound_sync(&item)).await??;
 
@@ -1366,9 +1382,8 @@ impl Storage<Sendable> for FsStorage {
             );
 
             // Validate + resolve every item off the filesystem, then persist the
-            // whole batch in a single blocking-pool hop. Previously each item
-            // was its own `spawn_blocking` save, so an N-item batch paid the
-            // scheduling round-trip N times back-to-back; now it pays it once.
+            // whole batch in a single blocking-pool hop, so an N-item batch
+            // pays the spawn-scheduling cost once instead of once per item.
             let mut items = Vec::with_capacity(num_commits + num_fragments);
             for verified in &commits {
                 items.push(self.build_commit_write(sedimentree_id, verified)?);

@@ -17,7 +17,7 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
 };
 use sedimentree_fs_storage::FsStorage;
-use subduction_core::storage::traits::Storage;
+use subduction_core::storage::{conformance, traits::Storage};
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
 
 fn test_signer() -> MemorySigner {
@@ -542,8 +542,6 @@ async fn failed_batch_leaves_no_temp_files() -> testresult::TestResult {
 /// layout).
 #[tokio::test]
 async fn saves_register_tree_id_conformance() -> testresult::TestResult {
-    use subduction_core::storage::conformance;
-
     let dir = tempfile::tempdir()?;
     let storage = FsStorage::new(dir.path().to_path_buf())?;
     let signer = test_signer();
@@ -762,10 +760,10 @@ async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestR
 
 /// Byzantine equivocation: two payloads sharing one `CommitId` (different
 /// blobs ⇒ different content digests ⇒ two `.meta`/`.blob` pairs in one
-/// commit dir). The fs backend resolves the commit dir to a *single*
-/// (readdir-order) pair — this pins that semantic. A transactional backend
-/// keyed on content digest could instead let both payloads coexist; the fs
-/// layout deliberately collapses them to one.
+/// commit dir). The fs backend collapses the dir to a *single, deterministic*
+/// representative — the lowest content-digest pair, independent of
+/// directory-iteration order — and the metadata-only load resolves to that
+/// *same* representative, so hydration parity holds even under equivocation.
 #[tokio::test]
 async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
@@ -792,11 +790,28 @@ async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
         1,
         "the fs backend must resolve an equivocating commit dir to one item"
     );
-    let got = loaded[0].blob().contents();
+    let resolved = loaded[0].blob().contents().clone();
     assert!(
-        got == &blob_a || got == &blob_b,
+        resolved == blob_a || resolved == blob_b,
         "the resolved item must be one of the stored payloads"
     );
+
+    // Deterministic: the representative does not depend on readdir order.
+    let again = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(
+        again.len(),
+        1,
+        "repeated load must still resolve to one item"
+    );
+    assert_eq!(
+        again[0].blob().contents(),
+        loaded[0].blob().contents(),
+        "the resolved representative must be stable across loads"
+    );
+
+    // Parity: the metadata-only load resolves to the *same* representative as
+    // the full load (compared by payload digest), even under equivocation.
+    conformance::assert_metas_match_full_load::<Sendable, _>(&storage, id).await;
 
     Ok(())
 }
@@ -806,8 +821,6 @@ async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
 /// twin is `failed_batch_does_not_register_tree_id`).
 #[tokio::test]
 async fn failed_single_save_does_not_register_tree_id() -> testresult::TestResult {
-    use subduction_core::storage::conformance;
-
     let dir = tempfile::tempdir()?;
     let storage = FsStorage::new(dir.path().to_path_buf())?;
     let signer = test_signer();
@@ -956,8 +969,8 @@ async fn empty_blob_roundtrips() -> testresult::TestResult {
 /// ```
 ///
 /// Heads are deduplicated up front because the fs backend deliberately
-/// resolves equivocating payloads (same head, different content) to a
-/// single readdir-order pair — see `equivocating_commits_resolve_to_one_item`.
+/// resolves equivocating payloads (same head, different content) to a single
+/// representative — see `equivocating_commits_resolve_to_one_item`.
 #[test]
 fn prop_batch_save_load_roundtrip() {
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -1022,8 +1035,6 @@ fn prop_batch_save_load_roundtrip() {
 /// large blob to exercise the size range.
 #[tokio::test]
 async fn metas_match_full_load() -> testresult::TestResult {
-    use subduction_core::storage::conformance;
-
     let dir = tempfile::tempdir()?;
     let storage = FsStorage::new(dir.path().to_path_buf())?;
     let signer = test_signer();
