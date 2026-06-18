@@ -186,7 +186,54 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     /// - The schema header doesn't match `T::SCHEMA`
     /// - The verifying key is invalid
     /// - The payload cannot be decoded
-    pub fn try_decode(mut bytes: Vec<u8>) -> Result<Self, DecodeError> {
+    pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        Self::try_decode_prefix(bytes).map(|(signed, _)| signed)
+    }
+
+    /// Decode one signed message from the front of `bytes`, returning the
+    /// decoded value and the number of bytes it consumed (`actual_size`).
+    ///
+    /// The consumed length lets callers decode a sequence of messages packed
+    /// back-to-back (e.g. the commits and fragments in a batch sync response).
+    ///
+    /// Validates the header but does NOT verify the signature; use
+    /// [`try_verify`](Self::try_verify) for that.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`try_decode`](Self::try_decode).
+    pub fn try_decode_prefix(bytes: &[u8]) -> Result<(Self, usize), DecodeError> {
+        let (issuer, signature, actual_size) = Self::decode_header(bytes)?;
+
+        // Copy out this message's bytes, leaving the rest of `bytes` for the
+        // caller to continue decoding.
+        let message = bytes
+            .get(..actual_size)
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
+                need: actual_size,
+                have: bytes.len(),
+            })?
+            .to_vec();
+
+        Ok((
+            Self {
+                issuer,
+                signature,
+                bytes: message,
+                _marker: PhantomData,
+            },
+            actual_size,
+        ))
+    }
+
+    /// Validate the wire header and compute the signed message's total size.
+    ///
+    /// Validates the schema and optional discriminant, extracts the issuer key
+    /// and signature, and decodes the fields to determine `actual_size` (schema
+    /// + discriminant + issuer + fields + signature). Does not verify the
+    /// signature.
+    fn decode_header(bytes: &[u8]) -> Result<(VerifyingKey, Signature, usize), DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIGNED_SIZE {
             return Err(DecodeError::MessageTooShort {
@@ -201,10 +248,10 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
             .get(0..SCHEMA_SIZE)
             .and_then(|s| s.try_into().ok())
             .ok_or(DecodeError::MessageTooShort {
-            type_name: core::any::type_name::<T>(),
-            need: SCHEMA_SIZE,
-            have: bytes.len(),
-        })?;
+                type_name: core::any::type_name::<T>(),
+                need: SCHEMA_SIZE,
+                have: bytes.len(),
+            })?;
         if schema != T::SCHEMA {
             return Err(InvalidSchema {
                 expected: T::SCHEMA,
@@ -280,15 +327,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
             })?;
         let signature = Signature::from_bytes(&sig_bytes);
 
-        // Truncate to only include the actual signed message bytes
-        bytes.truncate(actual_size);
-
-        Ok(Self {
-            issuer,
-            signature,
-            bytes,
-            _marker: PhantomData,
-        })
+        Ok((issuer, signature, actual_size))
     }
 
     /// Consume and return the wire bytes.

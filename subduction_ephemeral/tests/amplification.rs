@@ -617,7 +617,7 @@ async fn cross_edge_duplicate_with_corrupted_signature_is_dropped_silently() -> 
     let mut bytes = good_signed.into_bytes();
     let sig_start = bytes.len() - subduction_crypto::signed::SIGNATURE_SIZE;
     bytes[sig_start] ^= 0xFF;
-    let tampered_signed = Signed::<EphemeralPayload>::try_decode(bytes)
+    let tampered_signed = Signed::<EphemeralPayload>::try_decode(&bytes)
         .expect("flipping a signature byte must leave the wire structure valid");
     let tampered = EphemeralMessage::Ephemeral(Box::new(tampered_signed));
 

@@ -125,7 +125,7 @@ fn challenge_signed_round_trip() {
         .with_arbitrary::<(Challenge, [u8; 32])>()
         .for_each(|(challenge, key_bytes)| {
             let bytes = seal_sync(*key_bytes, challenge);
-            let signed = Signed::<Challenge>::try_decode(bytes).expect("decode");
+            let signed = Signed::<Challenge>::try_decode(&bytes).expect("decode");
             let verified = signed.try_verify().expect("verify");
             assert_eq!(verified.payload(), challenge);
         });
@@ -136,7 +136,7 @@ fn challenge_signed_decode_random_bytes_no_panic() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<Challenge>::try_decode(bytes.clone());
+            let _result = Signed::<Challenge>::try_decode(bytes);
         });
 }
 
@@ -181,7 +181,7 @@ fn challenge_rejects_response_bytes() {
             let bytes = seal_sync(*key_bytes, response);
             // Sanity: byte 4 should be Response::DISCRIMINANT (0x01).
             assert_eq!(bytes[SCHEMA_SIZE], 0x01);
-            let result = Signed::<Challenge>::try_decode(bytes);
+            let result = Signed::<Challenge>::try_decode(&bytes);
             assert!(
                 matches!(
                     result,
@@ -207,7 +207,7 @@ fn challenge_rejects_response_bytes_padded_via_discriminant() {
                 bytes.push(0u8);
             }
             assert_eq!(bytes[SCHEMA_SIZE], 0x01);
-            let result = Signed::<Challenge>::try_decode(bytes);
+            let result = Signed::<Challenge>::try_decode(&bytes);
             assert!(
                 matches!(
                     result,
@@ -226,7 +226,7 @@ fn challenge_signed_truncation_does_not_panic() {
             let mut bytes = seal_sync(*key_bytes, challenge);
             let new_len = bytes.len().saturating_sub(*drop_count as usize);
             bytes.truncate(new_len);
-            let _result = Signed::<Challenge>::try_decode(bytes);
+            let _result = Signed::<Challenge>::try_decode(&bytes);
         });
 }
 
@@ -243,7 +243,7 @@ fn challenge_signed_bit_flip_breaks_verification() {
             let bit_idx = bit_idx_seed % 8;
             bytes[byte_idx] ^= 1 << bit_idx;
 
-            if let Ok(signed) = Signed::<Challenge>::try_decode(bytes) {
+            if let Ok(signed) = Signed::<Challenge>::try_decode(&bytes) {
                 let verify = signed.try_verify();
                 assert!(verify.is_err(), "tampered bytes must not verify");
             }
@@ -298,7 +298,7 @@ fn response_signed_round_trip() {
         .with_arbitrary::<(Response, [u8; 32])>()
         .for_each(|(response, key_bytes)| {
             let bytes = seal_sync(*key_bytes, response);
-            let signed = Signed::<Response>::try_decode(bytes).expect("decode");
+            let signed = Signed::<Response>::try_decode(&bytes).expect("decode");
             let verified = signed.try_verify().expect("verify");
             assert_eq!(verified.payload(), response);
         });
@@ -309,7 +309,7 @@ fn response_signed_decode_random_bytes_no_panic() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<Response>::try_decode(bytes.clone());
+            let _result = Signed::<Response>::try_decode(bytes);
         });
 }
 
@@ -323,7 +323,7 @@ fn response_rejects_challenge_bytes_via_discriminant() {
         .for_each(|(challenge, key_bytes)| {
             let bytes = seal_sync(*key_bytes, challenge);
             assert_eq!(bytes[SCHEMA_SIZE], 0x00);
-            let result = Signed::<Response>::try_decode(bytes);
+            let result = Signed::<Response>::try_decode(&bytes);
             assert!(
                 matches!(
                     result,

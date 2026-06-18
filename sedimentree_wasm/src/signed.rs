@@ -26,7 +26,7 @@ impl WasmSignedLooseCommit {
     #[wasm_bindgen(js_name = tryDecode)]
     pub fn try_decode(bytes: &Uint8Array) -> Result<WasmSignedLooseCommit, JsValue> {
         let data = bytes.to_vec();
-        let signed = Signed::<LooseCommit>::try_decode(data)
+        let signed = Signed::<LooseCommit>::try_decode(&data)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(Self(signed))
     }
