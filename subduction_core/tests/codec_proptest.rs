@@ -136,7 +136,7 @@ fn challenge_signed_decode_random_bytes_no_panic() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<Challenge>::try_decode(&bytes);
+            let _result = Signed::<Challenge>::try_decode(bytes);
         });
 }
 
@@ -309,7 +309,7 @@ fn response_signed_decode_random_bytes_no_panic() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<Response>::try_decode(&bytes);
+            let _result = Signed::<Response>::try_decode(bytes);
         });
 }
 

@@ -230,8 +230,8 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     /// Validate the wire header and compute the signed message's total size.
     ///
     /// Validates the schema and optional discriminant, extracts the issuer key
-    /// and signature, and decodes the fields to determine `actual_size` (schema
-    /// + discriminant + issuer + fields + signature). Does not verify the signature.
+    /// and signature, and decodes the fields to determine `actual_size` (schema,
+    /// discriminant, issuer, fields, and signature). Does not verify the signature.
     fn decode_header(bytes: &[u8]) -> Result<(VerifyingKey, Signature, usize), DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIGNED_SIZE {
@@ -705,7 +705,7 @@ mod regression {
         schema::{self, Schema},
     };
 
-    use super::{Signed, MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, VERIFYING_KEY_SIZE};
+    use super::{MIN_SIGNED_SIZE, SCHEMA_SIZE, SIGNATURE_SIZE, Signed, VERIFYING_KEY_SIZE};
 
     // ── Test payloads ─────────────────────────────────────────────────
 

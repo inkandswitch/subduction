@@ -77,8 +77,8 @@ impl WasmSignedLooseCommit {
     /// # Errors
     ///
     /// Returns an error if the bytes are not a valid signed loose commit.
-    pub fn try_from_vec(bytes: Vec<u8>) -> Result<Self, DecodeError> {
-        Ok(Self(Signed::<LooseCommit>::try_decode(&bytes)?))
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        Ok(Self(Signed::<LooseCommit>::try_decode(bytes)?))
     }
 
     /// Get the raw bytes of the signed loose commit.
@@ -155,8 +155,8 @@ impl WasmSignedFragment {
     /// # Errors
     ///
     /// Returns an error if the bytes are not a valid signed fragment.
-    pub fn try_from_vec(bytes: Vec<u8>) -> Result<Self, DecodeError> {
-        Ok(Self(Signed::<Fragment>::try_decode(&bytes)?))
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        Ok(Self(Signed::<Fragment>::try_decode(bytes)?))
     }
 
     /// Get the raw bytes of the signed fragment.

@@ -431,7 +431,7 @@ fn random_bytes_through_plain_signed_never_panics() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<PlainPayload>::try_decode(&bytes);
+            let _result = Signed::<PlainPayload>::try_decode(bytes);
         });
 }
 
@@ -440,7 +440,7 @@ fn random_bytes_through_tagged_signed_never_panics() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<TaggedPayload>::try_decode(&bytes);
+            let _result = Signed::<TaggedPayload>::try_decode(bytes);
         });
 }
 
@@ -449,7 +449,7 @@ fn random_bytes_through_variable_signed_never_panics() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<VariablePayload>::try_decode(&bytes);
+            let _result = Signed::<VariablePayload>::try_decode(bytes);
         });
 }
 
