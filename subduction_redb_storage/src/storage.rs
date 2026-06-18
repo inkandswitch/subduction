@@ -154,8 +154,7 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>
-    {
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::load_loose_commits");
 
@@ -199,8 +198,7 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
         &self,
         sedimentree_id: SedimentreeId,
         commit_id: CommitId,
-    ) -> Async::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>
-    {
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(
                 ?sedimentree_id,
@@ -299,8 +297,7 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
         &self,
         sedimentree_id: SedimentreeId,
         fragment_head: CommitId,
-    ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>
-    {
+    ) -> Async::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(
                 ?sedimentree_id,
@@ -341,8 +338,7 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>
-    {
+    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::load_fragments");
 
