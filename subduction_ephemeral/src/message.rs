@@ -331,7 +331,7 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
         tags::EPHEMERAL => {
             // The full bytes are a Signed<EphemeralPayload>.
             // The discriminant at byte 4 is validated by Signed::try_decode.
-            let signed = Signed::<EphemeralPayload>::try_decode(bytes.to_vec())?;
+            let signed = Signed::<EphemeralPayload>::try_decode(bytes)?;
             Ok(EphemeralMessage::Ephemeral(Box::new(signed)))
         }
         tags::SUBSCRIBE | tags::UNSUBSCRIBE | tags::SUBSCRIBE_REJECTED => {
@@ -605,7 +605,7 @@ mod tests {
         let sig_start = bytes.len() - 64;
         bytes[sig_start] ^= 0xFF;
 
-        let tampered = Signed::<EphemeralPayload>::try_decode(bytes);
+        let tampered = Signed::<EphemeralPayload>::try_decode(&bytes);
         if let Ok(s) = tampered {
             assert!(
                 s.try_verify().is_err(),

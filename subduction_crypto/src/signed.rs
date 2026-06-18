@@ -563,7 +563,7 @@ mod tests {
         let bytes = sealed.as_bytes().to_vec();
 
         // Parse from wire bytes
-        let parsed = Signed::<TestPayload>::try_decode(bytes)?;
+        let parsed = Signed::<TestPayload>::try_decode(&bytes)?;
 
         // Verify the signature and decode
         let verified = parsed.try_verify()?;
@@ -610,7 +610,7 @@ mod tests {
         // Tamper with the payload (change the value)
         bytes[36] ^= 0xFF;
 
-        let parsed = Signed::<TestPayload>::try_decode(bytes)?;
+        let parsed = Signed::<TestPayload>::try_decode(&bytes)?;
         let result = parsed.try_verify();
 
         assert!(result.is_err(), "tampered bytes should fail verification");
@@ -643,7 +643,7 @@ mod tests {
                 original_bytes.extend_from_slice(&signature.to_bytes());
 
                 // Round-trip through try_decode
-                let decoded = Signed::<TestPayload>::try_decode(original_bytes.clone())
+                let decoded = Signed::<TestPayload>::try_decode(&original_bytes)
                     .expect("decode should succeed for sealed bytes");
 
                 assert_eq!(
@@ -679,7 +679,7 @@ mod tests {
                 bytes.extend_from_slice(&signature.to_bytes());
 
                 let decoded =
-                    Signed::<TestPayload>::try_decode(bytes).expect("decode should succeed");
+                    Signed::<TestPayload>::try_decode(&bytes).expect("decode should succeed");
 
                 let verified = decoded
                     .try_verify()
@@ -769,8 +769,7 @@ mod regression {
     #[test]
     fn into_bytes_returns_full_wire_bytes() {
         let canonical = seal_payload([7u8; 32], 0xDEAD_BEEF);
-        let signed =
-            Signed::<Payload>::try_decode(canonical.clone()).expect("decode of canonical bytes");
+        let signed = Signed::<Payload>::try_decode(&canonical).expect("decode of canonical bytes");
 
         let via_as_bytes: Vec<u8> = signed.as_bytes().to_vec();
         let via_into_bytes: Vec<u8> = signed.into_bytes();
@@ -882,7 +881,7 @@ mod regression {
         bytes.extend_from_slice(&UnderSpecifiedTagged::SCHEMA);
         assert_eq!(bytes.len(), SCHEMA_SIZE);
 
-        let result = Signed::<UnderSpecifiedTagged>::try_decode(bytes);
+        let result = Signed::<UnderSpecifiedTagged>::try_decode(&bytes);
         match result {
             Err(DecodeError::MessageTooShort { need, have, .. }) => {
                 assert_eq!(
@@ -908,7 +907,7 @@ mod regression {
         bytes.extend_from_slice(&UnderSpecifiedPlain::SCHEMA);
         assert_eq!(bytes.len(), SCHEMA_SIZE);
 
-        let result = Signed::<UnderSpecifiedPlain>::try_decode(bytes);
+        let result = Signed::<UnderSpecifiedPlain>::try_decode(&bytes);
         match result {
             Err(DecodeError::MessageTooShort { need, have, .. }) => {
                 assert_eq!(
@@ -945,7 +944,7 @@ mod regression {
         bytes.extend_from_slice(&[0u8; VERIFYING_KEY_SIZE]);
         assert_eq!(bytes.len(), SCHEMA_SIZE + VERIFYING_KEY_SIZE);
 
-        let result = Signed::<UnderSpecifiedPlain>::try_decode(bytes);
+        let result = Signed::<UnderSpecifiedPlain>::try_decode(&bytes);
         assert!(
             result.is_err(),
             "decode of bytes with empty fields region must fail"
@@ -959,12 +958,12 @@ mod regression {
     /// be `!=`.
     #[test]
     fn partial_eq_distinguishes_different_signed_values() {
-        let a = Signed::<Payload>::try_decode(seal_payload([1u8; 32], 100)).expect("decode a");
+        let a = Signed::<Payload>::try_decode(&seal_payload([1u8; 32], 100)).expect("decode a");
         let a_again =
-            Signed::<Payload>::try_decode(seal_payload([1u8; 32], 100)).expect("decode a_again");
-        let b = Signed::<Payload>::try_decode(seal_payload([1u8; 32], 200))
+            Signed::<Payload>::try_decode(&seal_payload([1u8; 32], 100)).expect("decode a_again");
+        let b = Signed::<Payload>::try_decode(&seal_payload([1u8; 32], 200))
             .expect("decode b (different value)");
-        let c = Signed::<Payload>::try_decode(seal_payload([2u8; 32], 100))
+        let c = Signed::<Payload>::try_decode(&seal_payload([2u8; 32], 100))
             .expect("decode c (different signer)");
 
         assert_eq!(a, a, "self-equality must hold");
@@ -993,7 +992,7 @@ mod regression {
         let mut with_trailing = canonical.clone();
         with_trailing.extend_from_slice(&[0xFF; 256]);
 
-        let signed = Signed::<Payload>::try_decode(with_trailing)
+        let signed = Signed::<Payload>::try_decode(&with_trailing)
             .expect("decode must succeed when extra bytes trail the canonical encoding");
         assert_eq!(
             signed.as_bytes().len(),
@@ -1019,8 +1018,8 @@ mod regression {
         use core::hash::{BuildHasher as _, Hasher as _};
         use std::collections::hash_map::RandomState;
 
-        let a = Signed::<Payload>::try_decode(seal_payload([5u8; 32], 100)).expect("decode a");
-        let b = Signed::<Payload>::try_decode(seal_payload([5u8; 32], 200)).expect("decode b");
+        let a = Signed::<Payload>::try_decode(&seal_payload([5u8; 32], 100)).expect("decode a");
+        let b = Signed::<Payload>::try_decode(&seal_payload([5u8; 32], 200)).expect("decode b");
 
         let builder = RandomState::new();
         let mut ha = builder.build_hasher();
@@ -1039,8 +1038,8 @@ mod regression {
     /// values, since `Ord` defines a total order.
     #[test]
     fn partial_cmp_is_total() {
-        let a = Signed::<Payload>::try_decode(seal_payload([6u8; 32], 1)).expect("decode a");
-        let b = Signed::<Payload>::try_decode(seal_payload([6u8; 32], 2)).expect("decode b");
+        let a = Signed::<Payload>::try_decode(&seal_payload([6u8; 32], 1)).expect("decode a");
+        let b = Signed::<Payload>::try_decode(&seal_payload([6u8; 32], 2)).expect("decode b");
 
         assert!(
             a.partial_cmp(&a).is_some(),

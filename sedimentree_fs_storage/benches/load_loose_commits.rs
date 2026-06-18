@@ -169,7 +169,7 @@ fn read_all_pairs_sync(commits_dir: &Path) -> Vec<(Vec<u8>, Vec<u8>)> {
 /// Decode a pre-read `.meta` + `.blob` pair, mirroring the decode phase of
 /// `load_loose_commits`.
 fn decode_pair(meta: Vec<u8>, blob: Vec<u8>) -> VerifiedMeta<LooseCommit> {
-    let signed = Signed::try_decode(meta).expect("decode Signed<LooseCommit>");
+    let signed = Signed::try_decode(&meta).expect("decode Signed<LooseCommit>");
     VerifiedMeta::try_from_trusted(signed, Blob::new(blob)).expect("reconstruct VerifiedMeta")
 }
 

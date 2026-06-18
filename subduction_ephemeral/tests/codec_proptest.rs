@@ -183,7 +183,7 @@ fn ephemeral_signed_round_trip() {
         .for_each(|(inputs, key_bytes)| {
             let payload = build_payload(inputs);
             let bytes = seal_sync(*key_bytes, &payload);
-            let signed = Signed::<EphemeralPayload>::try_decode(bytes).expect("decode");
+            let signed = Signed::<EphemeralPayload>::try_decode(&bytes).expect("decode");
             let verified = signed.try_verify().expect("verify");
             assert_eq!(verified.payload(), &payload);
         });
@@ -194,7 +194,7 @@ fn ephemeral_signed_decode_random_bytes_no_panic() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<EphemeralPayload>::try_decode(bytes.clone());
+            let _result = Signed::<EphemeralPayload>::try_decode(&bytes);
         });
 }
 
@@ -209,7 +209,7 @@ fn ephemeral_signed_truncates_trailing_bytes() {
             let mut with_trailing = canonical.clone();
             with_trailing.extend_from_slice(trailing);
 
-            let signed = Signed::<EphemeralPayload>::try_decode(with_trailing)
+            let signed = Signed::<EphemeralPayload>::try_decode(&with_trailing)
                 .expect("decode with trailing");
             assert_eq!(signed.as_bytes().len(), canonical_len);
             signed.try_verify().expect("verify after truncation");
@@ -225,7 +225,7 @@ fn ephemeral_signed_truncation_does_not_panic() {
             let mut bytes = seal_sync(*key_bytes, &payload);
             let new_len = bytes.len().saturating_sub(*drop_count as usize);
             bytes.truncate(new_len);
-            let _result = Signed::<EphemeralPayload>::try_decode(bytes);
+            let _result = Signed::<EphemeralPayload>::try_decode(&bytes);
         });
 }
 
@@ -243,7 +243,7 @@ fn ephemeral_signed_bit_flip_breaks_verification() {
             let bit_idx = bit_idx_seed % 8;
             bytes[byte_idx] ^= 1 << bit_idx;
 
-            if let Ok(signed) = Signed::<EphemeralPayload>::try_decode(bytes) {
+            if let Ok(signed) = Signed::<EphemeralPayload>::try_decode(&bytes) {
                 assert!(
                     signed.try_verify().is_err(),
                     "tampered Ephemeral bytes must not verify"
