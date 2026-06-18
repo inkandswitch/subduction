@@ -248,10 +248,10 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
             .get(0..SCHEMA_SIZE)
             .and_then(|s| s.try_into().ok())
             .ok_or(DecodeError::MessageTooShort {
-                type_name: core::any::type_name::<T>(),
-                need: SCHEMA_SIZE,
-                have: bytes.len(),
-            })?;
+            type_name: core::any::type_name::<T>(),
+            need: SCHEMA_SIZE,
+            have: bytes.len(),
+        })?;
         if schema != T::SCHEMA {
             return Err(InvalidSchema {
                 expected: T::SCHEMA,

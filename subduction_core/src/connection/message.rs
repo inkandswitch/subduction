@@ -809,14 +809,13 @@ fn decode_loose_commit(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
     let sender_heads = decode_remote_heads(payload, &mut offset)?;
 
-    let (commit, consumed) = Signed::<LooseCommit>::try_decode_prefix(
-        payload.get(offset..).ok_or(BufferTooShort {
+    let (commit, consumed) =
+        Signed::<LooseCommit>::try_decode_prefix(payload.get(offset..).ok_or(BufferTooShort {
             reading: ReadingType::Slice { len: 0 },
             offset,
             need: 1,
             have: 0,
-        })?,
-    )?;
+        })?)?;
     offset += consumed;
 
     let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
@@ -847,14 +846,13 @@ fn decode_fragment(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
     let sender_heads = decode_remote_heads(payload, &mut offset)?;
 
-    let (fragment, consumed) = Signed::<Fragment>::try_decode_prefix(
-        payload.get(offset..).ok_or(BufferTooShort {
+    let (fragment, consumed) =
+        Signed::<Fragment>::try_decode_prefix(payload.get(offset..).ok_or(BufferTooShort {
             reading: ReadingType::Slice { len: 0 },
             offset,
             need: 1,
             have: 0,
-        })?,
-    )?;
+        })?)?;
     offset += consumed;
 
     let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
