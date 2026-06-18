@@ -186,7 +186,53 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     /// - The schema header doesn't match `T::SCHEMA`
     /// - The verifying key is invalid
     /// - The payload cannot be decoded
-    pub fn try_decode(mut bytes: Vec<u8>) -> Result<Self, DecodeError> {
+    pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        Self::try_decode_prefix(bytes).map(|(signed, _)| signed)
+    }
+
+    /// Decode one signed message from the front of `bytes`, returning the
+    /// decoded value and the number of bytes it consumed (`actual_size`).
+    ///
+    /// The consumed length lets callers decode a sequence of messages packed
+    /// back-to-back (e.g. the commits and fragments in a batch sync response).
+    ///
+    /// Validates the header but does NOT verify the signature; use
+    /// [`try_verify`](Self::try_verify) for that.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`try_decode`](Self::try_decode).
+    pub fn try_decode_prefix(bytes: &[u8]) -> Result<(Self, usize), DecodeError> {
+        let (issuer, signature, actual_size) = Self::decode_header(bytes)?;
+
+        // Copy out this message's bytes, leaving the rest of `bytes` for the
+        // caller to continue decoding.
+        let message = bytes
+            .get(..actual_size)
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
+                need: actual_size,
+                have: bytes.len(),
+            })?
+            .to_vec();
+
+        Ok((
+            Self {
+                issuer,
+                signature,
+                bytes: message,
+                _marker: PhantomData,
+            },
+            actual_size,
+        ))
+    }
+
+    /// Validate the wire header and compute the signed message's total size.
+    ///
+    /// Validates the schema and optional discriminant, extracts the issuer key
+    /// and signature, and decodes the fields to determine `actual_size` (schema,
+    /// discriminant, issuer, fields, and signature). Does not verify the signature.
+    fn decode_header(bytes: &[u8]) -> Result<(VerifyingKey, Signature, usize), DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIGNED_SIZE {
             return Err(DecodeError::MessageTooShort {
@@ -280,15 +326,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
             })?;
         let signature = Signature::from_bytes(&sig_bytes);
 
-        // Truncate to only include the actual signed message bytes
-        bytes.truncate(actual_size);
-
-        Ok(Self {
-            issuer,
-            signature,
-            bytes,
-            _marker: PhantomData,
-        })
+        Ok((issuer, signature, actual_size))
     }
 
     /// Consume and return the wire bytes.
@@ -524,7 +562,7 @@ mod tests {
         let bytes = sealed.as_bytes().to_vec();
 
         // Parse from wire bytes
-        let parsed = Signed::<TestPayload>::try_decode(bytes)?;
+        let parsed = Signed::<TestPayload>::try_decode(&bytes)?;
 
         // Verify the signature and decode
         let verified = parsed.try_verify()?;
@@ -571,7 +609,7 @@ mod tests {
         // Tamper with the payload (change the value)
         bytes[36] ^= 0xFF;
 
-        let parsed = Signed::<TestPayload>::try_decode(bytes)?;
+        let parsed = Signed::<TestPayload>::try_decode(&bytes)?;
         let result = parsed.try_verify();
 
         assert!(result.is_err(), "tampered bytes should fail verification");
@@ -604,7 +642,7 @@ mod tests {
                 original_bytes.extend_from_slice(&signature.to_bytes());
 
                 // Round-trip through try_decode
-                let decoded = Signed::<TestPayload>::try_decode(original_bytes.clone())
+                let decoded = Signed::<TestPayload>::try_decode(&original_bytes)
                     .expect("decode should succeed for sealed bytes");
 
                 assert_eq!(
@@ -640,7 +678,7 @@ mod tests {
                 bytes.extend_from_slice(&signature.to_bytes());
 
                 let decoded =
-                    Signed::<TestPayload>::try_decode(bytes).expect("decode should succeed");
+                    Signed::<TestPayload>::try_decode(&bytes).expect("decode should succeed");
 
                 let verified = decoded
                     .try_verify()
@@ -730,8 +768,7 @@ mod regression {
     #[test]
     fn into_bytes_returns_full_wire_bytes() {
         let canonical = seal_payload([7u8; 32], 0xDEAD_BEEF);
-        let signed =
-            Signed::<Payload>::try_decode(canonical.clone()).expect("decode of canonical bytes");
+        let signed = Signed::<Payload>::try_decode(&canonical).expect("decode of canonical bytes");
 
         let via_as_bytes: Vec<u8> = signed.as_bytes().to_vec();
         let via_into_bytes: Vec<u8> = signed.into_bytes();
@@ -843,7 +880,7 @@ mod regression {
         bytes.extend_from_slice(&UnderSpecifiedTagged::SCHEMA);
         assert_eq!(bytes.len(), SCHEMA_SIZE);
 
-        let result = Signed::<UnderSpecifiedTagged>::try_decode(bytes);
+        let result = Signed::<UnderSpecifiedTagged>::try_decode(&bytes);
         match result {
             Err(DecodeError::MessageTooShort { need, have, .. }) => {
                 assert_eq!(
@@ -869,7 +906,7 @@ mod regression {
         bytes.extend_from_slice(&UnderSpecifiedPlain::SCHEMA);
         assert_eq!(bytes.len(), SCHEMA_SIZE);
 
-        let result = Signed::<UnderSpecifiedPlain>::try_decode(bytes);
+        let result = Signed::<UnderSpecifiedPlain>::try_decode(&bytes);
         match result {
             Err(DecodeError::MessageTooShort { need, have, .. }) => {
                 assert_eq!(
@@ -906,7 +943,7 @@ mod regression {
         bytes.extend_from_slice(&[0u8; VERIFYING_KEY_SIZE]);
         assert_eq!(bytes.len(), SCHEMA_SIZE + VERIFYING_KEY_SIZE);
 
-        let result = Signed::<UnderSpecifiedPlain>::try_decode(bytes);
+        let result = Signed::<UnderSpecifiedPlain>::try_decode(&bytes);
         assert!(
             result.is_err(),
             "decode of bytes with empty fields region must fail"
@@ -920,12 +957,12 @@ mod regression {
     /// be `!=`.
     #[test]
     fn partial_eq_distinguishes_different_signed_values() {
-        let a = Signed::<Payload>::try_decode(seal_payload([1u8; 32], 100)).expect("decode a");
+        let a = Signed::<Payload>::try_decode(&seal_payload([1u8; 32], 100)).expect("decode a");
         let a_again =
-            Signed::<Payload>::try_decode(seal_payload([1u8; 32], 100)).expect("decode a_again");
-        let b = Signed::<Payload>::try_decode(seal_payload([1u8; 32], 200))
+            Signed::<Payload>::try_decode(&seal_payload([1u8; 32], 100)).expect("decode a_again");
+        let b = Signed::<Payload>::try_decode(&seal_payload([1u8; 32], 200))
             .expect("decode b (different value)");
-        let c = Signed::<Payload>::try_decode(seal_payload([2u8; 32], 100))
+        let c = Signed::<Payload>::try_decode(&seal_payload([2u8; 32], 100))
             .expect("decode c (different signer)");
 
         assert_eq!(a, a, "self-equality must hold");
@@ -954,7 +991,7 @@ mod regression {
         let mut with_trailing = canonical.clone();
         with_trailing.extend_from_slice(&[0xFF; 256]);
 
-        let signed = Signed::<Payload>::try_decode(with_trailing)
+        let signed = Signed::<Payload>::try_decode(&with_trailing)
             .expect("decode must succeed when extra bytes trail the canonical encoding");
         assert_eq!(
             signed.as_bytes().len(),
@@ -980,8 +1017,8 @@ mod regression {
         use core::hash::{BuildHasher as _, Hasher as _};
         use std::collections::hash_map::RandomState;
 
-        let a = Signed::<Payload>::try_decode(seal_payload([5u8; 32], 100)).expect("decode a");
-        let b = Signed::<Payload>::try_decode(seal_payload([5u8; 32], 200)).expect("decode b");
+        let a = Signed::<Payload>::try_decode(&seal_payload([5u8; 32], 100)).expect("decode a");
+        let b = Signed::<Payload>::try_decode(&seal_payload([5u8; 32], 200)).expect("decode b");
 
         let builder = RandomState::new();
         let mut ha = builder.build_hasher();
@@ -1000,8 +1037,8 @@ mod regression {
     /// values, since `Ord` defines a total order.
     #[test]
     fn partial_cmp_is_total() {
-        let a = Signed::<Payload>::try_decode(seal_payload([6u8; 32], 1)).expect("decode a");
-        let b = Signed::<Payload>::try_decode(seal_payload([6u8; 32], 2)).expect("decode b");
+        let a = Signed::<Payload>::try_decode(&seal_payload([6u8; 32], 1)).expect("decode a");
+        let b = Signed::<Payload>::try_decode(&seal_payload([6u8; 32], 2)).expect("decode b");
 
         assert!(
             a.partial_cmp(&a).is_some(),

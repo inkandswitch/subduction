@@ -281,11 +281,11 @@ impl HandshakeMessage {
         match tag {
             handshake_tags::CHALLENGE => {
                 // Full bytes are Signed<Challenge> — discriminant validated by try_decode.
-                let signed = Signed::<Challenge>::try_decode(bytes.to_vec())?;
+                let signed = Signed::<Challenge>::try_decode(bytes)?;
                 Ok(HandshakeMessage::SignedChallenge(signed))
             }
             handshake_tags::RESPONSE => {
-                let signed = Signed::<Response>::try_decode(bytes.to_vec())?;
+                let signed = Signed::<Response>::try_decode(bytes)?;
                 Ok(HandshakeMessage::SignedResponse(signed))
             }
             handshake_tags::REJECTION => {

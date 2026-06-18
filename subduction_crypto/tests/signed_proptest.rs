@@ -247,7 +247,7 @@ fn plain_round_trip_seal_decode_verify() {
         .with_arbitrary::<(PlainPayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let bytes = seal_sync(*key_bytes, payload);
-            let signed = Signed::<PlainPayload>::try_decode(bytes).expect("decode");
+            let signed = Signed::<PlainPayload>::try_decode(&bytes).expect("decode");
             let verified = signed.try_verify().expect("verify");
             assert_eq!(verified.payload(), payload);
         });
@@ -259,7 +259,7 @@ fn tagged_round_trip_seal_decode_verify() {
         .with_arbitrary::<(TaggedPayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let bytes = seal_sync(*key_bytes, payload);
-            let signed = Signed::<TaggedPayload>::try_decode(bytes).expect("decode");
+            let signed = Signed::<TaggedPayload>::try_decode(&bytes).expect("decode");
             let verified = signed.try_verify().expect("verify");
             assert_eq!(verified.payload(), payload);
         });
@@ -271,7 +271,7 @@ fn variable_round_trip_seal_decode_verify() {
         .with_arbitrary::<(VariablePayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let bytes = seal_sync(*key_bytes, payload);
-            let signed = Signed::<VariablePayload>::try_decode(bytes).expect("decode");
+            let signed = Signed::<VariablePayload>::try_decode(&bytes).expect("decode");
             let verified = signed.try_verify().expect("verify");
             assert_eq!(verified.payload(), payload);
         });
@@ -291,7 +291,7 @@ fn plain_decode_preserves_canonical_bytes() {
         .with_arbitrary::<(PlainPayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let original = seal_sync(*key_bytes, payload);
-            let signed = Signed::<PlainPayload>::try_decode(original.clone()).expect("decode");
+            let signed = Signed::<PlainPayload>::try_decode(&original).expect("decode");
             assert_eq!(signed.as_bytes(), original.as_slice());
         });
 }
@@ -302,7 +302,7 @@ fn tagged_decode_preserves_canonical_bytes() {
         .with_arbitrary::<(TaggedPayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let original = seal_sync(*key_bytes, payload);
-            let signed = Signed::<TaggedPayload>::try_decode(original.clone()).expect("decode");
+            let signed = Signed::<TaggedPayload>::try_decode(&original).expect("decode");
             assert_eq!(signed.as_bytes(), original.as_slice());
         });
 }
@@ -313,7 +313,7 @@ fn variable_decode_preserves_canonical_bytes() {
         .with_arbitrary::<(VariablePayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let original = seal_sync(*key_bytes, payload);
-            let signed = Signed::<VariablePayload>::try_decode(original.clone()).expect("decode");
+            let signed = Signed::<VariablePayload>::try_decode(&original).expect("decode");
             assert_eq!(signed.as_bytes(), original.as_slice());
         });
 }
@@ -338,7 +338,7 @@ fn plain_decode_truncates_trailing_bytes() {
             with_trailing.extend_from_slice(trailing);
 
             let signed =
-                Signed::<PlainPayload>::try_decode(with_trailing).expect("decode with trailing");
+                Signed::<PlainPayload>::try_decode(&with_trailing).expect("decode with trailing");
             assert_eq!(
                 signed.as_bytes().len(),
                 canonical_len,
@@ -360,7 +360,7 @@ fn tagged_decode_truncates_trailing_bytes() {
             with_trailing.extend_from_slice(trailing);
 
             let signed =
-                Signed::<TaggedPayload>::try_decode(with_trailing).expect("decode with trailing");
+                Signed::<TaggedPayload>::try_decode(&with_trailing).expect("decode with trailing");
             assert_eq!(signed.as_bytes().len(), canonical_len);
             signed.try_verify().expect("verify after truncation");
         });
@@ -376,8 +376,8 @@ fn variable_decode_truncates_trailing_bytes() {
             let mut with_trailing = canonical.clone();
             with_trailing.extend_from_slice(trailing);
 
-            let signed =
-                Signed::<VariablePayload>::try_decode(with_trailing).expect("decode with trailing");
+            let signed = Signed::<VariablePayload>::try_decode(&with_trailing)
+                .expect("decode with trailing");
             assert_eq!(signed.as_bytes().len(), canonical_len);
             signed.try_verify().expect("verify after truncation");
         });
@@ -396,7 +396,7 @@ fn plain_decode_truncated_does_not_panic() {
             let mut bytes = seal_sync(*key_bytes, payload);
             let new_len = bytes.len().saturating_sub(*drop_count as usize);
             bytes.truncate(new_len);
-            let _result = Signed::<PlainPayload>::try_decode(bytes);
+            let _result = Signed::<PlainPayload>::try_decode(&bytes);
         });
 }
 
@@ -408,7 +408,7 @@ fn tagged_decode_truncated_does_not_panic() {
             let mut bytes = seal_sync(*key_bytes, payload);
             let new_len = bytes.len().saturating_sub(*drop_count as usize);
             bytes.truncate(new_len);
-            let _result = Signed::<TaggedPayload>::try_decode(bytes);
+            let _result = Signed::<TaggedPayload>::try_decode(&bytes);
         });
 }
 
@@ -420,7 +420,7 @@ fn variable_decode_truncated_does_not_panic() {
             let mut bytes = seal_sync(*key_bytes, payload);
             let new_len = bytes.len().saturating_sub(*drop_count as usize);
             bytes.truncate(new_len);
-            let _result = Signed::<VariablePayload>::try_decode(bytes);
+            let _result = Signed::<VariablePayload>::try_decode(&bytes);
         });
 }
 
@@ -431,7 +431,7 @@ fn random_bytes_through_plain_signed_never_panics() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<PlainPayload>::try_decode(bytes.clone());
+            let _result = Signed::<PlainPayload>::try_decode(bytes);
         });
 }
 
@@ -440,7 +440,7 @@ fn random_bytes_through_tagged_signed_never_panics() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<TaggedPayload>::try_decode(bytes.clone());
+            let _result = Signed::<TaggedPayload>::try_decode(bytes);
         });
 }
 
@@ -449,7 +449,7 @@ fn random_bytes_through_variable_signed_never_panics() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<VariablePayload>::try_decode(bytes.clone());
+            let _result = Signed::<VariablePayload>::try_decode(bytes);
         });
 }
 
@@ -467,7 +467,7 @@ fn plain_schema_tamper_yields_invalid_schema() {
             }
             let mut bytes = seal_sync(*key_bytes, payload);
             bytes[..4].copy_from_slice(bad_schema);
-            let result = Signed::<PlainPayload>::try_decode(bytes);
+            let result = Signed::<PlainPayload>::try_decode(&bytes);
             assert!(
                 matches!(
                     result,
@@ -490,7 +490,7 @@ fn tagged_discriminant_tamper_yields_invalid_discriminant() {
             }
             let mut bytes = seal_sync(*key_bytes, payload);
             bytes[SCHEMA_SIZE] = *bad_disc;
-            let result = Signed::<TaggedPayload>::try_decode(bytes);
+            let result = Signed::<TaggedPayload>::try_decode(&bytes);
             assert!(
                 matches!(
                     result,
@@ -519,7 +519,7 @@ fn tag_swap_attack_is_rejected() {
 
             // Decoding as OtherTaggedPayload must reject due to
             // discriminant mismatch.
-            let result = Signed::<OtherTaggedPayload>::try_decode(bytes);
+            let result = Signed::<OtherTaggedPayload>::try_decode(&bytes);
             assert!(
                 matches!(
                     result,
@@ -552,7 +552,7 @@ fn plain_single_bit_flip_breaks_verification() {
 
             // Either decode fails or verify fails — never both succeed.
             // A decode failure is acceptable; we only assert on the Ok branch.
-            if let Ok(signed) = Signed::<PlainPayload>::try_decode(bytes) {
+            if let Ok(signed) = Signed::<PlainPayload>::try_decode(&bytes) {
                 let verify_result = signed.try_verify();
                 assert!(
                     verify_result.is_err(),
@@ -575,7 +575,7 @@ fn tagged_single_bit_flip_breaks_verification() {
             let bit_idx = bit_idx_seed % 8;
             bytes[byte_idx] ^= 1 << bit_idx;
 
-            if let Ok(signed) = Signed::<TaggedPayload>::try_decode(bytes) {
+            if let Ok(signed) = Signed::<TaggedPayload>::try_decode(&bytes) {
                 let verify_result = signed.try_verify();
                 assert!(verify_result.is_err(), "tampered bytes must not verify");
             }
@@ -595,7 +595,7 @@ fn variable_single_bit_flip_breaks_verification() {
             let bit_idx = bit_idx_seed % 8;
             bytes[byte_idx] ^= 1 << bit_idx;
 
-            if let Ok(signed) = Signed::<VariablePayload>::try_decode(bytes) {
+            if let Ok(signed) = Signed::<VariablePayload>::try_decode(&bytes) {
                 let verify_result = signed.try_verify();
                 assert!(verify_result.is_err(), "tampered bytes must not verify");
             }
@@ -613,7 +613,7 @@ fn wire_layout_slices_agree() {
         .with_arbitrary::<(PlainPayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let bytes = seal_sync(*key_bytes, payload);
-            let signed = Signed::<PlainPayload>::try_decode(bytes.clone()).expect("decode");
+            let signed = Signed::<PlainPayload>::try_decode(&bytes).expect("decode");
 
             assert_eq!(signed.as_bytes(), &bytes[..]);
 
@@ -639,7 +639,7 @@ fn wire_layout_slices_agree_tagged() {
         .with_arbitrary::<(TaggedPayload, [u8; 32])>()
         .for_each(|(payload, key_bytes)| {
             let bytes = seal_sync(*key_bytes, payload);
-            let signed = Signed::<TaggedPayload>::try_decode(bytes.clone()).expect("decode");
+            let signed = Signed::<TaggedPayload>::try_decode(&bytes).expect("decode");
 
             // For a tagged payload, fields starts after schema + disc
             // (1 byte) + issuer.

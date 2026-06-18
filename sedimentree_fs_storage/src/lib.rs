@@ -605,7 +605,7 @@ where
 {
     let mut out = Vec::with_capacity(raw.len());
     for (name, signed_data) in raw {
-        match Signed::<T>::try_decode(signed_data).and_then(|s| s.try_decode_trusted_payload()) {
+        match Signed::<T>::try_decode(&signed_data).and_then(|s| s.try_decode_trusted_payload()) {
             Ok(payload) => out.push(payload),
             Err(e) => tracing::warn!(dir = %name, "skipping corrupt stored {what}: {e}"),
         }
@@ -1072,7 +1072,7 @@ impl Storage<Sendable> for FsStorage {
 
             match Self::read_first_meta_blob_pair(&id_dir).await? {
                 Some((signed_data, blob_data)) => {
-                    let signed = Signed::try_decode(signed_data)?;
+                    let signed = Signed::try_decode(&signed_data)?;
                     let blob = Blob::new(blob_data);
                     Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
                 }
@@ -1119,7 +1119,7 @@ impl Storage<Sendable> for FsStorage {
 
             let mut results = Vec::with_capacity(raw.len());
             for (name, signed_data, blob_data) in raw {
-                let signed = match Signed::try_decode(signed_data) {
+                let signed = match Signed::try_decode(&signed_data) {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::warn!(
@@ -1218,7 +1218,7 @@ impl Storage<Sendable> for FsStorage {
 
             match Self::read_first_meta_blob_pair(&id_dir).await? {
                 Some((signed_data, blob_data)) => {
-                    let signed = match Signed::try_decode(signed_data) {
+                    let signed = match Signed::try_decode(&signed_data) {
                         Ok(s) => s,
                         Err(e) => {
                             tracing::error!(
@@ -1280,7 +1280,7 @@ impl Storage<Sendable> for FsStorage {
 
             let mut results = Vec::with_capacity(raw.len());
             for (name, signed_data, blob_data) in raw {
-                let signed = match Signed::try_decode(signed_data) {
+                let signed = match Signed::try_decode(&signed_data) {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::warn!(

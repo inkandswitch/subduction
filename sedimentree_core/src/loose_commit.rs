@@ -306,11 +306,8 @@ mod proptests {
     }
 
     /// Decoded struct's `fields_size()` matches the consumed byte count
-    /// returned by `try_decode_fields`.
-    ///
-    /// This is the invariant that the old `Signed::try_decode` assumed
-    /// but never verified — if these disagree, `bytes.truncate()` corrupts
-    /// the signed data.
+    /// returned by `try_decode_fields`. `Signed` decoding relies on these
+    /// agreeing to locate the signature; a mismatch would corrupt it.
     #[test]
     #[allow(clippy::panic)]
     fn decoded_fields_size_matches_consumed() {

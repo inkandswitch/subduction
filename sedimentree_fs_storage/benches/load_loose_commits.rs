@@ -168,7 +168,7 @@ fn read_all_pairs_sync(commits_dir: &Path) -> Vec<(Vec<u8>, Vec<u8>)> {
 
 /// Decode a pre-read `.meta` + `.blob` pair, mirroring the decode phase of
 /// `load_loose_commits`.
-fn decode_pair(meta: Vec<u8>, blob: Vec<u8>) -> VerifiedMeta<LooseCommit> {
+fn decode_pair(meta: &[u8], blob: Vec<u8>) -> VerifiedMeta<LooseCommit> {
     let signed = Signed::try_decode(meta).expect("decode Signed<LooseCommit>");
     VerifiedMeta::try_from_trusted(signed, Blob::new(blob)).expect("reconstruct VerifiedMeta")
 }
@@ -256,7 +256,7 @@ fn bench_phases(c: &mut Criterion) {
             |pairs| {
                 pairs
                     .into_iter()
-                    .map(|(meta, blob)| decode_pair(meta, blob))
+                    .map(|(meta, blob)| decode_pair(&meta, blob))
                     .collect::<Vec<_>>()
             },
             BatchSize::SmallInput,

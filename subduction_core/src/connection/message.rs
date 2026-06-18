@@ -809,18 +809,14 @@ fn decode_loose_commit(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
     let sender_heads = decode_remote_heads(payload, &mut offset)?;
 
-    let commit = Signed::<LooseCommit>::try_decode(
-        payload
-            .get(offset..)
-            .ok_or(BufferTooShort {
-                reading: ReadingType::Slice { len: 0 },
-                offset,
-                need: 1,
-                have: 0,
-            })?
-            .to_vec(),
-    )?;
-    offset += commit.as_bytes().len();
+    let (commit, consumed) =
+        Signed::<LooseCommit>::try_decode_prefix(payload.get(offset..).ok_or(BufferTooShort {
+            reading: ReadingType::Slice { len: 0 },
+            offset,
+            need: 1,
+            have: 0,
+        })?)?;
+    offset += consumed;
 
     let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
 
@@ -850,18 +846,14 @@ fn decode_fragment(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
     let sender_heads = decode_remote_heads(payload, &mut offset)?;
 
-    let fragment = Signed::<Fragment>::try_decode(
-        payload
-            .get(offset..)
-            .ok_or(BufferTooShort {
-                reading: ReadingType::Slice { len: 0 },
-                offset,
-                need: 1,
-                have: 0,
-            })?
-            .to_vec(),
-    )?;
-    offset += fragment.as_bytes().len();
+    let (fragment, consumed) =
+        Signed::<Fragment>::try_decode_prefix(payload.get(offset..).ok_or(BufferTooShort {
+            reading: ReadingType::Slice { len: 0 },
+            offset,
+            need: 1,
+            have: 0,
+        })?)?;
+    offset += consumed;
 
     let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
 
@@ -974,18 +966,15 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 
     let mut missing_commits = Vec::with_capacity(commit_count);
     for _ in 0..commit_count {
-        let commit = Signed::<LooseCommit>::try_decode(
-            payload
-                .get(*offset..)
-                .ok_or(BufferTooShort {
-                    reading: ReadingType::Slice { len: 0 },
-                    offset: *offset,
-                    need: 1,
-                    have: 0,
-                })?
-                .to_vec(),
+        let (commit, consumed) = Signed::<LooseCommit>::try_decode_prefix(
+            payload.get(*offset..).ok_or(BufferTooShort {
+                reading: ReadingType::Slice { len: 0 },
+                offset: *offset,
+                need: 1,
+                have: 0,
+            })?,
         )?;
-        *offset += commit.as_bytes().len();
+        *offset += consumed;
 
         let blob_size = read_bijou64_as_usize(payload, offset)?;
         let blob = Blob::new(
@@ -1006,18 +995,15 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 
     let mut missing_fragments = Vec::with_capacity(fragment_count);
     for _ in 0..fragment_count {
-        let fragment = Signed::<Fragment>::try_decode(
-            payload
-                .get(*offset..)
-                .ok_or(BufferTooShort {
-                    reading: ReadingType::Slice { len: 0 },
-                    offset: *offset,
-                    need: 1,
-                    have: 0,
-                })?
-                .to_vec(),
+        let (fragment, consumed) = Signed::<Fragment>::try_decode_prefix(
+            payload.get(*offset..).ok_or(BufferTooShort {
+                reading: ReadingType::Slice { len: 0 },
+                offset: *offset,
+                need: 1,
+                have: 0,
+            })?,
         )?;
-        *offset += fragment.as_bytes().len();
+        *offset += consumed;
 
         let blob_size = read_bijou64_as_usize(payload, offset)?;
         let blob = Blob::new(

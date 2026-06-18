@@ -890,7 +890,7 @@ async fn invalid_signature_is_dropped() -> TestResult {
 
     // Reconstruct a Signed<EphemeralPayload> from the tampered bytes.
     // try_decode may succeed (the bytes are structurally valid, just the sig is wrong).
-    let tampered = Signed::<EphemeralPayload>::try_decode(bytes);
+    let tampered = Signed::<EphemeralPayload>::try_decode(&bytes);
     let tampered_msg = match tampered {
         Ok(s) => EphemeralMessage::Ephemeral(Box::new(s)),
         Err(_) => {

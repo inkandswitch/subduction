@@ -1,6 +1,6 @@
 //! Wasm wrappers for signed types.
 
-use alloc::{string::ToString, vec::Vec};
+use alloc::string::ToString;
 
 use js_sys::Uint8Array;
 use sedimentree_core::{codec::error::DecodeError, fragment::Fragment, loose_commit::LooseCommit};
@@ -26,7 +26,7 @@ impl WasmSignedLooseCommit {
     #[wasm_bindgen(js_name = tryDecode)]
     pub fn try_decode(bytes: &Uint8Array) -> Result<WasmSignedLooseCommit, JsValue> {
         let data = bytes.to_vec();
-        let signed = Signed::<LooseCommit>::try_decode(data)
+        let signed = Signed::<LooseCommit>::try_decode(&data)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(Self(signed))
     }
@@ -77,7 +77,7 @@ impl WasmSignedLooseCommit {
     /// # Errors
     ///
     /// Returns an error if the bytes are not a valid signed loose commit.
-    pub fn try_from_vec(bytes: Vec<u8>) -> Result<Self, DecodeError> {
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
         Ok(Self(Signed::<LooseCommit>::try_decode(bytes)?))
     }
 
@@ -105,7 +105,7 @@ impl WasmSignedFragment {
     pub fn try_decode(bytes: &Uint8Array) -> Result<WasmSignedFragment, JsValue> {
         let data = bytes.to_vec();
         let signed =
-            Signed::<Fragment>::try_decode(data).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            Signed::<Fragment>::try_decode(&data).map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(Self(signed))
     }
 
@@ -155,7 +155,7 @@ impl WasmSignedFragment {
     /// # Errors
     ///
     /// Returns an error if the bytes are not a valid signed fragment.
-    pub fn try_from_vec(bytes: Vec<u8>) -> Result<Self, DecodeError> {
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
         Ok(Self(Signed::<Fragment>::try_decode(bytes)?))
     }
 

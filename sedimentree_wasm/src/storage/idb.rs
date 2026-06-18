@@ -385,7 +385,7 @@ impl WasmIndexedDbStorage {
             .map_err(WasmLoadCommitError::ReflectError)?;
 
         let signed_bytes = Uint8Array::new(&signed_val).to_vec();
-        let signed = WasmSignedLooseCommit::try_from_vec(signed_bytes)?;
+        let signed = WasmSignedLooseCommit::try_from_bytes(&signed_bytes)?;
         let blob = Uint8Array::new(&blob_val);
 
         Ok(Some(WasmCommitWithBlob::new(signed, blob)))
@@ -444,7 +444,7 @@ impl WasmIndexedDbStorage {
             let signed_bytes = Uint8Array::new(&signed_val).to_vec();
             let blob = Uint8Array::new(&blob_val);
 
-            let signed = WasmSignedLooseCommit::try_from_vec(signed_bytes)?;
+            let signed = WasmSignedLooseCommit::try_from_bytes(&signed_bytes)?;
 
             result.push(WasmCommitWithBlob::new(signed, blob));
         }
@@ -581,7 +581,7 @@ impl WasmIndexedDbStorage {
         let signed_bytes = Uint8Array::new(&signed_val).to_vec();
         let blob = Uint8Array::new(&blob_val);
 
-        let signed = WasmSignedFragment::try_from_vec(signed_bytes)?;
+        let signed = WasmSignedFragment::try_from_bytes(&signed_bytes)?;
 
         Ok(Some(WasmFragmentWithBlob::new(signed, blob)))
     }
@@ -639,7 +639,7 @@ impl WasmIndexedDbStorage {
             let signed_bytes = Uint8Array::new(&signed_val).to_vec();
             let blob = Uint8Array::new(&blob_val);
 
-            let signed = WasmSignedFragment::try_from_vec(signed_bytes)?;
+            let signed = WasmSignedFragment::try_from_bytes(&signed_bytes)?;
 
             result.push(WasmFragmentWithBlob::new(signed, blob));
         }

@@ -254,7 +254,7 @@ mod tests {
     }
 
     fn verified(key_bytes: [u8; 32], value: u64) -> VerifiedSignature<Payload> {
-        Signed::<Payload>::try_decode(seal_payload(key_bytes, value))
+        Signed::<Payload>::try_decode(&seal_payload(key_bytes, value))
             .expect("decode")
             .try_verify()
             .expect("verify")
