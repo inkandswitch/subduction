@@ -5190,6 +5190,7 @@ dependencies = [
  "subduction_http_longpoll",
  "subduction_iroh",
  "subduction_keyhive",
+ "subduction_redb_storage",
  "subduction_websocket",
  "tempfile",
  "testresult",

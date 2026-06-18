@@ -892,3 +892,58 @@ async fn metas_match_full_load() -> testresult::TestResult {
 
     Ok(())
 }
+
+/// Representative parity for an equivocating id that *straddles* the inline
+/// threshold: two payloads share one `CommitId`, one blob inline and one
+/// external. The full load (`load_loose_commits`) and the metadata-only load
+/// (`load_loose_commit_metas`) must resolve to the *same* first-wins
+/// representative — both in content-digest (composite-key) order — so a
+/// hydrating caller can't pick different winners from the two paths.
+///
+/// The shared head is chosen so the inline payload has the *higher* content
+/// digest; an inline-before-external ordering in the full load would then
+/// pick the inline payload while the key-ordered metas load picks the
+/// external one, diverging. Regression guard for that ordering bug (the full
+/// load now also returns in composite-key order).
+#[tokio::test]
+async fn equivocating_straddle_resolves_same_representative() -> testresult::TestResult {
+    use sedimentree_core::crypto::digest::Digest;
+    use subduction_core::storage::conformance;
+
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x5A; 32]);
+    // 64 B threshold: `small` (16 B) stays inline, `large` (256 B) external.
+    let small_blob = vec![0xAA; 16];
+    let large_blob = vec![0xBB; 256];
+
+    // Find a shared head where the inline (small-blob) payload sorts *after*
+    // the external (large-blob) payload by content digest, so an inline-first
+    // ordering would diverge from composite-key order. Digests are
+    // effectively random per head, so this succeeds almost immediately.
+    let mut chosen = None;
+    for h in 0u8..=u8::MAX {
+        let head = CommitId::new([h; 32]);
+        let small = seal_commit(&signer, id, head, small_blob.clone()).await;
+        let large = seal_commit(&signer, id, head, large_blob.clone()).await;
+        if Digest::hash(small.payload()).as_bytes() > Digest::hash(large.payload()).as_bytes() {
+            chosen = Some((small, large));
+            break;
+        }
+    }
+    let (small, large) =
+        chosen.expect("a head with inline-digest > external-digest exists within 256 tries");
+
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+    Storage::<Sendable>::save_loose_commit(&storage, id, small).await?;
+    Storage::<Sendable>::save_loose_commit(&storage, id, large).await?;
+
+    let full = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+    assert_eq!(full.len(), 2, "equivocating payloads must coexist");
+
+    // Strengthened conformance compares first-wins representatives, so this
+    // fails if the two load paths disagree on the straddling id.
+    conformance::assert_metas_match_full_load::<Sendable, _>(&storage, id).await;
+
+    Ok(())
+}

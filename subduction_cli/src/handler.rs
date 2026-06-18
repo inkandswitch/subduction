@@ -19,7 +19,6 @@ use crate::{
 use future_form::Sendable;
 use futures::future::BoxFuture;
 use sedimentree_core::depth::CountLeadingZeroBytes;
-use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     authenticated::Authenticated,
     connection::message::SyncMessage,
@@ -34,6 +33,7 @@ use subduction_ephemeral::{
     clock::std_clock::StdClock, handler::EphemeralHandler, policy::OpenEphemeralPolicy,
 };
 use subduction_keyhive::handler::{SendableKeyhiveHandler, SendableRuntimeProtocol};
+use subduction_redb_storage::RedbStorage;
 
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
@@ -55,7 +55,7 @@ pub(crate) type CliKeyhiveHandler = SendableKeyhiveHandler<
 >;
 
 /// Concrete `ListenError` for the CLI handler.
-type CliListenError = ListenError<Sendable, MetricsStorage<FsStorage>, CliConn, CliWireMessage>;
+type CliListenError = ListenError<Sendable, MetricsStorage<RedbStorage>, CliConn, CliWireMessage>;
 
 /// Bundles the bounds the server's connection plumbing requires of a CLI
 /// handler, so [`CliHandler`] and [`CliHandlerOpenPolicy`] can be used
@@ -83,7 +83,7 @@ impl<H> CliWireHandler for H where
 pub(crate) type CliSyncHandler = Arc<
     SyncHandler<
         Sendable,
-        MetricsStorage<FsStorage>,
+        MetricsStorage<RedbStorage>,
         CliConn,
         CliKeyhivePolicyHandle,
         CountLeadingZeroBytes,
@@ -259,7 +259,7 @@ impl Handler<Sendable, CliConn> for CliHandlerOpenPolicy {
 fn convert_sync_listen_error(
     err: ListenError<
         Sendable,
-        MetricsStorage<FsStorage>,
+        MetricsStorage<RedbStorage>,
         CliConn,
         subduction_core::connection::message::SyncMessage,
     >,

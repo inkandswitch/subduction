@@ -114,7 +114,7 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::save_loose_commit");
-            let pending = pending_commit(sedimentree_id, &verified);
+            let pending = pending_commit(sedimentree_id, verified);
             let threshold = self.inline_threshold;
             self.with_db(move |db, blobs_dir| {
                 // External blob (if any) staged before the write txn so its
@@ -273,7 +273,7 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::save_fragment");
-            let pending = pending_fragment(sedimentree_id, &verified);
+            let pending = pending_fragment(sedimentree_id, verified);
             let threshold = self.inline_threshold;
             self.with_db(move |db, blobs_dir| {
                 // External blob (if any) staged before the write txn so its
@@ -438,11 +438,11 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
             );
 
             let pending_commits: Vec<_> = commits
-                .iter()
+                .into_iter()
                 .map(|v| pending_commit(sedimentree_id, v))
                 .collect();
             let pending_fragments: Vec<_> = fragments
-                .iter()
+                .into_iter()
                 .map(|v| pending_fragment(sedimentree_id, v))
                 .collect();
 

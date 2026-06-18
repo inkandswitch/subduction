@@ -1,14 +1,14 @@
 # `subduction_redb_storage`
 
 A hybrid [redb] + filesystem storage backend for Sedimentree,
-implementing the `Storage` trait from `subduction_core`. Intended as an
-alternative to `sedimentree_fs_storage` for native servers.
+implementing the `Storage` trait from `subduction_core`. This is the native
+server storage backend: the `subduction_cli` server builds on it, replacing
+the earlier `sedimentree_fs_storage` directory layout.
 
 > [!NOTE]
-> This is an _evaluation_ crate (`publish = false`). Nothing in the
-> workspace depends on it; it exists for the `benches/backends.rs`
-> shoot-out against `FsStorage`. See `.ignore/DECISIONS.md` (internal)
-> for the comparison rationale.
+> The `benches/backends.rs` shoot-out against `FsStorage` (and the
+> `concurrent_writes` group that gated the cutover) is retained as a local
+> performance regression guard; it is not wired into CI.
 
 ## Design
 
@@ -48,8 +48,39 @@ return; `save_batch` amortizes one fsync across the batch. External blob
 files are fully written and fsynced _before_ the referencing database
 transaction commits, so a stored record always points at a complete
 blob. A crash in between leaves at most a harmless orphan blob file
-(content-addressed, so a later save adopts it). Deletes do not remove
-external blob files; a GC sweep is future work.
+(content-addressed, so a later save adopts it).
+
+## Migrating from the filesystem backend
+
+An existing `sedimentree_fs_storage` store is converted with the CLI:
+
+```text
+# stop the server first — both stores must be quiescent
+subduction migrate --from /var/lib/subduction --to /var/lib/subduction-redb
+# then point the server's --data-dir at the new directory
+```
+
+The migration streams one tree per durable transaction and is resumable:
+re-running skips any tree already present in the destination (id and items
+are committed atomically). `--from` and `--to` must differ — both layouts
+use a `blobs/` subdirectory.
+
+## Backup
+
+The store is a single `sedimentree.redb` file plus the `blobs/` directory.
+Back them up together while the server is **stopped** (or otherwise not
+writing): a copy taken mid-write may capture a torn database page. There is
+no incremental backup; snapshot the whole root.
+
+## Known limitations
+
+- **No blob GC.** `delete_*` removes the redb record but not the external
+  blob file (large blobs are content-addressed and may be shared across
+  trees, so they cannot be unlinked on a single tree's removal). The only
+  caller that deletes is whole-document removal (`Subduction::remove_sedimentree`);
+  normal sync is append-only, so this leaks only in proportion to document
+  removals. Revisit with reference-counting or a mark-and-sweep pass if
+  whole-document removal becomes routine.
 
 ## Example
 

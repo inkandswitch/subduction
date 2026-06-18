@@ -31,31 +31,35 @@ pub(crate) struct PendingInsert {
     blob_digest: [u8; 32],
 }
 
-/// Resolve a verified commit into its key and payloads.
+/// Resolve a verified commit into its key and payloads, consuming it so the
+/// blob bytes move into the [`PendingInsert`] rather than being cloned.
 pub(crate) fn pending_commit(
     tree: SedimentreeId,
-    verified: &VerifiedMeta<LooseCommit>,
+    verified: VerifiedMeta<LooseCommit>,
 ) -> PendingInsert {
-    let digest = Digest::hash(verified.payload());
+    let (signed, payload, blob) = verified.into_full_parts();
+    let digest = Digest::hash(&payload);
     PendingInsert {
-        key: key96(tree, verified.payload().head(), digest.as_bytes()),
-        meta: verified.signed().as_bytes().to_vec(),
-        blob: verified.blob().contents().clone(),
-        blob_digest: *verified.payload().blob_meta().digest().as_bytes(),
+        key: key96(tree, payload.head(), digest.as_bytes()),
+        meta: signed.as_bytes().to_vec(),
+        blob: blob.into_contents(),
+        blob_digest: *payload.blob_meta().digest().as_bytes(),
     }
 }
 
-/// Resolve a verified fragment into its key and payloads.
+/// Resolve a verified fragment into its key and payloads, consuming it so the
+/// blob bytes move into the [`PendingInsert`] rather than being cloned.
 pub(crate) fn pending_fragment(
     tree: SedimentreeId,
-    verified: &VerifiedMeta<Fragment>,
+    verified: VerifiedMeta<Fragment>,
 ) -> PendingInsert {
-    let digest = Digest::hash(verified.payload());
+    let (signed, payload, blob) = verified.into_full_parts();
+    let digest = Digest::hash(&payload);
     PendingInsert {
-        key: key96(tree, verified.payload().head(), digest.as_bytes()),
-        meta: verified.signed().as_bytes().to_vec(),
-        blob: verified.blob().contents().clone(),
-        blob_digest: *verified.payload().blob_meta().digest().as_bytes(),
+        key: key96(tree, payload.head(), digest.as_bytes()),
+        meta: signed.as_bytes().to_vec(),
+        blob: blob.into_contents(),
+        blob_digest: *payload.blob_meta().digest().as_bytes(),
     }
 }
 

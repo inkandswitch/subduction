@@ -1,7 +1,10 @@
 [package]
 name = "subduction_redb_storage"
 version = "0.1.0"
-publish = false # evaluation crate; not released to crates.io
+# Not yet released to crates.io. `subduction_cli` now depends on this crate as
+# its production storage backend; if the CLI is published this must become
+# publishable too (resolve before the next release cohort).
+publish = false
 description = "Hybrid redb + filesystem storage backend for Sedimentree"
 
 categories = ["database"]

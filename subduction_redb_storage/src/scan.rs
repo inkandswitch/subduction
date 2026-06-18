@@ -172,38 +172,53 @@ pub(crate) async fn resolve_items<T>(
 where
     T: HasBlobMeta + Schema + EncodeFields + DecodeFields,
 {
-    let mut out = Vec::with_capacity(items.len());
-    let mut pending: Vec<(Signed<T>, [u8; 32], u64)> = Vec::new();
+    // Resolve into positional slots so the output preserves the scan's
+    // composite-key (tree ++ id ++ content_digest) order — the *same* order
+    // the metadata-only path (`scan_payloads`) returns. Callers deduplicate
+    // equivocating payloads first-wins, so both load paths must agree on
+    // which payload of an equivocating `CommitId` comes first; pushing all
+    // inline items ahead of all external ones would diverge from
+    // `scan_payloads` whenever two payloads sharing a `CommitId` straddle the
+    // inline threshold. External blobs are still read out of order in
+    // parallel, then dropped back into their reserved slots.
+    let mut slots: Vec<Option<VerifiedMeta<T>>> = Vec::with_capacity(items.len());
+
+    // (reserved slot index, signed, blob digest, signed blob size) for each
+    // external item whose blob file must be read.
+    let mut pending: Vec<(usize, Signed<T>, [u8; 32], u64)> = Vec::new();
 
     for item in items {
         match item {
             DecodedCompound::Inline { meta, blob } => {
-                if let Some(verified) = decode_verified((meta, blob), what) {
-                    out.push(verified);
+                slots.push(decode_verified((meta, blob), what));
+            }
+            DecodedCompound::External { meta } => {
+                let slot = slots.len();
+                slots.push(None);
+                match Signed::<T>::try_decode(meta) {
+                    Ok(signed) => match signed.try_decode_trusted_payload() {
+                        Ok(payload) => {
+                            let blob_meta = payload.blob_meta();
+                            pending.push((
+                                slot,
+                                signed,
+                                *blob_meta.digest().as_bytes(),
+                                blob_meta.size_bytes(),
+                            ));
+                        }
+                        Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
+                    },
+                    Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
                 }
             }
-            DecodedCompound::External { meta } => match Signed::<T>::try_decode(meta) {
-                Ok(signed) => match signed.try_decode_trusted_payload() {
-                    Ok(payload) => {
-                        let blob_meta = payload.blob_meta();
-                        pending.push((
-                            signed,
-                            *blob_meta.digest().as_bytes(),
-                            blob_meta.size_bytes(),
-                        ));
-                    }
-                    Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
-                },
-                Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
-            },
         }
     }
 
     if pending.is_empty() {
-        return Ok(out);
+        return Ok(slots.into_iter().flatten().collect());
     }
 
-    let digests: Vec<[u8; 32]> = pending.iter().map(|(_, digest, _)| *digest).collect();
+    let digests: Vec<[u8; 32]> = pending.iter().map(|(_, _, digest, _)| *digest).collect();
     let handles: Vec<_> = digests
         .chunks(EXTERNAL_READ_CHUNK)
         .map(|chunk| {
@@ -225,7 +240,7 @@ where
         blobs.extend(handle.await??);
     }
 
-    for ((signed, digest, expected_size), blob) in pending.into_iter().zip(blobs) {
+    for ((slot, signed, digest, expected_size), blob) in pending.into_iter().zip(blobs) {
         let Some(blob) = blob else {
             tracing::warn!(
                 digest = %hex_encode(&digest),
@@ -259,12 +274,18 @@ where
         }
 
         match VerifiedMeta::try_from_trusted(signed, Blob::new(blob)) {
-            Ok(verified) => out.push(verified),
+            // The slot was reserved in scan order above; `get_mut` is always
+            // `Some` (avoids an indexing-panic lint).
+            Ok(verified) => {
+                if let Some(reserved) = slots.get_mut(slot) {
+                    *reserved = Some(verified);
+                }
+            }
             Err(e) => tracing::warn!("skipping corrupt stored {what}: {e}"),
         }
     }
 
-    Ok(out)
+    Ok(slots.into_iter().flatten().collect())
 }
 
 /// Collect the item ids present in `range` (deduplicated).

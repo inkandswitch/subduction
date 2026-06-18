@@ -15,11 +15,14 @@
 //! conformance::assert_commit_save_registers_tree_id(&storage, commit).await;
 //! ```
 
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::{collections::BTreeMap, vec::Vec};
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    crypto::digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
+    crypto::digest::Digest,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
@@ -236,13 +239,23 @@ pub async fn assert_failed_commit_save_does_not_register_tree_id<Async, Store>(
 
 /// Assert that the metadata-only loads
 /// ([`load_loose_commit_metas`](Storage::load_loose_commit_metas) /
-/// [`load_fragment_metas`](Storage::load_fragment_metas)) return exactly the
-/// same payload set as the full loads — the contract the hydration path
-/// relies on. Compared by content digest, so it holds under Byzantine
-/// equivocation (multiple payloads per id).
+/// [`load_fragment_metas`](Storage::load_fragment_metas)) resolve to the same
+/// payloads as the full loads — the contract the hydration path relies on.
+///
+/// Comparison is by *first-wins representative per causal id*: a
+/// `BTreeMap<CommitId, Digest>` built by folding each load in its own return
+/// order, keeping the first payload seen per id. This pins both the payload
+/// *set* (the keys) and, under Byzantine equivocation (several payloads
+/// sharing one [`CommitId`]), the *representative* each load resolves to (the
+/// values) — the property a first-wins-dedup caller depends on. A backend
+/// whose full load and metadata-only load ordered an equivocating id's
+/// payloads differently (e.g. inline-before-external in one, content-digest
+/// order in the other) would pick different representatives and diverge here,
+/// even though the raw payload sets are identical.
 ///
 /// `id`'s commits and fragments must already be stored; mix inline and
-/// external (large) blobs to exercise both blob paths.
+/// external (large) blobs — including an equivocating id whose payloads
+/// straddle the inline threshold — to exercise both blob paths.
 ///
 /// # Panics
 ///
@@ -254,42 +267,52 @@ where
 {
     #[allow(clippy::expect_used)]
     {
-        let full_commits: BTreeSet<Digest<LooseCommit>> = storage
+        let mut full_commits: BTreeMap<CommitId, Digest<LooseCommit>> = BTreeMap::new();
+        for vm in storage
             .load_loose_commits(id)
             .await
             .expect("load_loose_commits failed")
-            .iter()
-            .map(|vm| Digest::hash(vm.payload()))
-            .collect();
-        let meta_commits: BTreeSet<Digest<LooseCommit>> = storage
+        {
+            full_commits
+                .entry(vm.payload().head())
+                .or_insert_with(|| Digest::hash(vm.payload()));
+        }
+        let mut meta_commits: BTreeMap<CommitId, Digest<LooseCommit>> = BTreeMap::new();
+        for payload in storage
             .load_loose_commit_metas(id)
             .await
             .expect("load_loose_commit_metas failed")
-            .iter()
-            .map(Digest::hash)
-            .collect();
+        {
+            let digest = Digest::hash(&payload);
+            meta_commits.entry(payload.head()).or_insert(digest);
+        }
         assert_eq!(
             meta_commits, full_commits,
-            "load_loose_commit_metas must return the same payload set as load_loose_commits"
+            "load_loose_commit_metas must resolve to the same representative per id as load_loose_commits"
         );
 
-        let full_fragments: BTreeSet<Digest<Fragment>> = storage
+        let mut full_fragments: BTreeMap<CommitId, Digest<Fragment>> = BTreeMap::new();
+        for vm in storage
             .load_fragments(id)
             .await
             .expect("load_fragments failed")
-            .iter()
-            .map(|vm| Digest::hash(vm.payload()))
-            .collect();
-        let meta_fragments: BTreeSet<Digest<Fragment>> = storage
+        {
+            full_fragments
+                .entry(vm.payload().head())
+                .or_insert_with(|| Digest::hash(vm.payload()));
+        }
+        let mut meta_fragments: BTreeMap<CommitId, Digest<Fragment>> = BTreeMap::new();
+        for payload in storage
             .load_fragment_metas(id)
             .await
             .expect("load_fragment_metas failed")
-            .iter()
-            .map(Digest::hash)
-            .collect();
+        {
+            let digest = Digest::hash(&payload);
+            meta_fragments.entry(payload.head()).or_insert(digest);
+        }
         assert_eq!(
             meta_fragments, full_fragments,
-            "load_fragment_metas must return the same payload set as load_fragments"
+            "load_fragment_metas must resolve to the same representative per id as load_fragments"
         );
     }
 }

@@ -6,7 +6,6 @@ use eyre::Result;
 use future_form::Sendable;
 use iroh::{EndpointAddr, endpoint::presets};
 use sedimentree_core::depth::CountLeadingZeroBytes;
-use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     authenticated::Authenticated,
     handshake::{
@@ -23,6 +22,7 @@ use subduction_core::{
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;
+use subduction_redb_storage::RedbStorage;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
@@ -63,7 +63,7 @@ type CliSubduction<H> = Arc<
     Subduction<
         'static,
         future_form::Sendable,
-        MetricsStorage<FsStorage>,
+        MetricsStorage<RedbStorage>,
         CliConn,
         H,
         CliKeyhivePolicyHandle,
@@ -348,12 +348,12 @@ async fn run_open(args: ServerArgs, token: CancellationToken) -> Result<()> {
 }
 
 /// Common setup shared by [`run_with_keyhive`] and [`run_open`]: parses
-/// addresses, starts the metrics endpoint and refresh task, opens filesystem
+/// addresses, starts the metrics endpoint and refresh task, opens redb
 /// storage, and derives the signing identity.
 struct SetupCommon {
     addr: SocketAddr,
     data_dir: PathBuf,
-    storage: MetricsStorage<FsStorage>,
+    storage: MetricsStorage<RedbStorage>,
     seed: [u8; 32],
     signer: MemorySigner,
     peer_id: PeerId,
@@ -378,9 +378,9 @@ impl SetupCommon {
             metrics::start_metrics_server(metrics_addr, metrics_handle).await?;
         }
 
-        tracing::info!(dir = ?data_dir, "Initializing filesystem storage");
-        let fs_storage = FsStorage::new(data_dir.clone())?;
-        let storage = MetricsStorage::new(fs_storage);
+        tracing::info!(dir = ?data_dir, "Initializing redb storage");
+        let redb_storage = RedbStorage::new(data_dir.clone())?;
+        let storage = MetricsStorage::new(redb_storage);
 
         // Background metrics refresh
         if args.metrics {

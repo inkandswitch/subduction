@@ -132,6 +132,24 @@ fn size_datasets() -> &'static [(usize, usize, &'static str)] {
     }
 }
 
+/// Concurrency degrees (number of trees written simultaneously) for the
+/// `concurrent_writes` gate. The total item count is held *constant* across
+/// the sweep, so each step trades batch size for writer concurrency.
+fn concurrency_sweep() -> &'static [usize] {
+    if ci_slim() {
+        &[1, 16, 64]
+    } else {
+        &[1, 4, 16, 64, 256]
+    }
+}
+
+/// Run only the `concurrent_writes` gate (skip the size table and every
+/// other group). Lets the production-readiness gate be measured on its own
+/// without paying for the full shoot-out's populate phases.
+fn concurrency_only() -> bool {
+    std::env::var("SUBDUCTION_BENCH_CONCURRENCY_ONLY").is_ok_and(|v| !v.is_empty())
+}
+
 fn test_signer() -> MemorySigner {
     MemorySigner::from_bytes(&[42u8; 32])
 }
@@ -745,8 +763,97 @@ fn bench_hydrate_metas<S: Storage<Sendable> + 'static>(
     group.finish();
 }
 
+/// Aggregate durable-write throughput as write concurrency rises — the gate
+/// for replacing the parallel-friendly `FsStorage` with redb.
+///
+/// The production server writes many *distinct* trees at once: post-#220 the
+/// listener spawns up to `MAX_INFLIGHT_DISPATCH` dispatch tasks, and each
+/// peer typically syncs a different document. `FsStorage` writes land in
+/// independent directories and parallelize across blocking threads; redb
+/// funnels *every* write through a single writer with one fsync per
+/// transaction. This group holds the total item count fixed and splits it
+/// across `T` trees written concurrently, so the sweep isolates the cost of
+/// concurrency itself: an ideal parallel backend stays flat (or improves)
+/// as `T` grows, while a fully serialized one pays one fsync per tree.
+///
+/// Untimed setup seals all commits and builds a fresh store; the timed body
+/// spawns one `save_batch` task per tree and joins them on the multi-thread
+/// runtime.
+fn bench_concurrent_writes<S: Storage<Sendable> + Clone + Send + Sync + 'static>(
+    c: &mut Criterion,
+    rt: &Runtime,
+    backend: &Backend<S>,
+) {
+    /// Total commits persisted per iteration, fixed across the concurrency
+    /// sweep. 256 B blobs — the dominant production commit size (p50 178 B).
+    const TOTAL: usize = 1_024;
+    const BLOB: usize = 256;
+
+    let mut group = c.benchmark_group("concurrent_writes");
+    group.sample_size(10);
+
+    for &trees in concurrency_sweep() {
+        let per_tree = (TOTAL / trees).max(1);
+        let actual_total = per_tree * trees;
+
+        group.throughput(Throughput::Elements(actual_total as u64));
+        group.bench_function(BenchmarkId::new(backend.name, trees), |b| {
+            b.iter_batched(
+                || {
+                    let dir = tempfile::tempdir().expect("tempdir");
+                    let storage = (backend.make)(dir.path());
+                    let work: Vec<(SedimentreeId, Vec<VerifiedMeta<LooseCommit>>)> = (0..trees)
+                        .map(|ti| {
+                            let mut id_bytes = [0u8; 32];
+                            id_bytes[..8].copy_from_slice(&(ti as u64).to_be_bytes());
+                            let id = SedimentreeId::new(id_bytes);
+                            let commits =
+                                (0..per_tree).map(|_| seal_commit(rt, id, BLOB)).collect();
+                            (id, commits)
+                        })
+                        .collect();
+                    (dir, storage, work)
+                },
+                |(dir, storage, work)| {
+                    rt.block_on(async {
+                        let mut handles = Vec::with_capacity(work.len());
+                        for (id, commits) in work {
+                            let storage = storage.clone();
+                            handles.push(tokio::spawn(async move {
+                                storage
+                                    .save_batch(id, commits, Vec::new())
+                                    .await
+                                    .unwrap_or_else(|e| panic!("save batch: {e}"));
+                            }));
+                        }
+                        for handle in handles {
+                            handle.await.expect("save task panicked");
+                        }
+                    });
+                    // Returned so criterion drops the store (and cleans the
+                    // tempdir) *outside* the timed region.
+                    (dir, storage)
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
+
+    group.finish();
+}
+
 fn all_benches(c: &mut Criterion) {
     let rt = Runtime::new().expect("create tokio runtime");
+
+    // Production-readiness gate: measure concurrent durable writes in
+    // isolation when requested (skips the size table + read groups, which
+    // otherwise pay expensive populate phases before any timing).
+    if concurrency_only() {
+        bench_concurrent_writes(c, &rt, &FS);
+        bench_concurrent_writes(c, &rt, &REDB);
+        bench_concurrent_writes(c, &rt, &REDB_INLINE);
+        return;
+    }
 
     report_sizes(&rt);
 
@@ -768,6 +875,10 @@ fn all_benches(c: &mut Criterion) {
     bench_save(c, &rt, &FS);
     bench_save(c, &rt, &REDB);
     bench_save(c, &rt, &REDB_INLINE);
+
+    bench_concurrent_writes(c, &rt, &FS);
+    bench_concurrent_writes(c, &rt, &REDB);
+    bench_concurrent_writes(c, &rt, &REDB_INLINE);
 }
 
 criterion_group!(benches, all_benches);

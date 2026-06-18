@@ -758,6 +758,8 @@ async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestR
     Ok(())
 }
 
+/// Byzantine equivocation: two payloads sharing one `CommitId` (different
+/// blobs ⇒ different content digests ⇒ two `.meta`/`.blob` pairs in one
 /// commit dir). The fs backend collapses the dir to a *single, deterministic*
 /// representative — the lowest content-digest pair, independent of
 /// directory-iteration order — and the metadata-only load resolves to that
