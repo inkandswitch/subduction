@@ -194,7 +194,7 @@ fn ephemeral_signed_decode_random_bytes_no_panic() {
     bolero::check!()
         .with_arbitrary::<Vec<u8>>()
         .for_each(|bytes| {
-            let _result = Signed::<EphemeralPayload>::try_decode(&bytes);
+            let _result = Signed::<EphemeralPayload>::try_decode(bytes);
         });
 }
 
