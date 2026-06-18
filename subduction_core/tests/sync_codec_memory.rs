@@ -1,19 +1,9 @@
-//! Regression test: decoding a `BatchSyncResponse` carrying N missing
-//! commits must use memory **linear** in N, not quadratic.
+//! Decoding a `BatchSyncResponse` carrying N missing commits must use memory
+//! linear in N: each decoded `Signed` retains only its own bytes, keeping
+//! batch decode within wasm's bounded linear-memory heap.
 //!
-//! Background: `decode_sync_diff` decodes each commit via
-//! `Signed::try_decode(payload.get(*offset..)?.to_vec())` — it copies the
-//! *entire remaining payload* per commit, and `Signed::try_decode` finalizes
-//! its buffer with `Vec::truncate` (which shrinks length but **not**
-//! capacity). So each of the N decoded `Signed` values retains a `Vec` whose
-//! capacity is the whole remaining payload at its decode point. Summed over
-//! N commits that is `Σ (N-k) ≈ ½·N²` bytes held at once — ~12 GiB for an
-//! 8.7k-commit document, which overflows wasm's 4 GiB linear-memory heap and
-//! crashes sync with `RuntimeError: unreachable`.
-//!
-//! This test fails (red) on the quadratic code and passes once each decoded
-//! `Signed` retains only its own bytes. It is deterministic — it inspects the
-//! decoded buffers' `capacity()` directly rather than sampling process RSS.
+//! The check is deterministic: it inspects the decoded buffers' `capacity()`
+//! directly rather than sampling process RSS.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::cast_precision_loss)]
 
@@ -27,9 +17,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::{
-            BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage, SyncResult,
-        },
+        message::{BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage, SyncResult},
         test_utils::test_signer,
     },
     peer::id::PeerId,
@@ -89,11 +77,14 @@ async fn batch_sync_response_decode_memory_is_linear() {
         panic!("expected Ok(BatchSyncResponse)");
     };
 
-    assert_eq!(diff.missing_commits.len(), N as usize, "all commits decoded");
+    assert_eq!(
+        diff.missing_commits.len(),
+        N as usize,
+        "all commits decoded"
+    );
 
-    // Total memory retained by the decoded commit buffers. The bug makes each
-    // commit retain ~the whole remaining payload, so this sums to O(N²); the
-    // fix makes each retain only its own bytes, so it sums to ~the wire size.
+    // Total memory retained by the decoded commit buffers. With each commit
+    // retaining only its own bytes, this sums to ~the wire size.
     let total_capacity: usize = diff
         .missing_commits
         .into_iter()
@@ -105,16 +96,14 @@ async fn batch_sync_response_decode_memory_is_linear() {
     let ratio = total_capacity as f64 / wire as f64;
 
     eprintln!(
-        "N={N}: decoded total_capacity = {total_capacity} B, wire = {wire} B, ratio {ratio:.2}x \
-         (quadratic would be ~{:.0}x)",
-        f64::from(N + 1) / 2.0
+        "N={N}: decoded total_capacity = {total_capacity} B, wire = {wire} B, \
+         ratio {ratio:.2}x (linear bound {bound} B)"
     );
 
     assert!(
         total_capacity <= bound,
-        "decoded commit buffers retain memory quadratic in N: \
-         total_capacity = {total_capacity} B, wire = {wire} B (ratio {ratio:.0}x), \
-         linear bound = {bound} B. Each decoded Signed must retain only its own \
-         bytes, not the whole remaining payload."
+        "decoded commit buffers retain {total_capacity} B for {wire} B of wire \
+         (ratio {ratio:.0}x), exceeding the linear bound of {bound} B. Each decoded \
+         Signed must retain only its own bytes."
     );
 }
