@@ -314,7 +314,7 @@ fn fsync_dir(dir: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::cast_possible_truncation, clippy::expect_used)]
 mod tests {
     use std::collections::BTreeSet;
 
@@ -565,5 +565,137 @@ mod tests {
             !dst.exists(),
             "dry run must not create the destination directory"
         );
+    }
+
+    /// `run` rejects an in-place migration (`--from == --to`) before touching
+    /// either store.
+    #[tokio::test]
+    async fn run_rejects_same_from_and_to() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let args = MigrateArgs {
+            from: dir.path().to_path_buf(),
+            to: dir.path().to_path_buf(),
+            progress_every: 1000,
+            dry_run: false,
+        };
+        let err = run(args)
+            .await
+            .expect_err("same --from/--to must be rejected");
+        assert!(
+            err.to_string().contains("must differ"),
+            "expected the distinct-directory guard, got: {err}"
+        );
+    }
+
+    /// `run` rejects a missing source directory.
+    #[tokio::test]
+    async fn run_rejects_missing_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let args = MigrateArgs {
+            from: dir.path().join("does-not-exist"),
+            to: dir.path().join("dest"),
+            progress_every: 1000,
+            dry_run: false,
+        };
+        let err = run(args)
+            .await
+            .expect_err("missing source must be rejected");
+        assert!(
+            err.to_string().contains("does not exist"),
+            "expected the missing-source guard, got: {err}"
+        );
+    }
+
+    /// Property: migrating an arbitrary filesystem corpus to redb preserves every
+    /// tree's commit and fragment content (by digest) and the tree-id set, and a
+    /// second pass is a no-op.
+    ///
+    /// ```text
+    /// forall corpus.
+    ///   migrate_all(fs → redb);
+    ///   ∀ tree. commit_digests(redb)   == commit_digests(fs)
+    ///         ∧ fragment_digests(redb) == fragment_digests(fs)
+    ///   ∧ tree_ids(redb) == tree_ids(fs)
+    ///   ∧ a second migrate_all migrates 0
+    /// ```
+    #[test]
+    fn prop_migrate_preserves_content() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+        let s = signer();
+
+        bolero::check!()
+            .with_arbitrary::<Vec<(u8, u8)>>()
+            .for_each(|corpus| {
+                rt.block_on(async {
+                    let src_dir = tempfile::tempdir().expect("src tempdir");
+                    let dst_dir = tempfile::tempdir().expect("dst tempdir");
+                    let source = FsStorage::new(src_dir.path().to_path_buf()).expect("fs source");
+                    let dest = RedbStorage::new(dst_dir.path()).expect("redb dest");
+
+                    let mut tree_ids = Vec::new();
+                    for (i, &(c, f)) in corpus.iter().take(3).enumerate() {
+                        let n_c = usize::from(c % 4);
+                        let n_f = usize::from(f % 2);
+                        if n_c + n_f == 0 {
+                            continue;
+                        }
+                        let mut id_bytes = [0u8; 32];
+                        id_bytes[0] = i as u8 + 1;
+                        let id = SedimentreeId::new(id_bytes);
+                        tree_ids.push(id);
+
+                        let mut commits = Vec::new();
+                        for j in 0..n_c {
+                            // Mix inline (32 B) and external (300 B) blobs.
+                            let len = if j % 2 == 0 { 32 } else { 300 };
+                            commits.push(commit(&s, id, j as u8, len).await);
+                        }
+                        let mut frags = Vec::new();
+                        for j in 0..n_f {
+                            frags.push(fragment(&s, id, 0xF0 + j as u8, 64).await);
+                        }
+                        Storage::<Sendable>::save_batch(&source, id, commits, frags)
+                            .await
+                            .expect("populate source");
+                    }
+
+                    let stats = migrate_all(&source, Some(&dest), 1).await.expect("migrate");
+                    assert_eq!(stats.migrated, tree_ids.len(), "every tree migrated");
+
+                    for &id in &tree_ids {
+                        assert_eq!(
+                            commit_digests(&source, id).await,
+                            commit_digests(&dest, id).await,
+                            "commit content preserved for {id:?}"
+                        );
+                        assert_eq!(
+                            fragment_digests(&source, id).await,
+                            fragment_digests(&dest, id).await,
+                            "fragment content preserved for {id:?}"
+                        );
+                    }
+
+                    let src_ids: BTreeSet<_> =
+                        Storage::<Sendable>::load_all_sedimentree_ids(&source)
+                            .await
+                            .expect("src ids")
+                            .into_iter()
+                            .collect();
+                    let dst_ids: BTreeSet<_> = Storage::<Sendable>::load_all_sedimentree_ids(&dest)
+                        .await
+                        .expect("dst ids")
+                        .into_iter()
+                        .collect();
+                    assert_eq!(src_ids, dst_ids, "tree-id set preserved");
+
+                    let again = migrate_all(&source, Some(&dest), 1)
+                        .await
+                        .expect("re-migrate");
+                    assert_eq!(again.migrated, 0, "second pass is a no-op");
+                });
+            });
     }
 }

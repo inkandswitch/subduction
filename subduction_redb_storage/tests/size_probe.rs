@@ -77,13 +77,16 @@ async fn inline_db_size(records: u32, blob_size: usize) -> u64 {
         .len()
 }
 
-/// CI tripwire for the buddy-allocator conclusion behind
-/// `DEFAULT_INLINE_THRESHOLD`: an inline value just *past* a power-of-two
-/// boundary allocates double, one just *under* allocates snugly. 100
-/// records (~6–13 MiB of I/O) keep this cheap enough to run on every
-/// `cargo test`; the full five-point sweep lives in the `#[ignore]`d
-/// probe below. If redb's allocation strategy changes, this fails and the
-/// threshold analysis in `.ignore/DECISIONS.md` needs redoing.
+/// External-assumption tripwire — **not** a behavior test of this crate. It
+/// pins a property of *redb's* buddy allocator that `DEFAULT_INLINE_THRESHOLD`
+/// relies on: an inline value just *past* a power-of-two boundary allocates
+/// double, one just *under* allocates snugly. A failure means a redb upgrade
+/// changed its allocation strategy, so the threshold analysis in
+/// `.ignore/DECISIONS.md` needs redoing — it does **not** indicate a bug in our
+/// code.
+///
+/// 100 records (~6–13 MiB of I/O) keep it cheap enough for every `cargo test`;
+/// the full five-point sweep lives in the `#[ignore]`d probe below.
 #[tokio::test]
 async fn buddy_allocation_doubles_past_power_of_two_boundary() {
     const RECORDS: u32 = 100;

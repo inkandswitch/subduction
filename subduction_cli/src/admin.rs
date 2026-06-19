@@ -334,10 +334,19 @@ mod tests {
             bytes: 100,
         }];
         let out = render_overview(&store, &trees);
-        assert!(out.contains("trees:      1"), "{out}");
-        assert!(out.contains("blob files: 1 (20480 bytes)"), "{out}");
-        assert!(out.contains(&hex::encode([0xA1; 32])), "{out}");
-        assert!(out.contains("commits=2 fragments=1 bytes=100"), "{out}");
+        let expected = format!(
+            "store\n  \
+             trees:      1\n  \
+             commits:    2\n  \
+             fragments:  1\n  \
+             redb file:  4096 bytes\n  \
+             blob files: 1 (20480 bytes)\n  \
+             logical:    100 bytes\n\n\
+             trees (by sedimentree id):\n  \
+             {}  commits=2 fragments=1 bytes=100\n",
+            hex::encode([0xA1; 32]),
+        );
+        assert_eq!(out, expected);
     }
 
     #[test]
@@ -358,15 +367,27 @@ mod tests {
             fragments: Vec::new(),
         };
         let out = render_heads(sid(0xA1), &heads);
-        assert!(out.contains("commits (2):"), "{out}");
-        assert!(out.contains("equivocated ×2"), "{out}");
-        assert!(out.contains(&hex::encode([0xAA; 32])), "{out}");
-        assert!(out.contains("fragments (0):"), "{out}");
+        let expected = format!(
+            "tree {} heads\n\
+             commits (2):\n  \
+             {}  (equivocated ×2)\n    \
+             {}\n    \
+             {}\n  \
+             {}\n\
+             fragments (0):\n",
+            hex::encode([0xA1; 32]),
+            hex::encode([0x01; 32]),
+            hex::encode([0xAA; 32]),
+            hex::encode([0xBB; 32]),
+            hex::encode([0x02; 32]),
+        );
+        assert_eq!(out, expected);
     }
 
     #[test]
     fn find_renders_not_found_when_empty() {
-        assert!(render_find(cid(0x09), &[]).contains("not found"));
+        let out = render_find(cid(0x09), &[]);
+        assert_eq!(out, format!("head {} not found\n", hex::encode([0x09; 32])));
     }
 
     #[test]
