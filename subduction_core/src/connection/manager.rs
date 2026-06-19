@@ -10,16 +10,58 @@
 //! - [`ConnectionId`]: Logical identifier that survives reconnects (returned to caller)
 //! - `TaskId`: Internal identifier for the spawned task (changes on reconnect)
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use async_lock::Mutex;
+use async_lock::{Mutex, Semaphore, SemaphoreGuardArc};
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::stream::AbortHandle;
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    collections::Map,
+};
 
 use super::{Connection, id::ConnectionId};
 use crate::peer::id::PeerId;
+
+/// Maximum number of inbound handler-dispatch slots kept in flight per peer.
+///
+/// Each peer gets its own [`Semaphore`] with this many permits, shared across
+/// all of that peer's connections. A reader acquires a permit before admitting
+/// a request (see [`connection_loop`]) and holds it until the spawned handler
+/// completes, capping a peer's concurrent (queued or running) handlers.
+///
+/// At the cap the reader stops pulling from the connection, so a flooding or
+/// slow peer backpressures its own transport rather than consuming a shared
+/// dispatch budget.
+pub(crate) const MAX_INFLIGHT_DISPATCH_PER_PEER: usize = 512;
+
+/// Get or create the per-peer dispatch [`Semaphore`], shared across all of a
+/// peer's connections.
+///
+/// The registry holds [`Weak`] references: a peer's semaphore stays alive only
+/// while one of its `connection_loop`s — or a still-running dispatch task
+/// holding a permit — keeps an `Arc`. Once the last holder drops, the `Weak`
+/// dangles and is pruned on the next miss, so the registry can't grow unbounded
+/// across peer churn. A reconnecting peer whose tasks are still draining
+/// re-shares the same semaphore, so its in-flight budget carries across the
+/// handoff.
+fn slots_for(peer: PeerId, registry: &mut Map<PeerId, Weak<Semaphore>>) -> Arc<Semaphore> {
+    if let Some(live) = registry.get(&peer).and_then(Weak::upgrade) {
+        return live;
+    }
+
+    // Miss: this peer has no live semaphore. Drop any other dangling entries
+    // before inserting so peers that departed for good can't accumulate.
+    registry.retain(|_, weak| weak.strong_count() > 0);
+
+    let slots = Arc::new(Semaphore::new(MAX_INFLIGHT_DISPATCH_PER_PEER));
+    registry.insert(peer, Arc::downgrade(&slots));
+    slots
+}
 
 /// Internal task identifier for abort handle tracking.
 ///
@@ -88,8 +130,13 @@ pub struct ConnectionManager<
     /// Inbound commands (add/remove connections).
     commands: async_channel::Receiver<Command<Conn>>,
 
-    /// Outbound messages from all connections (bounded — provides backpressure).
-    messages: async_channel::Sender<(Conn, WireMsg)>,
+    /// Outbound (non-response) messages from all connections (bounded —
+    /// provides backpressure).
+    ///
+    /// Each message carries a [`SemaphoreGuardArc`] from its peer's dispatch
+    /// semaphore, acquired in [`connection_loop`] and held until the spawned
+    /// handler completes, which caps in-flight dispatches per peer.
+    messages: async_channel::Sender<(Conn, WireMsg, SemaphoreGuardArc)>,
 
     /// Fast path for response messages (bounded at high capacity).
     ///
@@ -120,7 +167,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>>
     pub fn new(
         spawner: Spawner,
         commands: async_channel::Receiver<Command<Conn>>,
-        messages: async_channel::Sender<(Conn, WireMsg)>,
+        messages: async_channel::Sender<(Conn, WireMsg, SemaphoreGuardArc)>,
         responses: async_channel::Sender<(Conn, WireMsg)>,
         is_response: fn(&WireMsg) -> bool,
         closed: async_channel::Sender<(ConnectionId, Conn)>,
@@ -215,6 +262,11 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
         manager: ConnectionManager<Self, Conn, WireMsg, Spawner>,
     ) -> Self::Future<'static, ()> {
         Async::from_future(async move {
+            // Per-peer dispatch semaphores, shared across a peer's connections.
+            // Owned by this single command loop, so no extra synchronization is
+            // needed; spawned `connection_loop`s only hold an `Arc` clone.
+            let mut dispatch_registry: Map<PeerId, Weak<Semaphore>> = Map::new();
+
             while let Ok(cmd) = manager.commands.recv().await {
                 match cmd {
                     Command::Add(conn, peer_id) => {
@@ -230,6 +282,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                         let is_response = manager.is_response;
                         let closed = manager.closed.clone();
                         let conn_clone = conn.clone();
+                        let dispatch_slots = slots_for(peer_id, &mut dispatch_registry);
 
                         let fut = Async::from_future(async move {
                             connection_loop(
@@ -238,6 +291,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                                 messages,
                                 responses,
                                 is_response,
+                                dispatch_slots,
                             )
                             .await;
 
@@ -272,6 +326,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                         let is_response = manager.is_response;
                         let closed = manager.closed.clone();
                         let conn_clone = conn.clone();
+                        let dispatch_slots = slots_for(peer_id, &mut dispatch_registry);
 
                         let fut = Async::from_future(async move {
                             connection_loop(
@@ -280,6 +335,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                                 messages,
                                 responses,
                                 is_response,
+                                dispatch_slots,
                             )
                             .await;
 
@@ -337,22 +393,32 @@ async fn connection_loop<
 >(
     conn: Conn,
     peer_id: PeerId,
-    messages: async_channel::Sender<(Conn, WireMsg)>,
+    messages: async_channel::Sender<(Conn, WireMsg, SemaphoreGuardArc)>,
     responses: async_channel::Sender<(Conn, WireMsg)>,
     is_response: fn(&WireMsg) -> bool,
+    dispatch_slots: Arc<Semaphore>,
 ) {
     loop {
         match conn.recv().await {
             Ok(msg) => {
                 tracing::trace!(peer = %peer_id, "connection received message");
-                let sender = if is_response(&msg) {
-                    &responses
+                if is_response(&msg) {
+                    // Responses use the fast path and are never throttled: they
+                    // resolve a pending caller rather than spawning a handler.
+                    if responses.send((conn.clone(), msg)).await.is_err() {
+                        tracing::warn!(peer = %peer_id, "connection response channel closed");
+                        break;
+                    }
                 } else {
-                    &messages
-                };
-                if sender.send((conn.clone(), msg)).await.is_err() {
-                    tracing::warn!(peer = %peer_id, "connection message channel closed");
-                    break;
+                    // Acquire this peer's dispatch slot before forwarding. At
+                    // the cap this awaits, pausing `conn.recv()` for this peer
+                    // only; the permit rides the queue and releases when the
+                    // handler completes.
+                    let permit = dispatch_slots.acquire_arc().await;
+                    if messages.send((conn.clone(), msg, permit)).await.is_err() {
+                        tracing::warn!(peer = %peer_id, "connection message channel closed");
+                        break;
+                    }
                 }
             }
             Err(e) => {

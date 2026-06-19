@@ -92,7 +92,7 @@ use crate::{
 };
 use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
-use async_lock::{Mutex, Semaphore, SemaphoreGuardArc};
+use async_lock::{Mutex, SemaphoreGuardArc};
 use core::{marker::PhantomData, time::Duration};
 use dispatch_completion::{DispatchCompletion, DispatchOutcome};
 use error::{
@@ -127,18 +127,6 @@ use spawn_guard::AbortOnDrop;
 use subduction_crypto::{
     signed::Signed, signer::Signer, verified_author::VerifiedAuthor, verified_meta::VerifiedMeta,
 };
-
-/// Maximum number of inbound handler-dispatch tasks the listener keeps in
-/// flight at once.
-///
-/// The listener spawns one task per inbound message; without a cap, a fast or
-/// hostile peer could make it drain the bounded `msg_queue` and spawn tasks
-/// faster than they complete, converting queue backpressure into unbounded
-/// runtime-task growth. While at the cap the listener stops accepting new
-/// messages and prioritises draining completions, so `msg_queue` backpressure
-/// flows back to the senders. Sized well above the queue's steady-state depth
-/// so it only engages under genuine overload.
-const MAX_INFLIGHT_DISPATCH: usize = 1024;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -222,7 +210,8 @@ pub struct Subduction<
     send_counter: PeerCounter,
 
     manager_channel: Sender<Command<Authenticated<Conn, Async>>>,
-    msg_queue: async_channel::Receiver<(Authenticated<Conn, Async>, Hdl::Message)>,
+    msg_queue:
+        async_channel::Receiver<(Authenticated<Conn, Async>, Hdl::Message, SemaphoreGuardArc)>,
     response_queue: async_channel::Receiver<(Authenticated<Conn, Async>, Hdl::Message)>,
     connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<Conn, Async>)>,
 
@@ -327,7 +316,7 @@ where
         tracing::info!("initializing Subduction instance");
 
         let (manager_sender, manager_receiver) = bounded(256);
-        let (queue_sender, queue_receiver) = async_channel::bounded(2048);
+        let (queue_sender, queue_receiver) = async_channel::bounded(4096);
         let (response_sender, response_receiver) = async_channel::bounded(8192);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
         let stored_spawner = spawner.clone();
@@ -3167,11 +3156,9 @@ where
             async_channel::Receiver<DispatchOutcome<Conn, Async, Hdl::HandlerError>>,
         ) = async_channel::unbounded();
 
-        let dispatch_permits = Arc::new(Semaphore::new(MAX_INFLIGHT_DISPATCH));
-
-        #[cfg(feature = "metrics")]
-        crate::metrics::set_dispatch_inflight_max(MAX_INFLIGHT_DISPATCH);
-
+        // Dispatch admission is per-peer, enforced upstream in the connection
+        // manager (a reader acquires its peer's permit before forwarding); the
+        // listener just drains the queue and spawns.
         loop {
             futures::select_biased! {
                 done = done_rx.recv().fuse() => {
@@ -3247,13 +3234,11 @@ where
                     }
                 }
 
-                permitted = async {
-                    let permit = dispatch_permits.acquire_arc().await;
-                    let received = self.msg_queue.recv().await;
-                    (permit, received)
-                }.fuse() => {
-                    let (permit, msg_result) = permitted;
-                    if let Ok((conn, msg)) = msg_result {
+                received = self.msg_queue.recv().fuse() => {
+                    // The per-peer permit was acquired upstream in the
+                    // connection reader and rides the queue here; it's moved
+                    // into the dispatch task and released on completion.
+                    if let Ok((conn, msg, permit)) = received {
                         let peer_id = conn.peer_id();
                         // Don't Debug-format `msg` — it can embed commit/blob bytes.
                         tracing::trace!(peer = %peer_id, "listener received message");

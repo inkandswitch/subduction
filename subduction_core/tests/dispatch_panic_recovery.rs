@@ -1,17 +1,17 @@
 //! A panicking dispatch task must not wedge the listener.
 //!
-//! The listener bounds in-flight dispatch tasks with a counter and stops
-//! pulling new messages once it reaches `MAX_INFLIGHT_DISPATCH`. Each spawned
-//! task releases its slot through a completion guard that fires on drop — on the
-//! normal path *and* on unwind. So even a flood of panicking handler tasks
-//! cannot ratchet the in-flight count up permanently, and the listener keeps
-//! processing.
+//! Each peer's connection reader holds a per-peer dispatch semaphore
+//! (`MAX_INFLIGHT_DISPATCH_PER_PEER` permits) and acquires a permit before
+//! admitting a request; the permit rides the queue into the spawned handler
+//! task and is released when that task drops — on the normal path *and* on
+//! unwind. So even a flood of panicking handler tasks cannot permanently
+//! exhaust a peer's permits, and the reader keeps admitting work.
 //!
-//! This test drives more than `MAX_INFLIGHT_DISPATCH` panicking messages
-//! through a real listener, then a normal message, and asserts the normal one
-//! is still handled. Without the completion guard, the panics would never
-//! release their slots, the count would pin at the cap, and the final message
-//! would never be processed.
+//! This test drives more than `MAX_INFLIGHT_DISPATCH_PER_PEER` panicking
+//! messages from one peer through a real listener, then a normal message, and
+//! asserts the normal one is still handled. Without the permit's drop-release,
+//! the panics would never return their slots, the peer's semaphore would pin at
+//! the cap, and the final message would never be admitted.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -102,8 +102,9 @@ async fn wait_for(limit: Duration, mut cond: impl FnMut() -> bool) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn panicking_dispatch_tasks_do_not_wedge_the_listener() -> TestResult {
-    // Comfortably above the listener's `MAX_INFLIGHT_DISPATCH` (1024): without
-    // the completion guard, this many un-released slots would pin the gate.
+    // Comfortably above the per-peer cap `MAX_INFLIGHT_DISPATCH_PER_PEER` (512):
+    // without the permit's drop-release, this many un-returned slots would pin
+    // the peer's semaphore.
     const POISON_COUNT: usize = 1100;
 
     let handled = Arc::new(AtomicUsize::new(0));
