@@ -40,7 +40,7 @@ where
     T: HasBlobMeta + Schema + EncodeFields + DecodeFields,
 {
     let (meta, blob) = raw;
-    let signed: Signed<T> = match Signed::try_decode(meta) {
+    let signed: Signed<T> = match Signed::try_decode(&meta) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("skipping corrupt stored {what}: {e}");
@@ -108,7 +108,7 @@ where
             continue;
         };
 
-        let payload = match Signed::<T>::try_decode(meta)
+        let payload = match Signed::<T>::try_decode(&meta)
             .and_then(|signed| signed.try_decode_trusted_payload())
         {
             Ok(payload) => payload,
@@ -195,7 +195,7 @@ where
             DecodedCompound::External { meta } => {
                 let slot = slots.len();
                 slots.push(None);
-                match Signed::<T>::try_decode(meta) {
+                match Signed::<T>::try_decode(&meta) {
                     Ok(signed) => match signed.try_decode_trusted_payload() {
                         Ok(payload) => {
                             let blob_meta = payload.blob_meta();
