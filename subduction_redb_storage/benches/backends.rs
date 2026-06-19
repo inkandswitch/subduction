@@ -61,7 +61,9 @@
     clippy::panic,
     clippy::unwrap_used,
     clippy::cast_possible_truncation,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_const_for_fn
 )]
 
 use std::{
@@ -95,28 +97,42 @@ fn ci_slim() -> bool {
     std::env::var("SUBDUCTION_BENCH_CI_SLIM").is_ok_and(|v| !v.is_empty())
 }
 
-/// Commit-count sweep for `load/count`.
+/// Commit-count sweep, set to the production per-tree commit percentiles
+/// (p50=2, p99=48, p99.9=1310, max=27444 across 190.6k trees, 2026-06): most
+/// documents are tiny, with a heavy tail of large ones.
 fn count_sweep() -> &'static [usize] {
     if ci_slim() {
-        &[10, 100, 1_000]
+        &[2, 48, 1_310]
     } else {
-        &[10, 100, 1_000, 10_000]
+        &[2, 48, 1_310, 27_444]
     }
 }
 
-/// Blob-size sweep for `load/blob_size`.
-///
-/// 48 KiB sits midway between the 32 Ki and 64 Ki buddy-allocator
-/// boundaries (representative ~33% inline waste); 64 KiB is the documented
-/// pathological worst case (see module docs); 192 KiB matches the *actual*
-/// average size of production blobs above the external threshold (~171 KB
-/// measured across 31.6k externals, 2026-06).
+/// Blob-size sweep, set to the production blob-size percentiles (p50=187 B,
+/// p90=639 B, p99=44 KB, external-mean 169 KB across 1.71M blobs, 2026-06).
+/// 97.9% of blobs are inline (≤16 KiB); the multi-MB external tail is measured
+/// separately by `large_external` (it would need a tiny `N` here).
 fn blob_size_sweep() -> &'static [usize] {
     if ci_slim() {
-        &[64, 1024]
+        &[187, 44_233]
     } else {
-        &[64, 1024, 49_152, 65_536, 196_608]
+        &[187, 639, 44_233, 169_259]
     }
+}
+
+/// Number of trees in the production-replica corpus (`SUBDUCTION_BENCH_PROD_REPLICA=1`).
+/// Override with `SUBDUCTION_BENCH_REPLICA_TREES`. The footprint *ratio* is
+/// scale-invariant, so a few thousand trees suffice to show it.
+fn replica_trees() -> usize {
+    std::env::var("SUBDUCTION_BENCH_REPLICA_TREES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(if ci_slim() { 1_000 } else { 5_000 })
+}
+
+/// Run only the production-replica group (footprint + id-enumeration + load).
+fn replica_only() -> bool {
+    std::env::var("SUBDUCTION_BENCH_PROD_REPLICA").is_ok_and(|v| !v.is_empty())
 }
 
 /// Datasets for the size-on-disk table: `(items, blob_size, label)`.
@@ -702,6 +718,30 @@ fn bench_save<S: Storage<Sendable> + 'static>(
         },
     );
 
+    // Realistic small batches: the median document is 2 commits and sync
+    // deltas are tiny, so redb's one-fsync-per-transaction win matters here
+    // more than at the 1000-batch above.
+    for &batch in &[1usize, 2, 8, 32] {
+        group.throughput(Throughput::Elements(batch as u64));
+        group.bench_function(
+            BenchmarkId::new("smallbatch", format!("{}/{batch}", backend.name)),
+            |b| {
+                b.iter_batched(
+                    || {
+                        (0..batch)
+                            .map(|_| seal_commit(rt, id, 256))
+                            .collect::<Vec<_>>()
+                    },
+                    |commits| {
+                        rt.block_on(storage.save_batch(id, commits, Vec::new()))
+                            .unwrap_or_else(|e| panic!("small batch save: {e}"));
+                    },
+                    BatchSize::PerIteration,
+                );
+            },
+        );
+    }
+
     group.finish();
 }
 
@@ -842,6 +882,420 @@ fn bench_concurrent_writes<S: Storage<Sendable> + Clone + Send + Sync + 'static>
     group.finish();
 }
 
+// ── Production-replica corpus ─────────────────────────────────────────
+
+/// Deterministic xorshift64* PRNG — reproducible replica generation without a
+/// `rand` dependency.
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Self(seed | 1)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// Uniform `f64` in `[0, 1)`.
+    fn unit(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// Inverse-CDF breakpoints `(cumulative_probability, value)` for the production
+/// blob-size distribution (1.71M blobs, 2026-06). 97.9% inline (≤16 KiB), but
+/// the >16 KiB tail holds 88% of the bytes.
+const BLOB_CDF: &[(f64, f64)] = &[
+    (0.0, 34.0),
+    (0.10, 125.0),
+    (0.25, 151.0),
+    (0.50, 187.0),
+    (0.75, 271.0),
+    (0.90, 639.0),
+    (0.95, 3465.0),
+    (0.99, 44_233.0),
+    (0.999, 653_060.0),
+    (0.9999, 3_952_602.0),
+    (1.0, 27_297_996.0),
+];
+
+/// Inverse-CDF breakpoints for production commits-per-tree (190.6k trees).
+const TREE_CDF: &[(f64, f64)] = &[
+    (0.0, 1.0),
+    (0.50, 2.0),
+    (0.75, 2.0),
+    (0.90, 3.0),
+    (0.99, 48.0),
+    (0.999, 1_310.0),
+    (0.9999, 9_218.0),
+    (1.0, 27_444.0),
+];
+
+/// Sample from a piecewise-linear inverse CDF given `u` in `[0, 1)`.
+fn sample_cdf(cdf: &[(f64, f64)], u: f64) -> f64 {
+    for win in cdf.windows(2) {
+        let (p0, v0) = win[0];
+        let (p1, v1) = win[1];
+        if u < p1 {
+            let t = if p1 > p0 { (u - p0) / (p1 - p0) } else { 0.0 };
+            return v0 + t * (v1 - v0);
+        }
+    }
+    cdf[cdf.len() - 1].1
+}
+
+fn sample_blob_size(rng: &mut Rng) -> usize {
+    (sample_cdf(BLOB_CDF, rng.unit()).round() as usize).max(34)
+}
+
+fn sample_tree_size(rng: &mut Rng) -> usize {
+    (sample_cdf(TREE_CDF, rng.unit()).round() as usize).max(1)
+}
+
+/// Populate `storage` with `n_trees` documents whose per-tree commit counts and
+/// per-commit blob sizes are drawn from the production distributions (one
+/// durable batch per tree). Returns the tree ids.
+fn populate_replica<S: Storage<Sendable>>(
+    rt: &Runtime,
+    storage: &S,
+    n_trees: usize,
+    seed: u64,
+) -> Vec<SedimentreeId> {
+    let mut rng = Rng::new(seed);
+    let mut ids = Vec::with_capacity(n_trees);
+
+    for ti in 0..n_trees {
+        let mut id_bytes = [0u8; 32];
+        id_bytes[..8].copy_from_slice(&(ti as u64).to_be_bytes());
+        let id = SedimentreeId::new(id_bytes);
+
+        let commits: Vec<_> = (0..sample_tree_size(&mut rng))
+            .map(|_| seal_commit(rt, id, sample_blob_size(&mut rng)))
+            .collect();
+        rt.block_on(storage.save_batch(id, commits, Vec::new()))
+            .unwrap_or_else(|e| panic!("replica save_batch: {e}"));
+        ids.push(id);
+    }
+
+    ids
+}
+
+/// Measure one backend's footprint over the production-replica corpus.
+fn measure_replica_size<S: Storage<Sendable>>(
+    rt: &Runtime,
+    backend: &Backend<S>,
+    n_trees: usize,
+) -> SizeRow {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let storage = (backend.make)(dir.path());
+        populate_replica(rt, &storage, n_trees, 0xC0FF_EE00);
+    }
+    let (apparent, allocated) = disk_usage(dir.path());
+    let compacted = backend.compactable.then(|| {
+        let db_path = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
+        let mut db = redb::Database::create(&db_path).expect("reopen redb for compaction");
+        db.compact().expect("compact redb");
+        drop(db);
+        disk_usage(dir.path()).1
+    });
+    SizeRow {
+        dataset: "prod-replica",
+        backend: backend.name,
+        apparent,
+        allocated,
+        compacted,
+    }
+}
+
+/// Print the production-replica footprint for all three backends — the
+/// headline disk-footprint comparison on a realistic blob/tree mix.
+fn report_replica_size(rt: &Runtime, n_trees: usize) {
+    eprintln!("\nproduction-replica footprint ({n_trees} trees, prod blob/tree distributions):");
+    for row in [
+        measure_replica_size(rt, &FS, n_trees),
+        measure_replica_size(rt, &REDB, n_trees),
+        measure_replica_size(rt, &REDB_INLINE, n_trees),
+    ] {
+        let compacted = row.compacted.map_or_else(|| "—".to_owned(), human);
+        eprintln!(
+            "  {:<11}  apparent {:>11}  allocated {:>11}  compacted {:>11}",
+            row.backend,
+            human(row.apparent),
+            human(row.allocated),
+            compacted,
+        );
+    }
+}
+
+/// Id enumeration (`load_all_sedimentree_ids`) and an aggregate load over the
+/// production-replica corpus. The enumeration cost is the metrics-refresh /
+/// startup scan at realistic scale (redb `TREES` B+tree scan vs FS two-level
+/// dir walk); the load samples the realistic tiny-tree-dominated read mix.
+fn bench_replica_reads<S: Storage<Sendable> + 'static>(
+    c: &mut Criterion,
+    rt: &Runtime,
+    backend: &Backend<S>,
+    n_trees: usize,
+) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let storage = (backend.make)(dir.path());
+    let ids = populate_replica(rt, &storage, n_trees, 0xC0FF_EE00);
+
+    let mut group = c.benchmark_group("replica");
+    group.sample_size(10);
+
+    group.throughput(Throughput::Elements(n_trees as u64));
+    group.bench_function(BenchmarkId::new("enumerate_ids", backend.name), |b| {
+        b.iter(|| {
+            let got = rt
+                .block_on(storage.load_all_sedimentree_ids())
+                .unwrap_or_else(|e| panic!("load_all_sedimentree_ids: {e}"));
+            assert_eq!(got.len(), n_trees);
+            got
+        });
+    });
+
+    // Aggregate load over an evenly-spaced sample of trees (the realistic,
+    // mostly-tiny read mix).
+    let sample: Vec<_> = ids
+        .iter()
+        .step_by((ids.len() / 200).max(1))
+        .take(200)
+        .copied()
+        .collect();
+    group.throughput(Throughput::Elements(sample.len() as u64));
+    group.bench_function(BenchmarkId::new("load_sample", backend.name), |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                let mut total = 0;
+                for &id in &sample {
+                    total += storage
+                        .load_loose_commits(id)
+                        .await
+                        .unwrap_or_else(|e| panic!("replica load: {e}"))
+                        .len();
+                }
+                total
+            })
+        });
+    });
+
+    group.finish();
+}
+
+// ── Cold-cache reads ──────────────────────────────────────────────────
+
+/// Drop the OS page cache for every file under `path` (`POSIX_FADV_DONTNEED`).
+/// Clean pages only — callers must have synced first (the durable saves do).
+#[cfg(unix)]
+fn evict_cache(path: &Path) {
+    use std::os::unix::io::AsRawFd as _;
+
+    use nix::fcntl::{PosixFadviseAdvice, posix_fadvise};
+
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if meta.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                evict_cache(&entry.path());
+            }
+        }
+    } else if meta.is_file()
+        && let Ok(file) = std::fs::File::open(path)
+    {
+        let _ = posix_fadvise(
+            file.as_raw_fd(),
+            0,
+            0,
+            PosixFadviseAdvice::POSIX_FADV_DONTNEED,
+        );
+    }
+}
+
+/// Cold-cache bulk load at the production tail tree sizes (p99=48, p99.9=1310,
+/// max=27444 commits). Each timed iteration opens the store fresh (cold
+/// in-process cache) after evicting the OS page cache, so it reads from disk —
+/// the cold path the warm `load/count` group understates and where redb's
+/// clustered B+tree scan beats FS's per-item random I/O most. The open+drop
+/// lifecycle is inside the timed region (the realistic cold-access cost).
+#[cfg(unix)]
+fn bench_cold_reads<S: Storage<Sendable> + 'static>(
+    c: &mut Criterion,
+    rt: &Runtime,
+    backend: &Backend<S>,
+) {
+    let mut group = c.benchmark_group("load/cold");
+    group.sample_size(10);
+    let id = SedimentreeId::new(TREE);
+
+    let sizes: &[usize] = if ci_slim() {
+        &[48, 1_310]
+    } else {
+        &[48, 1_310, 27_444]
+    };
+    for &n in sizes {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        {
+            let storage = (backend.make)(&path);
+            populate(rt, &storage, n, 256);
+        }
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new(backend.name, n), |b| {
+            b.iter_batched(
+                || evict_cache(&path),
+                |()| {
+                    let storage = (backend.make)(&path);
+                    let commits = rt
+                        .block_on(storage.load_loose_commits(id))
+                        .unwrap_or_else(|e| panic!("cold load: {e}"));
+                    assert_eq!(commits.len(), n);
+                    commits
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+// ── Concurrent reads ──────────────────────────────────────────────────
+
+/// Aggregate read throughput as read concurrency rises — the production
+/// profile (~99% of storage ops are reads; the responder fans out to many
+/// concurrent dispatches). `T` distinct trees at the realistic p99 size (48
+/// commits) are loaded concurrently: redb MVCC readers vs FS parallel reads.
+fn bench_concurrent_reads<S: Storage<Sendable> + Clone + Send + Sync + 'static>(
+    c: &mut Criterion,
+    rt: &Runtime,
+    backend: &Backend<S>,
+) {
+    const PER_TREE: usize = 48; // production p99 commits/tree
+
+    let mut group = c.benchmark_group("concurrent_reads");
+    group.sample_size(10);
+
+    for &readers in concurrency_sweep() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = (backend.make)(dir.path());
+        let ids: Vec<SedimentreeId> = (0..readers)
+            .map(|ti| {
+                let mut id_bytes = [0u8; 32];
+                id_bytes[..8].copy_from_slice(&(ti as u64).to_be_bytes());
+                let id = SedimentreeId::new(id_bytes);
+                let commits = (0..PER_TREE).map(|_| seal_commit(rt, id, 256)).collect();
+                rt.block_on(storage.save_batch(id, commits, Vec::new()))
+                    .unwrap_or_else(|e| panic!("populate tree: {e}"));
+                id
+            })
+            .collect();
+
+        group.throughput(Throughput::Elements((readers * PER_TREE) as u64));
+        group.bench_function(BenchmarkId::new(backend.name, readers), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let mut handles = Vec::with_capacity(ids.len());
+                    for &id in &ids {
+                        let storage = storage.clone();
+                        handles.push(tokio::spawn(async move {
+                            storage
+                                .load_loose_commits(id)
+                                .await
+                                .unwrap_or_else(|e| panic!("concurrent read: {e}"))
+                                .len()
+                        }));
+                    }
+                    let mut total = 0;
+                    for handle in handles {
+                        total += handle.await.expect("read task panicked");
+                    }
+                    total
+                })
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ── Large external blobs ──────────────────────────────────────────────
+
+/// Save + load at the external-blob tail (the 2% of blobs holding 88% of the
+/// bytes: ext-mean 169 KB, ext-p99 2.2 MB). Small `N` keeps the multi-MB sizes
+/// tractable. `redb-inline` is included to show its buddy-allocator pathology
+/// at MB scale — the hybrid streams these as flat files instead.
+fn bench_large_external<S: Storage<Sendable> + 'static>(
+    c: &mut Criterion,
+    rt: &Runtime,
+    backend: &Backend<S>,
+) {
+    const N: usize = 8;
+
+    let mut group = c.benchmark_group("large_external");
+    group.sample_size(10);
+    let id = SedimentreeId::new(TREE);
+
+    let sizes: &[usize] = if ci_slim() {
+        &[169_259]
+    } else {
+        &[169_259, 2_230_481]
+    };
+    for &blob in sizes {
+        group.throughput(Throughput::Bytes((N * blob) as u64));
+        group.bench_function(
+            BenchmarkId::new(format!("save/{}", backend.name), blob),
+            |b| {
+                b.iter_batched(
+                    || {
+                        let dir = tempfile::tempdir().expect("tempdir");
+                        let storage = (backend.make)(dir.path());
+                        rt.block_on(storage.save_sedimentree_id(id))
+                            .unwrap_or_else(|e| panic!("save id: {e}"));
+                        let commits: Vec<_> = (0..N).map(|_| seal_commit(rt, id, blob)).collect();
+                        (dir, storage, commits)
+                    },
+                    |(dir, storage, commits)| {
+                        rt.block_on(storage.save_batch(id, commits, Vec::new()))
+                            .unwrap_or_else(|e| panic!("save batch: {e}"));
+                        (dir, storage)
+                    },
+                    BatchSize::PerIteration,
+                );
+            },
+        );
+
+        // Load (warm): the read-back/streaming cost.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = (backend.make)(dir.path());
+        populate(rt, &storage, N, blob);
+        group.bench_function(
+            BenchmarkId::new(format!("load/{}", backend.name), blob),
+            |b| {
+                b.iter(|| {
+                    let commits = rt
+                        .block_on(storage.load_loose_commits(id))
+                        .unwrap_or_else(|e| panic!("load: {e}"));
+                    assert_eq!(commits.len(), N);
+                    commits
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn all_benches(c: &mut Criterion) {
     let rt = Runtime::new().expect("create tokio runtime");
 
@@ -852,6 +1306,17 @@ fn all_benches(c: &mut Criterion) {
         bench_concurrent_writes(c, &rt, &FS);
         bench_concurrent_writes(c, &rt, &REDB);
         bench_concurrent_writes(c, &rt, &REDB_INLINE);
+        return;
+    }
+
+    // Production-replica group (footprint + id enumeration + load) on its own:
+    // it populates thousands of trees from the prod distributions (minutes),
+    // so it's opt-in rather than part of the default shoot-out.
+    if replica_only() {
+        let n = replica_trees();
+        report_replica_size(&rt, n);
+        bench_replica_reads(c, &rt, &FS, n);
+        bench_replica_reads(c, &rt, &REDB, n);
         return;
     }
 
@@ -875,6 +1340,20 @@ fn all_benches(c: &mut Criterion) {
     bench_save(c, &rt, &FS);
     bench_save(c, &rt, &REDB);
     bench_save(c, &rt, &REDB_INLINE);
+
+    // Cold-cache reads (Unix only — uses POSIX_FADV_DONTNEED to evict).
+    #[cfg(unix)]
+    {
+        bench_cold_reads(c, &rt, &FS);
+        bench_cold_reads(c, &rt, &REDB);
+    }
+
+    bench_concurrent_reads(c, &rt, &FS);
+    bench_concurrent_reads(c, &rt, &REDB);
+
+    bench_large_external(c, &rt, &FS);
+    bench_large_external(c, &rt, &REDB);
+    bench_large_external(c, &rt, &REDB_INLINE);
 
     bench_concurrent_writes(c, &rt, &FS);
     bench_concurrent_writes(c, &rt, &REDB);

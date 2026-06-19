@@ -31,6 +31,7 @@ tracing = { workspace = true, default-features = true }
 [dev-dependencies]
 bolero = { workspace = true }
 criterion = { workspace = true }
+nix = { version = "0.26", features = ["fs"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
 tempfile = { workspace = true }
