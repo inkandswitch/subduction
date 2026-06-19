@@ -1,0 +1,43 @@
+[package]
+name = "subduction_redb_storage"
+version = "0.1.0"
+publish = true
+description = "Hybrid redb + filesystem storage backend for Sedimentree"
+
+categories = ["database"]
+keywords = ["sedimentree", "storage", "redb"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+future_form = { workspace = true }
+futures = { workspace = true }
+redb = { workspace = true }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true, default-features = true }
+
+[dev-dependencies]
+bolero = { workspace = true }
+criterion = { workspace = true }
+nix = { version = "0.26", features = ["fs"] }
+sedimentree_fs_storage = { workspace = true }
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
+tempfile = { workspace = true }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "backends"
+harness = false

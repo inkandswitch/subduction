@@ -22,8 +22,11 @@ use subduction_keyhive::{
 
 use crate::{handler::CliConn, transport::TransportSendError, wire::CliWireMessage};
 
-const ARCHIVES_SUBDIR: &str = "archives";
-const OPS_SUBDIR: &str = "ops";
+/// Subdirectory of the server data dir holding keyhive state.
+pub(crate) const KEYHIVE_DIR: &str = ".keyhive";
+
+pub(crate) const ARCHIVES_SUBDIR: &str = "archives";
+pub(crate) const OPS_SUBDIR: &str = "ops";
 const TMP_SUBDIR: &str = "tmp";
 
 /// Monotonic per-process counter for temp filenames. A unique temp path per

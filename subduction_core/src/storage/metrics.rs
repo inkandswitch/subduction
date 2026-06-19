@@ -62,22 +62,22 @@ impl<Store> MetricsStorage<Store> {
     }
 }
 
-/// Trait for refreshing scan-free storage gauges.
+/// Trait for refreshing cheap storage gauges.
 pub trait RefreshMetrics {
     /// The error type for storage operations.
     type Error;
 
     /// Refresh the cheap storage gauges from current state.
     ///
-    /// Only the sedimentree-count gauge is refreshed here, sourced from the
-    /// backend's in-memory id cache (`load_all_sedimentree_ids`) — an O(1)
-    /// clone, **not** a directory scan.
+    /// Only the sedimentree-count gauge is refreshed here, sourced from
+    /// `load_all_sedimentree_ids`. Its cost is backend-dependent: the FS backend
+    /// returns a clone of its in-memory id cache (O(1)), while the redb backend
+    /// scans the `trees` B+tree (O(trees) — ~20 ms at 190k trees, measured).
+    /// Neither reads per-tree contents.
     ///
     /// Commit and fragment volume are tracked as cumulative write/delete
     /// counters maintained incrementally on each operation (see the `Storage`
-    /// impl below), so this method never walks per-tree storage. The previous
-    /// implementation scanned every tree on every tick, which was O(trees) of
-    /// `read_dir` syscalls per refresh and the dominant cost at scale.
+    /// impl below), so this method never walks per-tree contents.
     ///
     /// Returns the current sedimentree count (also published to the gauge) so
     /// callers can log it — e.g. the boot-time tree count.
@@ -88,7 +88,8 @@ impl<Store: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S
     type Error = Store::Error;
 
     async fn refresh_metrics(&self) -> Result<usize, Self::Error> {
-        // Cheap: the FS backend returns a clone of its in-memory id cache.
+        // FS backend: a clone of its in-memory id cache (O(1)). redb backend:
+        // an O(trees) `trees` B+tree scan (~20 ms at 190k trees).
         let sedimentree_count = Storage::<Sendable>::load_all_sedimentree_ids(&self.inner)
             .await?
             .len();

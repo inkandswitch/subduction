@@ -61,8 +61,9 @@ pub mod names {
 
     /// Current number of sedimentrees in storage.
     ///
-    /// Refreshed cheaply from the storage backend's in-memory id cache (no
-    /// directory scan).
+    /// Refreshed from `load_all_sedimentree_ids`: an O(1) id-cache clone on the
+    /// FS backend, or an O(trees) `trees` B+tree scan on redb (no per-tree
+    /// contents read either way).
     pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
 
     /// Cumulative resident-cache hits when resolving a sedimentree (the tree
@@ -264,7 +265,8 @@ pub fn subscription_pushes(n: u64) {
 
 /// Set the current number of sedimentrees in storage.
 ///
-/// Sourced from the backend's in-memory id cache; cheap and scan-free.
+/// Sourced from `load_all_sedimentree_ids` (O(1) id-cache clone on FS, O(trees)
+/// `trees` B+tree scan on redb).
 #[inline]
 #[allow(clippy::cast_precision_loss)]
 pub fn set_storage_sedimentrees(count: usize) {
@@ -446,7 +448,7 @@ pub fn describe_all() {
     );
     metrics::describe_gauge!(
         names::STORAGE_SEDIMENTREES,
-        "Current number of sedimentrees in storage (from the in-memory id cache)."
+        "Current number of sedimentrees in storage."
     );
     metrics::describe_counter!(
         names::SEDIMENTREE_CACHE_HITS_TOTAL,

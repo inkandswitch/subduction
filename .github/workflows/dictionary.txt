@@ -209,6 +209,7 @@ auto-init
 automerge
 automerge-repo
 backend
+backend's
 backoff
 balancer
 bchacha-note
@@ -237,6 +238,7 @@ const
 crypto
 cryptographic
 cryptographically
+cutover
 data's
 datasource
 datasources
@@ -266,6 +268,8 @@ filesystem
 flamegraphs
 fs
 fsync
+fsynced
+fsyncs
 fɔːr
 gzipped
 hardcoded
@@ -355,12 +359,15 @@ reachability
 reconnection
 recurse
 recv
+redb
+redb's
 repo
 representable
 reproducibility
 requester's
 responder
 responder's
+resumable
 revoker
 runtimes
 sedimentree
@@ -397,6 +404,7 @@ topologies
 tradeoff
 tradeoffs
 unforgeable
+unlinked
 unrepresentable
 unresolvable
 unreviewed

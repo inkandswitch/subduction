@@ -13,6 +13,7 @@ members = [
   "subduction_http_longpoll",
   "subduction_iroh",
   "subduction_keyhive",
+  "subduction_redb_storage",
   "subduction_wasm",
   "subduction_wasm_bootstrap",
   "subduction_websocket"
@@ -40,6 +41,7 @@ subduction_ephemeral = { version = "0.7.0", path = "subduction_ephemeral", defau
 subduction_http_longpoll = { version = "0.10.0", path = "subduction_http_longpoll", default-features = false }
 subduction_iroh = { version = "0.9.0", path = "subduction_iroh" }
 subduction_keyhive = { version = "0.7.0", path = "subduction_keyhive" }
+subduction_redb_storage = { version = "0.1.0", path = "subduction_redb_storage" }
 subduction_wasm = { version = "0.20.0", path = "subduction_wasm" }
 subduction_wasm_bootstrap = { version = "0.2.0", path = "subduction_wasm_bootstrap" }
 subduction_websocket = { version = "0.11.0", path = "subduction_websocket", default-features = false }
@@ -89,6 +91,7 @@ nonempty = { version = "0.12.0", default-features = false }
 num-bigint = { version = "0.4.6", default-features = false }
 rand = { version = "0.8.5", default-features = false }
 rayon = "1.11"
+redb = "4.1"
 reqwest = { version = "0.12", default-features = false }
 serde = { version = "1.0", default-features = false }
 serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }

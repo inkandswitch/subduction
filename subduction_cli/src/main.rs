@@ -4,9 +4,12 @@
 
 pub mod metrics;
 
+mod admin;
 mod handler;
+mod inspect;
 mod key;
 mod keyhive;
+mod migrate;
 mod policy;
 mod purge;
 mod server;
@@ -35,6 +38,8 @@ async fn main() -> eyre::Result<()> {
 
     match args.command {
         Command::Server(server_args) => server::run(*server_args, token).await?,
+        Command::Migrate(migrate_args) => migrate::run(migrate_args).await?,
+        Command::Inspect(inspect_args) => inspect::run(inspect_args).await?,
         Command::Purge(purge_args) => purge::run(purge_args).await?,
     }
 
@@ -202,6 +207,14 @@ enum Command {
     /// Start a Subduction node (WebSocket, HTTP long-poll, and/or Iroh transport)
     #[command(name = "server", alias = "start")]
     Server(Box<server::ServerArgs>),
+
+    /// Migrate a legacy filesystem store into a redb store
+    #[command(name = "migrate")]
+    Migrate(migrate::MigrateArgs),
+
+    /// Inspect a running server's store via its admin endpoint
+    #[command(name = "inspect")]
+    Inspect(inspect::InspectArgs),
 
     /// Purge all storage data (destructive)
     #[command(name = "purge")]

@@ -6,7 +6,6 @@ use eyre::Result;
 use future_form::Sendable;
 use iroh::{EndpointAddr, endpoint::presets};
 use sedimentree_core::depth::CountLeadingZeroBytes;
-use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     authenticated::Authenticated,
     handshake::{
@@ -23,6 +22,7 @@ use subduction_core::{
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;
+use subduction_redb_storage::RedbStorage;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
@@ -48,7 +48,7 @@ use crate::{
         CliKeyhiveProtocol, CliSyncHandler, CliWireHandler,
     },
     key,
-    keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage},
+    keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage, KEYHIVE_DIR},
     metrics,
     policy::CliKeyhivePolicyHandle,
     transport::UnifiedTransport,
@@ -63,7 +63,7 @@ type CliSubduction<H> = Arc<
     Subduction<
         'static,
         future_form::Sendable,
-        MetricsStorage<FsStorage>,
+        MetricsStorage<RedbStorage>,
         CliConn,
         H,
         CliKeyhivePolicyHandle,
@@ -131,6 +131,13 @@ pub(crate) struct ServerArgs {
     /// Enable the Prometheus metrics server
     #[arg(long, default_value_t = false)]
     pub(crate) metrics: bool,
+
+    /// Bind a localhost admin HTTP server for live store inspection
+    /// (`GET /inspect`). Off unless set. Use a loopback address such as
+    /// `127.0.0.1:9091`: it exposes storage internals (tree ids, heads,
+    /// digests) and has no authentication.
+    #[arg(long, value_name = "ADDR")]
+    pub(crate) admin_addr: Option<SocketAddr>,
 
     /// Interval in seconds for refreshing storage metrics from disk
     #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
@@ -267,7 +274,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
 
     // Initialize the full keyhive stack: storage, identity, protocol, ingest.
     let keyhive_signer = key::keyhive_signer_from_seed(&common.seed);
-    let keyhive_root = common.data_dir.join(".keyhive");
+    let keyhive_root = common.data_dir.join(KEYHIVE_DIR);
     tracing::info!(root = ?keyhive_root, "Initializing keyhive storage");
     let fs_keyhive_storage = FsKeyhiveStorage::new(keyhive_root)?;
 
@@ -348,12 +355,12 @@ async fn run_open(args: ServerArgs, token: CancellationToken) -> Result<()> {
 }
 
 /// Common setup shared by [`run_with_keyhive`] and [`run_open`]: parses
-/// addresses, starts the metrics endpoint and refresh task, opens filesystem
+/// addresses, starts the metrics endpoint and refresh task, opens redb
 /// storage, and derives the signing identity.
 struct SetupCommon {
     addr: SocketAddr,
     data_dir: PathBuf,
-    storage: MetricsStorage<FsStorage>,
+    storage: MetricsStorage<RedbStorage>,
     seed: [u8; 32],
     signer: MemorySigner,
     peer_id: PeerId,
@@ -378,15 +385,24 @@ impl SetupCommon {
             metrics::start_metrics_server(metrics_addr, metrics_handle).await?;
         }
 
-        tracing::info!(dir = ?data_dir, "Initializing filesystem storage");
-        let fs_storage = FsStorage::new(data_dir.clone())?;
-        let storage = MetricsStorage::new(fs_storage);
+        tracing::info!(dir = ?data_dir, "Initializing redb storage");
+        let redb_storage = RedbStorage::new(data_dir.clone())?;
+
+        // Optional localhost admin server for live inspection. Shares the redb
+        // handle (Arc-cheap clone); queries run as MVCC read txns concurrent
+        // with the live writer.
+        if let Some(admin_addr) = args.admin_addr {
+            crate::admin::start_admin_server(admin_addr, redb_storage.clone(), token.clone())
+                .await?;
+        }
+
+        let storage = MetricsStorage::new(redb_storage);
 
         // Background metrics refresh
         if args.metrics {
-            // Seed the storage gauge from the on-disk id cache and log the
-            // startup tree count explicitly (the gauge alone only surfaces it
-            // to scrapers; this makes the boot-time count visible in logs too).
+            // Seed the storage gauge (one `trees` B+tree scan on redb) and log
+            // the startup tree count explicitly (the gauge alone only surfaces
+            // it to scrapers; this makes the boot-time count visible in logs).
             let startup_tree_count = storage.refresh_metrics().await?;
             tracing::info!(
                 sedimentrees = startup_tree_count,
