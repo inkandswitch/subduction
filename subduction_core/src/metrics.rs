@@ -24,8 +24,6 @@ pub mod names {
     pub const DISPATCH_DURATION_SECONDS: &str = "subduction_dispatch_duration_seconds";
     /// Inbound messages currently being dispatched across all peers.
     pub const DISPATCH_INFLIGHT: &str = "subduction_dispatch_inflight";
-    /// Per-peer in-flight dispatch ceiling (the per-peer semaphore bound).
-    pub const DISPATCH_INFLIGHT_MAX: &str = "subduction_dispatch_inflight_max";
     /// Completed dispatch tasks, labeled by `outcome` (`ok`/`err`/`aborted`).
     pub const DISPATCH_COMPLETED_TOTAL: &str = "subduction_dispatch_completed_total";
     /// Total batch sync requests received.
@@ -173,13 +171,6 @@ pub fn dispatch_inflight_inc() {
 #[inline]
 pub fn dispatch_inflight_dec() {
     metrics::gauge!(names::DISPATCH_INFLIGHT).decrement(1.0);
-}
-
-/// Publish the per-peer in-flight dispatch ceiling (set once at listener start).
-#[inline]
-#[allow(clippy::cast_precision_loss)]
-pub fn set_dispatch_inflight_max(max: usize) {
-    metrics::gauge!(names::DISPATCH_INFLIGHT_MAX).set(max as f64);
 }
 
 /// Record a completed dispatch task, labeled by outcome.
@@ -395,10 +386,6 @@ pub fn describe_all() {
     metrics::describe_gauge!(
         names::DISPATCH_INFLIGHT,
         "Inbound messages currently being dispatched across all peers."
-    );
-    metrics::describe_gauge!(
-        names::DISPATCH_INFLIGHT_MAX,
-        "Per-peer in-flight dispatch ceiling (per-peer semaphore bound)."
     );
     metrics::describe_counter!(
         names::DISPATCH_COMPLETED_TOTAL,

@@ -27,18 +27,16 @@ use sedimentree_core::{
 use super::{Connection, id::ConnectionId};
 use crate::peer::id::PeerId;
 
-/// Maximum number of inbound handler-dispatch slots kept in flight **per peer**.
+/// Maximum number of inbound handler-dispatch slots kept in flight per peer.
 ///
 /// Each peer gets its own [`Semaphore`] with this many permits, shared across
 /// all of that peer's connections. A reader acquires a permit before admitting
 /// a request (see [`connection_loop`]) and holds it until the spawned handler
-/// completes, so a single peer can have at most this many handlers in flight
-/// (queued or running) at once.
+/// completes, capping a peer's concurrent (queued or running) handlers.
 ///
-/// When a peer hits the cap its reader stops pulling from the connection, so
-/// backpressure flows back to *that peer's* transport alone (its bounded
-/// inbound channel fills) — a slow or hostile peer can no longer starve
-/// dispatch for everyone else, which a single global cap allowed.
+/// At the cap the reader stops pulling from the connection, so a flooding or
+/// slow peer backpressures its own transport rather than consuming a shared
+/// dispatch budget.
 pub(crate) const MAX_INFLIGHT_DISPATCH_PER_PEER: usize = 512;
 
 /// Get or create the per-peer dispatch [`Semaphore`], shared across all of a
@@ -412,12 +410,10 @@ async fn connection_loop<
                         break;
                     }
                 } else {
-                    // Acquire a per-peer dispatch slot BEFORE admitting the
-                    // request. At the cap this awaits, so the loop stops calling
-                    // `conn.recv()` and backpressure flows to *this* peer's
-                    // transport (its bounded inbound channel fills) without
-                    // affecting other peers. The permit rides the queue and is
-                    // released when the spawned handler completes.
+                    // Acquire this peer's dispatch slot before forwarding. At
+                    // the cap this awaits, pausing `conn.recv()` for this peer
+                    // only; the permit rides the queue and releases when the
+                    // handler completes.
                     let permit = dispatch_slots.acquire_arc().await;
                     if messages.send((conn.clone(), msg, permit)).await.is_err() {
                         tracing::warn!(peer = %peer_id, "connection message channel closed");

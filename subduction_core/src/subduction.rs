@@ -3156,15 +3156,9 @@ where
             async_channel::Receiver<DispatchOutcome<Conn, Async, Hdl::HandlerError>>,
         ) = async_channel::unbounded();
 
-        // Per-peer dispatch admission lives in the connection manager: each
-        // peer has its own semaphore and a reader acquires a permit (carried on
-        // the `msg_queue` payload) before admitting a request. The listener no
-        // longer holds a global cap, so one peer can't starve the rest.
-        #[cfg(feature = "metrics")]
-        crate::metrics::set_dispatch_inflight_max(
-            crate::connection::manager::MAX_INFLIGHT_DISPATCH_PER_PEER,
-        );
-
+        // Dispatch admission is per-peer, enforced upstream in the connection
+        // manager (a reader acquires its peer's permit before forwarding); the
+        // listener just drains the queue and spawns.
         loop {
             futures::select_biased! {
                 done = done_rx.recv().fuse() => {

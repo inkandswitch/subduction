@@ -8,10 +8,6 @@
 //! semaphore is fully held and its connection reader stops draining — observable
 //! as a backlog left in the slow peer's (unbounded) inbound channel — then
 //! assert the fast peer's message is still dispatched promptly.
-//!
-//! With the old single global cap, a peer holding the whole cap would block
-//! dispatch for everyone; the per-peer semaphore is what keeps the fast peer
-//! flowing here.
 
 #![allow(clippy::expect_used, clippy::panic)]
 

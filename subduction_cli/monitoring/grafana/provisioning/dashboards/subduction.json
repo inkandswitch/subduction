@@ -51,15 +51,14 @@
     {
       "type": "stat",
       "title": "Dispatch In-Flight",
-      "description": "Messages currently being dispatched vs the semaphore ceiling. Approaching max means inbound processing is saturating.",
+      "description": "Messages currently being dispatched across all peers.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 5, "w": 5, "x": 4, "y": 1 },
       "id": 2,
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 512 }, { "color": "red", "value": 900 }] }, "unit": "none" }, "overrides": [] },
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name" },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight", "legendFormat": "in-flight", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight_max", "legendFormat": "max", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight", "legendFormat": "in-flight", "refId": "A" }
       ]
     },
     {
@@ -103,15 +102,14 @@
     },
     {
       "type": "timeseries",
-      "title": "Dispatch In-Flight vs Max",
+      "title": "Dispatch In-Flight Over Time",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 7 },
       "id": 10,
-      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1, "showPoints": "never" }, "unit": "none" }, "overrides": [{ "matcher": { "id": "byName", "options": "max" }, "properties": [{ "id": "custom.lineStyle", "value": { "dash": [8, 4], "fill": "dash" } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }] },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1, "showPoints": "never" }, "unit": "none" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight", "legendFormat": "in-flight", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight_max", "legendFormat": "max", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_dispatch_inflight", "legendFormat": "in-flight", "refId": "A" }
       ]
     },
     {
@@ -339,15 +337,15 @@
     },
     {
       "type": "timeseries",
-      "title": "Sedimentree Cache Hit Ratio (read paths)",
-      "description": "Fraction of READ-path sedimentree resolutions (heads lookups, foreground sync, get_commits) served from the in-memory LRU vs. hydrated from storage. A low ratio means hydration (and its minimization) is on the read hot path. NOTE: a pure write-through relay exercises these read paths rarely, so low sample counts here are expected and not a problem — watch it under foreground-sync load.",
+      "title": "Sedimentree Cache Miss Ratio (read paths)",
+      "description": "Fraction of READ-path sedimentree resolutions (heads lookups, foreground sync, get_commits) hydrated from storage rather than served from the in-memory LRU. A high ratio means hydration (and its minimization) is on the read hot path. NOTE: a pure write-through relay exercises these read paths rarely, so low sample counts here are expected and not a problem — watch it under foreground-sync load.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 52 },
       "id": 43,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "(sum(rate(subduction_sedimentree_cache_hits_total[5m])) or vector(0)) / clamp_min((sum(rate(subduction_sedimentree_cache_hits_total[5m])) or vector(0)) + (sum(rate(subduction_sedimentree_cache_misses_total[5m])) or vector(0)), 1)", "legendFormat": "hit ratio", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "(sum(rate(subduction_sedimentree_cache_misses_total[5m])) or vector(0)) / clamp_min((sum(rate(subduction_sedimentree_cache_hits_total[5m])) or vector(0)) + (sum(rate(subduction_sedimentree_cache_misses_total[5m])) or vector(0)), 1)", "legendFormat": "miss ratio", "refId": "A" }
       ]
     },
     {

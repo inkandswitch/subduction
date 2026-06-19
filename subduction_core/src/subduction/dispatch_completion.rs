@@ -1,10 +1,10 @@
 //! Completion accounting for spawned inbound-dispatch tasks.
 //!
-//! The listener bounds in-flight dispatch tasks with a counter
-//! (`MAX_INFLIGHT_DISPATCH`): it increments on spawn and decrements when a task
-//! reports completion over an unbounded channel. If a task could finish without
-//! reporting — for instance by panicking before sending — the counter would
-//! ratchet up permanently and, once it hit the cap, wedge inbound processing.
+//! Each spawned task reports its outcome back to the listener over an unbounded
+//! channel. The listener uses the report to decrement the in-flight gauge and,
+//! on a handler error, to tear the connection down. A task that finished
+//! without reporting — for instance by panicking before sending — would leak
+//! its gauge increment and, worse, leave a failed connection un-condemned.
 //!
 //! [`DispatchCompletion`] guarantees a report on *every* exit path. The dispatch
 //! body records its outcome into the guard; the guard's [`Drop`] sends that
