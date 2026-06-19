@@ -116,6 +116,15 @@ wasm-tracing = { version = "3.0.0-alpha.0", git = "https://github.com/dsgallups/
 wasm_refgen = "0.2.0" # no_std by default
 windows-sys = "0.61.2"
 
+# TEMPORARY: build keyhive from the local working tree (path) so the server picks
+# up the uncommitted forward-secrecy / CgkaOperation::Update change, matching the
+# WASM client which is also built from the working tree. This intentionally
+# overrides the git-`rev` pin below for the new-format cutover. Revert to a
+# committed `rev` once the keyhive change is committed and published.
+[patch.crates-io]
+keyhive_core = { path = "/Users/jtfmumm/dev/keyhive/keyhive_core" }
+keyhive_crypto = { path = "/Users/jtfmumm/dev/keyhive/keyhive_crypto" }
+
 [workspace.lints.rust]
 future_incompatible = { level = "warn", priority = -1 }
 let_underscore = { level = "warn", priority = -1 }

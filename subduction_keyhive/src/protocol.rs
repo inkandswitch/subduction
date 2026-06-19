@@ -73,6 +73,20 @@ use crate::{
 type SharedKeyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng> =
     Arc<Mutex<Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>>>;
 
+/// XOR a set of 32-byte op hashes into a single 32-byte digest.
+///
+/// An empty set yields all zeros, matching a peer that has not yet sent a
+/// digest.
+fn pair_set_digest<'a>(hashes: impl IntoIterator<Item = &'a EventHash>) -> EventHash {
+    let mut out = [0u8; 32];
+    for h in hashes {
+        for (o, c) in out.iter_mut().zip(h.iter()) {
+            *o ^= *c;
+        }
+    }
+    out
+}
+
 /// Keyhive sync protocol handler.
 ///
 /// Manages peer connections and implements the keyhive sync protocol for
@@ -263,6 +277,7 @@ where
         skip_serialization: &BTreeSet<EventHash>,
     ) -> Result<crate::all_agent_events::AllAgentEvents, ProtocolError<Conn::SendError>> {
         let keyhive = { self.keyhive.lock().await.dupe() };
+
         let (all_membership, all_prekey, all_cgka) = {
             let all_membership = keyhive.membership_ops_for_all_agents().await;
             let all_prekey = keyhive.reachable_prekey_ops_for_all_agents().await;
@@ -475,12 +490,13 @@ where
         target: &KeyhivePeerId,
         our_syncpoint_for_target: u64,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let our_total = self.compute_total_for_peer(target).await?;
+        let (our_total, our_digest) = self.compute_total_and_digest_for_peer(target).await?;
         let msg = Message::SyncCheck {
             sender_id: self.peer_id.clone(),
             target_id: target.clone(),
             sender_total: our_total,
             sender_syncpoint: our_syncpoint_for_target,
+            sender_digest: our_digest,
         };
         self.sign_and_send(target, msg, false).await
     }
@@ -490,11 +506,15 @@ where
         peer: &KeyhivePeerId,
         sender_total: u64,
         sender_syncpoint: u64,
+        sender_digest: EventHash,
         local_syncpoint_for_sender: u64,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let our_total = self.compute_total_for_peer(peer).await?;
+        let (our_total, our_digest) = self.compute_total_and_digest_for_peer(peer).await?;
 
-        let in_sync = local_syncpoint_for_sender == sender_total && sender_syncpoint == our_total;
+        let digests_match = sender_digest == our_digest;
+        let in_sync = local_syncpoint_for_sender == sender_total
+            && sender_syncpoint == our_total
+            && digests_match;
 
         if in_sync {
             tracing::debug!(
@@ -508,6 +528,7 @@ where
                 sender_total,
                 sender_syncpoint,
                 local_syncpoint_for_sender,
+                digests_match,
                 "sync check mismatch, falling back to full sync"
             );
             self.sync_keyhive(Some(peer)).await?;
@@ -570,6 +591,7 @@ where
                 sender_id,
                 sender_total,
                 sender_syncpoint,
+                sender_digest,
                 ..
             } => {
                 if !self.has_peer(sender_id).await
@@ -583,6 +605,7 @@ where
                     sender_id,
                     *sender_total,
                     *sender_syncpoint,
+                    *sender_digest,
                     local_syncpoint_for_sender,
                 )
                 .await
@@ -1216,27 +1239,29 @@ where
         (!map.is_empty()).then_some(map)
     }
 
-    /// Compute the total operation count for a peer pair.
+    /// Compute the per-pair total op count and a digest of the pair's op-hash
+    /// set.
     ///
-    /// This is the number of intersection hashes plus pending hashes,
-    /// used for sync check/confirmation metadata.
+    /// The total is the number of intersection hashes plus pending hashes. The
+    /// digest is an order-independent XOR of the intersection hashes.
     ///
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if hash or pending computation fails.
-    async fn compute_total_for_peer(
+    async fn compute_total_and_digest_for_peer(
         &self,
         peer: &KeyhivePeerId,
-    ) -> Result<u64, ProtocolError<Conn::SendError>> {
-        let hash_count = if let Some(cached) = self.cached_events_for_pair_with_peer(peer).await {
-            cached.len()
-        } else {
-            self.get_events_for_peer_pair(peer)
-                .await?
-                .map_or(0, |h| h.len())
-        };
+    ) -> Result<(u64, EventHash), ProtocolError<Conn::SendError>> {
+        let (hash_count, digest) =
+            if let Some(cached) = self.cached_events_for_pair_with_peer(peer).await {
+                (cached.len(), pair_set_digest(cached.keys()))
+            } else if let Some(pair) = self.get_events_for_peer_pair(peer).await? {
+                (pair.len(), pair_set_digest(pair.keys()))
+            } else {
+                (0, [0u8; 32])
+            };
         let pending_count = self.get_pending_hashes().await?.len();
-        Ok((hash_count + pending_count) as u64)
+        Ok(((hash_count + pending_count) as u64, digest))
     }
 
     /// Sync with a peer using the best available strategy.
@@ -3091,6 +3116,103 @@ mod tests {
             .handle_message(&bob_id, fallback_msg, None)
             .await
             .expect("alice failed to handle fallback message");
+    }
+
+    /// `pair_set_digest` must be order-independent, reduce
+    /// an empty set to all zeros, and distinguish different op-sets.
+    #[test]
+    fn pair_set_digest_properties() {
+        let mut a: EventHash = [0u8; 32];
+        a[0] = 1;
+        let mut b: EventHash = [0u8; 32];
+        b[1] = 1;
+
+        // An empty set yields all zeros, matching a peer that sends no digest.
+        assert_eq!(
+            pair_set_digest(core::iter::empty::<&EventHash>()),
+            [0u8; 32]
+        );
+
+        // Iteration order does not change the digest.
+        assert_eq!(pair_set_digest([&a, &b]), pair_set_digest([&b, &a]));
+
+        // Different op-sets produce different digests.
+        assert_ne!(pair_set_digest([&a, &b]), pair_set_digest([&a]));
+    }
+
+    /// When the counts cross-match on crossed syncpoints and the digests also
+    /// match, `resolve_sync_check` short-circuits without a fallback sync.
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_sync_check_in_sync_when_counts_and_digest_match() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_kh,
+            bob_id,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        // Give Alice some pair state with Bob so the digest is non-trivial.
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+        while bob_conn.inbound_rx.try_recv().is_ok() {}
+
+        let (our_total, our_digest) = alice_proto
+            .compute_total_and_digest_for_peer(&bob_id)
+            .await
+            .expect("compute total and digest");
+
+        // local_syncpoint_for_sender == sender_total and sender_syncpoint ==
+        // our_total, so the counts pass; the digest matches too.
+        alice_proto
+            .resolve_sync_check(&bob_id, our_total, our_total, our_digest, our_total)
+            .await
+            .expect("resolve_sync_check");
+
+        assert!(
+            bob_conn.inbound_rx.try_recv().is_err(),
+            "no fallback expected when counts and digest match"
+        );
+    }
+
+    /// A digest mismatch forces a full sync even when the counts cross-match.
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_sync_check_falls_back_on_digest_mismatch_despite_matching_counts() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_kh,
+            bob_id,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+
+        {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await;
+        }
+        while bob_conn.inbound_rx.try_recv().is_ok() {}
+
+        let (our_total, our_digest) = alice_proto
+            .compute_total_and_digest_for_peer(&bob_id)
+            .await
+            .expect("compute total and digest");
+
+        // Identical crossed-syncpoint counts as the in-sync case, but a digest
+        // that differs by one byte.
+        let mut wrong_digest = our_digest;
+        wrong_digest[0] ^= 0xFF;
+
+        alice_proto
+            .resolve_sync_check(&bob_id, our_total, our_total, wrong_digest, our_total)
+            .await
+            .expect("resolve_sync_check");
+
+        assert!(
+            bob_conn.inbound_rx.try_recv().is_ok(),
+            "digest mismatch should trigger a fallback sync"
+        );
     }
 
     // ── Revocation chain regression tests ──────────────────────────────

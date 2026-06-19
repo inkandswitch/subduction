@@ -160,6 +160,10 @@ pub enum Message {
 
         /// The sender's syncpoint for the target (last confirmed target total).
         sender_syncpoint: u64,
+
+        /// Order-independent XOR digest of the sender's per-pair op-hash set.
+        #[cfg_attr(feature = "serde", serde(with = "serde_bytes", default))]
+        sender_digest: [u8; 32],
     },
 
     /// Sync confirmation.
@@ -384,6 +388,32 @@ mod wire_format_tests {
             sync_responder_total: 2,
             sync_requester_total: 3,
         };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&original, &mut buf).expect("encode");
+        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
+        assert_eq!(original, recovered);
+    }
+
+    /// `SyncCheck.sender_digest` must serialize as a CBOR byte string (not an
+    /// array of integers) and survive a round-trip.
+    #[test]
+    fn sync_check_digest_is_byte_string_and_round_trips() {
+        let original = Message::SyncCheck {
+            sender_id: peer(1),
+            target_id: peer(2),
+            sender_total: 35,
+            sender_syncpoint: 28,
+            sender_digest: [
+                0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+                0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+                0x19, 0x1A, 0x1B, 0x1C,
+            ],
+        };
+        let payload = variant_payload(&original, "SyncCheck");
+        assert!(
+            field(&payload, "sender_digest").is_bytes(),
+            "sender_digest must be CBOR bytes"
+        );
         let mut buf = Vec::new();
         ciborium::into_writer(&original, &mut buf).expect("encode");
         let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
