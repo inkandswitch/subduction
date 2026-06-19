@@ -20,7 +20,9 @@ use sedimentree_core::{
 };
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
-use subduction_redb_storage::{BLOBS_DIR_NAME, DB_FILE_NAME, RedbStorage, RedbStorageError};
+use subduction_redb_storage::{
+    BLOBS_DIR_NAME, DB_FILE_NAME, FileOp, RedbStorage, RedbStorageError,
+};
 
 fn test_signer() -> MemorySigner {
     MemorySigner::from_bytes(&[42u8; 32])
@@ -288,6 +290,44 @@ async fn failed_external_blob_save_does_not_register_tree_id() -> testresult::Te
         &storage, commit,
     )
     .await;
+
+    Ok(())
+}
+
+/// External blob write failures surface as a typed [`RedbStorageError::File`]
+/// naming the [operation](FileOp) and offending path — not an opaque I/O
+/// error. Induced by replacing `blobs/` with a regular file, so staging an
+/// over-threshold blob fails at the bucket `create_dir_all`.
+#[tokio::test]
+async fn external_blob_write_failure_reports_operation_and_path() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
+    let signer = test_signer();
+    let id = SedimentreeId::new([0x95; 32]);
+
+    // Poison the blob store: a regular file where the bucket dirs must go.
+    let blobs_dir = dir.path().join(BLOBS_DIR_NAME);
+    std::fs::remove_dir_all(&blobs_dir)?;
+    std::fs::write(&blobs_dir, b"roadblock")?;
+
+    // Over-threshold blob ⇒ the save must stage an external file ⇒ fails.
+    let commit = seal_commit(&signer, id, CommitId::new([0x01; 32]), vec![7; 300]).await;
+    let result = Storage::<Sendable>::save_loose_commit(&storage, id, commit).await;
+
+    let Some(RedbStorageError::File(file_err)) = result.as_ref().err() else {
+        return Err(format!("expected a typed File error, got {result:?}").into());
+    };
+    assert_eq!(
+        file_err.op(),
+        FileOp::CreateDir,
+        "the failing step was creating the bucket directory"
+    );
+    assert!(
+        file_err.path().starts_with(&blobs_dir),
+        "the error must name the offending path under {}, got {}",
+        blobs_dir.display(),
+        file_err.path().display()
+    );
 
     Ok(())
 }
