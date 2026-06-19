@@ -77,9 +77,7 @@ pub trait RefreshMetrics {
     ///
     /// Commit and fragment volume are tracked as cumulative write/delete
     /// counters maintained incrementally on each operation (see the `Storage`
-    /// impl below), so this method never walks per-tree contents. (An earlier FS
-    /// implementation scanned every tree's directory on every tick — O(trees) of
-    /// `read_dir` syscalls — which the counters replaced.)
+    /// impl below), so this method never walks per-tree contents.
     ///
     /// Returns the current sedimentree count (also published to the gauge) so
     /// callers can log it — e.g. the boot-time tree count.

@@ -48,7 +48,7 @@ use crate::{
         CliKeyhiveProtocol, CliSyncHandler, CliWireHandler,
     },
     key,
-    keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage},
+    keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage, KEYHIVE_DIR},
     metrics,
     policy::CliKeyhivePolicyHandle,
     transport::UnifiedTransport,
@@ -274,7 +274,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
 
     // Initialize the full keyhive stack: storage, identity, protocol, ingest.
     let keyhive_signer = key::keyhive_signer_from_seed(&common.seed);
-    let keyhive_root = common.data_dir.join(crate::keyhive::KEYHIVE_DIR);
+    let keyhive_root = common.data_dir.join(KEYHIVE_DIR);
     tracing::info!(root = ?keyhive_root, "Initializing keyhive storage");
     let fs_keyhive_storage = FsKeyhiveStorage::new(keyhive_root)?;
 

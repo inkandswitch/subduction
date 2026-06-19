@@ -2,8 +2,8 @@
 
 A hybrid [redb] + filesystem storage backend for Sedimentree,
 implementing the `Storage` trait from `subduction_core`. This is the native
-server storage backend: the `subduction_cli` server builds on it, replacing
-the earlier `sedimentree_fs_storage` directory layout.
+server storage backend: the `subduction_cli` server builds on it in place
+of `sedimentree_fs_storage`.
 
 > [!NOTE]
 > The `benches/backends.rs` shoot-out against `FsStorage` (and the
