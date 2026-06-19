@@ -400,9 +400,9 @@ impl SetupCommon {
 
         // Background metrics refresh
         if args.metrics {
-            // Seed the storage gauge from the on-disk id cache and log the
-            // startup tree count explicitly (the gauge alone only surfaces it
-            // to scrapers; this makes the boot-time count visible in logs too).
+            // Seed the storage gauge (one `trees` B+tree scan on redb) and log
+            // the startup tree count explicitly (the gauge alone only surfaces
+            // it to scrapers; this makes the boot-time count visible in logs).
             let startup_tree_count = storage.refresh_metrics().await?;
             tracing::info!(
                 sedimentrees = startup_tree_count,

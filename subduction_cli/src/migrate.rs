@@ -35,9 +35,9 @@ pub(crate) struct MigrateArgs {
     #[arg(long)]
     pub(crate) from: PathBuf,
 
-    /// Destination directory for the redb store. Must differ from `--from`:
-    /// both backends use a `blobs/` subdirectory, so an in-place migration
-    /// would read from and write to the same files.
+    /// Destination directory for the new redb store. Must differ from `--from`
+    /// so the source filesystem store is left untouched — the migration is
+    /// non-destructive and reversible (you can re-point `--data-dir` back).
     #[arg(long)]
     pub(crate) to: PathBuf,
 
@@ -67,8 +67,8 @@ struct MigrationStats {
 pub(crate) async fn run(args: MigrateArgs) -> Result<()> {
     ensure!(
         args.from != args.to,
-        "--from and --to must differ: both backends use a `blobs/` subdirectory, \
-         so an in-place migration would corrupt the source"
+        "--from and --to must differ: pick a fresh destination directory so the \
+         source filesystem store is left untouched (the migration is non-destructive)"
     );
     ensure!(
         args.from.exists(),
@@ -170,7 +170,8 @@ async fn migrate_all(
 
         if already_present {
             stats.skipped += 1;
-        } else {
+        } else if let Some(dest) = dest {
+            // Real run: full load (with blobs) so the destination can store them.
             let commits = Storage::<Sendable>::load_loose_commits(source, id)
                 .await
                 .wrap_err_with(|| format!("load commits for {id:?}"))?;
@@ -181,13 +182,21 @@ async fn migrate_all(
             stats.commits += commits.len();
             stats.fragments += fragments.len();
 
-            if let Some(dest) = dest {
-                // One durable redb transaction per tree (atomic id + items).
-                Storage::<Sendable>::save_batch(dest, id, commits, fragments)
-                    .await
-                    .wrap_err_with(|| format!("write tree {id:?} into redb"))?;
-                stats.migrated += 1;
-            }
+            // One durable redb transaction per tree (atomic id + items).
+            Storage::<Sendable>::save_batch(dest, id, commits, fragments)
+                .await
+                .wrap_err_with(|| format!("write tree {id:?} into redb"))?;
+            stats.migrated += 1;
+        } else {
+            // Dry run: metadata-only counts, so a preview never reads blob bytes.
+            stats.commits += Storage::<Sendable>::load_loose_commit_metas(source, id)
+                .await
+                .wrap_err_with(|| format!("load commit metas for {id:?}"))?
+                .len();
+            stats.fragments += Storage::<Sendable>::load_fragment_metas(source, id)
+                .await
+                .wrap_err_with(|| format!("load fragment metas for {id:?}"))?
+                .len();
         }
 
         if (processed + 1) % progress_every == 0 {
@@ -282,13 +291,20 @@ fn copy_keyhive_subdir(src: &Path, dst: &Path, dry_run: bool) -> io::Result<usiz
 }
 
 /// Copy `src` to `dst` durably: stage to a temp file, fsync it, then rename
-/// into place. The caller fsyncs the destination directory afterward.
+/// into place. The caller fsyncs the destination directory afterward. On any
+/// failure the staged temp is removed so a partial copy isn't left behind.
 fn durable_copy(src: &Path, dst: &Path) -> io::Result<()> {
     let tmp = dst.with_extension("bin.tmp");
-    fs::copy(src, &tmp)?;
-    fs::File::open(&tmp)?.sync_all()?;
-    fs::rename(&tmp, dst)?;
-    Ok(())
+    let staged = (|| {
+        fs::copy(src, &tmp)?;
+        fs::File::open(&tmp)?.sync_all()?;
+        fs::rename(&tmp, dst)
+    })();
+    if staged.is_err() {
+        // Best-effort cleanup; a successful rename already consumed `tmp`.
+        fs::remove_file(&tmp).ok();
+    }
+    staged
 }
 
 /// Fsync a directory so creations/renames of its entries are durable.

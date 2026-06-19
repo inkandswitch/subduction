@@ -64,10 +64,13 @@ The migration streams one tree per durable transaction and is resumable:
 re-running skips any tree already present in the destination (id and items
 are committed atomically). The server's keyhive state (`.keyhive/`) is copied
 across too, so the destination is a complete data directory the server can run
-against directly. `--from` and `--to` must differ — both layouts use a
-`blobs/` subdirectory.
+against directly. `--from` and `--to` must differ so the source store is left
+untouched (the migration is non-destructive and reversible).
 
 Pass `--dry-run` to report what would be migrated without writing anything.
+
+See [`MIGRATION.md`](./MIGRATION.md) for the full step-by-step guide, including
+preview, verification, and rollback.
 
 ## Backup
 

@@ -138,7 +138,8 @@ async fn find_head(
         Err(resp) => return resp,
     };
     let with_digests = query_flag(query.as_deref(), "digests");
-    // Optional `?tree=<hex>` scopes the lookup to one tree.
+    // Optional `?tree=<hex>` filters the results to one tree (the scan still
+    // covers every tree, then we keep only matches in that tree).
     let tree_filter = match query_value(query.as_deref(), "tree") {
         Some(t) => match parse_tree_id(t) {
             Ok(id) => Some(id),
