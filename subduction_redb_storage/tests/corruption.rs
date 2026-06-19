@@ -7,7 +7,7 @@
 //! (`sedimentree_fs_storage/tests/roundtrip.rs`); this suite holds the
 //! redb backend to the same standard.
 
-#![allow(clippy::expect_used, clippy::indexing_slicing)]
+#![allow(clippy::indexing_slicing)]
 
 use std::collections::BTreeSet;
 
@@ -173,7 +173,7 @@ async fn missing_external_blob_skipped_then_healed_on_resave() -> testresult::Te
 
     let healed = Storage::<Sendable>::load_loose_commit(&storage, id, head)
         .await?
-        .expect("commit must be loadable after re-save");
+        .ok_or("commit must be loadable after re-save")?;
     assert_eq!(
         healed.blob().contents(),
         &blob,
@@ -225,7 +225,7 @@ async fn truncated_external_blob_skipped_then_healed_on_resave() -> testresult::
 
     let healed = Storage::<Sendable>::load_loose_commit(&storage, id, head)
         .await?
-        .expect("commit must be loadable after re-save");
+        .ok_or("commit must be loadable after re-save")?;
     assert_eq!(
         healed.blob().contents(),
         &blob,

@@ -2,11 +2,7 @@
 //! (inline records + external blob files), head listing with Byzantine
 //! equivocation, and cross-tree head lookup.
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::expect_used,
-    clippy::indexing_slicing
-)]
+#![allow(clippy::indexing_slicing)]
 
 use std::collections::BTreeSet;
 
@@ -63,7 +59,7 @@ async fn fragment(
 /// Build a two-tree store. Tree A holds an equivocating commit head (`0x01`,
 /// two variants from differing blobs), an external-blob commit (`0x02`), and a
 /// fragment (`0x03`). Tree B holds one commit (`0x10`).
-async fn populate(storage: &RedbStorage) -> (SedimentreeId, SedimentreeId) {
+async fn populate(storage: &RedbStorage) -> testresult::TestResult<(SedimentreeId, SedimentreeId)> {
     let s = signer();
     let tree_a = SedimentreeId::new([0xA1; 32]);
     let tree_b = SedimentreeId::new([0xB2; 32]);
@@ -74,9 +70,7 @@ async fn populate(storage: &RedbStorage) -> (SedimentreeId, SedimentreeId) {
         commit(&s, tree_a, 0x02, vec![0xCC; EXTERNAL_BLOB_LEN]).await,
     ];
     let a_fragments = vec![fragment(&s, tree_a, 0x03, vec![0xDD; 32]).await];
-    Storage::<Sendable>::save_batch(storage, tree_a, a_commits, a_fragments)
-        .await
-        .expect("populate tree A");
+    Storage::<Sendable>::save_batch(storage, tree_a, a_commits, a_fragments).await?;
 
     Storage::<Sendable>::save_batch(
         storage,
@@ -84,19 +78,18 @@ async fn populate(storage: &RedbStorage) -> (SedimentreeId, SedimentreeId) {
         vec![commit(&s, tree_b, 0x10, vec![0xEE; 64]).await],
         Vec::new(),
     )
-    .await
-    .expect("populate tree B");
+    .await?;
 
-    (tree_a, tree_b)
+    Ok((tree_a, tree_b))
 }
 
 #[tokio::test]
-async fn overview_counts_trees_records_and_blob_files() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = RedbStorage::new(dir.path()).expect("open storage");
-    let (tree_a, tree_b) = populate(&storage).await;
+async fn overview_counts_trees_records_and_blob_files() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let (tree_a, tree_b) = populate(&storage).await?;
 
-    let (store, per_tree) = storage.inspect_overview().await.expect("overview");
+    let (store, per_tree) = storage.inspect_overview().await?;
 
     assert_eq!(store.trees, 2);
     assert_eq!(store.commits, 4, "3 in A (incl. equivocation) + 1 in B");
@@ -118,40 +111,37 @@ async fn overview_counts_trees_records_and_blob_files() {
     assert_eq!(per_tree[1].id, tree_b);
     assert_eq!(per_tree[1].commits, 1);
     assert_eq!(per_tree[1].fragments, 0);
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn inspect_tree_returns_none_for_unknown_id() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = RedbStorage::new(dir.path()).expect("open storage");
-    let (tree_a, _) = populate(&storage).await;
+async fn inspect_tree_returns_none_for_unknown_id() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let (tree_a, _) = populate(&storage).await?;
 
-    let stats = storage.inspect_tree(tree_a).await.expect("inspect A");
-    let stats = stats.expect("tree A is registered");
+    let stats = storage.inspect_tree(tree_a).await?;
+    let stats = stats.ok_or("tree A is registered")?;
     assert_eq!(stats.commits, 3);
     assert_eq!(stats.fragments, 1);
 
     let missing = SedimentreeId::new([0x00; 32]);
     assert!(
-        storage
-            .inspect_tree(missing)
-            .await
-            .expect("inspect missing")
-            .is_none(),
+        storage.inspect_tree(missing).await?.is_none(),
         "an unregistered id yields None"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn heads_dedupe_and_surface_equivocation() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = RedbStorage::new(dir.path()).expect("open storage");
-    let (tree_a, _) = populate(&storage).await;
+async fn heads_dedupe_and_surface_equivocation() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let (tree_a, _) = populate(&storage).await?;
 
-    let heads = storage
-        .inspect_tree_heads(tree_a, true)
-        .await
-        .expect("heads");
+    let heads = storage.inspect_tree_heads(tree_a, true).await?;
 
     // Two distinct commit heads (0x01 with 2 variants, 0x02 with 1).
     assert_eq!(heads.commits.len(), 2);
@@ -159,7 +149,7 @@ async fn heads_dedupe_and_surface_equivocation() {
         .commits
         .iter()
         .find(|h| h.id == CommitId::new([0x01; 32]))
-        .expect("head 0x01 present");
+        .ok_or("head 0x01 present")?;
     assert_eq!(equivocated.variants, 2, "0x01 was signed over two blobs");
     assert_eq!(equivocated.digests.len(), 2, "both digests returned");
     assert_ne!(
@@ -171,23 +161,22 @@ async fn heads_dedupe_and_surface_equivocation() {
         .commits
         .iter()
         .find(|h| h.id == CommitId::new([0x02; 32]))
-        .expect("head 0x02 present");
+        .ok_or("head 0x02 present")?;
     assert_eq!(single.variants, 1);
 
     assert_eq!(heads.fragments.len(), 1);
     assert_eq!(heads.fragments[0].id, CommitId::new([0x03; 32]));
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn heads_omit_digests_when_not_requested() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = RedbStorage::new(dir.path()).expect("open storage");
-    let (tree_a, _) = populate(&storage).await;
+async fn heads_omit_digests_when_not_requested() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let (tree_a, _) = populate(&storage).await?;
 
-    let heads = storage
-        .inspect_tree_heads(tree_a, false)
-        .await
-        .expect("heads");
+    let heads = storage.inspect_tree_heads(tree_a, false).await?;
     for entry in heads.commits.iter().chain(heads.fragments.iter()) {
         assert!(
             entry.digests.is_empty(),
@@ -195,18 +184,19 @@ async fn heads_omit_digests_when_not_requested() {
         );
         assert!(entry.variants >= 1);
     }
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn find_head_locates_across_trees() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = RedbStorage::new(dir.path()).expect("open storage");
-    let (tree_a, tree_b) = populate(&storage).await;
+async fn find_head_locates_across_trees() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let (tree_a, tree_b) = populate(&storage).await?;
 
     let equivocated = storage
         .inspect_find_head(CommitId::new([0x01; 32]), false)
-        .await
-        .expect("find 0x01");
+        .await?;
     assert_eq!(equivocated.len(), 1);
     assert_eq!(equivocated[0].tree, tree_a);
     assert_eq!(equivocated[0].kind, HeadKind::Commit);
@@ -214,34 +204,33 @@ async fn find_head_locates_across_trees() {
 
     let in_b = storage
         .inspect_find_head(CommitId::new([0x10; 32]), false)
-        .await
-        .expect("find 0x10");
+        .await?;
     assert_eq!(in_b.len(), 1);
     assert_eq!(in_b[0].tree, tree_b);
 
     let frag = storage
         .inspect_find_head(CommitId::new([0x03; 32]), false)
-        .await
-        .expect("find 0x03");
+        .await?;
     assert_eq!(frag.len(), 1);
     assert_eq!(frag[0].kind, HeadKind::Fragment);
 
     let absent = storage
         .inspect_find_head(CommitId::new([0xEE; 32]), false)
-        .await
-        .expect("find absent");
+        .await?;
     assert!(absent.is_empty(), "an unknown head is found nowhere");
+
+    Ok(())
 }
 
 /// `inspect_all_heads` dumps every tree's heads, sorted by sedimentree id, with
 /// per-tree commit/fragment heads (and digests when requested).
 #[tokio::test]
-async fn all_heads_dumps_every_tree_sorted() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = RedbStorage::new(dir.path()).expect("open storage");
-    let (tree_a, tree_b) = populate(&storage).await;
+async fn all_heads_dumps_every_tree_sorted() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let (tree_a, tree_b) = populate(&storage).await?;
 
-    let dump = storage.inspect_all_heads(true).await.expect("all heads");
+    let dump = storage.inspect_all_heads(true).await?;
     assert_eq!(dump.len(), 2);
     // Sorted by id: A1.. before B2..
     assert_eq!(dump[0].0, tree_a);
@@ -254,7 +243,7 @@ async fn all_heads_dumps_every_tree_sorted() {
         .commits
         .iter()
         .find(|h| h.id == CommitId::new([0x01; 32]))
-        .expect("head 0x01 present");
+        .ok_or("head 0x01 present")?;
     assert_eq!(equiv.variants, 2);
     assert_eq!(
         equiv.digests.len(),
@@ -269,16 +258,18 @@ async fn all_heads_dumps_every_tree_sorted() {
     assert_eq!(b.commits.len(), 1);
     assert_eq!(b.commits[0].id, CommitId::new([0x10; 32]));
     assert!(b.fragments.is_empty());
+
+    Ok(())
 }
 
 /// Per-tree `bytes` is exactly the inline record bytes + the external record
 /// metas + the external blob file sizes — each counted once. Pins the summation
 /// against an exactly computed expectation (not a `>=` lower bound).
 #[tokio::test]
-async fn per_tree_bytes_counts_inline_and_external_exactly() {
-    let dir = tempfile::tempdir().expect("tempdir");
+async fn per_tree_bytes_counts_inline_and_external_exactly() -> testresult::TestResult {
+    let dir = tempfile::tempdir()?;
     // 64 B threshold: the 32 B blob stays inline, the 128 B blob goes external.
-    let storage = RedbStorage::with_inline_threshold(dir.path(), 64).expect("open storage");
+    let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
     let s = signer();
     let id = SedimentreeId::new([0xC0; 32]);
 
@@ -290,9 +281,7 @@ async fn per_tree_bytes_counts_inline_and_external_exactly() {
     let inline_meta = c_inline.signed().as_bytes().len();
     let external_meta = c_external.signed().as_bytes().len();
 
-    Storage::<Sendable>::save_batch(&storage, id, vec![c_inline, c_external], Vec::new())
-        .await
-        .expect("save");
+    Storage::<Sendable>::save_batch(&storage, id, vec![c_inline, c_external], Vec::new()).await?;
 
     // inline record  = tag(1) + meta_len(4) + meta + blob          (all in the db)
     // external record = tag(1) + meta                              (db)
@@ -300,16 +289,14 @@ async fn per_tree_bytes_counts_inline_and_external_exactly() {
     let expected =
         (1 + 4 + inline_meta + inline_blob.len()) + (1 + external_meta + external_blob.len());
 
-    let stats = storage
-        .inspect_tree(id)
-        .await
-        .expect("inspect")
-        .expect("tree present");
+    let stats = storage.inspect_tree(id).await?.ok_or("tree present")?;
     assert_eq!(stats.commits, 2);
     assert_eq!(
         stats.bytes, expected as u64,
         "per-tree bytes = inline value + external meta + external file, each counted once"
     );
+
+    Ok(())
 }
 
 /// Property: `inspect_overview`'s counts exactly reflect what was saved across an
@@ -326,6 +313,7 @@ async fn per_tree_bytes_counts_inline_and_external_exactly() {
 ///   per_tree sorted by id, Σ per_tree.commits == commits, Σ fragments == fragments
 /// ```
 #[test]
+#[allow(clippy::expect_used, clippy::cast_possible_truncation)]
 fn prop_overview_counts_match_corpus() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

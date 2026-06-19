@@ -27,7 +27,6 @@
 #![allow(
     clippy::cast_lossless,
     clippy::cast_precision_loss,
-    clippy::expect_used,
     clippy::indexing_slicing
 )]
 
@@ -45,12 +44,11 @@ use subduction_redb_storage::RedbStorage;
 
 /// Build an inline-only store holding `records` commits of `blob_size`
 /// bytes each, returning the db file's length.
-async fn inline_db_size(records: u32, blob_size: usize) -> u64 {
+async fn inline_db_size(records: u32, blob_size: usize) -> testresult::TestResult<u64> {
     let signer = MemorySigner::from_bytes(&[42u8; 32]);
     let id = SedimentreeId::new([0xAB; 32]);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage =
-        RedbStorage::with_inline_threshold(dir.path(), usize::MAX).expect("create inline storage");
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::with_inline_threshold(dir.path(), usize::MAX)?;
 
     let mut commits = Vec::new();
     for i in 0..records {
@@ -67,14 +65,10 @@ async fn inline_db_size(records: u32, blob_size: usize) -> u64 {
             .await,
         );
     }
-    Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new())
-        .await
-        .expect("save batch");
+    Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
     drop(storage);
 
-    std::fs::metadata(dir.path().join(subduction_redb_storage::DB_FILE_NAME))
-        .expect("metadata")
-        .len()
+    Ok(std::fs::metadata(dir.path().join(subduction_redb_storage::DB_FILE_NAME))?.len())
 }
 
 /// External-assumption tripwire — **not** a behavior test of this crate. It
@@ -88,12 +82,12 @@ async fn inline_db_size(records: u32, blob_size: usize) -> u64 {
 /// 100 records (~6–13 MiB of I/O) keep it cheap enough for every `cargo test`;
 /// the full five-point sweep lives in the `#[ignore]`d probe below.
 #[tokio::test]
-async fn buddy_allocation_doubles_past_power_of_two_boundary() {
+async fn buddy_allocation_doubles_past_power_of_two_boundary() -> testresult::TestResult {
     const RECORDS: u32 = 100;
 
     // Blob + ~245 B record overhead lands just under / just over 64 Ki.
-    let under = inline_db_size(RECORDS, 65_024).await;
-    let over = inline_db_size(RECORDS, 65_536).await;
+    let under = inline_db_size(RECORDS, 65_024).await?;
+    let over = inline_db_size(RECORDS, 65_536).await?;
 
     let amp_under = under as f64 / (u64::from(RECORDS) * 65_024) as f64;
     let amp_over = over as f64 / (u64::from(RECORDS) * 65_536) as f64;
@@ -109,11 +103,13 @@ async fn buddy_allocation_doubles_past_power_of_two_boundary() {
         "expected near-1x amplification just under the 64 Ki boundary, got {amp_under:.2}x \
          — redb's allocation behavior has changed; revisit the inline threshold analysis"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
 #[ignore = "diagnostic probe, run manually"]
-async fn inline_size_amplification_probe() {
+async fn inline_size_amplification_probe() -> testresult::TestResult {
     let signer = MemorySigner::from_bytes(&[42u8; 32]);
     let id = SedimentreeId::new([0xAB; 32]);
 
@@ -128,9 +124,8 @@ async fn inline_size_amplification_probe() {
         96 * 1024,  // 96 Ki + overhead < 128 Ki
         128 * 1024, // 128 Ki + overhead just over 128 Ki
     ] {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = RedbStorage::with_inline_threshold(dir.path(), usize::MAX)
-            .expect("create inline storage");
+        let dir = tempfile::tempdir()?;
+        let storage = RedbStorage::with_inline_threshold(dir.path(), usize::MAX)?;
 
         let mut commits = Vec::new();
         for i in 0..1000u32 {
@@ -147,13 +142,11 @@ async fn inline_size_amplification_probe() {
                 .await,
             );
         }
-        Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new())
-            .await
-            .expect("save batch");
+        Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
         drop(storage);
 
         let db = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
-        let file_len = std::fs::metadata(&db).expect("metadata").len();
+        let file_len = std::fs::metadata(&db)?.len();
         let logical = 1000 * blob_size as u64;
         let amp = file_len as f64 / logical as f64;
         eprintln!(
@@ -184,4 +177,6 @@ async fn inline_size_amplification_probe() {
          — redb's allocation behavior has changed; revisit the inline threshold analysis",
         amp_at[&65_024]
     );
+
+    Ok(())
 }

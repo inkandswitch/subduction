@@ -2,7 +2,7 @@
 //! `sedimentree_fs_storage` suite: byte identity across save/load, multiple
 //! commits per tree, Byzantine duplicates, batch saves, and reopen.
 
-#![allow(clippy::expect_used, clippy::indexing_slicing)]
+#![allow(clippy::indexing_slicing)]
 
 use std::collections::BTreeSet;
 
@@ -73,7 +73,7 @@ async fn save_load_roundtrip() -> testresult::TestResult {
 
     let one = Storage::<Sendable>::load_loose_commit(&storage, id, head)
         .await?
-        .expect("commit must be loadable by id");
+        .ok_or("commit must be loadable by id")?;
     assert_eq!(one.signed().as_bytes(), &original_signed[..]);
 
     Ok(())
@@ -179,7 +179,7 @@ async fn survives_reopen() -> testresult::TestResult {
 
     let loaded = Storage::<Sendable>::load_loose_commit(&reopened, id, head)
         .await?
-        .expect("commit must survive reopen");
+        .ok_or("commit must survive reopen")?;
     assert_eq!(
         loaded.signed().as_bytes(),
         &original_signed[..],
@@ -290,7 +290,7 @@ async fn large_blob_externalized_and_roundtrips() -> testresult::TestResult {
     let reopened = RedbStorage::new(dir.path())?;
     let loaded = Storage::<Sendable>::load_loose_commit(&reopened, id, head)
         .await?
-        .expect("commit must be loadable");
+        .ok_or("commit must be loadable")?;
     assert_eq!(
         loaded.blob().contents(),
         &big_blob,
@@ -397,7 +397,7 @@ async fn deleted_record_orphans_blob_file_and_resave_adopts_it() -> testresult::
 
     let restored = Storage::<Sendable>::load_loose_commit(&storage, id, head)
         .await?
-        .expect("commit must be loadable after re-save");
+        .ok_or("commit must be loadable after re-save")?;
     assert_eq!(
         restored.blob().contents(),
         &blob,
@@ -461,7 +461,7 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
 
     let one = Storage::<Sendable>::load_fragment(&storage, id, head)
         .await?
-        .expect("fragment must be loadable by head");
+        .ok_or("fragment must be loadable by head")?;
     assert_eq!(one.signed().as_bytes(), &original_signed[..]);
 
     let listed = Storage::<Sendable>::list_fragment_ids(&storage, id).await?;
@@ -548,7 +548,7 @@ async fn large_fragment_blob_externalized_and_roundtrips() -> testresult::TestRe
     let reopened = RedbStorage::new(dir.path())?;
     let loaded = Storage::<Sendable>::load_fragment(&reopened, id, head)
         .await?
-        .expect("fragment must be loadable");
+        .ok_or("fragment must be loadable")?;
     assert_eq!(
         loaded.blob().contents(),
         &big_blob,
@@ -696,12 +696,12 @@ async fn default_threshold_boundary_dispatch() -> testresult::TestResult {
     // Both shapes round-trip byte-identically.
     let inline_loaded = Storage::<Sendable>::load_loose_commit(&storage, id, inline_head)
         .await?
-        .expect("inline commit must load");
+        .ok_or("inline commit must load")?;
     assert_eq!(inline_loaded.blob().contents(), &at_threshold);
 
     let external_loaded = Storage::<Sendable>::load_loose_commit(&storage, id, external_head)
         .await?
-        .expect("external commit must load");
+        .ok_or("external commit must load")?;
     assert_eq!(external_loaded.blob().contents(), &over_threshold);
 
     Ok(())
@@ -746,7 +746,7 @@ async fn equivocating_commits_coexist() -> testresult::TestResult {
 
     let point = Storage::<Sendable>::load_loose_commit(&storage, id, head)
         .await?
-        .expect("point read must resolve to one of the equivocating payloads");
+        .ok_or("point read must resolve to one of the equivocating payloads")?;
     assert!(
         point.blob().contents() == &blob_a || point.blob().contents() == &blob_b,
         "point read must return one of the stored payloads"
@@ -820,6 +820,7 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
 /// (16 KiB) is pinned separately by `default_threshold_boundary_dispatch`
 /// since 16 KiB blobs are too heavy for a generator sweep.
 #[test]
+#[allow(clippy::expect_used)]
 fn prop_inline_external_dispatch_at_threshold() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -931,7 +932,7 @@ async fn equivocating_straddle_resolves_same_representative() -> testresult::Tes
         }
     }
     let (small, large) =
-        chosen.expect("a head with inline-digest > external-digest exists within 256 tries");
+        chosen.ok_or("a head with inline-digest > external-digest exists within 256 tries")?;
 
     let dir = tempfile::tempdir()?;
     let storage = RedbStorage::with_inline_threshold(dir.path(), 64)?;
