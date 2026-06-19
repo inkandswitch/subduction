@@ -82,6 +82,7 @@ mod blob_store;
 mod codec;
 mod error;
 mod insert;
+mod inspect;
 mod key;
 mod scan;
 mod storage;
@@ -96,6 +97,7 @@ use redb::{Database, TableDefinition};
 use crate::blob_store::fsync_dir_sync;
 
 pub use error::RedbStorageError;
+pub use inspect::{HeadEntry, HeadKind, HeadLocation, StoreStats, TreeHeads, TreeStats};
 
 /// Registered sedimentree ids.
 pub(crate) const TREES: TableDefinition<'_, &[u8; 32], ()> = TableDefinition::new("trees");

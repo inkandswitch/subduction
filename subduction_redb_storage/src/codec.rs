@@ -77,6 +77,17 @@ pub(crate) fn decode_compound(bytes: &[u8]) -> Option<DecodedCompound> {
     }
 }
 
+/// Whether a compound value stores its blob in an external file (`true`) or
+/// inline (`false`). `None` on an empty/unknown-tag buffer. Cheaper than
+/// [`split_meta`] when only the tag is needed (no copy).
+pub(crate) fn is_external(bytes: &[u8]) -> Option<bool> {
+    match *bytes.first()? {
+        TAG_INLINE => Some(false),
+        TAG_EXTERNAL => Some(true),
+        _ => None,
+    }
+}
+
 /// Copy out just the `meta` (`Signed<T>` wire bytes) of a compound value,
 /// ignoring any inline blob, and report whether the blob is stored
 /// externally (`true`) or inline (`false`). `None` on a malformed buffer.

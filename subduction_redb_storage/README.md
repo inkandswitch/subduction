@@ -62,8 +62,12 @@ subduction migrate --from /var/lib/subduction --to /var/lib/subduction-redb
 
 The migration streams one tree per durable transaction and is resumable:
 re-running skips any tree already present in the destination (id and items
-are committed atomically). `--from` and `--to` must differ — both layouts
-use a `blobs/` subdirectory.
+are committed atomically). The server's keyhive state (`.keyhive/`) is copied
+across too, so the destination is a complete data directory the server can run
+against directly. `--from` and `--to` must differ — both layouts use a
+`blobs/` subdirectory.
+
+Pass `--dry-run` to report what would be migrated without writing anything.
 
 ## Backup
 

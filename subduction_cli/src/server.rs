@@ -132,6 +132,13 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value_t = false)]
     pub(crate) metrics: bool,
 
+    /// Bind a localhost admin HTTP server for live store inspection
+    /// (`GET /inspect`). Off unless set. Use a loopback address such as
+    /// `127.0.0.1:9091`: it exposes storage internals (tree ids, heads,
+    /// digests) and has no authentication.
+    #[arg(long, value_name = "ADDR")]
+    pub(crate) admin_addr: Option<SocketAddr>,
+
     /// Interval in seconds for refreshing storage metrics from disk
     #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
     pub(crate) metrics_refresh_interval: u64,
@@ -267,7 +274,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
 
     // Initialize the full keyhive stack: storage, identity, protocol, ingest.
     let keyhive_signer = key::keyhive_signer_from_seed(&common.seed);
-    let keyhive_root = common.data_dir.join(".keyhive");
+    let keyhive_root = common.data_dir.join(crate::keyhive::KEYHIVE_DIR);
     tracing::info!(root = ?keyhive_root, "Initializing keyhive storage");
     let fs_keyhive_storage = FsKeyhiveStorage::new(keyhive_root)?;
 
@@ -380,6 +387,15 @@ impl SetupCommon {
 
         tracing::info!(dir = ?data_dir, "Initializing redb storage");
         let redb_storage = RedbStorage::new(data_dir.clone())?;
+
+        // Optional localhost admin server for live inspection. Shares the redb
+        // handle (Arc-cheap clone); queries run as MVCC read txns concurrent
+        // with the live writer.
+        if let Some(admin_addr) = args.admin_addr {
+            crate::admin::start_admin_server(admin_addr, redb_storage.clone(), token.clone())
+                .await?;
+        }
+
         let storage = MetricsStorage::new(redb_storage);
 
         // Background metrics refresh

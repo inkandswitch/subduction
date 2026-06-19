@@ -45,3 +45,11 @@ pub(crate) const fn item_id_of(key: &Key96) -> CommitId {
     id.copy_from_slice(item_id);
     CommitId::new(id)
 }
+
+/// Extract the trailing content digest (bytes 64..96) from a composite key.
+pub(crate) const fn digest_of(key: &Key96) -> [u8; 32] {
+    let (_, digest) = key.split_at(64);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(digest);
+    out
+}
