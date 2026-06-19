@@ -21,7 +21,7 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use crate::{
     blob_store::{blob_file_path, hex_encode, read_blob_file_sync},
     codec::{DecodedCompound, decode_compound, split_meta},
-    error::RedbStorageError,
+    error::{FileError, FileOp, RedbStorageError},
     key::{Key96, item_id_of},
 };
 
@@ -143,7 +143,7 @@ where
                     );
                     continue;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(FileError::new(FileOp::Stat, &path, e).into()),
             }
         }
 

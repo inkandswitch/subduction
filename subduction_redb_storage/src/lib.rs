@@ -94,9 +94,9 @@ use std::{
 
 use redb::{Database, TableDefinition};
 
-use crate::blob_store::fsync_dir_sync;
+use crate::{blob_store::fsync_dir_sync, error::FileContext};
 
-pub use error::RedbStorageError;
+pub use error::{FileError, FileOp, RedbStorageError};
 pub use inspect::{HeadEntry, HeadKind, HeadLocation, StoreStats, TreeHeads, TreeStats};
 
 /// Registered sedimentree ids.
@@ -170,9 +170,9 @@ impl RedbStorage {
         inline_threshold: usize,
     ) -> Result<Self, RedbStorageError> {
         let root = root.as_ref();
-        std::fs::create_dir_all(root)?;
+        std::fs::create_dir_all(root).file_context(FileOp::CreateDir, root)?;
         let blobs_dir = root.join(BLOBS_DIR_NAME);
-        std::fs::create_dir_all(&blobs_dir)?;
+        std::fs::create_dir_all(&blobs_dir).file_context(FileOp::CreateDir, &blobs_dir)?;
 
         // Make the directory links themselves durable (one-time cost):
         // `blobs/`'s link lives in `root`, `root`'s in its parent.

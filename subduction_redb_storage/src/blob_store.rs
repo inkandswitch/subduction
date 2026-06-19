@@ -12,7 +12,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::error::RedbStorageError;
+use crate::error::{FileContext, FileError, FileOp, RedbStorageError};
 
 /// Process-wide counter distinguishing concurrent writers that target the
 /// same content-addressed blob path.
@@ -75,7 +75,7 @@ pub(crate) fn write_blob_file_sync(
     // `blobs/` so the bucket's link survives a crash (the constructor made
     // `blobs/` itself durable).
     if std::fs::metadata(&bucket_dir).is_err() {
-        std::fs::create_dir_all(&bucket_dir)?;
+        std::fs::create_dir_all(&bucket_dir).file_context(FileOp::CreateDir, &bucket_dir)?;
         fsync_dir_sync(blobs_dir)?;
     }
 
@@ -89,12 +89,14 @@ pub(crate) fn write_blob_file_sync(
         renamed: false,
     };
 
-    let mut file = std::fs::File::create(&temp.path)?;
-    file.write_all(data)?;
-    file.sync_all()?;
+    let mut file =
+        std::fs::File::create(&temp.path).file_context(FileOp::CreateTemp, &temp.path)?;
+    file.write_all(data)
+        .file_context(FileOp::Write, &temp.path)?;
+    file.sync_all().file_context(FileOp::Sync, &temp.path)?;
     drop(file);
 
-    std::fs::rename(&temp.path, &path)?;
+    std::fs::rename(&temp.path, &path).file_context(FileOp::Rename, &path)?;
     temp.renamed = true;
     fsync_dir_sync(&bucket_dir)?;
 
@@ -109,7 +111,9 @@ pub(crate) fn write_blob_file_sync(
 /// is best-effort.
 pub(crate) fn fsync_dir_sync(dir: &Path) -> Result<(), RedbStorageError> {
     #[cfg(unix)]
-    std::fs::File::open(dir)?.sync_all()?;
+    std::fs::File::open(dir)
+        .and_then(|handle| handle.sync_all())
+        .file_context(FileOp::SyncDir, dir)?;
     #[cfg(not(unix))]
     let _ = dir;
 
@@ -135,9 +139,10 @@ pub(crate) fn read_blob_file_sync(
     blobs_dir: &Path,
     digest: &[u8; 32],
 ) -> Result<Option<Vec<u8>>, RedbStorageError> {
-    match std::fs::read(blob_file_path(blobs_dir, digest)) {
+    let path = blob_file_path(blobs_dir, digest);
+    match std::fs::read(&path) {
         Ok(data) => Ok(Some(data)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(FileError::new(FileOp::Read, &path, e).into()),
     }
 }
