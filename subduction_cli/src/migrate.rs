@@ -314,7 +314,6 @@ fn fsync_dir(dir: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::cast_possible_truncation, clippy::expect_used)]
 mod tests {
     use std::collections::BTreeSet;
 
@@ -366,38 +365,40 @@ mod tests {
         .await
     }
 
-    async fn commit_digests<S>(s: &S, id: SedimentreeId) -> BTreeSet<Digest<LooseCommit>>
+    async fn commit_digests<S>(s: &S, id: SedimentreeId) -> Result<BTreeSet<Digest<LooseCommit>>>
     where
         S: Storage<Sendable>,
+        S::Error: Send + Sync + 'static,
     {
-        Storage::<Sendable>::load_loose_commits(s, id)
+        Ok(Storage::<Sendable>::load_loose_commits(s, id)
             .await
-            .expect("load commits")
+            .wrap_err("load commits")?
             .iter()
             .map(|vm| Digest::hash(vm.payload()))
-            .collect()
+            .collect())
     }
 
-    async fn fragment_digests<S>(s: &S, id: SedimentreeId) -> BTreeSet<Digest<Fragment>>
+    async fn fragment_digests<S>(s: &S, id: SedimentreeId) -> Result<BTreeSet<Digest<Fragment>>>
     where
         S: Storage<Sendable>,
+        S::Error: Send + Sync + 'static,
     {
-        Storage::<Sendable>::load_fragments(s, id)
+        Ok(Storage::<Sendable>::load_fragments(s, id)
             .await
-            .expect("load fragments")
+            .wrap_err("load fragments")?
             .iter()
             .map(|vm| Digest::hash(vm.payload()))
-            .collect()
+            .collect())
     }
 
     /// Every tree migrates with byte-identical content (including an external
     /// >16 KiB blob), and a second run skips everything already present.
     #[tokio::test]
-    async fn migrates_all_trees_and_is_resumable() {
-        let src_dir = tempfile::tempdir().expect("src tempdir");
-        let dst_dir = tempfile::tempdir().expect("dst tempdir");
-        let source = FsStorage::new(src_dir.path().to_path_buf()).expect("open fs source");
-        let dest = RedbStorage::new(dst_dir.path()).expect("open redb dest");
+    async fn migrates_all_trees_and_is_resumable() -> Result<()> {
+        let src_dir = tempfile::tempdir()?;
+        let dst_dir = tempfile::tempdir()?;
+        let source = FsStorage::new(src_dir.path().to_path_buf())?;
+        let dest = RedbStorage::new(dst_dir.path())?;
         let s = signer();
 
         let tree_a = SedimentreeId::new([0xA1; 32]);
@@ -410,17 +411,13 @@ mod tests {
             commit(&s, tree_a, 0x02, 20 * 1024).await,
         ];
         let a_fragments = vec![fragment(&s, tree_a, 0x03, 32).await];
-        Storage::<Sendable>::save_batch(&source, tree_a, a_commits, a_fragments)
-            .await
-            .expect("populate tree A");
+        Storage::<Sendable>::save_batch(&source, tree_a, a_commits, a_fragments).await?;
 
         // Tree B: a single inline commit.
         let b_commits = vec![commit(&s, tree_b, 0x10, 64).await];
-        Storage::<Sendable>::save_batch(&source, tree_b, b_commits, Vec::new())
-            .await
-            .expect("populate tree B");
+        Storage::<Sendable>::save_batch(&source, tree_b, b_commits, Vec::new()).await?;
 
-        let stats = migrate_all(&source, Some(&dest), 1).await.expect("migrate");
+        let stats = migrate_all(&source, Some(&dest), 1).await?;
         assert_eq!(
             stats,
             MigrationStats {
@@ -436,27 +433,23 @@ mod tests {
 
         for id in [tree_a, tree_b] {
             assert!(
-                Storage::<Sendable>::contains_sedimentree_id(&dest, id)
-                    .await
-                    .expect("contains"),
+                Storage::<Sendable>::contains_sedimentree_id(&dest, id).await?,
                 "migrated tree {id:?} must be registered in the destination"
             );
             assert_eq!(
-                commit_digests(&source, id).await,
-                commit_digests(&dest, id).await,
+                commit_digests(&source, id).await?,
+                commit_digests(&dest, id).await?,
                 "commit content must survive migration for {id:?}"
             );
             assert_eq!(
-                fragment_digests(&source, id).await,
-                fragment_digests(&dest, id).await,
+                fragment_digests(&source, id).await?,
+                fragment_digests(&dest, id).await?,
                 "fragment content must survive migration for {id:?}"
             );
         }
 
         // Resumable: a second pass writes nothing.
-        let again = migrate_all(&source, Some(&dest), 1)
-            .await
-            .expect("re-migrate");
+        let again = migrate_all(&source, Some(&dest), 1).await?;
         assert_eq!(
             again,
             MigrationStats {
@@ -469,37 +462,39 @@ mod tests {
                 keyhive_ops: 0,
             }
         );
+
+        Ok(())
     }
 
     /// Seed a `.keyhive/{archives,ops}` tree under `root` with the given file
     /// stems, returning nothing — the test asserts on the copy afterward.
-    fn seed_keyhive(root: &Path, archives: &[&str], ops: &[&str]) {
+    fn seed_keyhive(root: &Path, archives: &[&str], ops: &[&str]) -> Result<()> {
         for (sub, stems) in [(ARCHIVES_SUBDIR, archives), (OPS_SUBDIR, ops)] {
             let dir = root.join(KEYHIVE_DIR).join(sub);
-            std::fs::create_dir_all(&dir).expect("create keyhive subdir");
+            std::fs::create_dir_all(&dir)?;
             for stem in stems {
                 std::fs::write(
                     dir.join(format!("{stem}.bin")),
                     format!("data-{stem}").as_bytes(),
-                )
-                .expect("write keyhive file");
+                )?;
             }
         }
         // A transient temp file that must NOT be copied.
         let tmp = root.join(KEYHIVE_DIR).join("tmp");
-        std::fs::create_dir_all(&tmp).expect("create tmp dir");
-        std::fs::write(tmp.join("stale.bin.tmp"), b"junk").expect("write tmp file");
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("stale.bin.tmp"), b"junk")?;
+        Ok(())
     }
 
     /// Keyhive archives and ops are copied (skipping `tmp/`), with byte-identical
     /// content, and a re-run copies nothing (content-addressed idempotency).
     #[test]
-    fn migrate_keyhive_copies_archives_ops_and_is_idempotent() {
-        let from = tempfile::tempdir().expect("from tempdir");
-        let to = tempfile::tempdir().expect("to tempdir");
-        seed_keyhive(from.path(), &["aa", "bb"], &["cc"]);
+    fn migrate_keyhive_copies_archives_ops_and_is_idempotent() -> Result<()> {
+        let from = tempfile::tempdir()?;
+        let to = tempfile::tempdir()?;
+        seed_keyhive(from.path(), &["aa", "bb"], &["cc"])?;
 
-        let (archives, ops) = migrate_keyhive(from.path(), to.path(), false).expect("copy keyhive");
+        let (archives, ops) = migrate_keyhive(from.path(), to.path(), false)?;
         assert_eq!((archives, ops), (2, 1));
 
         let to_kh = to.path().join(KEYHIVE_DIR);
@@ -510,7 +505,7 @@ mod tests {
         ] {
             let copied = to_kh.join(sub).join(format!("{stem}.bin"));
             assert_eq!(
-                std::fs::read(&copied).expect("read copied file"),
+                std::fs::read(&copied)?,
                 format!("data-{stem}").into_bytes(),
                 "{} must be copied with identical content",
                 copied.display()
@@ -523,18 +518,19 @@ mod tests {
         );
 
         // Re-run is idempotent: everything is already present.
-        let (archives, ops) =
-            migrate_keyhive(from.path(), to.path(), false).expect("re-copy keyhive");
+        let (archives, ops) = migrate_keyhive(from.path(), to.path(), false)?;
         assert_eq!((archives, ops), (0, 0));
+
+        Ok(())
     }
 
     /// A dry run reports source totals (trees, commits, fragments, keyhive
     /// files) and writes absolutely nothing to the destination.
     #[tokio::test]
-    async fn dry_run_writes_nothing() {
-        let src_dir = tempfile::tempdir().expect("src tempdir");
-        let dst_dir = tempfile::tempdir().expect("dst tempdir");
-        let source = FsStorage::new(src_dir.path().to_path_buf()).expect("open fs source");
+    async fn dry_run_writes_nothing() -> Result<()> {
+        let src_dir = tempfile::tempdir()?;
+        let dst_dir = tempfile::tempdir()?;
+        let source = FsStorage::new(src_dir.path().to_path_buf())?;
         let s = signer();
 
         let tree = SedimentreeId::new([0xC3; 32]);
@@ -544,15 +540,14 @@ mod tests {
             vec![commit(&s, tree, 0x01, 16).await],
             vec![fragment(&s, tree, 0x02, 32).await],
         )
-        .await
-        .expect("populate source");
-        seed_keyhive(src_dir.path(), &["aa"], &["bb", "cc"]);
+        .await?;
+        seed_keyhive(src_dir.path(), &["aa"], &["bb", "cc"])?;
 
         // The destination directory is a fresh, empty path that must stay empty.
         let dst = dst_dir.path().join("redb-out");
 
-        let stats = migrate_all(&source, None, 1).await.expect("dry-run trees");
-        let (archives, ops) = migrate_keyhive(src_dir.path(), &dst, true).expect("dry-run keyhive");
+        let stats = migrate_all(&source, None, 1).await?;
+        let (archives, ops) = migrate_keyhive(src_dir.path(), &dst, true)?;
 
         assert_eq!(stats.total, 1);
         assert_eq!(stats.commits, 1);
@@ -565,45 +560,47 @@ mod tests {
             !dst.exists(),
             "dry run must not create the destination directory"
         );
+
+        Ok(())
     }
 
     /// `run` rejects an in-place migration (`--from == --to`) before touching
     /// either store.
     #[tokio::test]
-    async fn run_rejects_same_from_and_to() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    async fn run_rejects_same_from_and_to() -> Result<()> {
+        let dir = tempfile::tempdir()?;
         let args = MigrateArgs {
             from: dir.path().to_path_buf(),
             to: dir.path().to_path_buf(),
             progress_every: 1000,
             dry_run: false,
         };
-        let err = run(args)
-            .await
-            .expect_err("same --from/--to must be rejected");
+        let result = run(args).await;
         assert!(
-            err.to_string().contains("must differ"),
-            "expected the distinct-directory guard, got: {err}"
+            matches!(&result, Err(e) if e.to_string().contains("must differ")),
+            "expected the distinct-directory guard, got: {result:?}"
         );
+
+        Ok(())
     }
 
     /// `run` rejects a missing source directory.
     #[tokio::test]
-    async fn run_rejects_missing_source() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    async fn run_rejects_missing_source() -> Result<()> {
+        let dir = tempfile::tempdir()?;
         let args = MigrateArgs {
             from: dir.path().join("does-not-exist"),
             to: dir.path().join("dest"),
             progress_every: 1000,
             dry_run: false,
         };
-        let err = run(args)
-            .await
-            .expect_err("missing source must be rejected");
+        let result = run(args).await;
         assert!(
-            err.to_string().contains("does not exist"),
-            "expected the missing-source guard, got: {err}"
+            matches!(&result, Err(e) if e.to_string().contains("does not exist")),
+            "expected the missing-source guard, got: {result:?}"
         );
+
+        Ok(())
     }
 
     /// Property: migrating an arbitrary filesystem corpus to redb preserves every
@@ -619,6 +616,7 @@ mod tests {
     ///   ∧ a second migrate_all migrates 0
     /// ```
     #[test]
+    #[allow(clippy::expect_used, clippy::cast_possible_truncation)]
     fn prop_migrate_preserves_content() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -626,9 +624,11 @@ mod tests {
             .expect("current-thread runtime");
         let s = signer();
 
+        // Up to three trees, each with 0..=3 commits and 0..=2 fragments.
         bolero::check!()
-            .with_arbitrary::<Vec<(u8, u8)>>()
-            .for_each(|corpus| {
+            .with_generator(((0u8..=3, 0u8..=2), (0u8..=3, 0u8..=2), (0u8..=3, 0u8..=2)))
+            .for_each(|&(a, b, c)| {
+                let corpus = [a, b, c];
                 rt.block_on(async {
                     let src_dir = tempfile::tempdir().expect("src tempdir");
                     let dst_dir = tempfile::tempdir().expect("dst tempdir");
@@ -636,9 +636,9 @@ mod tests {
                     let dest = RedbStorage::new(dst_dir.path()).expect("redb dest");
 
                     let mut tree_ids = Vec::new();
-                    for (i, &(c, f)) in corpus.iter().take(3).enumerate() {
-                        let n_c = usize::from(c % 4);
-                        let n_f = usize::from(f % 2);
+                    for (i, &(n_c_u, n_f_u)) in corpus.iter().enumerate() {
+                        let n_c = usize::from(n_c_u);
+                        let n_f = usize::from(n_f_u);
                         if n_c + n_f == 0 {
                             continue;
                         }
@@ -667,13 +667,13 @@ mod tests {
 
                     for &id in &tree_ids {
                         assert_eq!(
-                            commit_digests(&source, id).await,
-                            commit_digests(&dest, id).await,
+                            commit_digests(&source, id).await.expect("src commits"),
+                            commit_digests(&dest, id).await.expect("dst commits"),
                             "commit content preserved for {id:?}"
                         );
                         assert_eq!(
-                            fragment_digests(&source, id).await,
-                            fragment_digests(&dest, id).await,
+                            fragment_digests(&source, id).await.expect("src fragments"),
+                            fragment_digests(&dest, id).await.expect("dst fragments"),
                             "fragment content preserved for {id:?}"
                         );
                     }
