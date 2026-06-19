@@ -162,7 +162,10 @@ async fn saturated_peer_does_not_starve_another_peer() -> TestResult {
     sd.add_connection(fast_conn.authenticated()).await?;
 
     for _ in 0..SLOW_FLOOD {
-        slow_handle.inbound_tx.send(heads_update([0xCCu8; 32])).await?;
+        slow_handle
+            .inbound_tx
+            .send(heads_update([0xCCu8; 32]))
+            .await?;
     }
 
     // Wait until the slow peer holds its full per-peer budget in flight. The
