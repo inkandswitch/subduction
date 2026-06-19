@@ -120,6 +120,11 @@ fn heads_update(id: [u8; 32]) -> SyncMessage {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn saturated_peer_does_not_starve_another_peer() -> TestResult {
+    // Flood the slow peer past its per-peer cap. Its unbounded inbound channel
+    // absorbs the flood; the reader admits only `PER_PEER_CAP` before its
+    // semaphore is exhausted and it stops pulling.
+    const SLOW_FLOOD: usize = PER_PEER_CAP + 200;
+
     let slow_peer = PeerId::new([0xA1u8; 32]);
     let fast_peer = PeerId::new([0xB2u8; 32]);
 
@@ -156,10 +161,6 @@ async fn saturated_peer_does_not_starve_another_peer() -> TestResult {
     sd.add_connection(slow_conn.authenticated()).await?;
     sd.add_connection(fast_conn.authenticated()).await?;
 
-    // Flood the slow peer past its per-peer cap. Its unbounded inbound channel
-    // absorbs the flood; the reader admits only `PER_PEER_CAP` before its
-    // semaphore is exhausted and it stops pulling.
-    const SLOW_FLOOD: usize = PER_PEER_CAP + 200;
     for _ in 0..SLOW_FLOOD {
         slow_handle.inbound_tx.send(heads_update([0xCCu8; 32])).await?;
     }
@@ -185,7 +186,7 @@ async fn saturated_peer_does_not_starve_another_peer() -> TestResult {
     // Backpressure: once the cap was hit the reader stopped draining, so the
     // flood's remainder is still queued in the slow peer's inbound channel.
     assert!(
-        slow_handle.inbound_tx.len() > 0,
+        !slow_handle.inbound_tx.is_empty(),
         "a saturated peer must backpressure its own inbound channel, not drain it"
     );
 
