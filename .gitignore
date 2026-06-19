@@ -31,3 +31,6 @@ rust_out
 
 # Real-world test data (automerge docs dumped for local testing)
 real-world.am
+
+.local-sync-key
+.local-sync-data
