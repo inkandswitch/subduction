@@ -172,6 +172,23 @@ in {
          '';
        };
 
+      adminAddr = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "127.0.0.1:9091";
+        description = ''
+          Bind address for the localhost admin/inspection HTTP server
+          (passes `--admin-addr <addr>`). When set, the server exposes
+          read-only store inspection that the `subduction inspect` CLI
+          queries.
+
+          The endpoint is unauthenticated and surfaces store metadata (tree
+          ids, heads, content digests — not blob contents), so bind it to
+          loopback (e.g. `127.0.0.1:9091`) only. Left null (the default), the
+          admin server is not started.
+        '';
+      };
+
       maxResidentTrees = lib.mkOption {
         type = lib.types.nullOr lib.types.ints.unsigned;
         default = null;
@@ -356,6 +373,10 @@ in {
                   (toString cfg.server.metricsPort)
                   "--metrics-refresh-interval"
                   (toString cfg.server.metricsRefreshInterval)
+                ]
+                ++ lib.optionals (cfg.server.adminAddr != null) [
+                  "--admin-addr"
+                  cfg.server.adminAddr
                 ]
                 ++ lib.optionals (cfg.server.maxResidentTrees != null) [
                   "--max-resident-trees"
