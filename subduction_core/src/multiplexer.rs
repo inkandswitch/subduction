@@ -72,9 +72,17 @@ pub const DEFAULT_ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct Multiplexer {
     peer_id: PeerId,
     req_id_counter: AtomicU64,
-    pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
+    pending: Mutex<Map<RequestId, PendingValue>>,
     default_roundtrip_timeout: Duration,
 }
+
+/// Pending-map value: the response sender, plus (with `metrics`) the instant
+/// the request was registered so `resolve_pending` can record the
+/// request→response wait. The timestamp drops with the entry — no leak.
+#[cfg(feature = "metrics")]
+type PendingValue = (std::time::Instant, oneshot::Sender<BatchSyncResponse>);
+#[cfg(not(feature = "metrics"))]
+type PendingValue = oneshot::Sender<BatchSyncResponse>;
 
 /// Error from a multiplexed call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -146,7 +154,11 @@ impl Multiplexer {
         req_id: RequestId,
     ) -> oneshot::Receiver<BatchSyncResponse> {
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(req_id, tx);
+        #[cfg(feature = "metrics")]
+        let value = (std::time::Instant::now(), tx);
+        #[cfg(not(feature = "metrics"))]
+        let value = tx;
+        self.pending.lock().await.insert(req_id, value);
         #[cfg(feature = "metrics")]
         crate::metrics::mux_request_registered();
         rx
@@ -227,10 +239,17 @@ impl Multiplexer {
     pub async fn resolve_pending(&self, resp: &BatchSyncResponse) -> bool {
         let req_id = resp.req_id;
         let mut pending = self.pending.lock().await;
-        if let Some(tx) = pending.remove(&req_id) {
+        if let Some(value) = pending.remove(&req_id) {
+            #[cfg(feature = "metrics")]
+            let (since, tx) = value;
+            #[cfg(not(feature = "metrics"))]
+            let tx = value;
             drop(tx.send(resp.clone()));
             #[cfg(feature = "metrics")]
-            crate::metrics::mux_request_resolved();
+            {
+                crate::metrics::mux_request_resolved();
+                crate::metrics::mux_pending_duration(since.elapsed().as_secs_f64());
+            }
             tracing::debug!(req = ?req_id, "routed BatchSyncResponse to pending caller");
             true
         } else {

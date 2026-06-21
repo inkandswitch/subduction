@@ -411,8 +411,18 @@ impl SetupCommon {
 
             let metrics_storage = storage.clone();
             let metrics_token = token.clone();
+            #[cfg(feature = "os-metrics")]
+            let metrics_data_dir = data_dir.clone();
             let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
             tokio::spawn(async move {
+                // Process gauges (memory/CPU/FDs) are read from /proc each tick.
+                #[cfg(feature = "os-metrics")]
+                let process_collector = {
+                    let collector = metrics_process::Collector::default();
+                    collector.describe();
+                    collector
+                };
+
                 let mut interval = time::interval(refresh_interval);
                 interval.tick().await;
 
@@ -421,6 +431,11 @@ impl SetupCommon {
                         _ = interval.tick() => {
                             if let Err(e) = metrics_storage.refresh_metrics().await {
                                 tracing::warn!(error = %e, "Failed to refresh storage metrics");
+                            }
+                            #[cfg(feature = "os-metrics")]
+                            {
+                                process_collector.collect();
+                                publish_disk_usage(&metrics_data_dir);
                             }
                         }
                         () = metrics_token.cancelled() => {
@@ -785,50 +800,6 @@ where
             });
         }
 
-        // Background sync task: periodically reconcile with all connected peers
-        let sync_subduction = subduction.clone();
-        let sync_cancel = token.child_token();
-        tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(5));
-            interval.tick().await; // skip the first immediate tick
-            loop {
-                tokio::select! {
-                    () = sync_cancel.cancelled() => {
-                        tracing::debug!("iroh: background sync task canceled");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        let timeout = CallTimeout::TimeoutMillis(10_000);
-                        let round_start = std::time::Instant::now();
-                        let (had_success, _stats, call_errs, io_errs) =
-                            sync_subduction.full_sync_with_all_peers(timeout).await;
-                        subduction_core::metrics::background_sync_duration(
-                            round_start.elapsed().as_secs_f64(),
-                        );
-                        if !call_errs.is_empty() {
-                            subduction_core::metrics::background_sync_call_errors(
-                                call_errs.len() as u64,
-                            );
-                        }
-                        if !io_errs.is_empty() {
-                            subduction_core::metrics::background_sync_io_errors(
-                                io_errs.len() as u64,
-                            );
-                        }
-                        if had_success {
-                            tracing::debug!("iroh: background full_sync completed");
-                        }
-                        for e in &call_errs {
-                            tracing::warn!(error = ?e, "iroh: background sync call error");
-                        }
-                        for e in &io_errs {
-                            tracing::warn!(error = ?e, "iroh: background sync io error");
-                        }
-                    }
-                }
-            }
-        });
-
         Some(task)
     } else {
         None
@@ -909,6 +880,40 @@ where
     }
 
     Ok(())
+}
+
+/// Publish on-disk footprint gauges: the redb database file size (one `stat`,
+/// every platform) and, on unix, filesystem free/total for the data dir (one
+/// `statvfs`). Cheap enough to call on every metrics refresh tick.
+#[cfg(feature = "os-metrics")]
+fn publish_disk_usage(data_dir: &std::path::Path) {
+    let redb_bytes = std::fs::metadata(data_dir.join(subduction_redb_storage::DB_FILE_NAME))
+        .map_or(0, |m| m.len());
+
+    #[cfg(unix)]
+    {
+        match nix::sys::statvfs::statvfs(data_dir) {
+            Ok(stat) => {
+                let frsize = stat.fragment_size();
+                // `nix`'s statvfs block counts are `u64` on Linux but `u32` on
+                // macOS; widen before multiplying by the (`u64`) fragment size.
+                #[allow(clippy::useless_conversion)]
+                let (free, total) = (
+                    u64::from(stat.blocks_available()) * frsize,
+                    u64::from(stat.blocks()) * frsize,
+                );
+                subduction_core::metrics::set_disk_usage(free, total, redb_bytes);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "statvfs on data dir failed");
+                subduction_core::metrics::set_redb_file_bytes(redb_bytes);
+            }
+        }
+    }
+
+    // No portable `statvfs`; publish only the redb file size.
+    #[cfg(not(unix))]
+    subduction_core::metrics::set_redb_file_bytes(redb_bytes);
 }
 
 /// Accept loop: routes incoming TCP connections to WebSocket or HTTP long-poll.
@@ -1093,6 +1098,7 @@ async fn handle_websocket<H: CliWireHandler>(
 
     let authenticated = match result {
         Ok((auth, ())) => {
+            subduction_core::metrics::handshake_outcome("ok");
             tracing::info!(
                 peer = %auth.peer_id(),
                 addr = %addr,
@@ -1101,6 +1107,22 @@ async fn handle_websocket<H: CliWireHandler>(
             auth
         }
         Err(e) => {
+            use handshake::{
+                AuthenticateError as AE, HandshakeError, challenge::ChallengeValidationError,
+            };
+            // Any other variant (signature/audience/replay failure, explicit
+            // rejection, reflection, peer-id mismatch) is a rejection.
+            #[allow(clippy::wildcard_enum_match_arm)]
+            let outcome = match &e {
+                AE::Decode(_) => "decode",
+                AE::Transport(_) => "io",
+                AE::ConnectionClosed => "closed",
+                AE::Handshake(HandshakeError::ChallengeValidation(
+                    ChallengeValidationError::ClockDrift { .. },
+                )) => "drift",
+                _ => "rejected",
+            };
+            subduction_core::metrics::handshake_outcome(outcome);
             tracing::warn!(addr = %addr, error = %e, "WebSocket handshake failed");
             return;
         }

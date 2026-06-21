@@ -25,6 +25,11 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 tracing = { workspace = true, default-features = true }
 
+[features]
+# Record the storage blocking-pool in-flight gauge (proxy for spawn_blocking
+# pressure). Off by default; the CLI server enables it.
+metrics = ["subduction_core/metrics"]
+
 [dev-dependencies]
 bolero = { workspace = true }
 criterion = { workspace = true }

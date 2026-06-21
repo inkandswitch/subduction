@@ -33,6 +33,27 @@ use crate::{
 /// providing backpressure if the sender task can't keep up.
 const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 
+/// An outbound message, plus its enqueue instant under the `metrics` feature so
+/// the sender task can record queue dwell. Without the feature the timestamp
+/// field is gone — a zero-overhead newtype, and no `std::time` on wasm.
+struct Outbound {
+    msg: tungstenite::Message,
+    #[cfg(feature = "metrics")]
+    enqueued: std::time::Instant,
+}
+
+impl Outbound {
+    // `const` only without `metrics` (`Instant::now()` isn't const); not worth a cfg split.
+    #[allow(clippy::missing_const_for_fn)]
+    fn new(msg: tungstenite::Message) -> Self {
+        Self {
+            msg,
+            #[cfg(feature = "metrics")]
+            enqueued: std::time::Instant::now(),
+        }
+    }
+}
+
 /// Configuration for WebSocket Ping/Pong keepalive.
 ///
 /// A peer that misses [`missed_pong_threshold`] consecutive pongs is
@@ -201,7 +222,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> {
 
     /// Channel for outbound messages. A dedicated sender task drains this to the WebSocket.
     /// This eliminates mutex contention when many tasks send concurrently.
-    outbound_tx: async_channel::Sender<tungstenite::Message>,
+    outbound_tx: async_channel::Sender<Outbound>,
 
     /// The actual WebSocket sender, used only by the sender task.
     ws_sender: Arc<Mutex<WebSocketSender<T>>>,
@@ -233,10 +254,21 @@ impl<T, Async: FutureForm> Transport<Async> for WebSocket<T, Async> {
     }
 
     fn send_bytes(&self, bytes: &[u8]) -> Async::Future<'_, Result<(), Self::SendError>> {
-        let msg = tungstenite::Message::Binary(bytes.to_vec().into());
+        let item = Outbound::new(tungstenite::Message::Binary(bytes.to_vec().into()));
         let tx = self.outbound_tx.clone();
         Async::from_future(async move {
-            tx.send(msg).await.map_err(|_| SendError)?;
+            // Try the fast path first (metrics only) so a full channel — TCP
+            // backpressure from a slow peer — is counted before await.
+            #[cfg(feature = "metrics")]
+            let item = match tx.try_send(item) {
+                Ok(()) => return Ok(()),
+                Err(async_channel::TrySendError::Closed(_)) => return Err(SendError),
+                Err(async_channel::TrySendError::Full(item)) => {
+                    subduction_core::metrics::outbound_send_blocked("websocket");
+                    item
+                }
+            };
+            tx.send(item).await.map_err(|_| SendError)?;
             Ok(())
         })
     }
@@ -291,7 +323,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
     ) {
         let (ws_writer, ws_reader) = ws.split();
         let (inbound_writer, inbound_reader) = async_channel::bounded(128);
-        let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
+        let (outbound_tx, outbound_rx) =
+            async_channel::bounded::<Outbound>(OUTBOUND_CHANNEL_CAPACITY);
         let chan_id = rand::random::<u64>();
         // Initial value is irrelevant — the keepalive loop clears the
         // flag before each ping.
@@ -306,9 +339,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
 
                 let mut ws_sender = ws_sender.lock().await;
 
-                while let Ok(msg) = outbound_rx.recv().await {
+                while let Ok(item) = outbound_rx.recv().await {
                     tracing::trace!("sender task: sending message to WebSocket");
-                    ws_sender.send(msg).await?;
+                    #[cfg(feature = "metrics")]
+                    subduction_core::metrics::outbound_queue_dwell(
+                        "websocket",
+                        item.enqueued.elapsed().as_secs_f64(),
+                        outbound_rx.len(),
+                    );
+                    ws_sender.send(item.msg).await?;
                 }
 
                 tracing::debug!("sender task: outbound channel closed, shutting down");
@@ -406,7 +445,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                         // Non-blocking so a saturated outbound queue can't
                         // stall the listener. A dropped pong may cost one
                         // keepalive cycle on the remote side.
-                        if let Err(e) = self.outbound_tx.try_send(tungstenite::Message::Pong(p)) {
+                        if let Err(e) = self
+                            .outbound_tx
+                            .try_send(Outbound::new(tungstenite::Message::Pong(p)))
+                        {
                             tracing::warn!(
                                 error = ?e,
                                 peer = %self.peer_id,
@@ -466,7 +508,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                         // takes effect (`async-channel` allows buffered
                         // messages to be received after `close()`).
                         if let Some(close_frame) = kind.close_frame() {
-                            drop(self.outbound_tx.try_send(close_frame));
+                            drop(self.outbound_tx.try_send(Outbound::new(close_frame)));
                         }
 
                         break Err(RunError::from(e));
@@ -613,7 +655,7 @@ impl ReadErrorKind {
 async fn keepalive_loop<S, Async>(
     config: KeepAlive,
     peer_id: PeerId,
-    outbound_tx: async_channel::Sender<tungstenite::Message>,
+    outbound_tx: async_channel::Sender<Outbound>,
     inbound_writer: async_channel::Sender<Vec<u8>>,
     pong_received: Arc<AtomicBool>,
     sleeper: S,
@@ -635,7 +677,7 @@ where
         // Empty payload: we don't verify the Pong reply matches a
         // specific Ping, so a unique payload would just be overhead.
         let ping = tungstenite::Message::Ping(Vec::new().into());
-        if outbound_tx.send(ping).await.is_err() {
+        if outbound_tx.send(Outbound::new(ping)).await.is_err() {
             tracing::debug!(peer = %peer_id, "keepalive: outbound closed; exiting");
             return KeepAliveOutcome::ConnectionClosed;
         }
@@ -671,7 +713,7 @@ where
                 code: CloseCode::Away,
                 reason: "keepalive timeout".into(),
             }));
-            drop(outbound_tx.try_send(close_frame));
+            drop(outbound_tx.try_send(Outbound::new(close_frame)));
 
             outbound_tx.close();
             inbound_writer.close();
@@ -818,14 +860,14 @@ mod tests {
     /// `Close(Away, ...)`. Mock-time so we're CI-jitter-free.
     #[tokio::test(start_paused = true)]
     async fn keepalive_loop_times_out_on_silent_peer() -> TestResult {
-        let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));
 
         let outbound_drain = tokio::spawn(async move {
             let mut msgs = Vec::new();
-            while let Ok(msg) = outbound_rx.recv().await {
-                msgs.push(msg);
+            while let Ok(item) = outbound_rx.recv().await {
+                msgs.push(item.msg);
             }
             msgs
         });
@@ -879,15 +921,15 @@ mod tests {
     /// Responsive peer → loop runs indefinitely (no Timeout).
     #[tokio::test(start_paused = true)]
     async fn keepalive_loop_does_not_time_out_with_responsive_peer() -> TestResult {
-        let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));
 
         let responsive_peer = {
             let pong_received = pong_received.clone();
             tokio::spawn(async move {
-                while let Ok(msg) = outbound_rx.recv().await {
-                    if matches!(msg, tungstenite::Message::Ping(_)) {
+                while let Ok(item) = outbound_rx.recv().await {
+                    if matches!(item.msg, tungstenite::Message::Ping(_)) {
                         pong_received.store(true, Ordering::Relaxed);
                     }
                 }
@@ -929,7 +971,7 @@ mod tests {
     /// One miss + recovery resets the counter; threshold is never reached.
     #[tokio::test(start_paused = true)]
     async fn keepalive_loop_resets_misses_after_recovery() -> TestResult {
-        let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));
 
@@ -937,8 +979,8 @@ mod tests {
             let pong_received = pong_received.clone();
             tokio::spawn(async move {
                 let mut seen = 0u32;
-                while let Ok(msg) = outbound_rx.recv().await {
-                    if matches!(msg, tungstenite::Message::Ping(_)) {
+                while let Ok(item) = outbound_rx.recv().await {
+                    if matches!(item.msg, tungstenite::Message::Ping(_)) {
                         seen += 1;
                         // Respond on even-numbered pings only (miss-respond-miss-respond-…).
                         // With threshold = 2, a non-resetting loop would
@@ -988,7 +1030,7 @@ mod tests {
     /// Graceful path must not touch `inbound_writer`.
     #[tokio::test(start_paused = true)]
     async fn keepalive_loop_exits_when_outbound_closes_externally() -> TestResult {
-        let (outbound_tx, outbound_rx) = async_channel::bounded::<tungstenite::Message>(16);
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
         let pong_received = Arc::new(AtomicBool::new(false));
 
@@ -1092,7 +1134,7 @@ mod tests {
                     .expect("paused tokio runtime");
 
                 rt.block_on(async move {
-                    let (tx, rx) = async_channel::bounded::<tungstenite::Message>(64);
+                    let (tx, rx) = async_channel::bounded::<Outbound>(64);
                     let (inbound_tx, _) = async_channel::bounded::<Vec<u8>>(16);
                     let pong_received = Arc::new(AtomicBool::new(false));
 

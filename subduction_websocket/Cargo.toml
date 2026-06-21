@@ -82,6 +82,9 @@ default = ["std"]
 # dev-dependency) but its profiler is only activated when this feature is set.
 pprof-profile = []
 futures-timer = ["std", "dep:futures-timer"]
+# Record outbound send-queue dwell/depth (labeled `transport="websocket"`).
+# Off by default so wasm/no_std clients pay nothing; the CLI server enables it.
+metrics = ["std", "subduction_core/metrics"]
 std = [
   "async-channel/std",
   "async-lock/std",

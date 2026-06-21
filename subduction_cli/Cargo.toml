@@ -38,6 +38,7 @@ keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+metrics-process = { workspace = true, optional = true }
 metrics-util = { workspace = true }
 nonempty = { workspace = true, features = ["std"] }
 rand = { workspace = true }
@@ -48,10 +49,10 @@ subduction_core = { workspace = true, features = ["system_time", "metrics"] }
 subduction_ephemeral = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true }
 subduction_keyhive = { workspace = true, features = ["runtime"] }
-subduction_redb_storage = { workspace = true }
-subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
+subduction_redb_storage = { workspace = true, features = ["metrics"] }
+subduction_http_longpoll = { workspace = true, features = ["metrics", "server", "std"] }
 subduction_iroh = { workspace = true }
-subduction_websocket = { workspace = true }
+subduction_websocket = { workspace = true, features = ["metrics"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
@@ -74,8 +75,16 @@ subduction_websocket = { workspace = true, features = ["futures-timer"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
 
+# `nix` is unix-only. The `os-metrics` disk gauge reads `statvfs`; non-unix
+# targets (Windows) fall back to publishing just the redb file size.
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, optional = true }
+
 [features]
-default = ["native-tls"]
+default = ["native-tls", "os-metrics"]
+# Host-level metrics: process memory/CPU/FDs (metrics-process) and disk usage
+# (nix statvfs). Optional so the binary can drop those deps; on by default.
+os-metrics = ["dep:metrics-process", "dep:nix"]
 native-tls = [
   "async-tungstenite/tokio-native-tls",
   "reqwest/native-tls",
