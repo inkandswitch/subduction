@@ -35,6 +35,12 @@ pub enum RedbStorageError {
     /// A blocking storage task panicked or was cancelled.
     #[error("blocking storage task failed: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    /// The group-commit writer is unavailable: its queue closed or its reply
+    /// was dropped. Only reachable during shutdown or if the writer task
+    /// panicked (the offending item's own error already surfaced there).
+    #[error("redb group-commit writer is unavailable")]
+    WriterClosed,
 }
 
 /// A filesystem operation on an external blob file (or the on-disk store

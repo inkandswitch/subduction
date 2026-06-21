@@ -50,6 +50,88 @@ async fn seal_fragment(
     .await
 }
 
+/// Many concurrent writes are coalesced by the group-commit writer into shared
+/// transactions, yet every one is durable and correctly attributed to its tree.
+/// Exercises the writer's batching, per-tree id registration across a single
+/// multi-tree transaction, the commit/fragment table split, and result fan-out
+/// under contention.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_writes_coalesce_and_stay_durable() -> testresult::TestResult {
+    const TREES: u8 = 4;
+    const COMMITS_PER_TREE: u8 = 10;
+    const FRAGMENTS_PER_TREE: u8 = 3;
+
+    let dir = tempfile::tempdir()?;
+    let storage = RedbStorage::new(dir.path())?;
+    let signer = test_signer();
+    let ids: Vec<SedimentreeId> = (0..TREES)
+        .map(|t| SedimentreeId::new([t + 1; 32]))
+        .collect();
+
+    // Pre-seal everything (signing is async), then fire all saves at once so
+    // many land in each writer drain. No explicit `save_sedimentree_id`: the
+    // coalesced writes must register every tree id themselves.
+    let mut set = tokio::task::JoinSet::new();
+    for (t, &id) in (0u8..).zip(&ids) {
+        for c in 0..COMMITS_PER_TREE {
+            let verified = seal_commit(
+                &signer,
+                id,
+                CommitId::new([t * COMMITS_PER_TREE + c; 32]),
+                vec![t, c],
+            )
+            .await;
+            let storage = storage.clone();
+            set.spawn(async move {
+                Storage::<Sendable>::save_loose_commit(&storage, id, verified).await
+            });
+        }
+        for f in 0..FRAGMENTS_PER_TREE {
+            let verified = seal_fragment(
+                &signer,
+                id,
+                CommitId::new([100 + t * FRAGMENTS_PER_TREE + f; 32]),
+                vec![t, f],
+            )
+            .await;
+            let storage = storage.clone();
+            set.spawn(
+                async move { Storage::<Sendable>::save_fragment(&storage, id, verified).await },
+            );
+        }
+    }
+
+    while let Some(joined) = set.join_next().await {
+        joined??;
+    }
+
+    // Every item is durable, attributed to the right tree, and every tree id is
+    // enumerable — proving the coalesced transactions registered ids correctly.
+    let all_ids = Storage::<Sendable>::load_all_sedimentree_ids(&storage).await?;
+    assert_eq!(
+        all_ids.len(),
+        usize::from(TREES),
+        "every tree id must be registered"
+    );
+    for &id in &ids {
+        assert!(all_ids.contains(&id), "missing tree {id:?}");
+        let commits = Storage::<Sendable>::load_loose_commits(&storage, id).await?;
+        assert_eq!(
+            commits.len(),
+            usize::from(COMMITS_PER_TREE),
+            "tree {id:?} lost commits"
+        );
+        let fragments = Storage::<Sendable>::load_fragments(&storage, id).await?;
+        assert_eq!(
+            fragments.len(),
+            usize::from(FRAGMENTS_PER_TREE),
+            "tree {id:?} lost fragments"
+        );
+    }
+
+    Ok(())
+}
+
 /// Save a commit, reload via bulk + point lookups, verify byte identity.
 #[tokio::test]
 async fn save_load_roundtrip() -> testresult::TestResult {

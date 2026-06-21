@@ -86,15 +86,23 @@ mod inspect;
 mod key;
 mod scan;
 mod storage;
+mod writer;
 
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use redb::{Database, TableDefinition};
+use sedimentree_core::id::SedimentreeId;
+use tokio::sync::{mpsc, oneshot};
 
-use crate::{blob_store::fsync_dir_sync, error::FileContext};
+use crate::{
+    blob_store::fsync_dir_sync,
+    error::FileContext,
+    insert::PendingInsert,
+    writer::{WriteJob, WriteKind},
+};
 
 pub use error::{FileError, FileOp, RedbStorageError};
 pub use inspect::{HeadEntry, HeadKind, HeadLocation, StoreStats, TreeHeads, TreeStats};
@@ -135,6 +143,10 @@ pub struct RedbStorage {
     db: Arc<Database>,
     blobs_dir: Arc<PathBuf>,
     inline_threshold: usize,
+    /// Group-commit writer queue, spawned lazily on first write (the
+    /// constructor is sync and may run outside a runtime; writes never do).
+    /// Shared across clones so all handles feed one writer.
+    writer: Arc<OnceLock<mpsc::Sender<WriteJob>>>,
 }
 
 impl RedbStorage {
@@ -204,6 +216,7 @@ impl RedbStorage {
             db: Arc::new(db),
             blobs_dir: Arc::new(blobs_dir),
             inline_threshold,
+            writer: Arc::new(OnceLock::new()),
         })
     }
 
@@ -215,6 +228,70 @@ impl RedbStorage {
     ) -> Result<T, RedbStorageError> {
         let db = Arc::clone(&self.db);
         let blobs_dir = Arc::clone(&self.blobs_dir);
+        // Counts the op as blocking-pool-resident from enqueue until completion
+        // (drops on return, including cancellation) — a proxy for pool pressure.
+        #[cfg(feature = "metrics")]
+        let _blocking = BlockingGuard::new();
         tokio::task::spawn_blocking(move || f(&db, &blobs_dir)).await?
+    }
+
+    /// The group-commit writer's queue, spawning the writer task on first use.
+    ///
+    /// Lazy because the constructor is sync and may run outside a Tokio runtime
+    /// (e.g. benches build the store, then drive ops inside `block_on`), whereas
+    /// every write runs inside one. `OnceLock` makes the first writer win and
+    /// the rest share its sender.
+    fn writer(&self) -> &mpsc::Sender<WriteJob> {
+        self.writer.get_or_init(|| {
+            writer::spawn(&self.db, Arc::clone(&self.blobs_dir), self.inline_threshold)
+        })
+    }
+
+    /// Enqueue one verified write and await its durability.
+    ///
+    /// The writer coalesces this with any concurrent writes into a single
+    /// fsync'd transaction (registering the tree id atomically) and signals back
+    /// only after `commit()` returns — so durability-on-return is preserved.
+    pub(crate) async fn enqueue_write(
+        &self,
+        tree: SedimentreeId,
+        insert: PendingInsert,
+        kind: WriteKind,
+    ) -> Result<(), RedbStorageError> {
+        let (responder, rx) = oneshot::channel();
+        self.writer()
+            .send(WriteJob {
+                tree,
+                insert,
+                kind,
+                responder,
+            })
+            .await
+            .map_err(|_| RedbStorageError::WriterClosed)?;
+
+        match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(RedbStorageError::WriterClosed),
+        }
+    }
+}
+
+/// RAII guard that raises the `storage_blocking_inflight` gauge while a storage
+/// op is queued/running on the blocking pool, lowering it on drop.
+#[cfg(feature = "metrics")]
+pub(crate) struct BlockingGuard;
+
+#[cfg(feature = "metrics")]
+impl BlockingGuard {
+    pub(crate) fn new() -> Self {
+        subduction_core::metrics::storage_blocking_inc();
+        Self
+    }
+}
+
+#[cfg(feature = "metrics")]
+impl Drop for BlockingGuard {
+    fn drop(&mut self) {
+        subduction_core::metrics::storage_blocking_dec();
     }
 }
