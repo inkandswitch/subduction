@@ -153,30 +153,18 @@ pedantic = { level = "deny", priority = -1 }
 [profile.release]
 codegen-units = 1
 lto = "fat"
-opt-level = "z"
+opt-level = 3
 panic = "abort"
 strip = "symbols"
 
-# The workspace-wide opt-level="z" is tuned for Wasm bundle size.
-# Override to opt-level=3 only for crates that are NOT shared with the
-# Wasm target, so Wasm bundles stay small while the native CLI is fast.
-[profile.release.package.subduction_cli]
-opt-level = 3
-
-[profile.release.package.subduction_http_longpoll]
-opt-level = 3
-
-[profile.release.package.subduction_iroh]
-opt-level = 3
-
-[profile.release.package.subduction_websocket]
-opt-level = 3
-
-[profile.release.package.sedimentree_fs_storage]
-opt-level = 3
-
-[profile.release.package.tokio]
-opt-level = 3
+# opt-level = 3 (speed) for the whole release profile, native CLI and Wasm
+# alike. This is a compute-bound system on both ends (Ed25519 verify, BLAKE3,
+# B-tree storage, Automerge merges), and "z" often emits slower code than "s"/2
+# for a size win that gzip/brotli and wasm-opt mostly recover anyway.
+#
+# If a Wasm bundle's size becomes the binding constraint, drop that one crate
+# (or the `*_wasm` binding crate) to opt-level = 2 / "s" rather than reverting
+# the whole profile to "z".
 
 # Wasm crates: preserve Wasm name section for readable stack traces in
 # production. Only strips DWARF debug info, not function names (~5-15%
@@ -207,9 +195,8 @@ opt-level = 2
 [profile.test.package.sedimentree_core]
 opt-level = 2
 
-# Benchmarks inherit from release, but the workspace release profile is tuned
-# for Wasm (opt-level="z", strip="symbols"). Override for accurate benchmarks
-# with debug info sufficient for flamegraphs.
+# Benchmarks inherit from release (opt-level=3, lto="fat", strip="symbols").
+# Override only the debug-info knobs needed for accurate flamegraphs.
 [profile.bench]
 codegen-units = 1
 debug = true        # Full debug symbols for flamegraphs/profiling
@@ -228,7 +215,7 @@ strip = false       # Keep symbols for profiling tools
 #
 # | knob             | wasm-debug | release | why different             |
 # |------------------|------------|---------|---------------------------|
-# | opt-level        | 1          | "z"     | preserve locals/stepping  |
+# | opt-level        | 1          | 3       | preserve locals/stepping  |
 # | lto              | "thin"     | "fat"   | keep stack frames clear   |
 # | codegen-units    | 16         | 1       | faster rebuild cycle      |
 # | debug            | "limited"  | (off)   | DWARF for step-through    |
