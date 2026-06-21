@@ -113,7 +113,7 @@ use sedimentree_core::{
     blob::{Blob, verified::VerifiedBlobMeta},
     codec::{decode::Decode, encode::Encode},
     collections::{
-        Entry, Map, Set,
+        Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
@@ -2159,89 +2159,23 @@ where
                     let commits_to_receive = missing_commits.len();
                     let fragments_to_receive = missing_fragments.len();
 
-                    // Cache putters by author to avoid redundant policy checks.
-                    let mut putter_cache: Map<PeerId, Putter<Async, Store>> = Map::new();
-
-                    for (signed_commit, blob) in missing_commits {
-                        let verified = match signed_commit.try_verify() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "sync commit signature verification failed");
-                                continue;
-                            }
-                        };
-                        let verified_meta = match VerifiedMeta::new(verified, blob) {
-                            Ok(vm) => vm,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "sync commit blob mismatch");
-                                continue;
-                            }
-                        };
-                        let author = verified_meta.verified_author();
-                        let author_id = PeerId::from(*author.verifying_key());
-                        let putter = match putter_cache.entry(author_id) {
-                            Entry::Occupied(e) => e.into_mut(),
-                            Entry::Vacant(e) => {
-                                match self.storage.get_putter::<Async>(*to_ask, author, id).await {
-                                    Ok(p) => e.insert(p),
-                                    Err(err) => {
-                                        tracing::warn!(
-                                            peer = %to_ask,
-                                            author = ?author,
-                                            tree = ?id,
-                                            error = %err,
-                                            "policy rejected sync commit"
-                                        );
-                                        continue;
-                                    }
-                                }
-                            }
-                        };
-                        self.insert_commit_locally(putter, verified_meta)
-                            .await
-                            .map_err(IoError::Storage)?;
-                    }
-
-                    for (signed_fragment, blob) in missing_fragments {
-                        let verified = match signed_fragment.try_verify() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "sync fragment signature verification failed");
-                                continue;
-                            }
-                        };
-                        let verified_meta = match VerifiedMeta::new(verified, blob) {
-                            Ok(vm) => vm,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "sync fragment blob mismatch");
-                                continue;
-                            }
-                        };
-                        let author = verified_meta.verified_author();
-                        let author_id = PeerId::from(*author.verifying_key());
-                        let putter = match putter_cache.entry(author_id) {
-                            Entry::Occupied(e) => e.into_mut(),
-                            Entry::Vacant(e) => {
-                                match self.storage.get_putter::<Async>(*to_ask, author, id).await {
-                                    Ok(p) => e.insert(p),
-                                    Err(err) => {
-                                        tracing::warn!(
-                                            peer = %to_ask,
-                                            author = ?author,
-                                            tree = ?id,
-                                            error = %err,
-                                            "policy rejected sync fragment"
-                                        );
-                                        continue;
-                                    }
-                                }
-                            }
-                        };
-                        self.insert_fragment_locally(putter, verified_meta)
-                            .await
-                            .map_err(IoError::Storage)?;
-                    }
-
+                    // Ingest the diff in one batched pass: `recv_batch_sync_response`
+                    // groups items by author and writes each author's batch in a
+                    // single `save_batch` (one fsync), instead of one fsync per
+                    // commit. `requesting` is handled separately below, so the
+                    // copy handed to the ingester is left empty.
+                    ingest::recv_batch_sync_response(
+                        &self.sedimentrees,
+                        &self.storage,
+                        to_ask,
+                        id,
+                        SyncDiff {
+                            missing_commits,
+                            missing_fragments,
+                            requesting: RequestedData::default(),
+                        },
+                    )
+                    .await?;
                     self.minimize_tree(id).await;
 
                     // Update received stats (count what was offered, not verified)
@@ -2294,7 +2228,12 @@ where
 
         #[cfg(feature = "metrics")]
         {
-            crate::metrics::sync_duration(sync_start.elapsed().as_secs_f64());
+            // Duration is for successful round-trips only; all-failed syncs are
+            // counted via `sync_call_failure` below. Recording them here would
+            // skew the histogram toward the timeout instead of real latency.
+            if had_success {
+                crate::metrics::sync_duration(sync_start.elapsed().as_secs_f64());
+            }
             crate::metrics::sync_data_exchanged(
                 stats.commits_received,
                 stats.fragments_received,
@@ -2454,89 +2393,22 @@ where
                                     "sync_with_all_peers: response received"
                                 );
 
-                                // Cache putters by author to avoid redundant policy checks.
-                                let mut putter_cache: Map<PeerId, Putter<Async, Store>> = Map::new();
-
-                                for (signed_commit, blob) in missing_commits {
-                                    let verified = match signed_commit.try_verify() {
-                                        Ok(v) => v,
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "full sync commit signature verification failed");
-                                            continue;
-                                        }
-                                    };
-                                    let verified_meta = match VerifiedMeta::new(verified, blob) {
-                                        Ok(vm) => vm,
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "full sync commit blob mismatch");
-                                            continue;
-                                        }
-                                    };
-                                    let author = verified_meta.verified_author();
-                                    let author_id = PeerId::from(*author.verifying_key());
-                                    let putter = match putter_cache.entry(author_id) {
-                                        Entry::Occupied(e) => e.into_mut(),
-                                        Entry::Vacant(e) => {
-                                            match self.storage.get_putter::<Async>(*peer_id, author, id).await {
-                                                Ok(p) => e.insert(p),
-                                                Err(err) => {
-                                                    tracing::warn!(
-                                                        peer = %peer_id,
-                                                        author = ?author,
-                                                        tree = ?id,
-                                                        error = %err,
-                                                        "policy rejected full sync commit"
-                                                    );
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    };
-                                    self.insert_commit_locally(putter, verified_meta)
-                                        .await
-                                        .map_err(IoError::Storage)?;
-                                }
-
-                                for (signed_fragment, blob) in missing_fragments {
-                                    let verified = match signed_fragment.try_verify() {
-                                        Ok(v) => v,
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "full sync fragment signature verification failed");
-                                            continue;
-                                        }
-                                    };
-                                    let verified_meta = match VerifiedMeta::new(verified, blob) {
-                                        Ok(vm) => vm,
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "full sync fragment blob mismatch");
-                                            continue;
-                                        }
-                                    };
-                                    let author = verified_meta.verified_author();
-                                    let author_id = PeerId::from(*author.verifying_key());
-                                    let putter = match putter_cache.entry(author_id) {
-                                        Entry::Occupied(e) => e.into_mut(),
-                                        Entry::Vacant(e) => {
-                                            match self.storage.get_putter::<Async>(*peer_id, author, id).await {
-                                                Ok(p) => e.insert(p),
-                                                Err(err) => {
-                                                    tracing::warn!(
-                                                        peer = %peer_id,
-                                                        author = ?author,
-                                                        tree = ?id,
-                                                        error = %err,
-                                                        "policy rejected full sync fragment"
-                                                    );
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    };
-                                    self.insert_fragment_locally(putter, verified_meta)
-                                        .await
-                                        .map_err(IoError::Storage)?;
-                                }
-
+                                // Ingest the diff in one batched pass (see
+                                // `sync_with_peer`): one `save_batch` per author
+                                // instead of one fsync per commit. `requesting`
+                                // is handled separately below.
+                                ingest::recv_batch_sync_response(
+                                    &self.sedimentrees,
+                                    &self.storage,
+                                    peer_id,
+                                    id,
+                                    SyncDiff {
+                                        missing_commits,
+                                        missing_fragments,
+                                        requesting: RequestedData::default(),
+                                    },
+                                )
+                                .await?;
                                 self.minimize_tree(id).await;
 
                                 // Update received stats
