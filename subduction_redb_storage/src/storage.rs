@@ -25,6 +25,7 @@ use crate::{
     insert::{insert_compound, pending_commit, pending_fragment, stage_external_blobs_sync},
     key::{item_range, tree_range},
     scan::{delete_range, resolve_items, scan_decoded, scan_ids, scan_payloads},
+    writer::WriteKind,
 };
 
 #[future_form(Sendable, Local)]
@@ -114,25 +115,12 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::save_loose_commit");
-            let pending = pending_commit(sedimentree_id, verified);
-            let threshold = self.inline_threshold;
-            self.with_db(move |db, blobs_dir| {
-                // External blob (if any) staged before the write txn so its
-                // file I/O doesn't hold the database-wide writer slot.
-                stage_external_blobs_sync(core::slice::from_ref(&pending), blobs_dir, threshold)?;
-
-                let txn = db.begin_write()?;
-                {
-                    // Contract: persisting an item registers its
-                    // sedimentree id, atomically with the item itself.
-                    txn.open_table(TREES)?
-                        .insert(sedimentree_id.as_bytes(), ())?;
-                    insert_compound(&mut txn.open_table(COMMITS)?, &pending, threshold)?;
-                }
-                txn.commit()?;
-                Ok(())
-            })
-            .await
+            let insert = pending_commit(sedimentree_id, verified);
+            // Group-commit: the writer task coalesces this with any concurrent
+            // single-item writes into one fsync'd transaction. It registers the
+            // tree id atomically with the commit (Storage contract).
+            self.enqueue_write(sedimentree_id, insert, WriteKind::Commit)
+                .await
         })
     }
 
@@ -271,25 +259,11 @@ impl<Async: FutureForm> Storage<Async> for RedbStorage {
     ) -> Async::Future<'_, Result<(), Self::Error>> {
         Async::from_future(async move {
             tracing::trace!(?sedimentree_id, "RedbStorage::save_fragment");
-            let pending = pending_fragment(sedimentree_id, verified);
-            let threshold = self.inline_threshold;
-            self.with_db(move |db, blobs_dir| {
-                // External blob (if any) staged before the write txn so its
-                // file I/O doesn't hold the database-wide writer slot.
-                stage_external_blobs_sync(core::slice::from_ref(&pending), blobs_dir, threshold)?;
-
-                let txn = db.begin_write()?;
-                {
-                    // Contract: persisting an item registers its
-                    // sedimentree id, atomically with the item itself.
-                    txn.open_table(TREES)?
-                        .insert(sedimentree_id.as_bytes(), ())?;
-                    insert_compound(&mut txn.open_table(FRAGMENTS)?, &pending, threshold)?;
-                }
-                txn.commit()?;
-                Ok(())
-            })
-            .await
+            let insert = pending_fragment(sedimentree_id, verified);
+            // Group-commit: coalesced with concurrent writes into one fsync'd
+            // transaction; registers the tree id atomically with the fragment.
+            self.enqueue_write(sedimentree_id, insert, WriteKind::Fragment)
+                .await
         })
     }
 
