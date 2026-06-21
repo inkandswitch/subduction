@@ -18,6 +18,10 @@ pub mod names {
     pub const CONNECTIONS_TOTAL: &str = "subduction_connections_total";
     /// Total number of connections closed.
     pub const CONNECTIONS_CLOSED: &str = "subduction_connections_closed";
+    /// Completed handshake attempts, labeled by `outcome`. Counts rejections
+    /// (auth/clock-drift/decode) that never become a connection, which
+    /// `CONNECTIONS_TOTAL` (successes only) can't show.
+    pub const HANDSHAKE_TOTAL: &str = "subduction_handshake_total";
     /// Total messages processed, labeled by type.
     pub const MESSAGES_TOTAL: &str = "subduction_messages_total";
     /// Message dispatch duration in seconds.
@@ -26,6 +30,12 @@ pub mod names {
     pub const DISPATCH_INFLIGHT: &str = "subduction_dispatch_inflight";
     /// Completed dispatch tasks, labeled by `outcome` (`ok`/`err`/`aborted`).
     pub const DISPATCH_COMPLETED_TOTAL: &str = "subduction_dispatch_completed_total";
+    /// Times an inbound message had to wait for a per-peer dispatch permit
+    /// (the peer was at its concurrency cap — the rate limiter engaging).
+    pub const DISPATCH_THROTTLED_TOTAL: &str = "subduction_dispatch_throttled_total";
+    /// Time spent waiting to acquire a per-peer dispatch permit (0 on the
+    /// fast path; grows as a peer saturates its cap).
+    pub const DISPATCH_PERMIT_WAIT_SECONDS: &str = "subduction_dispatch_permit_wait_seconds";
     /// Total batch sync requests received.
     pub const BATCH_SYNC_REQUESTS_TOTAL: &str = "subduction_batch_sync_requests_total";
     /// Total batch sync responses received.
@@ -52,6 +62,23 @@ pub mod names {
     pub const MUX_REQUESTS_TOTAL: &str = "subduction_mux_requests_total";
     /// Cumulative pending requests cancelled (timeout or disconnect teardown).
     pub const MUX_CANCELLED_TOTAL: &str = "subduction_mux_cancelled_total";
+    /// Time a correlated request stays pending until resolved by a response
+    /// (successful round-trips): the full request→response wait at the
+    /// correlation layer. Cancellations/timeouts are excluded (counted in
+    /// [`MUX_CANCELLED_TOTAL`]).
+    pub const MUX_PENDING_DURATION_SECONDS: &str = "subduction_mux_pending_duration_seconds";
+
+    // Transport outbound queue (per-connection send buffer).
+    /// Time an outbound message waits in the per-connection send queue before
+    /// the peer grabs it, labeled by `transport` (`websocket`/`longpoll`/`iroh`).
+    pub const OUTBOUND_QUEUE_DWELL_SECONDS: &str = "subduction_outbound_queue_dwell_seconds";
+    /// Outbound send-queue depth sampled when a message is drained, labeled by
+    /// `transport`. Rising depth signals a slow/absent peer backing up the
+    /// bounded per-connection channel.
+    pub const OUTBOUND_QUEUE_DEPTH: &str = "subduction_outbound_queue_depth";
+    /// Times a send had to block because the bounded outbound channel was full
+    /// (head-of-line backpressure from a slow peer), labeled by `transport`.
+    pub const OUTBOUND_SEND_BLOCKED_TOTAL: &str = "subduction_outbound_send_blocked_total";
 
     // Subscriptions (live update fan-out).
     /// Number of sedimentrees with at least one subscriber.
@@ -90,16 +117,18 @@ pub mod names {
         "subduction_storage_operation_duration_seconds";
     /// Cumulative storage operation errors, labeled by `operation`.
     pub const STORAGE_OPERATION_ERRORS_TOTAL: &str = "subduction_storage_operation_errors_total";
+    /// Storage operations currently executing on the blocking pool. A proxy for
+    /// blocking-pool pressure (redb funnels every op through `spawn_blocking`):
+    /// sustained high values mean storage ops are queueing for a thread.
+    pub const STORAGE_BLOCKING_INFLIGHT: &str = "subduction_storage_blocking_inflight";
 
-    // Background sync (iroh and similar periodic full-sync tasks).
-    /// Duration of a background `full_sync_with_all_peers` round trip in seconds.
-    pub const BACKGROUND_SYNC_DURATION_SECONDS: &str =
-        "subduction_background_sync_duration_seconds";
-    /// Cumulative count of call errors across background sync rounds (since process start).
-    pub const BACKGROUND_SYNC_CALL_ERRORS_TOTAL: &str =
-        "subduction_background_sync_call_errors_total";
-    /// Cumulative count of I/O errors across background sync rounds (since process start).
-    pub const BACKGROUND_SYNC_IO_ERRORS_TOTAL: &str = "subduction_background_sync_io_errors_total";
+    // On-disk footprint (published from the metrics refresh loop).
+    /// Free bytes on the filesystem holding the data directory.
+    pub const DISK_FREE_BYTES: &str = "subduction_disk_free_bytes";
+    /// Total bytes of the filesystem holding the data directory.
+    pub const DISK_TOTAL_BYTES: &str = "subduction_disk_total_bytes";
+    /// Size of the redb database file on disk.
+    pub const REDB_FILE_BYTES: &str = "subduction_redb_file_bytes";
 }
 
 /// Record a new connection being established.
@@ -114,6 +143,13 @@ pub fn connection_opened() {
 pub fn connection_closed() {
     metrics::gauge!(names::CONNECTIONS_ACTIVE).decrement(1);
     metrics::counter!(names::CONNECTIONS_CLOSED).increment(1);
+}
+
+/// Record a completed handshake attempt, labeled by a bounded `outcome`
+/// (`"ok"`, `"rejected"`, `"drift"`, `"decode"`, `"io"`, `"closed"`).
+#[inline]
+pub fn handshake_outcome(outcome: &'static str) {
+    metrics::counter!(names::HANDSHAKE_TOTAL, "outcome" => outcome).increment(1);
 }
 
 /// Record a message being dispatched.
@@ -182,6 +218,15 @@ pub fn dispatch_completed(outcome: &'static str) {
     metrics::counter!(names::DISPATCH_COMPLETED_TOTAL, "outcome" => outcome).increment(1);
 }
 
+/// Record that an inbound message had to wait for a per-peer dispatch permit
+/// (the peer hit its concurrency cap), and how long the wait took. Called only
+/// when the fast-path acquire fails, so the no-contention path stays free.
+#[inline]
+pub fn dispatch_permit_waited(wait_secs: f64) {
+    metrics::counter!(names::DISPATCH_THROTTLED_TOTAL).increment(1);
+    metrics::histogram!(names::DISPATCH_PERMIT_WAIT_SECONDS).record(wait_secs);
+}
+
 /// Record a batch sync request.
 #[inline]
 pub fn batch_sync_request() {
@@ -245,6 +290,34 @@ pub fn mux_requests_cancelled(n: usize) {
     }
     metrics::counter!(names::MUX_CANCELLED_TOTAL).increment(n as u64);
     metrics::gauge!(names::MUX_PENDING).decrement(n as f64);
+}
+
+/// Record how long a correlated request stayed pending, from registration
+/// until it was resolved by a response. Cancellations and timeouts are
+/// excluded (they're counted in [`MUX_CANCELLED_TOTAL`](names::MUX_CANCELLED_TOTAL)).
+#[inline]
+pub fn mux_pending_duration(duration_secs: f64) {
+    metrics::histogram!(names::MUX_PENDING_DURATION_SECONDS).record(duration_secs);
+}
+
+/// Record an outbound message's send-queue dwell (enqueue → drained by the
+/// peer) and the queue depth observed at drain, labeled by `transport`.
+///
+/// `transport` must be a bounded `&'static str` (`"websocket"`, `"longpoll"`,
+/// `"iroh"`) to keep label cardinality fixed.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn outbound_queue_dwell(transport: &'static str, dwell_secs: f64, depth: usize) {
+    metrics::histogram!(names::OUTBOUND_QUEUE_DWELL_SECONDS, "transport" => transport)
+        .record(dwell_secs);
+    metrics::histogram!(names::OUTBOUND_QUEUE_DEPTH, "transport" => transport).record(depth as f64);
+}
+
+/// Record that an outbound send blocked on a full per-connection channel
+/// (backpressure from a slow peer), labeled by `transport`.
+#[inline]
+pub fn outbound_send_blocked(transport: &'static str) {
+    metrics::counter!(names::OUTBOUND_SEND_BLOCKED_TOTAL, "transport" => transport).increment(1);
 }
 
 /// Set the number of sedimentrees with at least one subscriber.
@@ -341,22 +414,35 @@ pub fn storage_operation_error(operation: &'static str) {
     metrics::counter!(names::STORAGE_OPERATION_ERRORS_TOTAL, "operation" => operation).increment(1);
 }
 
-/// Record the duration of a background `full_sync_with_all_peers` round.
+/// Mark a storage operation entering the blocking pool.
 #[inline]
-pub fn background_sync_duration(duration_secs: f64) {
-    metrics::histogram!(names::BACKGROUND_SYNC_DURATION_SECONDS).record(duration_secs);
+pub fn storage_blocking_inc() {
+    metrics::gauge!(names::STORAGE_BLOCKING_INFLIGHT).increment(1.0);
 }
 
-/// Record `n` call errors observed in a background sync round.
+/// Mark a storage operation leaving the blocking pool.
 #[inline]
-pub fn background_sync_call_errors(n: u64) {
-    metrics::counter!(names::BACKGROUND_SYNC_CALL_ERRORS_TOTAL).increment(n);
+pub fn storage_blocking_dec() {
+    metrics::gauge!(names::STORAGE_BLOCKING_INFLIGHT).decrement(1.0);
 }
 
-/// Record `n` I/O errors observed in a background sync round.
+/// Publish the on-disk footprint: filesystem free/total bytes for the data
+/// directory and the redb database file size.
 #[inline]
-pub fn background_sync_io_errors(n: u64) {
-    metrics::counter!(names::BACKGROUND_SYNC_IO_ERRORS_TOTAL).increment(n);
+#[allow(clippy::cast_precision_loss)]
+pub fn set_disk_usage(free_bytes: u64, total_bytes: u64, redb_file_bytes: u64) {
+    metrics::gauge!(names::DISK_FREE_BYTES).set(free_bytes as f64);
+    metrics::gauge!(names::DISK_TOTAL_BYTES).set(total_bytes as f64);
+    set_redb_file_bytes(redb_file_bytes);
+}
+
+/// Publish just the redb database file size, leaving the filesystem free/total
+/// gauges untouched. For platforms without a portable `statvfs` (e.g. Windows),
+/// where those gauges are skipped rather than reported as zero.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_redb_file_bytes(redb_file_bytes: u64) {
+    metrics::gauge!(names::REDB_FILE_BYTES).set(redb_file_bytes as f64);
 }
 
 /// Register HELP/TYPE metadata for every metric this crate emits.
@@ -377,6 +463,10 @@ pub fn describe_all() {
         "Total number of peer connections closed since process start."
     );
     metrics::describe_counter!(
+        names::HANDSHAKE_TOTAL,
+        "Completed handshake attempts, labeled by `outcome` (ok/rejected/drift/decode/io/closed). Rejections never become connections, so `connections_total` can't show them."
+    );
+    metrics::describe_counter!(
         names::MESSAGES_TOTAL,
         "Total number of sync messages dispatched, labeled by `SyncMessage` variant."
     );
@@ -392,6 +482,15 @@ pub fn describe_all() {
     metrics::describe_counter!(
         names::DISPATCH_COMPLETED_TOTAL,
         "Completed dispatch tasks, labeled by `outcome` (ok/err/aborted)."
+    );
+    metrics::describe_counter!(
+        names::DISPATCH_THROTTLED_TOTAL,
+        "Times an inbound message waited for a per-peer dispatch permit (the peer hit its concurrency cap — the rate limiter engaging)."
+    );
+    metrics::describe_histogram!(
+        names::DISPATCH_PERMIT_WAIT_SECONDS,
+        metrics::Unit::Seconds,
+        "Time spent waiting to acquire a per-peer dispatch permit (recorded only when the fast-path acquire fails)."
     );
     metrics::describe_counter!(
         names::BATCH_SYNC_REQUESTS_TOTAL,
@@ -437,6 +536,24 @@ pub fn describe_all() {
     metrics::describe_counter!(
         names::MUX_CANCELLED_TOTAL,
         "Cumulative pending requests cancelled (timeout or disconnect teardown)."
+    );
+    metrics::describe_histogram!(
+        names::MUX_PENDING_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Time a correlated request stays pending until resolved by a response (successful round-trips); the full request→response wait at the correlation layer. Cancellations/timeouts are excluded (counted in mux_cancelled_total)."
+    );
+    metrics::describe_histogram!(
+        names::OUTBOUND_QUEUE_DWELL_SECONDS,
+        metrics::Unit::Seconds,
+        "Time an outbound message waits in the per-connection send queue before the peer grabs it, labeled by `transport`."
+    );
+    metrics::describe_histogram!(
+        names::OUTBOUND_QUEUE_DEPTH,
+        "Outbound send-queue depth sampled when a message is drained, labeled by `transport`."
+    );
+    metrics::describe_counter!(
+        names::OUTBOUND_SEND_BLOCKED_TOTAL,
+        "Times a send blocked on a full bounded outbound channel (slow-peer backpressure), labeled by `transport`."
     );
     metrics::describe_gauge!(
         names::SUBSCRIBED_SEDIMENTREES,
@@ -487,17 +604,20 @@ pub fn describe_all() {
         names::STORAGE_OPERATION_ERRORS_TOTAL,
         "Cumulative storage operation errors, labeled by `operation`."
     );
-    metrics::describe_histogram!(
-        names::BACKGROUND_SYNC_DURATION_SECONDS,
-        metrics::Unit::Seconds,
-        "Duration of a single background `full_sync_with_all_peers` round."
+    metrics::describe_gauge!(
+        names::STORAGE_BLOCKING_INFLIGHT,
+        "Storage operations currently executing on the blocking pool (proxy for blocking-pool pressure; redb funnels every op through spawn_blocking)."
     );
-    metrics::describe_counter!(
-        names::BACKGROUND_SYNC_CALL_ERRORS_TOTAL,
-        "Total call errors observed across background sync rounds."
+    metrics::describe_gauge!(
+        names::DISK_FREE_BYTES,
+        "Free bytes on the filesystem holding the data directory."
     );
-    metrics::describe_counter!(
-        names::BACKGROUND_SYNC_IO_ERRORS_TOTAL,
-        "Total I/O errors observed across background sync rounds."
+    metrics::describe_gauge!(
+        names::DISK_TOTAL_BYTES,
+        "Total bytes of the filesystem holding the data directory."
+    );
+    metrics::describe_gauge!(
+        names::REDB_FILE_BYTES,
+        "Size of the redb database file on disk."
     );
 }

@@ -27,6 +27,27 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 /// Channel capacity for inbound messages (client → server via `/lp/send`).
 const INBOUND_CHANNEL_CAPACITY: usize = 128;
 
+/// An outbound message, plus its enqueue instant under the `metrics` feature so
+/// the drain side can record queue dwell. Without the feature the timestamp
+/// field is gone — a zero-overhead newtype, and no `std::time` on wasm.
+struct Outbound {
+    bytes: Vec<u8>,
+    #[cfg(feature = "metrics")]
+    enqueued: std::time::Instant,
+}
+
+impl Outbound {
+    // `const` only without `metrics` (`Instant::now()` isn't const); not worth a cfg split.
+    #[allow(clippy::missing_const_for_fn)]
+    fn new(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            #[cfg(feature = "metrics")]
+            enqueued: std::time::Instant::now(),
+        }
+    }
+}
+
 /// Shared interior state for an HTTP long-poll connection.
 ///
 /// This struct is wrapped in an `Arc` so that clones share the same channels
@@ -37,7 +58,7 @@ struct Inner {
     peer_id: PeerId,
 
     /// Raw bytes from `send_bytes()` / `call()` → picked up by `/lp/recv` handler.
-    outbound_tx: async_channel::Sender<Vec<u8>>,
+    outbound_tx: async_channel::Sender<Outbound>,
 
     /// Raw bytes from `/lp/send` handler → picked up by `recv_bytes()`.
     inbound_writer: async_channel::Sender<Vec<u8>>,
@@ -58,7 +79,7 @@ struct Inner {
 pub struct HttpLongPollTransport {
     inner: Arc<Inner>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
-    outbound_rx: async_channel::Receiver<Vec<u8>>,
+    outbound_rx: async_channel::Receiver<Outbound>,
 }
 
 impl HttpLongPollTransport {
@@ -118,7 +139,16 @@ impl HttpLongPollTransport {
     ///
     /// Returns an error if the outbound channel is closed.
     pub async fn pull_outbound(&self) -> Result<Vec<u8>, async_channel::RecvError> {
-        self.outbound_rx.recv().await
+        let item = self.outbound_rx.recv().await?;
+
+        #[cfg(feature = "metrics")]
+        subduction_core::metrics::outbound_queue_dwell(
+            "longpoll",
+            item.enqueued.elapsed().as_secs_f64(),
+            self.outbound_rx.len(),
+        );
+
+        Ok(item.bytes)
     }
 
     /// Close the connection's channels and cancel background tasks.
@@ -156,10 +186,21 @@ impl<Async: FutureForm> Transport<Async> for HttpLongPollTransport {
             "http-lp: sending outbound bytes"
         );
 
-        let data = bytes.to_vec();
+        let item = Outbound::new(bytes.to_vec());
         let tx = self.inner.outbound_tx.clone();
         Async::from_future(async move {
-            tx.send(data).await.map_err(|_| SendError)?;
+            // Try the fast path first (metrics only) so a full channel —
+            // backpressure from a slow/absent poller — is counted before await.
+            #[cfg(feature = "metrics")]
+            let item = match tx.try_send(item) {
+                Ok(()) => return Ok(()),
+                Err(async_channel::TrySendError::Closed(_)) => return Err(SendError),
+                Err(async_channel::TrySendError::Full(item)) => {
+                    subduction_core::metrics::outbound_send_blocked("longpoll");
+                    item
+                }
+            };
+            tx.send(item).await.map_err(|_| SendError)?;
             Ok(())
         })
     }

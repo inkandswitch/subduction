@@ -20,17 +20,34 @@ use tokio::net::TcpListener;
 
 /// Fine buckets (seconds) for sub-millisecond/low-millisecond operations:
 /// per-message dispatch and individual storage operations. Resolves down to
-/// 50µs so fast ops don't all collapse into one bucket.
+/// 50µs so fast ops don't collapse into one bucket, and extends to 10s so a
+/// write that stalls for seconds under redb write contention isn't clamped to
+/// the 1s bucket (which would hide the real p99).
 const FINE_BUCKETS_SECONDS: &[f64] = &[
     0.000_05, 0.000_1, 0.000_25, 0.000_5, 0.001, 0.002_5, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
-    1.0,
+    1.0, 2.5, 5.0, 10.0,
 ];
 
 /// Coarse buckets (seconds) for whole-round operations measured in
-/// milliseconds-to-seconds: foreground and background sync rounds. Sub-ms
-/// resolution would be wasted series here.
+/// milliseconds-to-seconds: foreground sync rounds. Sub-ms resolution would be
+/// wasted series here.
 const COARSE_BUCKETS_SECONDS: &[f64] = &[
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+];
+
+/// Buckets (seconds) for outbound send-queue dwell — sub-millisecond
+/// (WebSocket) to tens of seconds (long-poll), so both transports resolve.
+const DWELL_BUCKETS_SECONDS: &[f64] = &[
+    0.000_5, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+];
+
+/// Buckets (message count) for outbound send-queue depth sampled at drain, up
+/// to the per-connection channel capacity (1024). The leading `0` matters: an
+/// idle queue drains at depth 0, and without an `le="0"` bucket those samples
+/// fall into `le="1"`, so `histogram_quantile` interpolates to ~0.95 for a
+/// quiet queue instead of 0.
+const DEPTH_BUCKETS: &[f64] = &[
+    0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0,
 ];
 
 /// Idle series are evicted after this long with no updates. A safety valve:
@@ -56,7 +73,7 @@ pub fn init_metrics() -> PrometheusHandle {
     // exporter sorts overrides by `Matcher` `Ord` (Full < Prefix < Suffix) and
     // takes the first match. So the fine `Full(...)` rules below win over the
     // coarse `Suffix("_duration_seconds")` fallback for those specific metrics,
-    // while sync/background-sync durations fall through to the coarse set.
+    // while whole-round sync durations fall through to the coarse set.
     #[allow(clippy::expect_used)]
     let handle = PrometheusBuilder::new()
         .set_buckets_for_metric(
@@ -66,6 +83,27 @@ pub fn init_metrics() -> PrometheusHandle {
         .expect("fine buckets are non-empty and sorted")
         .set_buckets_for_metric(
             Matcher::Full(names::DISPATCH_DURATION_SECONDS.to_owned()),
+            FINE_BUCKETS_SECONDS,
+        )
+        .expect("fine buckets are non-empty and sorted")
+        // Outbound-queue dwell ends in `_dwell_seconds` (not `_duration_seconds`)
+        // and depth is a count, so neither matches the coarse suffix fallback —
+        // they need explicit bucket sets or they'd render as summaries.
+        .set_buckets_for_metric(
+            Matcher::Full(names::OUTBOUND_QUEUE_DWELL_SECONDS.to_owned()),
+            DWELL_BUCKETS_SECONDS,
+        )
+        .expect("dwell buckets are non-empty and sorted")
+        .set_buckets_for_metric(
+            Matcher::Full(names::OUTBOUND_QUEUE_DEPTH.to_owned()),
+            DEPTH_BUCKETS,
+        )
+        .expect("depth buckets are non-empty and sorted")
+        // Permit-wait is a contention wait (sub-ms..seconds); `_wait_seconds`
+        // doesn't match the coarse suffix, so set it explicitly. (Mux
+        // pending-duration ends in `_duration_seconds` → coarse via the suffix.)
+        .set_buckets_for_metric(
+            Matcher::Full(names::DISPATCH_PERMIT_WAIT_SECONDS.to_owned()),
             FINE_BUCKETS_SECONDS,
         )
         .expect("fine buckets are non-empty and sorted")
@@ -125,6 +163,9 @@ mod tests {
         subduction_core::metrics::dispatch_duration("LooseCommit", 0.000_3);
         subduction_core::metrics::storage_operation_duration("save_loose_commit", 0.000_8);
         subduction_core::metrics::sync_duration(2.0);
+        subduction_core::metrics::outbound_queue_dwell("longpoll", 5.0, 3);
+        subduction_core::metrics::dispatch_permit_waited(0.001);
+        subduction_core::metrics::mux_pending_duration(0.5);
 
         // Cache counters: 2 hits + 1 miss must render with exactly those totals
         // (guards against the hit/miss being mis-wired or a miss double-counted).
@@ -167,6 +208,13 @@ mod tests {
             "storage op histogram should use the fine 50us bucket:\n{storage_lines}"
         );
 
+        // The fine set extends past 1s so a contended storage write (seconds)
+        // isn't clamped to the 1s top bucket — p99 must stay observable.
+        assert!(
+            storage_lines.contains("le=\"2.5\"") && storage_lines.contains("le=\"10\""),
+            "storage op histogram should carry the >1s tail buckets:\n{storage_lines}"
+        );
+
         // The coarse-only 60s boundary must NOT appear on the fine storage
         // metric (proving the per-metric override took effect).
         assert!(
@@ -183,6 +231,41 @@ mod tests {
         assert!(
             sync_lines.contains("le=\"60\""),
             "sync duration histogram should use the coarse 60s bucket:\n{sync_lines}"
+        );
+
+        // Outbound dwell/depth render as histograms (not summaries), carry the
+        // `transport` label, and use their own bucket sets (depth up to the
+        // 1024 channel capacity) — so the per-connection-type panels work.
+        assert!(
+            rendered.contains("subduction_outbound_queue_dwell_seconds_bucket")
+                && rendered.contains("transport=\"longpoll\""),
+            "dwell histogram should render with the transport label:\n{rendered}"
+        );
+        let depth_lines: String = rendered
+            .lines()
+            .filter(|l| l.contains("subduction_outbound_queue_depth_bucket"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            depth_lines.contains("le=\"1024\""),
+            "depth histogram should render as buckets up to the 1024 capacity:\n{depth_lines}"
+        );
+        // The `le="0"` boundary makes an idle queue's depth p95 resolve to 0
+        // rather than interpolating across [0, 1] up to ~0.95.
+        assert!(
+            depth_lines.contains("le=\"0\""),
+            "depth histogram should carry the le=0 bucket so empty queues read 0:\n{depth_lines}"
+        );
+
+        // Permit-wait (fine, `_wait_seconds`) and mux pending-duration (coarse,
+        // `_duration_seconds` suffix) must also render as `_bucket` series.
+        assert!(
+            rendered.contains("subduction_dispatch_permit_wait_seconds_bucket"),
+            "permit-wait histogram should render as buckets:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_mux_pending_duration_seconds_bucket"),
+            "mux pending-duration histogram should render as buckets:\n{rendered}"
         );
 
         // Cache counters render with their exact totals; the resident gauge too.

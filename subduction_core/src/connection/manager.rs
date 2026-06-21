@@ -413,7 +413,19 @@ async fn connection_loop<
                     // Acquire this peer's dispatch slot before forwarding. At
                     // the cap this awaits, pausing `conn.recv()` for this peer
                     // only; the permit rides the queue and releases when the
-                    // handler completes.
+                    // handler completes. With metrics, take a try-first fast
+                    // path so contention (the rate limiter engaging) is recorded
+                    // without touching the uncontended path.
+                    #[cfg(feature = "metrics")]
+                    let permit = if let Some(permit) = dispatch_slots.try_acquire_arc() {
+                        permit
+                    } else {
+                        let wait_start = std::time::Instant::now();
+                        let permit = dispatch_slots.acquire_arc().await;
+                        crate::metrics::dispatch_permit_waited(wait_start.elapsed().as_secs_f64());
+                        permit
+                    };
+                    #[cfg(not(feature = "metrics"))]
                     let permit = dispatch_slots.acquire_arc().await;
                     if messages.send((conn.clone(), msg, permit)).await.is_err() {
                         tracing::warn!(peer = %peer_id, "connection message channel closed");
