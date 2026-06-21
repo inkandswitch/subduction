@@ -241,8 +241,6 @@ pub(crate) async fn insert_commit_locally<
 
     tracing::debug!(digest = ?Digest::hash(&commit), "inserting commit locally");
 
-    putter.save_sedimentree_id().await?;
-
     // Newness ("was this commit not already known?") is judged against the
     // tree state *before* persisting. Read it from the resident cache, or
     // hydrate-on-miss — both reflect pre-save state (we save below). This is
@@ -259,7 +257,9 @@ pub(crate) async fn insert_commit_locally<
         .unwrap_or(true);
 
     // Persist before the in-RAM mutation (storage is the source of truth;
-    // the map is a cache that re-hydrates from it).
+    // the map is a cache that re-hydrates from it). `save_commit` registers
+    // the sedimentree id atomically with the commit (Storage contract), so a
+    // separate `save_sedimentree_id` write would be pure redundant fsync.
     putter.save_commit(verified_meta).await?;
 
     // Apply to the in-RAM tree, hydrating on a miss in case it was evicted
@@ -295,8 +295,6 @@ pub(crate) async fn insert_fragment_locally<
     let fragment = verified_meta.payload().clone();
     let head = fragment.head();
 
-    putter.save_sedimentree_id().await?;
-
     // Newness from pre-save tree state (resident or hydrated); see
     // `insert_commit_locally`.
     let was_added = sedimentrees
@@ -308,6 +306,8 @@ pub(crate) async fn insert_fragment_locally<
         .await?
         .unwrap_or(true);
 
+    // `save_fragment` registers the sedimentree id atomically with the
+    // fragment (Storage contract); no separate `save_sedimentree_id` needed.
     putter.save_fragment(verified_meta).await?;
 
     sedimentrees
