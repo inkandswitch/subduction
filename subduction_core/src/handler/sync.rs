@@ -473,8 +473,6 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        self.minimize_tree(id).await;
-
         if was_new {
             let heads = self.heads_for(id).await;
 
@@ -665,8 +663,6 @@ impl<
             .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
-
-        self.minimize_tree(id).await;
 
         if was_new {
             let heads = self.heads_for(id).await;
@@ -885,11 +881,13 @@ impl<
             // Slow path (cache miss): full storage scan, which also warms
             // the cache so subsequent requests for this tree take the
             // fast path.
-            let verified_commits = fetcher
-                .load_loose_commits()
-                .await
-                .map_err(IoError::Storage)?;
-            let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
+            // Cache miss warms the whole tree, so load both tables at once.
+            // redb allows concurrent readers (MVCC), so the two scans overlap
+            // on the blocking pool instead of running back-to-back.
+            let (verified_commits, verified_fragments) =
+                futures::future::try_join(fetcher.load_loose_commits(), fetcher.load_fragments())
+                    .await
+                    .map_err(IoError::Storage)?;
 
             // Byzantine duplicates (multiple payloads per id) resolve
             // first-loaded-wins — the same policy for commits and

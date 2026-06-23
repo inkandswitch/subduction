@@ -79,9 +79,23 @@ pub(crate) fn stage_external_blobs_sync(
     inline_threshold: usize,
 ) -> Result<(), RedbStorageError> {
     for item in items {
-        if item.blob.len() > inline_threshold {
-            write_blob_file_sync(blobs_dir, &item.blob_digest, &item.blob)?;
-        }
+        stage_external_blob_sync(item, blobs_dir, inline_threshold)?;
+    }
+    Ok(())
+}
+
+/// Stage a single item's external blob file (no-op for inline blobs).
+///
+/// The one-item counterpart of [`stage_external_blobs_sync`], used by the
+/// group-commit writer which holds its pending items as individual jobs
+/// rather than a contiguous slice. Must be called from a blocking context.
+pub(crate) fn stage_external_blob_sync(
+    item: &PendingInsert,
+    blobs_dir: &Path,
+    inline_threshold: usize,
+) -> Result<(), RedbStorageError> {
+    if item.blob.len() > inline_threshold {
+        write_blob_file_sync(blobs_dir, &item.blob_digest, &item.blob)?;
     }
     Ok(())
 }

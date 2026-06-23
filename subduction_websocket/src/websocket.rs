@@ -43,7 +43,7 @@ struct Outbound {
 }
 
 impl Outbound {
-    // `const` only without `metrics` (`Instant::now()` isn't const); not worth a cfg split.
+    // Const-eligible only without `metrics` (`Instant::now()` isn't const).
     #[allow(clippy::missing_const_for_fn)]
     fn new(msg: tungstenite::Message) -> Self {
         Self {
