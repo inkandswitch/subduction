@@ -2159,11 +2159,10 @@ where
                     let commits_to_receive = missing_commits.len();
                     let fragments_to_receive = missing_fragments.len();
 
-                    // Ingest the diff in one batched pass: `recv_batch_sync_response`
-                    // groups items by author and writes each author's batch in a
-                    // single `save_batch` (one fsync), instead of one fsync per
-                    // commit. `requesting` is handled separately below, so the
-                    // copy handed to the ingester is left empty.
+                    // Ingest in one batched pass: `recv_batch_sync_response` groups
+                    // items by author and writes each batch in a single `save_batch`.
+                    // `requesting` is handled separately below, so the ingester's
+                    // copy is left empty.
                     ingest::recv_batch_sync_response(
                         &self.sedimentrees,
                         &self.storage,
@@ -2393,10 +2392,8 @@ where
                                     "sync_with_all_peers: response received"
                                 );
 
-                                // Ingest the diff in one batched pass (see
-                                // `sync_with_peer`): one `save_batch` per author
-                                // instead of one fsync per commit. `requesting`
-                                // is handled separately below.
+                                // Ingest in one batched pass; see `sync_with_peer`.
+                                // `requesting` is handled separately below.
                                 ingest::recv_batch_sync_response(
                                     &self.sedimentrees,
                                     &self.storage,

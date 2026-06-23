@@ -256,10 +256,8 @@ pub(crate) async fn insert_commit_locally<
         .await?
         .unwrap_or(true);
 
-    // Persist before the in-RAM mutation (storage is the source of truth;
-    // the map is a cache that re-hydrates from it). `save_commit` registers
-    // the sedimentree id atomically with the commit (Storage contract), so a
-    // separate `save_sedimentree_id` write would be pure redundant fsync.
+    // Persist before the in-RAM mutation: storage is the source of truth; the
+    // map is a cache that re-hydrates from it.
     putter.save_commit(verified_meta).await?;
 
     // Apply to the in-RAM tree, hydrating on a miss in case it was evicted
@@ -306,8 +304,7 @@ pub(crate) async fn insert_fragment_locally<
         .await?
         .unwrap_or(true);
 
-    // `save_fragment` registers the sedimentree id atomically with the
-    // fragment (Storage contract); no separate `save_sedimentree_id` needed.
+    // Persist before the in-RAM mutation; see `insert_commit_locally`.
     putter.save_fragment(verified_meta).await?;
 
     sedimentrees

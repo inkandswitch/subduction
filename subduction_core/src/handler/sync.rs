@@ -473,9 +473,6 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        // No eager minimize: `heads_for` below minimizes the resident tree in
-        // place (dirty-gated), as does every other reader, so minimizing here
-        // would be redundant work on the per-commit hot path.
         if was_new {
             let heads = self.heads_for(id).await;
 
@@ -667,8 +664,6 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        // No eager minimize: `heads_for` below minimizes in place; see
-        // `recv_commit`.
         if was_new {
             let heads = self.heads_for(id).await;
 
