@@ -248,6 +248,12 @@ where
                         match res {
                             Ok((tcp, addr)) => {
                                 tracing::info!(client = %addr, "new TCP connection");
+                                // The sync handshake and protocol are small
+                                // request/response frames, so Nagle's algorithm
+                                // only adds round-trip latency. Disable it.
+                                if let Err(e) = tcp.set_nodelay(true) {
+                                    tracing::debug!(error = %e, "failed to set TCP_NODELAY");
+                                }
 
                                 let task_subduction = inner_subduction.clone();
                                 let task_discovery_audience = discovery_audience;

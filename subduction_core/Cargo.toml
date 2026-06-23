@@ -43,6 +43,10 @@ testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [[bench]]
+name = "handshake"
+harness = false
+
+[[bench]]
 name = "subduction"
 harness = false
 
