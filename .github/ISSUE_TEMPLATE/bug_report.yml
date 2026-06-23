@@ -105,7 +105,7 @@ body:
 
         - **Browser**: Chromium 132 / Firefox 134 / Safari 18 (Wasm bugs)
         - **Node.js version** (Wasm-on-Node bugs)
-        - **Container**: Docker image (e.g. `rust:1.90-slim`), Kubernetes
+        - **Container**: Docker image (e.g. `rust:1.91-slim`), Kubernetes
         - **Cloud / VM**: AWS Lambda, Fly.io, GCP Cloud Run, bare-metal, …
         - **Deployment**: systemd unit, NixOS module, behind reverse proxy
           (nginx / Caddy / Cloudflare), with TLS termination, …
@@ -118,7 +118,7 @@ body:
         - Chromium 132 on Linux (Arch, kernel 6.12.5)
         - Wasm build via `bodge:debug subduction_wasm`
         - Behind Cloudflare → nginx → subduction_cli (containerized,
-          `rust:1.90-slim`, deployed via Helm chart)
+          `rust:1.91-slim`, deployed via Helm chart)
     validations:
       required: false
 

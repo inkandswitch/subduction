@@ -4,5 +4,5 @@
 # `actions-rust-lang/setup-rust-toolchain@v1` reads this file
 # automatically; local Nix users get the same version via the dev
 # shell. Bump these three in lockstep.
-channel = "1.90.0"
+channel = "1.91.0"
 components = ["clippy", "rustfmt"]
