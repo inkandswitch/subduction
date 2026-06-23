@@ -248,6 +248,9 @@ where
                         match res {
                             Ok((tcp, addr)) => {
                                 tracing::info!(client = %addr, "new TCP connection");
+                                if let Err(e) = tcp.set_nodelay(true) {
+                                    tracing::debug!(error = %e, "failed to set TCP_NODELAY");
+                                }
 
                                 let task_subduction = inner_subduction.clone();
                                 let task_discovery_audience = discovery_audience;

@@ -46,10 +46,13 @@
 
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
 
+use async_channel::{Receiver, Sender};
+use async_tungstenite::tokio::{accept_async, client_async, connect_async_with_config};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "pprof-profile")]
 use criterion_pprof::criterion::{Output, PProfProfiler};
-use future_form::Sendable;
+use future_form::{FutureForm, Sendable};
+use futures_util::StreamExt;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{
     blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
@@ -58,15 +61,16 @@ use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     connection::message::SyncMessage,
     handler::sync::SyncHandler,
-    handshake::audience::Audience,
+    handshake::{self, Handshake, audience::Audience},
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timeout::call::CallTimeout,
+    timestamp::TimestampSeconds,
 };
-use subduction_crypto::signer::memory::MemorySigner;
+use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
@@ -74,6 +78,7 @@ use subduction_websocket::{
     },
 };
 use tempfile::TempDir;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_util::task::TaskTracker;
 
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
@@ -516,35 +521,316 @@ fn bench_handshake(c: &mut Criterion) {
                 // Setup: spin up a fresh server per iteration to avoid port exhaustion.
                 rt.block_on(fresh_server(0))
             },
-            |(_server, server_peer_id, bound)| {
+            |(server, server_peer_id, bound)| {
                 // Measured: TCP connect + mutual Ed25519 handshake.
-                // The server's accept loop handles registration automatically.
-                rt.block_on(async {
+                let conn = rt.block_on(async {
                     let client_signer = signer(42);
                     let uri: tungstenite::http::Uri =
                         format!("ws://{}:{}", bound.ip(), bound.port())
                             .parse()
                             .expect("valid uri");
 
-                    // `TokioWebSocketClient::new` awaits the handshake
-                    // internally before returning. The returned `listener`
-                    // / `sender` / `keepalive` futures only matter for
-                    // post-handshake message I/O, which this bench doesn't
-                    // exercise — so we drop them immediately along with
-                    // the connection rather than leaking spawn handles
-                    // per iteration.
-                    let (_ws, _listener, _sender, _keepalive) = TokioWebSocketClient::new(
-                        uri,
-                        client_signer,
-                        Audience::known(server_peer_id),
-                    )
-                    .await
-                    .expect("connect");
+                    TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id))
+                        .await
+                        .expect("connect")
+                });
+                // Hand the server + connection back so criterion drops them
+                // (`ServerGuard::stop_and_drain`, connection teardown) OUTSIDE
+                // the timed region — otherwise we'd measure shutdown, not the
+                // handshake.
+                (server, conn)
+            },
+            BatchSize::PerIteration,
+        );
+    });
+}
+
+// ─── Handshake: WS connect only (no subduction protocol) ─────────────────────
+
+/// TCP connect + WebSocket upgrade only — the subduction challenge/response is
+/// *not* exchanged. Subtracting this from the full `handshake` bench isolates
+/// the protocol round-trip cost from raw connection establishment.
+fn bench_ws_connect_only(c: &mut Criterion) {
+    let rt = runtime();
+
+    c.bench_function("handshake/ws_connect_only", |b| {
+        b.iter_batched(
+            || rt.block_on(fresh_server(0)),
+            |(_server, _server_peer_id, bound)| {
+                rt.block_on(async {
+                    let uri: tungstenite::http::Uri =
+                        format!("ws://{}:{}", bound.ip(), bound.port())
+                            .parse()
+                            .expect("valid uri");
+                    let (ws, _resp) = connect_async_with_config(uri, None)
+                        .await
+                        .expect("ws connect");
+                    drop(ws);
                 });
             },
             BatchSize::PerIteration,
         );
     });
+}
+
+// ─── Handshake: in-memory transport (no TCP, no WebSocket framing) ───────────
+
+/// In-memory [`Handshake`] transport: a pair of `async_channel`s, no sockets.
+/// Runs the subduction handshake with real tokio task scheduling but zero
+/// TCP/WebSocket I/O.
+struct ChannelHandshake {
+    tx: Sender<Vec<u8>>,
+    rx: Receiver<Vec<u8>>,
+}
+
+#[derive(Debug)]
+struct ChannelClosed;
+
+impl Handshake<Sendable> for ChannelHandshake {
+    type Error = ChannelClosed;
+
+    fn send(
+        &mut self,
+        bytes: Vec<u8>,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), ChannelClosed>> {
+        Sendable::from_future(async move { self.tx.send(bytes).await.map_err(|_| ChannelClosed) })
+    }
+
+    fn recv(&mut self) -> <Sendable as FutureForm>::Future<'_, Result<Vec<u8>, ChannelClosed>> {
+        Sendable::from_future(async move { self.rx.recv().await.map_err(|_| ChannelClosed) })
+    }
+}
+
+/// The subduction challenge/response over the in-memory channel pair — no TCP,
+/// no WebSocket framing, but the responder still runs in a separate spawned
+/// task. Isolates protocol + crypto + tokio cross-task scheduling from the
+/// socket/WS I/O path measured by `handshake`.
+fn bench_handshake_inmemory(c: &mut Criterion) {
+    let rt = runtime();
+    let client_sig = signer(42);
+    let server_sig = signer(0);
+    let server_peer_id = PeerId::from(server_sig.verifying_key());
+    let audience = Audience::known(server_peer_id);
+    let now = TimestampSeconds::new(1_000);
+    let nonce = Nonce::from_u128(0xABCD_EF01);
+
+    c.bench_function("handshake/inmemory", |b| {
+        b.iter(|| {
+            let client_sig = client_sig.clone();
+            let server_sig = server_sig.clone();
+            rt.block_on(async move {
+                let (c2s_tx, c2s_rx) = async_channel::bounded::<Vec<u8>>(8);
+                let (s2c_tx, s2c_rx) = async_channel::bounded::<Vec<u8>>(8);
+                let client_hs = ChannelHandshake {
+                    tx: c2s_tx,
+                    rx: s2c_rx,
+                };
+                let server_hs = ChannelHandshake {
+                    tx: s2c_tx,
+                    rx: c2s_rx,
+                };
+
+                let server = tokio::spawn(async move {
+                    let nonce_cache = NonceCache::default();
+                    handshake::respond::<Sendable, _, _, _, _>(
+                        server_hs,
+                        |_h, _pid| ((), ()),
+                        &server_sig,
+                        &nonce_cache,
+                        server_peer_id,
+                        None,
+                        now,
+                        HANDSHAKE_MAX_DRIFT,
+                    )
+                    .await
+                    .expect("respond");
+                });
+
+                handshake::initiate::<Sendable, _, _, _, _>(
+                    client_hs,
+                    |_h, _pid| ((), ()),
+                    &client_sig,
+                    audience,
+                    now,
+                    nonce,
+                )
+                .await
+                .expect("initiate");
+
+                server.await.expect("server task");
+            });
+        });
+    });
+}
+
+// ─── Handshake: warm steady-state (shared server) ───────────────────────────
+
+/// Per-connection handshake against an already-warm server — the steady-state
+/// cost a long-running server actually pays per client. (`handshake` above
+/// spins up a fresh server every iteration, so it measures per-server
+/// cold-start, which is ~10x higher and paid only once per real server.)
+fn bench_handshake_warm(c: &mut Criterion) {
+    let rt = runtime();
+    let (server, server_peer_id, bound) = rt.block_on(fresh_server(0));
+
+    // Pay the one-time per-server cold-start up front so the loop sees steady
+    // state.
+    drop(rt.block_on(async {
+        let uri: tungstenite::http::Uri = format!("ws://{}:{}", bound.ip(), bound.port())
+            .parse()
+            .expect("uri");
+        TokioWebSocketClient::new(uri, signer(99), Audience::known(server_peer_id))
+            .await
+            .expect("warmup")
+    }));
+
+    c.bench_function("handshake/warm", |b| {
+        b.iter_batched(
+            || (),
+            |()| {
+                rt.block_on(async {
+                    let uri: tungstenite::http::Uri =
+                        format!("ws://{}:{}", bound.ip(), bound.port())
+                            .parse()
+                            .expect("uri");
+                    TokioWebSocketClient::new(uri, signer(42), Audience::known(server_peer_id))
+                        .await
+                        .expect("connect")
+                })
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    drop(server);
+}
+
+// ─── Handshake: concurrent fan-in (warm server) ─────────────────────────────
+
+/// `n` clients handshaking one warm server simultaneously — the scaling
+/// metric. Throughput is reported as handshakes/sec.
+fn bench_handshake_concurrent(c: &mut Criterion) {
+    let rt = runtime();
+    let (server, server_peer_id, bound) = rt.block_on(fresh_server(0));
+
+    drop(rt.block_on(async {
+        let uri: tungstenite::http::Uri = format!("ws://{}:{}", bound.ip(), bound.port())
+            .parse()
+            .expect("uri");
+        TokioWebSocketClient::new(uri, signer(99), Audience::known(server_peer_id))
+            .await
+            .expect("warmup")
+    }));
+
+    let mut group = c.benchmark_group("handshake/concurrent");
+    group.sample_size(10);
+    let counts: &[u64] = if ci_slim() {
+        &[1, 8, 32]
+    } else {
+        &[1, 8, 32, 64]
+    };
+    for &n in counts {
+        group.throughput(Throughput::Elements(n));
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.iter_batched(
+                || (),
+                |()| {
+                    rt.block_on(async {
+                        let mut handles = Vec::with_capacity(usize::try_from(n).expect("n fits"));
+                        for i in 0..n {
+                            let peer = server_peer_id;
+                            let seed = u8::try_from(i % 200 + 1).expect("seed fits");
+                            let uri: tungstenite::http::Uri =
+                                format!("ws://{}:{}", bound.ip(), bound.port())
+                                    .parse()
+                                    .expect("uri");
+                            handles.push(tokio::spawn(async move {
+                                TokioWebSocketClient::new(uri, signer(seed), Audience::known(peer))
+                                    .await
+                                    .expect("connect")
+                            }));
+                        }
+                        let mut conns = Vec::with_capacity(handles.len());
+                        for h in handles {
+                            conns.push(h.await.expect("join"));
+                        }
+                        conns
+                    })
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
+    group.finish();
+
+    drop(server);
+}
+
+// ─── Nagle / TCP_NODELAY A/B (warm round-trip) ──────────────────────────────
+
+/// Side-by-side warm request/response round-trips with `TCP_NODELAY` off vs on,
+/// over an established loopback WebSocket echo. Checks whether disabling Nagle
+/// changes steady-state round-trip latency for the protocol's ping-pong shape.
+/// A Nagle ↔ delayed-ACK stall (if it applied) would make `nodelay_off`
+/// dramatically slower; equal numbers mean Nagle isn't engaging.
+fn bench_nagle(c: &mut Criterion) {
+    const ROUNDS: u64 = 64;
+    let rt = runtime();
+    let mut group = c.benchmark_group("nagle/roundtrip");
+    group.throughput(Throughput::Elements(ROUNDS));
+
+    for nodelay in [false, true] {
+        let label = if nodelay { "nodelay_on" } else { "nodelay_off" };
+
+        let mut client_ws = rt.block_on(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            // Echo server: bounce every frame straight back.
+            tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.expect("accept");
+                tcp.set_nodelay(nodelay).expect("server nodelay");
+                let mut ws = accept_async(tcp).await.expect("accept ws");
+                while let Some(Ok(msg)) = ws.next().await {
+                    if ws.send(msg).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let tcp = TcpStream::connect(addr).await.expect("connect");
+            tcp.set_nodelay(nodelay).expect("client nodelay");
+            let (ws, _) = client_async("ws://localhost/", tcp)
+                .await
+                .expect("client ws");
+            ws
+        });
+
+        // Warm the connection (and the TCP path) before measuring.
+        rt.block_on(async {
+            for _ in 0..50 {
+                client_ws
+                    .send(tungstenite::Message::Binary(vec![7u8; 150].into()))
+                    .await
+                    .expect("warmup send");
+                client_ws.next().await.expect("warmup recv").expect("ok");
+            }
+        });
+
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    for _ in 0..ROUNDS {
+                        client_ws
+                            .send(tungstenite::Message::Binary(vec![7u8; 150].into()))
+                            .await
+                            .expect("send");
+                        client_ws.next().await.expect("recv").expect("ok");
+                    }
+                });
+            });
+        });
+    }
+
+    group.finish();
 }
 
 // ─── Single-Commit Sync ─────────────────────────────────────────────────────
@@ -958,6 +1244,11 @@ criterion_group! {
     config = ci_friendly_criterion();
     targets =
         bench_handshake,
+        bench_ws_connect_only,
+        bench_handshake_inmemory,
+        bench_handshake_warm,
+        bench_handshake_concurrent,
+        bench_nagle,
         bench_single_commit_sync,
         bench_batch_sync,
         bench_large_blob_sync,
