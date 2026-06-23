@@ -55,7 +55,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          # Reads rust-toolchain.toml automatically; pinned to 1.90.0.
+          # Reads rust-toolchain.toml automatically; pinned to 1.91.0.
           cache: false
 
       - name: Cache Cargo registry + git

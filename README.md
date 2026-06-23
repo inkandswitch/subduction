@@ -157,7 +157,7 @@ See the [CLI README] for full configuration options including Home Manager and r
 
 ### Prerequisites
 
-- Rust 1.90 or later
+- Rust 1.91 or later
 - For Wasm development: [wasm-pack]
 - For browser testing: Node.js 22+ and pnpm
 

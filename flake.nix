@@ -64,7 +64,7 @@
           config.allowUnfree = true;
         }).grafana;
 
-        rustVersion = "1.90.0";
+        rustVersion = "1.91.0";
 
         rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
