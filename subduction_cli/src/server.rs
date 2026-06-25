@@ -40,7 +40,9 @@ use subduction_ephemeral::{
     policy::OpenEphemeralPolicy,
 };
 
-use subduction_keyhive::{connection::KeyhiveConnection, runtime::init_sendable_keyhive};
+use subduction_keyhive::{
+    connection::KeyhiveConnection, peer_id::KeyhivePeerId, runtime::init_sendable_keyhive,
+};
 
 use crate::{
     handler::{
@@ -288,12 +290,43 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
 
     let shared_keyhive = Arc::new(async_lock::Mutex::new(keyhive_instance));
 
-    let keyhive_protocol: CliKeyhiveProtocol = Arc::new(subduction_keyhive::KeyhiveProtocol::new(
-        Arc::clone(&shared_keyhive),
-        fs_keyhive_storage,
-        kh_peer_id,
-        contact_card,
-    ));
+    // Temporary: peers whose inbound keyhive ops we drop instead of ingesting.
+    // These clients send CGKA ops this server cannot deserialize (a keyhive
+    // schema mismatch), so ingesting them only produces repeated errors.
+    // Matched by verifying key, so any suffix is ignored. Remove an entry once
+    // the corresponding client has upgraded to a compatible keyhive build.
+    const DENIED_OP_SYNC_PEERS: &[&str] = &[
+        "0cXI48aNs86V4oTjIqU2iQl26ecn6vDjQ5xgtL2+f9k=", // d1c5c8e3 (poison Update author)
+        "s91Lu86aMUPs/ZdqrSoU7OD5fRvH8QCzcUoyyyGiveA=", // b3dd4bbbce9a
+        "/Q2B0EnYPYh/8k22yE+kxotVZIIRhFXiWPV94dFiddc=", // fd0d81d0
+        "o5+O0NtfdckrtPgcM3sHt9B5dTqucvE7BLSDO6Ag0zw=", // a39f8ed0db5f
+    ];
+    let denied_op_sync_peers: Vec<KeyhivePeerId> = DENIED_OP_SYNC_PEERS
+        .iter()
+        .filter_map(|s| match KeyhivePeerId::from_string_repr(s) {
+            Ok(peer) => Some(peer),
+            Err(e) => {
+                tracing::warn!(peer = %s, error = %e, "ignoring invalid denied op-sync peer");
+                None
+            }
+        })
+        .collect();
+    if !denied_op_sync_peers.is_empty() {
+        tracing::info!(
+            count = denied_op_sync_peers.len(),
+            "keyhive op sync denied for configured peers"
+        );
+    }
+
+    let keyhive_protocol: CliKeyhiveProtocol = Arc::new(
+        subduction_keyhive::KeyhiveProtocol::new(
+            Arc::clone(&shared_keyhive),
+            fs_keyhive_storage,
+            kh_peer_id,
+            contact_card,
+        )
+        .with_denied_op_sync_peers(denied_op_sync_peers),
+    );
 
     if let Err(e) = keyhive_protocol.ingest_from_storage().await {
         tracing::warn!(error = %e, "keyhive ingest_from_storage failed");

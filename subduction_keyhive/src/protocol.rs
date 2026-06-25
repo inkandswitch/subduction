@@ -112,6 +112,13 @@ where
     peers: Mutex<Map<KeyhivePeerId, Conn>>,
     contact_card: ContactCard,
     archive_config: Option<(usize, StorageHash)>,
+    /// Peers whose inbound keyhive ops we silently drop instead of ingesting.
+    ///
+    /// This is a temporary, identity-based block (suffixes are ignored) for
+    /// clients sending ops this server cannot deserialize, for example after a
+    /// keyhive schema change. It only affects op ingestion. Matched by
+    /// verifying key via [`KeyhivePeerId::same_identity`].
+    denied_op_sync_peers: Vec<KeyhivePeerId>,
     /// Whether to reload and re-ingest the store when events remain pending
     /// after ingestion.
     ///
@@ -176,11 +183,31 @@ where
             peers: Mutex::new(Map::new()),
             contact_card,
             archive_config: None,
+            denied_op_sync_peers: Vec::new(),
             attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             _marker: core::marker::PhantomData,
         }
+    }
+
+    /// Block inbound keyhive op sync from the given peers.
+    ///
+    /// Ops received from any of these peers are dropped before
+    /// deserialization, so a peer sending events this server cannot decode no
+    /// longer produces ingest errors. Identity is matched by verifying key, so
+    /// any suffix on the peer ID is ignored. This is a temporary measure.
+    #[must_use]
+    pub fn with_denied_op_sync_peers(mut self, peers: Vec<KeyhivePeerId>) -> Self {
+        self.denied_op_sync_peers = peers;
+        self
+    }
+
+    /// Whether inbound keyhive op sync from `peer` is currently blocked.
+    fn is_op_sync_denied(&self, peer: &KeyhivePeerId) -> bool {
+        self.denied_op_sync_peers
+            .iter()
+            .any(|denied| denied.same_identity(peer))
     }
 
     /// Write a single archive instead of N event files when ingesting more
@@ -752,7 +779,7 @@ where
 
         let ingested = !found_events.is_empty();
         if ingested {
-            self.ingest_events(&found_events).await?;
+            self.ingest_events(&sender_id, &found_events).await?;
         }
 
         let total_after = self.total_ops().await;
@@ -836,7 +863,7 @@ where
         let total_before = self.total_ops().await;
 
         if !ops.is_empty() {
-            self.ingest_events(&ops).await?;
+            self.ingest_events(&sender_id, &ops).await?;
         }
 
         let total_after = self.total_ops().await;
@@ -1065,8 +1092,18 @@ where
     /// by loading from storage and retrying.
     async fn ingest_events<B: AsRef<[u8]>>(
         &self,
+        sender: &KeyhivePeerId,
         event_bytes_list: &[B],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
+        if self.is_op_sync_denied(sender) {
+            tracing::debug!(
+                peer = %sender,
+                count = event_bytes_list.len(),
+                "dropping inbound keyhive ops from denied peer"
+            );
+            return Ok(());
+        }
+
         let mut events: Vec<StaticEvent<CRef>> = Vec::with_capacity(event_bytes_list.len());
         for (idx, item) in event_bytes_list.iter().enumerate() {
             let bytes = item.as_ref();
@@ -1080,6 +1117,7 @@ where
                         let _ = write!(head_hex, "{b:02x}");
                     }
                     tracing::warn!(
+                        peer = %sender,
                         index = idx,
                         total = event_bytes_list.len(),
                         len = bytes.len(),
@@ -1971,7 +2009,10 @@ mod tests {
             event_bytes.len()
         );
 
-        protocol.ingest_events(&event_bytes).await.unwrap();
+        protocol
+            .ingest_events(&KeyhivePeerId::from_bytes([0x01; 32]), &event_bytes)
+            .await
+            .unwrap();
 
         let archives = crate::storage_ops::load_archives::<[u8; 32], _, Local>(&storage)
             .await
@@ -2017,7 +2058,10 @@ mod tests {
         let event_bytes: Vec<Arc<[u8]>> = pair.values().map(Dupe::dupe).collect();
         assert!(!event_bytes.is_empty());
 
-        protocol.ingest_events(&event_bytes).await.unwrap();
+        protocol
+            .ingest_events(&KeyhivePeerId::from_bytes([0x01; 32]), &event_bytes)
+            .await
+            .unwrap();
 
         let archives = crate::storage_ops::load_archives::<[u8; 32], _, Local>(&storage)
             .await
@@ -2120,7 +2164,10 @@ mod tests {
             dst_off.contact_card().await.unwrap(),
         );
         let before_off = proto_off.total_ops().await;
-        proto_off.ingest_events(&dependent).await.unwrap();
+        proto_off
+            .ingest_events(&KeyhivePeerId::from_bytes([0x01; 32]), &dependent)
+            .await
+            .unwrap();
         assert_eq!(
             proto_off.total_ops().await,
             before_off,
@@ -2138,7 +2185,10 @@ mod tests {
         )
         .with_storage_recovery();
         let before_on = proto_on.total_ops().await;
-        proto_on.ingest_events(&dependent).await.unwrap();
+        proto_on
+            .ingest_events(&KeyhivePeerId::from_bytes([0x01; 32]), &dependent)
+            .await
+            .unwrap();
         assert!(
             proto_on.total_ops().await > before_on,
             "with recovery on, a pending event must reload the archive and raise the op count"
