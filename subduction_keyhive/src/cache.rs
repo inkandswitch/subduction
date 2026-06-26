@@ -208,6 +208,19 @@ impl PeriodicEventCache {
         // can share it by `Arc` instead of rebuilding it.
         self.public_map = Arc::new(self.build_public_map());
         self.last_total_ops = Some(total);
+
+        // Emit the real (distinct) op-graph size and cache set sizes. These
+        // gauges are the trustworthy view of graph growth; the *_total counters
+        // re-count ops on every re-application during sync. Only updated on a
+        // rebuild, which is exactly when these values can change.
+        #[cfg(feature = "metrics")]
+        crate::metrics::op_graph(
+            total,
+            self.public_hashes.len() as u64,
+            self.agent_hashes.len() as u64,
+            self.event_data.len() as u64,
+        );
+
         Ok(true)
     }
 }

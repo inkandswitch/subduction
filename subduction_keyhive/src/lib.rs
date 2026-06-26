@@ -20,6 +20,8 @@ pub mod error;
 #[cfg(feature = "handler")]
 pub mod handler;
 pub mod message;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod peer_id;
 #[cfg(feature = "handler")]
 pub mod policy;

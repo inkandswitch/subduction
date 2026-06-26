@@ -254,6 +254,10 @@ impl ServerArgs {
 /// Default interval for refreshing storage metrics (1 minute).
 const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
 
+/// Interval for sampling process-level metrics (RSS/CPU/fds/threads). Finer than
+/// the storage refresh so memory growth under load is visible at scrape time.
+const PROCESS_METRICS_SAMPLE_SECS: u64 = 10;
+
 /// Run the server with both WebSocket and HTTP long-poll transports.
 ///
 /// Dispatches on `--auth`: [`run_with_keyhive`] initializes and runs the full
@@ -440,6 +444,23 @@ impl SetupCommon {
                         }
                         () = metrics_token.cancelled() => {
                             tracing::debug!("Stopping metrics refresh task");
+                            break;
+                        }
+                    }
+                }
+            });
+
+            // Process-level metrics sampler (RSS/CPU/fds/threads).
+            metrics::sample_process_metrics();
+            let process_token = token.clone();
+            tokio::spawn(async move {
+                let mut interval = time::interval(Duration::from_secs(PROCESS_METRICS_SAMPLE_SECS));
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => metrics::sample_process_metrics(),
+                        () = process_token.cancelled() => {
+                            tracing::debug!("Stopping process metrics sampler");
                             break;
                         }
                     }

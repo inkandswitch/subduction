@@ -700,6 +700,9 @@ where
             "sending sync response"
         );
 
+        #[cfg(feature = "metrics")]
+        crate::metrics::per_peer_serve(found_ops.len() as u64);
+
         let response = Message::SyncResponse {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -1093,6 +1096,15 @@ where
             let keyhive = self.keyhive.lock().await;
             keyhive.ingest_unsorted_static_events(events).await
         };
+
+        // Submitted is everything handed to keyhive; applied is the subset not
+        // left pending on missing dependencies.
+        #[cfg(feature = "metrics")]
+        {
+            let submitted = event_bytes_list.len() as u64;
+            let applied = submitted.saturating_sub(pending.len() as u64);
+            crate::metrics::events_ingested(submitted, applied);
+        }
 
         if !pending.is_empty() {
             if self.attempt_storage_recovery {

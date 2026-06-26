@@ -1096,6 +1096,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "cpp_demangle"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2bb79cb74d735044c972aae58ed0aaa9a837e85b01106a54c39e42e97f62253"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5377,6 +5386,7 @@ dependencies = [
  "metrics-util",
  "nix 0.29.0",
  "nonempty 0.12.0",
+ "pprof",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "sedimentree_core",
@@ -5546,6 +5556,7 @@ dependencies = [
  "futures",
  "keyhive_core",
  "keyhive_crypto",
+ "metrics",
  "nonempty 0.10.0",
  "rand 0.8.6",
  "sedimentree_core",
@@ -5687,6 +5698,7 @@ version = "12.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "912017718eb4d21930546245af9a3475c9dccf15675a5c215664e76621afc471"
 dependencies = [
+ "cpp_demangle",
  "rustc-demangle",
  "symbolic-common",
 ]

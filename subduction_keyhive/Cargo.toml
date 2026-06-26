@@ -23,6 +23,7 @@ dupe = { version = "0.9", optional = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 future_form = { workspace = true }
+metrics = { workspace = true, optional = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true, optional = true }
 dhat = { workspace = true, optional = true }
@@ -41,6 +42,11 @@ tracing = { workspace = true, features = ["attributes"] }
 [features]
 default = []
 bolero = ["dep:bolero"]
+# Emit Prometheus metrics (keyhive ingestion throughput) to the global
+# recorder the binary installs. Off by default; subduction_cli turns it on.
+# Self-contained in this crate so a keyhive-free subduction deployment never
+# registers keyhive metrics.
+metrics = ["dep:metrics"]
 handler = ["dep:async-channel", "dep:subduction_crypto", "std"]
 runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
 serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "dep:dupe", "std"]

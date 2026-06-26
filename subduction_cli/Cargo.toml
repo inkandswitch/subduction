@@ -41,6 +41,7 @@ metrics-exporter-prometheus = { workspace = true }
 metrics-process = { workspace = true, optional = true }
 metrics-util = { workspace = true }
 nonempty = { workspace = true, features = ["std"] }
+pprof = { version = "0.15", features = ["flamegraph", "frame-pointer"], optional = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
@@ -48,7 +49,7 @@ sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["system_time", "metrics"] }
 subduction_ephemeral = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true }
-subduction_keyhive = { workspace = true, features = ["runtime"] }
+subduction_keyhive = { workspace = true, features = ["runtime", "metrics"] }
 subduction_redb_storage = { workspace = true, features = ["metrics"] }
 subduction_http_longpoll = { workspace = true, features = ["metrics", "server", "std"] }
 subduction_iroh = { workspace = true }
@@ -103,6 +104,10 @@ rustls = [
 # Compile in `console-subscriber`. Off by default; set `TOKIO_CONSOLE=1` at
 # runtime when built with this feature to attach `tokio-console`.
 tokio-console = ["dep:console-subscriber"]
+# Expose an on-demand CPU-profile endpoint on the metrics server
+# (`GET /debug/pprof/profile?seconds=N` -> flamegraph SVG). Off by default;
+# the load-test deploy turns it on.
+pprof = ["dep:pprof"]
 
 [lints]
 workspace = true
