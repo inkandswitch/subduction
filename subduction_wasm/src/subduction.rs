@@ -28,12 +28,12 @@ use sedimentree_core::{
 };
 use subduction_core::{
     collections::bounded_sharded_map::BoundedShardedMap,
-    connection::manager::Spawn,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
     multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
     nonce_cache::NonceCache,
     peer::id::PeerId,
+    spawn::Spawn,
     storage::powerbox::StoragePowerbox,
     subduction::{Subduction, per_peer_sync::PerPeerSync},
     timeout::call::CallTimeout,

@@ -28,12 +28,12 @@ use subduction_core::{
     authenticated::Authenticated,
     connection::{
         managed::CallError,
-        manager::Spawn,
         test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    spawn::Spawn,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timeout::call::CallTimeout,

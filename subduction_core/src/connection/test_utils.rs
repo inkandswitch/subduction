@@ -21,12 +21,13 @@ use sedimentree_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 
-use super::{Connection, manager::Spawn, message::SyncMessage};
+use super::{Connection, message::SyncMessage};
 use crate::{
     authenticated::Authenticated,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    spawn::Spawn,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     transport::Transport,

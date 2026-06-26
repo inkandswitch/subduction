@@ -20,9 +20,10 @@ use subduction_crypto::signer::Signer;
 
 use super::SubductionFutureForm;
 use crate::{
-    connection::{Connection, manager::Spawn},
+    connection::Connection,
     handler::Handler,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+    spawn::Spawn,
     storage::traits::Storage,
     timeout::Timeout,
 };

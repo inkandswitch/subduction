@@ -69,7 +69,6 @@ use crate::{
     connection::{
         Connection,
         managed::{ManagedCall, ManagedConnection},
-        manager::Spawn,
         message::SyncMessage,
     },
     handler::{Handler, sync::SyncHandler},
@@ -79,6 +78,7 @@ use crate::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::RemoteHeadsNotifier,
+    spawn::Spawn,
     storage::{powerbox::StoragePowerbox, traits::Storage},
     timeout::Timeout,
 };

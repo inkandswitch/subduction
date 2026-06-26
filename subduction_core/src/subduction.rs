@@ -73,7 +73,7 @@ use crate::{
         backoff::Backoff,
         id::ConnectionId,
         managed::{CallError, ManagedCall, ManagedConnection},
-        manager::{Command, ConnectionManager, RunManager, Spawn},
+        manager::{Command, ConnectionManager, RunManager},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
             SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
@@ -87,6 +87,7 @@ use crate::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
+    spawn::Spawn,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::{Timeout, call::CallTimeout},
 };
@@ -2997,7 +2998,7 @@ where
     /// If no peers are connected, it will wait until a peer connects.
     ///
     /// Each inbound message is dispatched as its own task via the configured
-    /// [`Spawn`](crate::connection::manager::Spawn), so independent handlers
+    /// [`Spawn`](crate::spawn::Spawn), so independent handlers
     /// (e.g. batch-sync requests for different sedimentrees) run in parallel
     /// across worker threads on `Sendable` and concurrently on `Local`. A
     /// completion channel reports each task's outcome back so a broken
@@ -3200,7 +3201,7 @@ where
     ///
     /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
     /// Each document's sync is **spawned onto the runtime** (via the configured
-    /// [`Spawn`](crate::connection::manager::Spawn)) so that — on a `Sendable`
+    /// [`Spawn`](crate::spawn::Spawn)) so that — on a `Sendable`
     /// multi-threaded runtime — independent documents verify, ingest, and
     /// minimize in parallel across worker threads rather than all draining
     /// through one caller task. On `Local` (Wasm) the spawner runs tasks on the
@@ -3209,7 +3210,7 @@ where
     /// All documents are spawned at once (no in-flight cap), matching the
     /// concurrency level of the pre-spawn single-task fan-out. A shared results
     /// channel collects each task's outcome and doubles as the join mechanism,
-    /// since [`Spawn`](crate::connection::manager::Spawn) discards task output.
+    /// since [`Spawn`](crate::spawn::Spawn) discards task output.
     ///
     /// Errors are collected rather than short-circuiting, so a failure on one
     /// sedimentree does not prevent the rest from syncing.
