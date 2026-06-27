@@ -761,7 +761,7 @@ pub fn new_test_subduction() -> (
             Sendable,
             MemoryStorage,
             MockConnection,
-            SyncHandler<Sendable, MemoryStorage, MockConnection, OpenPolicy, CountLeadingZeroBytes>,
+            SyncHandler<Sendable, MemoryStorage, MockConnection, OpenPolicy, CountLeadingZeroBytes, TestSpawn>,
             OpenPolicy,
             MemorySigner,
             InstantTimeout,

@@ -27,7 +27,7 @@ use testresult::TestResult;
 
 type Conn = MockConnection;
 type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 type TestSubduction = Arc<
     Subduction<
         'static,

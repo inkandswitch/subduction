@@ -50,6 +50,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
         subscriptions.clone(),
         storage.clone(),
         CountLeadingZeroBytes,
+        TestSpawn,
     ));
 
     let (subduction, _listener_fut, _actor_fut) =
@@ -104,6 +105,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
         subscriptions.clone(),
         storage.clone(),
         CountLeadingZeroBytes,
+        TestSpawn,
     ));
 
     let (subduction, _listener_fut, _actor_fut) =
@@ -164,6 +166,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
         subscriptions.clone(),
         storage.clone(),
         CountLeadingZeroBytes,
+        TestSpawn,
     ));
 
     let (subduction, _listener_fut, _actor_fut) =

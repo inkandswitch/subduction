@@ -3813,7 +3813,7 @@ mod tests {
     use crate::{
         collections::bounded_sharded_map::BoundedShardedMap,
         connection::test_utils::{
-            FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
+            FailingSendMockConnection, InstantTimeout, TestSpawn, TokioSpawn, test_signer,
         },
         handler::sync::SyncHandler,
         nonce_cache::NonceCache,
@@ -3872,12 +3872,14 @@ mod tests {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+        // Real spawner: the fan-out (and its prune) runs in a spawned task now.
         let handler = Arc::new(SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
             CountLeadingZeroBytes,
+            TokioSpawn,
         ));
 
         let (subduction, _listener_fut, _actor_fut) = Subduction::<
@@ -3928,12 +3930,16 @@ mod tests {
         };
         let _ = handler.handle(&sender_conn, msg).await;
 
-        // Connection should be removed after send failure during propagation
-        assert_eq!(
-            subduction.connected_peer_ids().await.len(),
-            0,
-            "Connection should be removed after send failure"
-        );
+        // The fan-out (and its prune) runs in a task spawned off the dispatch
+        // permit, so poll until the failed connection is removed.
+        let removed = tokio::time::timeout(Duration::from_secs(5), async {
+            while !subduction.connected_peer_ids().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .is_ok();
+        assert!(removed, "Connection should be removed after send failure");
 
         Ok(())
     }
@@ -3944,12 +3950,14 @@ mod tests {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+        // Real spawner: the fan-out (and its prune) runs in a spawned task now.
         let handler = Arc::new(SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
             CountLeadingZeroBytes,
+            TokioSpawn,
         ));
 
         let (subduction, _listener_fut, _actor_fut) = Subduction::<
@@ -4000,12 +4008,16 @@ mod tests {
         };
         let _ = handler.handle(&sender_conn, msg).await;
 
-        // Connection should be removed after send failure during propagation
-        assert_eq!(
-            subduction.connected_peer_ids().await.len(),
-            0,
-            "Connection should be removed after send failure"
-        );
+        // The fan-out (and its prune) runs in a task spawned off the dispatch
+        // permit, so poll until the failed connection is removed.
+        let removed = tokio::time::timeout(Duration::from_secs(5), async {
+            while !subduction.connected_peer_ids().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .is_ok();
+        assert!(removed, "Connection should be removed after send failure");
 
         Ok(())
     }
@@ -4039,6 +4051,7 @@ mod tests {
             subscriptions.clone(),
             storage.clone(),
             CountLeadingZeroBytes,
+            TestSpawn,
         ));
 
         let (subduction, _listener_fut, _actor_fut) = Subduction::<

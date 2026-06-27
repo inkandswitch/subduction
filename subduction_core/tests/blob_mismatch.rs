@@ -102,6 +102,7 @@ fn make_subduction() -> (
                 ChannelMockConnection<SyncMessage>,
                 OpenPolicy,
                 CountLeadingZeroBytes,
+                TokioSpawn,
             >,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,

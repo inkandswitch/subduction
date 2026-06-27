@@ -56,6 +56,7 @@ type TestSubduction = Arc<
             MessageTransport<IrohTransport>,
             OpenPolicy,
             CountLeadingZeroBytes,
+            TokioSpawn,
         >,
         OpenPolicy,
         MemorySigner,

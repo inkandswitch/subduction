@@ -83,7 +83,7 @@ use tokio::runtime::Builder as RuntimeBuilder;
 type Conn = MessageTransport<ChannelTransport>;
 
 type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 
 type Node = Arc<
     Subduction<

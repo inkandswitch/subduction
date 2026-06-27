@@ -8,7 +8,7 @@ use futures::{
     future::BoxFuture,
     stream::{AbortHandle, Abortable},
 };
-use subduction_core::connection::manager::Spawn;
+use subduction_core::spawn::Spawn;
 use tokio_util::task::TaskTracker;
 
 use subduction_core::timeout::{TimedOut, Timeout};

@@ -232,6 +232,7 @@ impl WasmSubduction {
             powerbox.clone(),
             depth_metric.clone(),
             observer.clone(),
+            WasmSpawn,
         );
 
         let eph_policy = opts
