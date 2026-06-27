@@ -13,10 +13,7 @@ use async_lock::Mutex;
 use future_form::FutureForm;
 use nonempty::NonEmpty;
 use sedimentree_core::{
-    collections::{
-        Map, Set,
-        nonempty_ext::{NonEmptyExt, RemoveResult},
-    },
+    collections::{Map, Set},
     id::SedimentreeId,
 };
 
@@ -108,52 +105,4 @@ pub(crate) async fn get_authorized_subscriber_conns<
                 .unwrap_or_default()
         })
         .collect()
-}
-
-/// Remove a connection from tracking, cleaning up subscriptions if it
-/// was the peer's last connection.
-///
-/// Returns:
-/// - `Some(false)` — connection removed, peer still has other connections
-/// - `Some(true)` — connection removed, was the peer's last connection
-/// - `None` — connection was not found
-pub(crate) async fn remove_connection<
-    Async: FutureForm,
-    Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,
-    WireMsg: Encode + Decode,
->(
-    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
-    subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
-    conn: &Authenticated<Conn, Async>,
-) -> Option<bool> {
-    let peer_id = conn.peer_id();
-    let mut guard = connections.lock().await;
-
-    if let Some(peer_conns) = guard.remove(&peer_id) {
-        match peer_conns.remove_item(conn) {
-            RemoveResult::Removed(remaining) => {
-                guard.insert(peer_id, remaining);
-
-                #[cfg(feature = "metrics")]
-                crate::metrics::connection_closed();
-
-                Some(false)
-            }
-            RemoveResult::WasLast(_) => {
-                drop(guard);
-                remove_peer_from_subscriptions(subscriptions, peer_id).await;
-
-                #[cfg(feature = "metrics")]
-                crate::metrics::connection_closed();
-
-                Some(true)
-            }
-            RemoveResult::NotFound(original) => {
-                guard.insert(peer_id, original);
-                None
-            }
-        }
-    } else {
-        None
-    }
 }

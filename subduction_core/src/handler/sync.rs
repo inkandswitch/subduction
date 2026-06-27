@@ -283,8 +283,10 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
     }
 
     fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
-        // Sync subscriptions are already cleaned by `peers::remove_connection`,
-        // so there is nothing extra to do here.
+        // No-op: the listen loop invokes this only after `remove_connection`
+        // (-> `teardown_peer`) has already removed the peer's connection,
+        // subscriptions, and send counter. `SyncHandler` holds no other
+        // per-peer state, so there is nothing left to clean up here.
         Async::from_future(async {})
     }
 }
@@ -315,7 +317,7 @@ impl<
 /// spawns [`run`](FanOut::run) via the handler's [`Spawn`], so a slow
 /// subscriber backpressures a detached task instead of holding the per-peer
 /// dispatch permit. Per-peer send counters are stamped in order *before* the
-/// spawn; `run` only performs the wire sends and prunes dead connections.
+/// spawn; `run` only performs the wire sends.
 #[allow(clippy::type_complexity)]
 struct FanOut<Conn, Async>
 where
@@ -327,8 +329,6 @@ where
     ack_msg: SyncMessage,
     /// Per-subscriber pushes, send counters already stamped in order.
     pushes: Vec<(Authenticated<Conn, Async>, SyncMessage)>,
-    connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
-    subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
 }
 
 impl<Conn, Async> FanOut<Conn, Async>
@@ -337,9 +337,10 @@ where
     Async: FutureForm,
 {
     /// Ack the originating peer, then fan the update out to subscribers
-    /// concurrently, pruning any connection whose send fails terminally. A
-    /// slow or absent peer just doesn't receive the live push and reconciles
-    /// via batch sync — it can no longer stall the ingest path.
+    /// concurrently. A send failure is logged but not acted on here; the dead
+    /// transport is torn down by the listen loop's canonical path. A slow or
+    /// absent peer just doesn't receive the live push and reconciles via batch
+    /// sync — it can no longer stall the ingest path.
     async fn run(self) {
         if let Err(e) = self.ack_conn.send(&self.ack_msg).await {
             tracing::warn!(peer = %self.ack_conn.peer_id(), error = %e, "peer disconnected while sending HeadsUpdate");
@@ -589,8 +590,6 @@ impl<
                 ack_conn: conn.clone(),
                 ack_msg,
                 pushes,
-                connections: self.connections.clone(),
-                subscriptions: self.subscriptions.clone(),
             })
         } else {
             None
@@ -728,8 +727,6 @@ impl<
                 ack_conn: conn.clone(),
                 ack_msg,
                 pushes,
-                connections: self.connections.clone(),
-                subscriptions: self.subscriptions.clone(),
             })
         } else {
             None
