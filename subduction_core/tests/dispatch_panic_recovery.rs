@@ -39,7 +39,8 @@ use subduction_core::{
 use testresult::TestResult;
 
 type Conn = ChannelMockConnection<SyncMessage>;
-type InnerHandler = SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type InnerHandler =
+    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 
 /// The sedimentree id whose `HeadsUpdate` makes the handler panic.
 const POISON_ID: SedimentreeId = SedimentreeId::new([0xFFu8; 32]);

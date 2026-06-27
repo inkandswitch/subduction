@@ -398,7 +398,8 @@ impl DepthMetric for AlwaysDeep {
 
 type DeepConn = MessageTransport<ChannelTransport>;
 
-type DeepSyncHandler = SyncHandler<Sendable, MemoryStorage, DeepConn, OpenPolicy, AlwaysDeep, TokioSpawn>;
+type DeepSyncHandler =
+    SyncHandler<Sendable, MemoryStorage, DeepConn, OpenPolicy, AlwaysDeep, TokioSpawn>;
 
 type DeepSubduction = Arc<
     Subduction<

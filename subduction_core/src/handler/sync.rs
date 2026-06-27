@@ -354,7 +354,6 @@ where
 
         #[cfg(feature = "metrics")]
         let mut pushed: u64 = 0;
-        let mut failed = Vec::new();
         for (conn, result) in results {
             match result {
                 Ok(()) => {
@@ -365,12 +364,8 @@ where
                 }
                 Err(e) => {
                     tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
-                    failed.push(conn);
                 }
             }
-        }
-        for conn in failed {
-            peers::remove_connection(&self.connections, &self.subscriptions, conn).await;
         }
 
         #[cfg(feature = "metrics")]
