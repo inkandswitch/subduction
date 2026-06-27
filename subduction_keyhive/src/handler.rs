@@ -9,7 +9,7 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::{string::String, sync::Arc};
 
 use async_channel::{Receiver, Sender};
 use futures::{FutureExt, future::BoxFuture};
@@ -18,7 +18,7 @@ use subduction_core::{authenticated::Authenticated, handler::Handler, peer::id::
 use core::marker::PhantomData;
 use rand::rngs::OsRng;
 
-use crate::{KeyhiveMessage, SignedMessage, signed_message::CborError};
+use crate::{KeyhiveMessage, SignedMessage, SyncStatus, signed_message::CborError};
 // ── Command enum ────────────────────────────────────────────────────────
 
 /// Commands sent from the handle to the actor.
@@ -251,8 +251,6 @@ where
     }
 }
 
-use alloc::sync::Arc;
-
 use crate::{KeyhivePeerId, connection::KeyhiveConnection, storage::KeyhiveStorage};
 
 use keyhive_core::{
@@ -287,6 +285,7 @@ where
 {
     protocol: Arc<SendableRuntimeProtocol<Conn, Store>>,
     conn_adapter: ConnAdapter,
+    sync_done_observer: Option<Arc<dyn Fn(crate::KeyhivePeerId) + Send + Sync>>,
     _phantom: PhantomData<SubConn>,
 }
 
@@ -303,8 +302,19 @@ where
         Self {
             protocol,
             conn_adapter,
+            sync_done_observer: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// Observe completed keyhive sync rounds.
+    #[must_use]
+    pub fn with_sync_done_observer(
+        mut self,
+        observer: Arc<dyn Fn(crate::KeyhivePeerId) + Send + Sync>,
+    ) -> Self {
+        self.sync_done_observer = Some(observer);
+        self
     }
 }
 
@@ -344,10 +354,17 @@ where
             let signed_msg = message.into_signed().map_err(HandleError::Decode)?;
             let adapter = (self.conn_adapter)(auth);
             let kh_peer = adapter.peer_id();
-            self.protocol
+            let status = self
+                .protocol
                 .handle_message(&kh_peer, signed_msg, Some(adapter))
                 .await
-                .map_err(|e| HandleError::Protocol(e.to_string()))
+                .map_err(|e| HandleError::Protocol(e.to_string()))?;
+            if matches!(status, SyncStatus::Done)
+                && let Some(observer) = &self.sync_done_observer
+            {
+                observer(kh_peer);
+            }
+            Ok(())
         })
     }
 

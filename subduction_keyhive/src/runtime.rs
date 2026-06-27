@@ -262,6 +262,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
                 proto
                     .handle_message(&keyhive_peer, msg, Some(conn))
                     .await
+                    .map(|_| ())
                     .map_err(|e| e.to_string())
             }
         },
