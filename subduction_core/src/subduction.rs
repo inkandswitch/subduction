@@ -1275,11 +1275,9 @@ where
                         error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
                         "peer disconnected"
                     );
-                    // No prune: a failed send means the transport is already
-                    // closed, so the listen loop's canonical teardown
-                    // (`connection_closed` -> `remove_connection` ->
-                    // `on_peer_disconnect`) handles removal. Pruning here races
-                    // that path and would skip the `on_peer_disconnect` hook.
+                    // No prune: a failed send means the transport is closed, so
+                    // the read loop's canonical teardown removes it. Pruning here
+                    // would skip the `on_peer_disconnect` hook.
                 }
             }
         }
@@ -1421,11 +1419,9 @@ where
                     error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
                     "peer disconnected"
                 );
-                // No prune: a failed send means the transport is already
-                // closed, so the listen loop's canonical teardown
-                // (`connection_closed` -> `remove_connection` ->
-                // `on_peer_disconnect`) handles removal. Pruning here races
-                // that path and would skip the `on_peer_disconnect` hook.
+                // No prune: a failed send means the transport is closed, so
+                // the read loop's canonical teardown removes it. Pruning here
+                // would skip the `on_peer_disconnect` hook.
             }
         }
 

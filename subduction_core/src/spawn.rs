@@ -6,13 +6,9 @@
 use future_form::FutureForm;
 use futures::stream::AbortHandle;
 
-/// Trait for spawning connection handler tasks.
-///
-/// Implement this for your runtime (e.g., tokio, async-std, wasm-bindgen-futures).
+/// Spawns background tasks on the caller's runtime.
 pub trait Spawn<Async: FutureForm> {
-    /// Spawn a future as a background task.
-    ///
-    /// The future should be driven to completion. The returned [`AbortHandle`]
-    /// can be used to cancel the task.
+    /// Spawn a future, driving it to completion. The returned [`AbortHandle`]
+    /// aborts the task.
     fn spawn(&self, fut: Async::Future<'static, ()>) -> AbortHandle;
 }

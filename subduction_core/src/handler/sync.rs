@@ -337,10 +337,9 @@ where
     Async: FutureForm,
 {
     /// Ack the originating peer, then fan the update out to subscribers
-    /// concurrently. A send failure is logged but not acted on here; the dead
-    /// transport is torn down by the listen loop's canonical path. A slow or
-    /// absent peer just doesn't receive the live push and reconciles via batch
-    /// sync — it can no longer stall the ingest path.
+    /// concurrently. A send failure is logged, not acted on; the dead transport
+    /// is torn down by the listen loop's canonical path. A slow or absent peer
+    /// just misses the live push and reconciles via batch sync.
     async fn run(self) {
         if let Err(e) = self.ack_conn.send(&self.ack_msg).await {
             tracing::warn!(peer = %self.ack_conn.peer_id(), error = %e, "peer disconnected while sending HeadsUpdate");
