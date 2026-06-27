@@ -481,9 +481,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a55cd7ac9bd9450bfca9de75c9e3d691cc396ae5da88e28057e9842aaf43d7"
+checksum = "1bc4aae7cfec1cff51f39b132ffeb6a4a81560ab9b5837b677a21659f58950c8"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2954,9 +2954,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "034de6a8565cc13585f08da0cd3fc80de3bfb2c9f81ec70b5c595dc08c9f8769"
+checksum = "cabda9fac1a8b07b2468d15f6bb6d0242308048218de93178ced52977e6f81a1"
 dependencies = [
  "beekem",
  "bincode",
@@ -2981,9 +2981,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06cce70232e9f46005a509916753f51a9dc9cf8ac6ed77ae27c0df525ba93ae9"
+checksum = "af2feeaee7929bfabd6ac79a36d86ebbeb648cc137267e6c5b1465d2f657c313"
 dependencies = [
  "bincode",
  "blake3",
