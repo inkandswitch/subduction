@@ -69,6 +69,20 @@ use crate::{
     syncpoints::SyncpointMap,
 };
 
+/// `SyncStatus` indicating whether a protocol exchange has fully completed (`Done`)
+/// or is still pending further messages (Pending).
+///
+/// `Done` means the local protocol instance has completed its part of the
+/// exchange and established the relevant syncpoint for the peer. Callers can
+/// use this to observe completed sync rounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncStatus {
+    /// Sync is not yet complete --- more messages expected.
+    Pending,
+    /// Sync exchange is done --- a confirmation has been sent or received.
+    Done,
+}
+
 /// Shared keyhive instance behind a mutex.
 type SharedKeyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng> =
     Arc<Mutex<Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>>>;
@@ -569,7 +583,7 @@ where
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
         conn: Option<Conn>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncStatus, ProtocolError<Conn::SendError>> {
         let cached_sender_pair = self.cached_events_for_pair_with_peer(from).await;
         let verified = signed_msg.verify(from)?;
 
@@ -589,18 +603,24 @@ where
             .into());
         }
 
-        match &message {
-            Message::SyncRequest { .. } => {
-                self.handle_sync_request(message, cached_sender_pair.as_deref())
-                    .await
-            }
+        let status = match &message {
+            Message::SyncRequest { .. } => self
+                .handle_sync_request(message, cached_sender_pair.as_deref())
+                .await
+                .map(|()| SyncStatus::Pending),
             Message::SyncResponse { .. } => {
                 self.handle_sync_response(message, cached_sender_pair.as_deref())
                     .await
             }
             Message::SyncOps { .. } => self.handle_sync_ops(message).await,
-            Message::RequestContactCard { .. } => self.handle_request_contact_card(message).await,
-            Message::MissingContactCard { .. } => self.handle_missing_contact_card(message).await,
+            Message::RequestContactCard { .. } => self
+                .handle_request_contact_card(message)
+                .await
+                .map(|()| SyncStatus::Pending),
+            Message::MissingContactCard { .. } => self
+                .handle_missing_contact_card(message)
+                .await
+                .map(|()| SyncStatus::Pending),
             Message::SyncCheck {
                 sender_id,
                 sender_total,
@@ -623,6 +643,7 @@ where
                     local_syncpoint_for_sender,
                 )
                 .await
+                .map(|()| SyncStatus::Pending)
             }
             Message::SyncConfirmation {
                 sender_id,
@@ -633,9 +654,11 @@ where
                     .lock()
                     .await
                     .set(sender_id.clone(), *confirmer_total);
-                Ok(())
+                Ok(SyncStatus::Done)
             }
-        }
+        }?;
+
+        Ok(status)
     }
 
     /// Handle a `SyncRequest`: compute which ops to send and which to request.
@@ -736,7 +759,7 @@ where
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncStatus, ProtocolError<Conn::SendError>> {
         let Message::SyncResponse {
             sender_id,
             requested: requested_hashes,
@@ -795,7 +818,7 @@ where
                 if advanced {
                     self.syncpoints.lock().await.invalidate_all();
                 }
-                return Ok(());
+                return Ok(SyncStatus::Pending);
             }
         }
 
@@ -816,14 +839,14 @@ where
             map.set(sender_id, sync_responder_total);
         }
 
-        Ok(())
+        Ok(SyncStatus::Done)
     }
 
     /// Handle `SyncOps`: ingest received operations and send confirmation.
     async fn handle_sync_ops(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<SyncStatus, ProtocolError<Conn::SendError>> {
         let Message::SyncOps {
             sender_id,
             ops,
@@ -870,7 +893,7 @@ where
             map.set(sender_id, sync_requester_total);
         }
 
-        Ok(())
+        Ok(SyncStatus::Done)
     }
 
     /// Handle `RequestContactCard`: send our contact card to the requesting
@@ -1141,12 +1164,7 @@ where
             storage_ops::save_keyhive_archive(&self.storage, storage_id, &archive).await?;
         } else {
             for event_bytes in event_bytes_list {
-                if let Err(e) =
-                    storage_ops::save_event_bytes(&self.storage, event_bytes.as_ref().to_vec())
-                        .await
-                {
-                    tracing::warn!(error = %e, "failed to persist event to storage");
-                }
+                storage_ops::save_event_bytes(&self.storage, event_bytes.as_ref().to_vec()).await?;
             }
         }
 
@@ -1209,9 +1227,7 @@ where
             KeyOp::Add(add) => StaticEvent::PrekeysExpanded(Box::new(add.as_ref().clone())),
             KeyOp::Rotate(rot) => StaticEvent::PrekeyRotated(Box::new(rot.as_ref().clone())),
         };
-        if let Err(e) = storage_ops::save_event(&self.storage, &event).await {
-            tracing::error!(error = %e, "failed to save contact card op to storage. Card will be lost on restart");
-        }
+        storage_ops::save_event(&self.storage, &event).await?;
 
         tracing::debug!("ingested contact card");
         Ok(())
@@ -1297,6 +1313,25 @@ where
             Some(sp) => self.sync_check_keyhive(peer, sp).await,
             None => self.sync_keyhive(Some(peer)).await,
         }
+    }
+
+    /// Note that local keyhive state changed and refresh cache/syncpoints.
+    ///
+    /// Returns `Ok(true)` when the cache rebuild observed a new `total_ops`
+    /// value and stale syncpoints were invalidated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if the event cache cannot be rebuilt.
+    pub async fn note_local_keyhive_changed(&self) -> Result<bool, ProtocolError<Conn::SendError>> {
+        let changed = {
+            let mut cache = self.cache.lock().await;
+            cache.refresh(self).await?
+        };
+        if changed {
+            self.syncpoints.lock().await.invalidate_all();
+        }
+        Ok(changed)
     }
 
     /// Refresh the periodic event cache from the underlying keyhive.
