@@ -35,7 +35,7 @@ use testresult::TestResult;
 type Conn = MessageTransport<ChannelTransport>;
 
 type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 
 type TestSubduction = Arc<
     Subduction<
@@ -398,7 +398,8 @@ impl DepthMetric for AlwaysDeep {
 
 type DeepConn = MessageTransport<ChannelTransport>;
 
-type DeepSyncHandler = SyncHandler<Sendable, MemoryStorage, DeepConn, OpenPolicy, AlwaysDeep>;
+type DeepSyncHandler =
+    SyncHandler<Sendable, MemoryStorage, DeepConn, OpenPolicy, AlwaysDeep, TokioSpawn>;
 
 type DeepSubduction = Arc<
     Subduction<

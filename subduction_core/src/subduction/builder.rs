@@ -69,7 +69,6 @@ use crate::{
     connection::{
         Connection,
         managed::{ManagedCall, ManagedConnection},
-        manager::Spawn,
         message::SyncMessage,
     },
     handler::{Handler, sync::SyncHandler},
@@ -79,6 +78,7 @@ use crate::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::RemoteHeadsNotifier,
+    spawn::Spawn,
     storage::{powerbox::StoragePowerbox, traits::Storage},
     timeout::Timeout,
 };
@@ -430,14 +430,14 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     pub fn build<'a, Async, Conn>(
         self,
     ) -> (
-        Arc<Subduction<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
-        Arc<SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>>,
-        ListenerFuture<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        Arc<Subduction<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
+        Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>>,
+        ListenerFuture<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>,
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
         Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS> + 'static,
-        Async: StartListener<'a, Store, Conn, SyncMessage, SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>, Auth, Sign, Metric, SHARDS>,
+        Async: StartListener<'a, Store, Conn, SyncMessage, SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>, Auth, Sign, Metric, SHARDS>,
         Store: Storage<Async>,
         Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'a,
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
@@ -446,8 +446,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         'a: 'static,
         Metric: Clone,
-        SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
-        <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
+        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS> as Handler<Async, Conn>>::HandlerError:
             Into<ListenError<Async, Store, Conn, SyncMessage>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
                 Async,
@@ -476,6 +476,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             subscriptions.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
+            self.spawner.clone(),
         ));
 
         let send_counter = handler.send_counter().clone();
@@ -616,7 +617,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     #[allow(clippy::type_complexity)]
     pub fn build_composed<'a, Async, Conn, Hdl, X>(
         self,
-        compose: impl FnOnce(Arc<SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>>) -> (Arc<Hdl>, X),
+        compose: impl FnOnce(Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>>) -> (Arc<Hdl>, X),
     ) -> (
         Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
         ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -637,8 +638,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         Metric: Clone,
-        SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
-        <SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS> as Handler<Async, Conn>>::HandlerError:
+        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS> as Handler<Async, Conn>>::HandlerError:
             Into<ListenError<Async, Store, Conn, SyncMessage>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
                 Async,
@@ -667,6 +668,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             subscriptions.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
+            self.spawner.clone(),
         ));
 
         let send_counter = sync_handler.send_counter().clone();

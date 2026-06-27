@@ -28,12 +28,12 @@ use subduction_core::{
     authenticated::Authenticated,
     connection::{
         managed::CallError,
-        manager::Spawn,
         test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
+    spawn::Spawn,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timeout::call::CallTimeout,
@@ -45,7 +45,7 @@ use testresult::TestResult;
 type Conn = MessageTransport<PausableChannelTransport>;
 
 type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 
 type TestSubduction = Arc<
     Subduction<
@@ -671,7 +671,14 @@ type CountingSubduction = Arc<
         Sendable,
         MemoryStorage,
         CountingConn,
-        SyncHandler<Sendable, MemoryStorage, CountingConn, OpenPolicy, CountLeadingZeroBytes>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            CountingConn,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+            CountingSpawn,
+        >,
         OpenPolicy,
         MemorySigner,
         TokioTimeout,

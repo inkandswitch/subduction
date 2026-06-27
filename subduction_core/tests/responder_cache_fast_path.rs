@@ -216,7 +216,7 @@ impl Storage<Sendable> for CallCountingStorage {
 }
 
 type CountingSyncHandler =
-    SyncHandler<Sendable, CallCountingStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+    SyncHandler<Sendable, CallCountingStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 
 type CountingSubduction = Arc<
     Subduction<

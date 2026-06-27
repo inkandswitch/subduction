@@ -26,7 +26,7 @@ use crate::{
     peer_id::WasmPeerId,
     policy::{JsPolicy, ephemeral::JsEphemeralPolicy},
     remote_heads::JsRemoteHeadsObserver,
-    subduction::{WASM_SHARD_COUNT, WasmHashMetric},
+    subduction::{WASM_SHARD_COUNT, WasmHashMetric, WasmSpawn},
     transport::JsTransport,
     wire::WireMessage,
 };
@@ -148,6 +148,7 @@ type WasmSyncHandler = SyncHandler<
     WasmConn,
     JsPolicy,
     WasmHashMetric,
+    WasmSpawn,
     { WASM_SHARD_COUNT },
     JsRemoteHeadsObserver,
 >;

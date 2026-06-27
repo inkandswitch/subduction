@@ -217,6 +217,7 @@ type ClientSubduction = Arc<
             TokioWebSocketClient<MemorySigner>,
             OpenPolicy,
             CountLeadingZeroBytes,
+            TrackedTokioSpawn,
         >,
         OpenPolicy,
         MemorySigner,

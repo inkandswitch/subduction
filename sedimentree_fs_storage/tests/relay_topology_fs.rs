@@ -30,7 +30,8 @@ use tempfile::TempDir;
 use testresult::TestResult;
 
 type Conn = MessageTransport<ChannelTransport>;
-type TestSyncHandler = SyncHandler<Sendable, FsStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+type TestSyncHandler =
+    SyncHandler<Sendable, FsStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 type TestSubduction = Arc<
     Subduction<
         'static,

@@ -44,6 +44,7 @@ use crate::{
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
+    spawn::Spawn,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     subduction::{
         error::{IoError, ListenError},
@@ -81,6 +82,7 @@ pub struct SyncHandler<
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
+    Sp: Spawn<Async>,
     const SHARDS: usize = 256,
     R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
@@ -91,6 +93,7 @@ pub struct SyncHandler<
     depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
+    spawner: Sp,
 }
 
 impl<
@@ -99,9 +102,10 @@ impl<
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
+    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> core::fmt::Debug for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+> core::fmt::Debug for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -114,9 +118,10 @@ impl<
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric + Clone,
+    Sp: Spawn<Async> + Clone,
     R: RemoteHeadsObserver + Clone,
     const SHARDS: usize,
-> Clone for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+> Clone for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -127,6 +132,7 @@ impl<
             depth_metric: self.depth_metric.clone(),
             heads_notifier: self.heads_notifier.clone(),
             send_counter: self.send_counter.clone(),
+            spawner: self.spawner.clone(),
         }
     }
 }
@@ -137,8 +143,9 @@ impl<
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
+    Sp: Spawn<Async>,
     const SHARDS: usize,
-> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, NoRemoteHeadsObserver>
+> SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -154,6 +161,7 @@ impl<
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Auth>,
         depth_metric: Metric,
+        spawner: Sp,
     ) -> Self {
         Self {
             sedimentrees,
@@ -163,6 +171,7 @@ impl<
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
             send_counter: PeerCounter::default(),
+            spawner,
         }
     }
 }
@@ -173,9 +182,10 @@ impl<
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
+    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+> SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
@@ -186,6 +196,7 @@ impl<
         storage: StoragePowerbox<Store, Auth>,
         depth_metric: Metric,
         remote_heads_observer: R,
+        spawner: Sp,
     ) -> Self {
         Self {
             sedimentrees,
@@ -195,6 +206,7 @@ impl<
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
             send_counter: PeerCounter::default(),
+            spawner,
         }
     }
 
@@ -237,16 +249,18 @@ impl<
         Conn::SendError: Send + 'static,
         Conn::RecvError: Send + 'static,
         Conn::DisconnectionError: Send + 'static,
+        Sp: Spawn<Sendable> + Send + Sync + 'static,
         R: RemoteHeadsObserver + Send + Sync,
     Local where
         Store: Storage<Local> + core::fmt::Debug,
         Conn: Connection<Local, SyncMessage> + PartialEq + Clone + core::fmt::Debug + 'static,
         Auth: StoragePolicy<Local>,
         Metric: DepthMetric,
+        Sp: Spawn<Local> + 'static,
         R: RemoteHeadsObserver
 )]
-impl<Async: FutureForm, Store, Conn, Auth, Metric, R, const SHARDS: usize> Handler<Async, Conn>
-    for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> Handler<Async, Conn>
+    for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
     type Message = SyncMessage;
     type HandlerError = ListenError<Async, Store, Conn, SyncMessage>;
@@ -256,12 +270,23 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, R, const SHARDS: usize> Handl
         conn: &'a Authenticated<Conn, Async>,
         message: Self::Message,
     ) -> Async::Future<'a, Result<(), Self::HandlerError>> {
-        Async::from_future(async move { self.dispatch(conn, message).await })
+        Async::from_future(async move {
+            // Ingest + storage run here, on the per-peer dispatch permit. The
+            // subscription fan-out is spawned OFF the permit so a slow
+            // subscriber backpressures a detached task instead of stalling
+            // inbound dispatch for this peer.
+            if let Some(fanout) = self.dispatch(conn, message).await? {
+                self.spawner.spawn(Async::from_future(fanout.run()));
+            }
+            Ok(())
+        })
     }
 
     fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
-        // Sync subscriptions are already cleaned by `peers::remove_connection`,
-        // so there is nothing extra to do here.
+        // No-op: the listen loop invokes this only after `remove_connection`
+        // (-> `teardown_peer`) has already removed the peer's connection,
+        // subscriptions, and send counter. `SyncHandler` holds no other
+        // per-peer state, so there is nothing left to clean up here.
         Async::from_future(async {})
     }
 }
@@ -276,12 +301,75 @@ impl<
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
+    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> RemoteHeadsNotifier for SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+> RemoteHeadsNotifier for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
+    }
+}
+
+/// Deferred subscription fan-out for a freshly-ingested commit or fragment.
+///
+/// Built on the ingest path but **run off it**: [`SyncHandler`]'s `handle`
+/// spawns [`run`](FanOut::run) via the handler's [`Spawn`], so a slow
+/// subscriber backpressures a detached task instead of holding the per-peer
+/// dispatch permit. Per-peer send counters are stamped in order *before* the
+/// spawn; `run` only performs the wire sends.
+#[allow(clippy::type_complexity)]
+struct FanOut<Conn, Async>
+where
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Async: FutureForm,
+{
+    /// `HeadsUpdate` ack to the originating peer (1.5-RTT second half).
+    ack_conn: Authenticated<Conn, Async>,
+    ack_msg: SyncMessage,
+    /// Per-subscriber pushes, send counters already stamped in order.
+    pushes: Vec<(Authenticated<Conn, Async>, SyncMessage)>,
+}
+
+impl<Conn, Async> FanOut<Conn, Async>
+where
+    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
+    Async: FutureForm,
+{
+    /// Ack the originating peer, then fan the update out to subscribers
+    /// concurrently. A send failure is logged, not acted on; the dead transport
+    /// is torn down by the listen loop's canonical path. A slow or absent peer
+    /// just misses the live push and reconciles via batch sync.
+    async fn run(self) {
+        if let Err(e) = self.ack_conn.send(&self.ack_msg).await {
+            tracing::warn!(peer = %self.ack_conn.peer_id(), error = %e, "peer disconnected while sending HeadsUpdate");
+        }
+
+        let results = futures::future::join_all(
+            self.pushes
+                .iter()
+                .map(|(conn, msg)| async move { (conn, conn.send(msg).await) }),
+        )
+        .await;
+
+        #[cfg(feature = "metrics")]
+        let mut pushed: u64 = 0;
+        for (conn, result) in results {
+            match result {
+                Ok(()) => {
+                    #[cfg(feature = "metrics")]
+                    {
+                        pushed += 1;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
+                }
+            }
+        }
+
+        #[cfg(feature = "metrics")]
+        crate::metrics::subscription_pushes(pushed);
     }
 }
 
@@ -295,16 +383,17 @@ impl<
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
+    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> SyncHandler<Async, Store, Conn, Auth, Metric, SHARDS, R>
+> SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
         &self,
         conn: &Authenticated<Conn, Async>,
         message: SyncMessage,
-    ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
         let from = conn.peer_id();
 
         let span = tracing::debug_span!(
@@ -332,7 +421,7 @@ impl<
         from: PeerId,
         message: SyncMessage,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
         // Note: remote heads arrive via three paths:
         //
         // 1. `responder_heads` in `BatchSyncResponse` — handled by
@@ -343,7 +432,7 @@ impl<
         //
         // 3. `HeadsUpdate` messages (post-ingestion ack from the 1.5 RTT
         //    second half) — handled here in dispatch.
-        match message {
+        let fanout = match message {
             SyncMessage::LooseCommit {
                 id,
                 commit,
@@ -351,7 +440,7 @@ impl<
                 sender_heads,
             } => {
                 self.heads_notifier.notify(id, from, sender_heads);
-                self.recv_commit(&from, id, &commit, blob, conn).await?;
+                self.recv_commit(&from, id, &commit, blob, conn).await?
             }
             SyncMessage::Fragment {
                 id,
@@ -360,7 +449,7 @@ impl<
                 sender_heads,
             } => {
                 self.heads_notifier.notify(id, from, sender_heads);
-                self.recv_fragment(&from, id, &fragment, blob, conn).await?;
+                self.recv_fragment(&from, id, &fragment, blob, conn).await?
             }
             SyncMessage::BatchSyncRequest(BatchSyncRequest {
                 id,
@@ -378,6 +467,7 @@ impl<
 
                 self.recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
                     .await?;
+                None
             }
             SyncMessage::BatchSyncResponse(BatchSyncResponse { id, result, .. }) => {
                 #[cfg(feature = "metrics")]
@@ -394,25 +484,29 @@ impl<
                         tracing::debug!(peer = %from, tree = ?id, "peer reports we are unauthorized for sedimentree");
                     }
                 }
+                None
             }
             SyncMessage::RemoveSubscriptions(crate::connection::message::RemoveSubscriptions {
                 ids,
             }) => {
                 self.remove_subscriptions(from, &ids).await;
                 tracing::debug!(peer = %from, trees = ?ids, "removed subscriptions");
+                None
             }
             SyncMessage::DataRequestRejected(crate::connection::message::DataRequestRejected {
                 id,
             }) => {
                 tracing::debug!(peer = %from, tree = ?id, "peer rejected our data request");
+                None
             }
             SyncMessage::HeadsUpdate { id, heads } => {
                 tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
                 self.heads_notifier.notify(id, from, heads);
+                None
             }
-        }
+        };
 
-        Ok(())
+        Ok(fanout)
     }
 
     // -----------------------------------------------------------------------
@@ -426,12 +520,12 @@ impl<
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<bool, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(peer = %from, error = %e, "commit signature verification failed");
-                return Ok(false);
+                return Ok(None);
             }
         };
 
@@ -454,7 +548,7 @@ impl<
                     error = %e,
                     "policy rejected commit"
                 );
-                return Ok(false);
+                return Ok(None);
             }
         };
 
@@ -473,51 +567,48 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        if was_new {
+        let fanout = if was_new {
             let heads = self.heads_for(id).await;
 
-            // Send HeadsUpdate back to the originating peer
-            let heads_msg = SyncMessage::HeadsUpdate {
+            // Ack the originating peer; stamp per-subscriber counters in order
+            // now (before the spawn), then defer the wire sends to `FanOut`.
+            let ack_msg = SyncMessage::HeadsUpdate {
                 id,
                 heads: RemoteHeads {
                     counter: self.send_counter.next(*from).await,
                     heads: heads.clone(),
                 },
             };
-            if let Err(e) = conn.send(&heads_msg).await {
-                tracing::warn!(peer = %from, error = %e, "peer disconnected while sending HeadsUpdate");
-            }
 
-            // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
-            #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
-            let pushed = self
-                .broadcast_loose_commit(id, &signed_for_wire, &blob, &heads, conns)
+            let pushes = self
+                .build_loose_commit_pushes(id, &signed_for_wire, &blob, &heads, conns)
                 .await;
-            #[cfg(feature = "metrics")]
-            crate::metrics::subscription_pushes(pushed);
-        }
 
-        Ok(was_new)
+            Some(FanOut {
+                ack_conn: conn.clone(),
+                ack_msg,
+                pushes,
+            })
+        } else {
+            None
+        };
+
+        Ok(fanout)
     }
 
-    /// Fan a newly-received loose commit out to its authorized subscribers.
-    ///
-    /// Per-peer send counters are allocated sequentially (cheap, and counter
-    /// order per peer must be preserved), then the wire sends run concurrently
-    /// so a slow or backpressured subscriber can't stall delivery to the rest.
-    /// Connections whose send failed are pruned afterwards. Returns the number
-    /// of successful pushes.
-    async fn broadcast_loose_commit(
+    /// Build the per-subscriber `LooseCommit` pushes, stamping each peer's send
+    /// counter in order (per-peer counter order must be preserved). The wire
+    /// sends happen later, off the dispatch permit, in [`FanOut::run`].
+    async fn build_loose_commit_pushes(
         &self,
         id: SedimentreeId,
         commit: &Signed<LooseCommit>,
         blob: &Blob,
         heads: &[CommitId],
         conns: Vec<Authenticated<Conn, Async>>,
-    ) -> u64 {
-        // Allocate counters + build messages sequentially.
-        let mut pending = Vec::with_capacity(conns.len());
+    ) -> Vec<(Authenticated<Conn, Async>, SyncMessage)> {
+        let mut pushes = Vec::with_capacity(conns.len());
         for conn in conns {
             let peer_id = conn.peer_id();
             let msg = SyncMessage::LooseCommit {
@@ -529,48 +620,22 @@ impl<
                     heads: heads.to_vec(),
                 },
             };
-            pending.push((conn, msg));
+            pushes.push((conn, msg));
         }
-
-        // Run the sends concurrently; collect failures to prune after.
-        let results = futures::future::join_all(
-            pending
-                .iter()
-                .map(|(conn, msg)| async move { (conn, conn.send(msg).await) }),
-        )
-        .await;
-
-        let mut pushed: u64 = 0;
-        let mut failed = Vec::new();
-        for (conn, result) in results {
-            match result {
-                Ok(()) => pushed += 1,
-                Err(e) => {
-                    tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
-                    failed.push(conn);
-                }
-            }
-        }
-        for conn in failed {
-            self.remove_connection(conn).await;
-        }
-
-        pushed
+        pushes
     }
 
-    /// Fan a newly-received fragment out to its authorized subscribers.
-    ///
-    /// See [`broadcast_loose_commit`](Self::broadcast_loose_commit) for the
-    /// sequential-counter / concurrent-send rationale.
-    async fn broadcast_fragment(
+    /// Build the per-subscriber `Fragment` pushes. See
+    /// [`build_loose_commit_pushes`](Self::build_loose_commit_pushes).
+    async fn build_fragment_pushes(
         &self,
         id: SedimentreeId,
         fragment: &Signed<Fragment>,
         blob: &Blob,
         heads: &[CommitId],
         conns: Vec<Authenticated<Conn, Async>>,
-    ) -> u64 {
-        let mut pending = Vec::with_capacity(conns.len());
+    ) -> Vec<(Authenticated<Conn, Async>, SyncMessage)> {
+        let mut pushes = Vec::with_capacity(conns.len());
         for conn in conns {
             let peer_id = conn.peer_id();
             let msg = SyncMessage::Fragment {
@@ -582,32 +647,9 @@ impl<
                     heads: heads.to_vec(),
                 },
             };
-            pending.push((conn, msg));
+            pushes.push((conn, msg));
         }
-
-        let results = futures::future::join_all(
-            pending
-                .iter()
-                .map(|(conn, msg)| async move { (conn, conn.send(msg).await) }),
-        )
-        .await;
-
-        let mut pushed: u64 = 0;
-        let mut failed = Vec::new();
-        for (conn, result) in results {
-            match result {
-                Ok(()) => pushed += 1,
-                Err(e) => {
-                    tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
-                    failed.push(conn);
-                }
-            }
-        }
-        for conn in failed {
-            self.remove_connection(conn).await;
-        }
-
-        pushed
+        pushes
     }
 
     async fn recv_fragment(
@@ -617,12 +659,12 @@ impl<
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<bool, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(peer = %from, error = %e, "fragment signature verification failed");
-                return Ok(false);
+                return Ok(None);
             }
         };
 
@@ -645,7 +687,7 @@ impl<
                     error = %e,
                     "policy rejected fragment"
                 );
-                return Ok(false);
+                return Ok(None);
             }
         };
 
@@ -664,32 +706,32 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        if was_new {
+        let fanout = if was_new {
             let heads = self.heads_for(id).await;
 
-            // Send HeadsUpdate back to the originating peer
-            let heads_msg = SyncMessage::HeadsUpdate {
+            let ack_msg = SyncMessage::HeadsUpdate {
                 id,
                 heads: RemoteHeads {
                     counter: self.send_counter.next(*from).await,
                     heads: heads.clone(),
                 },
             };
-            if let Err(e) = conn.send(&heads_msg).await {
-                tracing::warn!(peer = %from, error = %e, "peer disconnected while sending HeadsUpdate");
-            }
 
-            // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
-            #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
-            let pushed = self
-                .broadcast_fragment(id, &signed_for_wire, &blob, &heads, conns)
+            let pushes = self
+                .build_fragment_pushes(id, &signed_for_wire, &blob, &heads, conns)
                 .await;
-            #[cfg(feature = "metrics")]
-            crate::metrics::subscription_pushes(pushed);
-        }
 
-        Ok(was_new)
+            Some(FanOut {
+                ack_conn: conn.clone(),
+                ack_msg,
+                pushes,
+            })
+        } else {
+            None
+        };
+
+        Ok(fanout)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1096,10 +1138,6 @@ impl<
             exclude_peer,
         )
         .await
-    }
-
-    async fn remove_connection(&self, conn: &Authenticated<Conn, Async>) -> Option<bool> {
-        peers::remove_connection(&self.connections, &self.subscriptions, conn).await
     }
 }
 

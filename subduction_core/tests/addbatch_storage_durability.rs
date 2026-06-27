@@ -46,7 +46,7 @@ use testresult::TestResult;
 type Conn = MessageTransport<PausableChannelTransport>;
 
 type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 
 type TestSubduction = Arc<
     Subduction<

@@ -83,6 +83,7 @@ type TestSubduction = Arc<
             TokioWebSocketClient<MemorySigner>,
             OpenPolicy,
             CountLeadingZeroBytes,
+            TokioSpawn,
         >,
         OpenPolicy,
         MemorySigner,
@@ -98,6 +99,7 @@ type TestHandler = Arc<
         TokioWebSocketClient<MemorySigner>,
         OpenPolicy,
         CountLeadingZeroBytes,
+        TokioSpawn,
     >,
 >;
 
@@ -113,6 +115,7 @@ type ServerSubduction = Arc<
             MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
             OpenPolicy,
             CountLeadingZeroBytes,
+            TrackedTokioSpawn,
         >,
         OpenPolicy,
         MemorySigner,
@@ -128,6 +131,7 @@ type ServerHandler = Arc<
         MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
         OpenPolicy,
         CountLeadingZeroBytes,
+        TrackedTokioSpawn,
     >,
 >;
 
@@ -137,6 +141,7 @@ type ClientSyncHandler = SyncHandler<
     TokioWebSocketClient<MemorySigner>,
     OpenPolicy,
     CountLeadingZeroBytes,
+    TokioSpawn,
 >;
 
 type ServerSyncHandler = SyncHandler<
@@ -145,6 +150,7 @@ type ServerSyncHandler = SyncHandler<
     MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
     OpenPolicy,
     CountLeadingZeroBytes,
+    TrackedTokioSpawn,
 >;
 
 #[allow(clippy::type_complexity)]

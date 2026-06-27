@@ -13,7 +13,7 @@
 //! the guard's surviving handles all point at finished tasks, so the final drop
 //! aborts nothing.
 //!
-//! [`Spawn::spawn`]: crate::connection::manager::Spawn::spawn
+//! [`Spawn::spawn`]: crate::spawn::Spawn::spawn
 
 use alloc::vec::Vec;
 

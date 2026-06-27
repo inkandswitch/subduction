@@ -62,6 +62,7 @@ type TestSyncHandler = SyncHandler<
     ChannelMockConnection<SyncMessage>,
     OpenPolicy,
     CountLeadingZeroBytes,
+    TokioSpawn,
 >;
 
 type TestSubduction = Arc<

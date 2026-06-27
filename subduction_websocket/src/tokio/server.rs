@@ -833,7 +833,7 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
         Sendable,
         S,
         MessageTransport<UnifiedWebSocket>,
-        SyncHandler<Sendable, S, MessageTransport<UnifiedWebSocket>, P, M>,
+        SyncHandler<Sendable, S, MessageTransport<UnifiedWebSocket>, P, M, TrackedTokioSpawn>,
         P,
         Sig,
         O,

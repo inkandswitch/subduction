@@ -63,6 +63,7 @@ type TestSubduction = Arc<
             MessageTransport<HttpLongPollTransport>,
             OpenPolicy,
             CountLeadingZeroBytes,
+            TokioSpawn,
         >,
         OpenPolicy,
         MemorySigner,

@@ -272,8 +272,14 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-type TrackingSyncHandler =
-    SyncHandler<Sendable, ConcurrencyTrackingStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+type TrackingSyncHandler = SyncHandler<
+    Sendable,
+    ConcurrencyTrackingStorage,
+    Conn,
+    OpenPolicy,
+    CountLeadingZeroBytes,
+    TokioSpawn,
+>;
 
 type TrackingSubduction = Arc<
     Subduction<

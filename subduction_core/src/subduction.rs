@@ -73,7 +73,7 @@ use crate::{
         backoff::Backoff,
         id::ConnectionId,
         managed::{CallError, ManagedCall, ManagedConnection},
-        manager::{Command, ConnectionManager, RunManager, Spawn},
+        manager::{Command, ConnectionManager, RunManager},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
             SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
@@ -87,6 +87,7 @@ use crate::{
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
+    spawn::Spawn,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::{Timeout, call::CallTimeout},
 };
@@ -1274,8 +1275,9 @@ where
                         error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
                         "peer disconnected"
                     );
-                    // `remove_connection` runs the full teardown on the last connection.
-                    self.remove_connection(&conn).await;
+                    // No prune: a failed send means the transport is closed, so
+                    // the read loop's canonical teardown removes it. Pruning here
+                    // would skip the `on_peer_disconnect` hook.
                 }
             }
         }
@@ -1417,8 +1419,9 @@ where
                     error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
                     "peer disconnected"
                 );
-                // `remove_connection` runs the full teardown on the last connection.
-                self.remove_connection(&conn).await;
+                // No prune: a failed send means the transport is closed, so
+                // the read loop's canonical teardown removes it. Pruning here
+                // would skip the `on_peer_disconnect` hook.
             }
         }
 
@@ -2997,7 +3000,7 @@ where
     /// If no peers are connected, it will wait until a peer connects.
     ///
     /// Each inbound message is dispatched as its own task via the configured
-    /// [`Spawn`](crate::connection::manager::Spawn), so independent handlers
+    /// [`Spawn`](crate::spawn::Spawn), so independent handlers
     /// (e.g. batch-sync requests for different sedimentrees) run in parallel
     /// across worker threads on `Sendable` and concurrently on `Local`. A
     /// completion channel reports each task's outcome back so a broken
@@ -3200,7 +3203,7 @@ where
     ///
     /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
     /// Each document's sync is **spawned onto the runtime** (via the configured
-    /// [`Spawn`](crate::connection::manager::Spawn)) so that — on a `Sendable`
+    /// [`Spawn`](crate::spawn::Spawn)) so that — on a `Sendable`
     /// multi-threaded runtime — independent documents verify, ingest, and
     /// minimize in parallel across worker threads rather than all draining
     /// through one caller task. On `Local` (Wasm) the spawner runs tasks on the
@@ -3209,7 +3212,7 @@ where
     /// All documents are spawned at once (no in-flight cap), matching the
     /// concurrency level of the pre-spawn single-task fan-out. A shared results
     /// channel collects each task's outcome and doubles as the join mechanism,
-    /// since [`Spawn`](crate::connection::manager::Spawn) discards task output.
+    /// since [`Spawn`](crate::spawn::Spawn) discards task output.
     ///
     /// Errors are collected rather than short-circuiting, so a failure on one
     /// sedimentree does not prevent the rest from syncing.
@@ -3823,28 +3826,19 @@ mod tests {
     use async_lock::Mutex;
     use future_form::Sendable;
     use sedimentree_core::{
-        blob::{Blob, BlobMeta},
+        blob::Blob,
         collections::Map,
         depth::CountLeadingZeroBytes,
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::{LooseCommit, id::CommitId},
     };
-    use subduction_crypto::signed::Signed;
     use testresult::TestResult;
 
     fn make_commit_parts() -> (CommitId, BTreeSet<CommitId>, Blob) {
         let contents = vec![0u8; 32];
         let blob = Blob::new(contents);
         (CommitId::new([0xCC; 32]), BTreeSet::new(), blob)
-    }
-
-    async fn make_signed_test_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blob) {
-        let (head, parents, blob) = make_commit_parts();
-        let blob_meta = BlobMeta::new(&blob);
-        let commit = LooseCommit::new(*id, head, parents, blob_meta);
-        let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
-        (verified.into_signed(), blob)
     }
 
     #[allow(clippy::type_complexity)]
@@ -3855,158 +3849,6 @@ mod tests {
         let boundary = BTreeSet::from([CommitId::new([2u8; 32])]);
         let checkpoints = vec![CommitId::new([3u8; 32])];
         (head, boundary, checkpoints, blob)
-    }
-
-    async fn make_signed_test_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob) {
-        let (head, boundary, checkpoints, blob) = make_fragment_parts();
-        let blob_meta = BlobMeta::new(&blob);
-        let fragment = Fragment::new(*id, head, boundary, &checkpoints, blob_meta);
-        let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
-        (verified.into_signed(), blob)
-    }
-
-    #[tokio::test]
-    async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult {
-        let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
-        let connections = Arc::new(Mutex::new(Map::new()));
-        let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-        let handler = Arc::new(SyncHandler::new(
-            sedimentrees.clone(),
-            connections.clone(),
-            subscriptions.clone(),
-            storage.clone(),
-            CountLeadingZeroBytes,
-        ));
-
-        let (subduction, _listener_fut, _actor_fut) = Subduction::<
-            '_,
-            Sendable,
-            _,
-            FailingSendMockConnection,
-            _,
-            _,
-            _,
-            InstantTimeout,
-            _,
-        >::new(
-            handler.clone(),
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            PeerCounter::default(),
-            NonceCache::default(),
-            InstantTimeout,
-            Duration::from_secs(30),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
-
-        // Add a failing connection with a different peer ID than the sender
-        let sender_peer_id = PeerId::new([1u8; 32]);
-        let other_peer_id = PeerId::new([2u8; 32]);
-        let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-        let _fresh = subduction.add_connection(conn.authenticated()).await?;
-        assert_eq!(subduction.connected_peer_ids().await.len(), 1);
-
-        // Subscribe other_peer to the sedimentree so forwarding will be attempted
-        let id = SedimentreeId::new([1u8; 32]);
-        subduction.add_subscription(other_peer_id, id).await;
-
-        // Dispatch a commit via the handler from a different peer
-        let (signed_commit, blob) = make_signed_test_commit(&id).await;
-        let sender_conn = FailingSendMockConnection::with_peer_id(sender_peer_id).authenticated();
-        let msg = SyncMessage::LooseCommit {
-            id,
-            commit: signed_commit,
-            blob,
-            sender_heads: RemoteHeads::default(),
-        };
-        let _ = handler.handle(&sender_conn, msg).await;
-
-        // Connection should be removed after send failure during propagation
-        assert_eq!(
-            subduction.connected_peer_ids().await.len(),
-            0,
-            "Connection should be removed after send failure"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_recv_fragment_removes_connection_on_send_failure() -> TestResult {
-        let sedimentrees = Arc::new(BoundedShardedMap::with_key(0, 0));
-        let connections = Arc::new(Mutex::new(Map::new()));
-        let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-        let handler = Arc::new(SyncHandler::new(
-            sedimentrees.clone(),
-            connections.clone(),
-            subscriptions.clone(),
-            storage.clone(),
-            CountLeadingZeroBytes,
-        ));
-
-        let (subduction, _listener_fut, _actor_fut) = Subduction::<
-            '_,
-            Sendable,
-            _,
-            FailingSendMockConnection,
-            _,
-            _,
-            _,
-            InstantTimeout,
-            _,
-        >::new(
-            handler.clone(),
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            PeerCounter::default(),
-            NonceCache::default(),
-            InstantTimeout,
-            Duration::from_secs(30),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
-
-        // Add a failing connection with a different peer ID than the sender
-        let sender_peer_id = PeerId::new([1u8; 32]);
-        let other_peer_id = PeerId::new([2u8; 32]);
-        let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-        let _fresh = subduction.add_connection(conn.authenticated()).await?;
-        assert_eq!(subduction.connected_peer_ids().await.len(), 1);
-
-        // Subscribe other_peer to the sedimentree so forwarding will be attempted
-        let id = SedimentreeId::new([1u8; 32]);
-        subduction.add_subscription(other_peer_id, id).await;
-
-        // Dispatch a fragment via the handler from a different peer
-        let (signed_fragment, blob) = make_signed_test_fragment(&id).await;
-        let sender_conn = FailingSendMockConnection::with_peer_id(sender_peer_id).authenticated();
-        let msg = SyncMessage::Fragment {
-            id,
-            fragment: signed_fragment,
-            blob,
-            sender_heads: RemoteHeads::default(),
-        };
-        let _ = handler.handle(&sender_conn, msg).await;
-
-        // Connection should be removed after send failure during propagation
-        assert_eq!(
-            subduction.connected_peer_ids().await.len(),
-            0,
-            "Connection should be removed after send failure"
-        );
-
-        Ok(())
     }
 
     /// Keystone invariant for the in-RAM sedimentree LRU cache: a tree must
@@ -4038,6 +3880,7 @@ mod tests {
             subscriptions.clone(),
             storage.clone(),
             CountLeadingZeroBytes,
+            TestSpawn,
         ));
 
         let (subduction, _listener_fut, _actor_fut) = Subduction::<

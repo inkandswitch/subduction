@@ -101,6 +101,7 @@ pub mod nonce_cache;
 pub mod peer;
 pub mod policy;
 pub mod remote_heads;
+pub mod spawn;
 pub mod storage;
 pub mod subduction;
 pub mod timeout;

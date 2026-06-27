@@ -35,7 +35,8 @@ use subduction_core::{
 use testresult::TestResult;
 
 type Conn = ChannelMockConnection<SyncMessage>;
-type InnerHandler = SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes>;
+type InnerHandler =
+    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
 
 /// Must match `MAX_INFLIGHT_DISPATCH_PER_PEER` in `connection::manager`. That
 /// constant is crate-private, so we pin it here; if it changes, the
