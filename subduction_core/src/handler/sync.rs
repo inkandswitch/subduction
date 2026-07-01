@@ -50,6 +50,7 @@ use crate::{
         error::{IoError, ListenError},
         ingest, peers,
     },
+    sync_session::{DynSyncSessionObserver, SyncSession, SyncSessionKind},
 };
 
 use super::Handler;
@@ -94,6 +95,8 @@ pub struct SyncHandler<
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
     spawner: Sp,
+    sync_session_observer: Arc<Mutex<Option<DynSyncSessionObserver>>>,
+    pending_push_sessions: Arc<Mutex<Map<(PeerId, SedimentreeId), SyncSession>>>,
 }
 
 impl<
@@ -133,6 +136,8 @@ impl<
             heads_notifier: self.heads_notifier.clone(),
             send_counter: self.send_counter.clone(),
             spawner: self.spawner.clone(),
+            sync_session_observer: self.sync_session_observer.clone(),
+            pending_push_sessions: self.pending_push_sessions.clone(),
         }
     }
 }
@@ -172,6 +177,8 @@ impl<
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
             send_counter: PeerCounter::default(),
             spawner,
+            sync_session_observer: Arc::new(Mutex::new(None)),
+            pending_push_sessions: Arc::new(Mutex::new(Map::new())),
         }
     }
 }
@@ -207,6 +214,32 @@ impl<
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
             send_counter: PeerCounter::default(),
             spawner,
+            sync_session_observer: Arc::new(Mutex::new(None)),
+            pending_push_sessions: Arc::new(Mutex::new(Map::new())),
+        }
+    }
+
+    /// Set a [`SyncSessionObserver`] implementation.
+    ///
+    /// This should just be another parameter to `new` but that
+    /// would be an invasive change just for a sketch.
+    ///
+    /// [`SyncSessionObserver`]: crate::sync_session::SyncSessionObserver
+    /// [`new`]: Self::new
+    ///
+    /// # Panics
+    /// Don't call this in parallel.
+    pub fn set_sync_session_observer(&self, observer: DynSyncSessionObserver) {
+        let Some(mut lock) = self.sync_session_observer.try_lock() else {
+            unreachable!("sync session observer lock uncontended during setup")
+        };
+        *lock = Some(observer);
+    }
+
+    async fn emit_sync_session(&self, session: SyncSession) {
+        let observer = self.sync_session_observer.lock().await.clone();
+        if let Some(observer) = observer {
+            observer.on_sync_session(session);
         }
     }
 
@@ -561,6 +594,7 @@ impl<
                 return Err(IoError::BlobMismatch(e));
             }
         };
+        let commit_id = verified_meta.payload().head();
 
         let was_new = self
             .insert_commit_locally(&putter, verified_meta)
@@ -568,6 +602,14 @@ impl<
             .map_err(IoError::Storage)?;
 
         let fanout = if was_new {
+            let session_key = (*from, id);
+            {
+                let mut sessions = self.pending_push_sessions.lock().await;
+                let session = sessions
+                    .entry(session_key)
+                    .or_insert_with(|| SyncSession::new(id, *from, SyncSessionKind::InboundPush));
+                session.received_commit_ids.push(commit_id);
+            }
             let heads = self.heads_for(id).await;
 
             // Ack the originating peer; stamp per-subscriber counters in order
@@ -580,6 +622,12 @@ impl<
                 },
             };
 
+            let maybe_session = self.pending_push_sessions.lock().await.remove(&session_key);
+            if let Some(session) = maybe_session {
+                self.emit_sync_session(session).await;
+            }
+
+            // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
             let pushes = self
                 .build_loose_commit_pushes(id, &signed_for_wire, &blob, &heads, conns)
@@ -700,6 +748,7 @@ impl<
                 return Err(IoError::BlobMismatch(e));
             }
         };
+        let fragment_id = verified_meta.payload().head();
 
         let was_new = self
             .insert_fragment_locally(&putter, verified_meta)
@@ -707,6 +756,14 @@ impl<
             .map_err(IoError::Storage)?;
 
         let fanout = if was_new {
+            let session_key = (*from, id);
+            {
+                let mut sessions = self.pending_push_sessions.lock().await;
+                let session = sessions
+                    .entry(session_key)
+                    .or_insert_with(|| SyncSession::new(id, *from, SyncSessionKind::InboundPush));
+                session.received_fragment_ids.push(fragment_id);
+            }
             let heads = self.heads_for(id).await;
 
             let ack_msg = SyncMessage::HeadsUpdate {
@@ -717,6 +774,12 @@ impl<
                 },
             };
 
+            let maybe_session = self.pending_push_sessions.lock().await.remove(&session_key);
+            if let Some(session) = maybe_session {
+                self.emit_sync_session(session).await;
+            }
+
+            // Broadcast to subscribers (excluding sender)
             let conns = self.get_authorized_subscriber_conns(id, from).await;
             let pushes = self
                 .build_fragment_pushes(id, &signed_for_wire, &blob, &heads, conns)
@@ -745,6 +808,7 @@ impl<
         let peer_id = conn.peer_id();
         tracing::info!(peer = %peer_id, tree = ?id, "recv_batch_sync_request");
 
+        let mut session = SyncSession::new(id, peer_id, SyncSessionKind::InboundBatch);
         let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
@@ -1017,6 +1081,26 @@ impl<
             heads,
         };
 
+        session.sent_commit_ids = their_missing_commits
+            .iter()
+            .map(|(signed, _)| {
+                signed
+                    .try_decode_trusted_payload()
+                    .expect("locally loaded signed commit should decode")
+                    .head()
+            })
+            .collect();
+        session.sent_fragment_ids = their_missing_fragments
+            .iter()
+            .map(|(signed, _)| {
+                signed
+                    .try_decode_trusted_payload()
+                    .expect("locally loaded signed fragment should decode")
+                    .head()
+            })
+            .collect();
+        session.remote_heads = Some(responder_heads.clone());
+
         tracing::info!(
             peer = %peer_id,
             tree = ?id,
@@ -1027,7 +1111,6 @@ impl<
             requesting_fragments = requesting_fragment_fingerprints.len(),
             "sending batch sync response"
         );
-
         let sync_diff = SyncDiff {
             missing_commits: their_missing_commits,
             missing_fragments: their_missing_fragments,
@@ -1047,6 +1130,8 @@ impl<
         if let Err(e) = conn.send(&msg).await {
             tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
         }
+
+        self.emit_sync_session(session).await;
 
         Ok(())
     }
