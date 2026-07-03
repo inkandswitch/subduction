@@ -182,7 +182,6 @@ impl PeriodicEventCache {
         Conn::DisconnectError: 'static,
         Store: KeyhiveStorage<Async>,
         Async: future_form::FutureForm,
-        Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>: Dupe,
     {
         let total = protocol.total_ops().await;
         if self.last_total_ops == Some(total) {
