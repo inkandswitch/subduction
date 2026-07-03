@@ -9,7 +9,6 @@
 use alloc::{format, string::ToString, sync::Arc, vec::Vec};
 use core::time::Duration;
 
-use async_lock::Mutex as AsyncMutex;
 use keyhive_core::{
     contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
     principal::identifier::Identifier, store::ciphertext::memory::MemoryCiphertextStore,
@@ -140,7 +139,7 @@ where
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<future_form::Local> + Send + 'static,
     ConnAdapter: Fn(KeyhivePeerId, C) -> Conn + Send + 'static,
-    PolicySetup: FnOnce(Arc<AsyncMutex<LocalRuntimeKeyhive>>) + Send + 'static,
+    PolicySetup: FnOnce(Arc<LocalRuntimeKeyhive>) + Send + 'static,
 {
     let (init_tx, init_rx) = oneshot::channel::<Result<(), std::string::String>>();
 
@@ -197,7 +196,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<future_form::Local> + 'static,
     ConnAdapter: Fn(KeyhivePeerId, C) -> Conn + 'static,
-    PolicySetup: FnOnce(Arc<AsyncMutex<LocalRuntimeKeyhive>>),
+    PolicySetup: FnOnce(Arc<LocalRuntimeKeyhive>),
 {
     let keyhive = match Keyhive::generate(
         signer,
@@ -229,11 +228,11 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     let kh_id: Identifier = keyhive.id().into();
     let peer_id = KeyhivePeerId::from_bytes(kh_id.to_bytes());
 
-    let shared = Arc::new(AsyncMutex::new(keyhive));
+    let shared = Arc::new(keyhive);
     let policy_keyhive = Arc::clone(&shared);
     let mut protocol =
         KeyhiveProtocol::<_, Vec<u8>, Vec<u8>, _, _, _, Conn, Store, future_form::Local>::new(
-            shared,
+            Arc::clone(&shared),
             storage,
             peer_id,
             contact_card,
