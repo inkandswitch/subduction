@@ -18,7 +18,11 @@ use subduction_core::{authenticated::Authenticated, handler::Handler, peer::id::
 use core::marker::PhantomData;
 use rand::rngs::OsRng;
 
-use crate::{KeyhiveMessage, SignedMessage, SyncStatus, signed_message::CborError};
+use crate::{
+    KeyhiveMessage, SignedMessage, SyncStatus,
+    message::RequestId,
+    signed_message::CborError,
+};
 // ── Command enum ────────────────────────────────────────────────────────
 
 /// Commands sent from the handle to the actor.
@@ -254,7 +258,10 @@ where
 use crate::{KeyhivePeerId, connection::KeyhiveConnection, storage::KeyhiveStorage};
 
 use keyhive_core::{
-    listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+    listener::{
+        membership::MembershipListener, no_listener::NoListener,
+    },
+    store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 
@@ -262,41 +269,49 @@ use keyhive_crypto::signer::memory::MemorySigner;
 /// [`SendableRuntimeKeyhive`](crate::runtime::SendableRuntimeKeyhive)'s
 /// concrete types, generic only over
 /// the connection and storage backends.
-pub type SendableRuntimeProtocol<Conn, Store> = crate::KeyhiveProtocol<
+pub type SendableRuntimeProtocol<Listener, Conn, Store> = crate::KeyhiveProtocol<
     MemorySigner,
     Vec<u8>,
     Vec<u8>,
     MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
-    NoListener,
+    Listener,
     OsRng,
     Conn,
     Store,
     future_form::Sendable,
 >;
 
+/// [`KeyhiveProtocol`] with the default [`NoListener`].
+pub type SendableRuntimeKeyhiveProtocol<Conn, Store> =
+    SendableRuntimeProtocol<NoListener, Conn, Store>;
+
 /// [`Handler`] for multi-threaded runtimes.
 ///
 /// `SubConn` is the subduction connection type (from [`Handler`]). `Conn`
 /// is the keyhive connection type. `ConnAdapter` converts between them.
-pub struct SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+pub struct SendableKeyhiveHandler<Listener, Conn, Store, SubConn, ConnAdapter>
 where
+    Listener: MembershipListener<future_form::Sendable, MemorySigner, Vec<u8>>,
     Conn: KeyhiveConnection<future_form::Sendable>,
     Store: KeyhiveStorage<future_form::Sendable>,
 {
-    protocol: Arc<SendableRuntimeProtocol<Conn, Store>>,
+    protocol: Arc<SendableRuntimeProtocol<Listener, Conn, Store>>,
     conn_adapter: ConnAdapter,
-    sync_done_observer: Option<Arc<dyn Fn(crate::KeyhivePeerId) + Send + Sync>>,
+    sync_done_observer:
+        Option<Arc<dyn Fn(crate::KeyhivePeerId, RequestId) + Send + Sync>>,
     _phantom: PhantomData<SubConn>,
 }
 
-impl<Conn, Store, SubConn, ConnAdapter> SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+impl<Listener, Conn, Store, SubConn, ConnAdapter>
+    SendableKeyhiveHandler<Listener, Conn, Store, SubConn, ConnAdapter>
 where
+    Listener: MembershipListener<future_form::Sendable, MemorySigner, Vec<u8>>,
     Conn: KeyhiveConnection<future_form::Sendable>,
     Store: KeyhiveStorage<future_form::Sendable>,
 {
     /// Create a new handler wrapping the given protocol.
     pub const fn new(
-        protocol: Arc<SendableRuntimeProtocol<Conn, Store>>,
+        protocol: Arc<SendableRuntimeProtocol<Listener, Conn, Store>>,
         conn_adapter: ConnAdapter,
     ) -> Self {
         Self {
@@ -311,16 +326,17 @@ where
     #[must_use]
     pub fn with_sync_done_observer(
         mut self,
-        observer: Arc<dyn Fn(crate::KeyhivePeerId) + Send + Sync>,
+        observer: Arc<dyn Fn(crate::KeyhivePeerId, RequestId) + Send + Sync>,
     ) -> Self {
         self.sync_done_observer = Some(observer);
         self
     }
 }
 
-impl<Conn, Store, SubConn, ConnAdapter> core::fmt::Debug
-    for SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+impl<Listener, Conn, Store, SubConn, ConnAdapter> core::fmt::Debug
+    for SendableKeyhiveHandler<Listener, Conn, Store, SubConn, ConnAdapter>
 where
+    Listener: MembershipListener<future_form::Sendable, MemorySigner, Vec<u8>>,
     Conn: KeyhiveConnection<future_form::Sendable>,
     Store: KeyhiveStorage<future_form::Sendable>,
 {
@@ -330,9 +346,10 @@ where
     }
 }
 
-impl<Conn, Store, SubConn, ConnAdapter> Handler<future_form::Sendable, SubConn>
-    for SendableKeyhiveHandler<Conn, Store, SubConn, ConnAdapter>
+impl<Listener, Conn, Store, SubConn, ConnAdapter> Handler<future_form::Sendable, SubConn>
+    for SendableKeyhiveHandler<Listener, Conn, Store, SubConn, ConnAdapter>
 where
+    Listener: MembershipListener<future_form::Sendable, MemorySigner, Vec<u8>> + Send + Sync,
     Conn: KeyhiveConnection<future_form::Sendable> + Send + Sync + 'static,
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
@@ -359,10 +376,10 @@ where
                 .handle_message(&kh_peer, signed_msg, Some(adapter))
                 .await
                 .map_err(|e| HandleError::Protocol(e.to_string()))?;
-            if matches!(status, SyncStatus::Done)
+            if let SyncStatus::Done { request_id } = status
                 && let Some(observer) = &self.sync_done_observer
             {
-                observer(kh_peer);
+                observer(kh_peer, request_id);
             }
             Ok(())
         })

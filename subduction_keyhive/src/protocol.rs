@@ -35,6 +35,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use async_lock::Mutex;
 use dupe::Dupe;
@@ -60,7 +61,7 @@ use crate::{
     collections::{Map, Set},
     connection::KeyhiveConnection,
     error::{ProtocolError, SigningError, StorageError, VerificationError},
-    message::{AgentHashMap, EventHash, Message},
+    message::{AgentHashMap, EventHash, Message, RequestId},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
     storage::{KeyhiveStorage, StorageHash},
@@ -75,12 +76,15 @@ use crate::{
 /// `Done` means the local protocol instance has completed its part of the
 /// exchange and established the relevant syncpoint for the peer. Callers can
 /// use this to observe completed sync rounds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncStatus {
     /// Sync is not yet complete --- more messages expected.
     Pending,
-    /// Sync exchange is done --- a confirmation has been sent or received.
-    Done,
+    /// Sync exchange is done and identifies the exchange that completed.
+    Done {
+        /// The exchange that reached its terminal state.
+        request_id: RequestId,
+    },
 }
 
 /// Shared keyhive instance.
@@ -133,6 +137,7 @@ where
     attempt_storage_recovery: bool,
     syncpoints: Mutex<SyncpointMap>,
     cache: Mutex<PeriodicEventCache>,
+    next_request_nonce: AtomicU64,
     _marker: core::marker::PhantomData<Async>,
 }
 
@@ -192,6 +197,7 @@ where
             attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
+            next_request_nonce: AtomicU64::new(0),
             _marker: core::marker::PhantomData,
         }
     }
@@ -213,6 +219,13 @@ where
     pub const fn with_storage_recovery(mut self) -> Self {
         self.attempt_storage_recovery = true;
         self
+    }
+
+    fn next_request_id(&self) -> RequestId {
+        RequestId {
+            requestor: self.peer_id.clone(),
+            nonce: self.next_request_nonce.fetch_add(1, Ordering::Relaxed),
+        }
     }
 
     /// Register a peer connection.
@@ -359,10 +372,8 @@ where
             let events = cgka_ops
                 .iter()
                 .map(|op| -> Event<Async, Signer, CRef, Listener> { Event::from(op.clone()) });
-            cgka_source_hashes.insert(
-                *source_id,
-                hash_and_insert_events(&mut event_data, events, skip_serialization)?,
-            );
+            let hashes = hash_and_insert_events(&mut event_data, events, skip_serialization)?;
+            cgka_source_hashes.insert(*source_id, hashes);
         }
 
         // Phase 2: union of all agent IDs across the three indices.
@@ -415,6 +426,10 @@ where
                 }
             }
             let peer = KeyhivePeerId::from_identifier(agent_id);
+            let cgka_in_hashset = hash_set
+                .iter()
+                .filter(|h| cgka_source_hashes.values().any(|v| v.contains(h)))
+                .count();
             agent_hashes.insert(peer, hash_set);
         }
 
@@ -447,57 +462,71 @@ where
             if target_id.same_identity(&self.peer_id) {
                 continue;
             }
+            self.sync_keyhive_for_request(target_id, self.next_request_id())
+                .await?;
+        }
 
-            let cached = self.cached_events_for_pair_with_peer(target_id).await;
-            let computed;
-            let pair = if let Some(c) = cached.as_deref() {
-                Some(c)
-            } else {
-                match self.get_events_for_peer_pair(target_id).await {
-                    Ok(p) => {
-                        computed = p;
-                        computed.as_ref()
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target = %target_id,
-                            error = %e,
-                            "failed to get hashes for peer pair, skipping"
-                        );
-                        continue;
-                    }
+        Ok(())
+    }
+
+    async fn sync_keyhive_for_request(
+        &self,
+        target_id: &KeyhivePeerId,
+        request_id: RequestId,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
+        let cached = self.cached_events_for_pair_with_peer(target_id).await;
+        let computed;
+        let pair = if let Some(c) = cached.as_deref() {
+            Some(c)
+        } else {
+            match self.get_events_for_peer_pair(target_id).await {
+                Ok(p) => {
+                    computed = p;
+                    computed.as_ref()
                 }
-            };
-            if let Some(hashes) = pair {
-                let found: Vec<EventHash> = hashes.keys().copied().collect();
-                let pending = self.get_pending_hashes().await?;
-
-                let message = Message::SyncRequest {
-                    sender_id: self.peer_id.clone(),
-                    target_id: target_id.clone(),
-                    found,
-                    pending,
-                };
-
-                tracing::debug!(
-                    target = %target_id,
-                    "sending sync request"
-                );
-
-                self.sign_and_send(target_id, message, false).await?;
-            } else {
-                tracing::debug!(
-                    target = %target_id,
-                    "requesting contact card"
-                );
-
-                let message = Message::RequestContactCard {
-                    sender_id: self.peer_id.clone(),
-                    target_id: target_id.clone(),
-                };
-
-                self.sign_and_send(target_id, message, true).await?;
+                Err(e) => {
+                    tracing::warn!(
+                        target = %target_id,
+                        error = %e,
+                        "failed to get hashes for peer pair, skipping"
+                    );
+                    return Ok(());
+                }
             }
+        };
+        if let Some(hashes) = pair {
+            let found: Vec<EventHash> = hashes.keys().copied().collect();
+            let pending = self.get_pending_hashes().await?;
+
+            let message = Message::SyncRequest {
+                sender_id: self.peer_id.clone(),
+                target_id: target_id.clone(),
+                request_id: request_id.clone(),
+                found,
+                pending,
+            };
+
+            tracing::debug!(
+                target = %target_id,
+                ?request_id,
+                "sending sync request"
+            );
+
+            self.sign_and_send(target_id, message, false).await?;
+        } else {
+            tracing::debug!(
+                target = %target_id,
+                ?request_id,
+                "requesting contact card"
+            );
+
+            let message = Message::RequestContactCard {
+                sender_id: self.peer_id.clone(),
+                target_id: target_id.clone(),
+                request_id,
+            };
+
+            self.sign_and_send(target_id, message, true).await?;
         }
 
         Ok(())
@@ -517,10 +546,25 @@ where
         target: &KeyhivePeerId,
         our_syncpoint_for_target: u64,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
+        self.sync_check_keyhive_for_request(
+            target,
+            our_syncpoint_for_target,
+            self.next_request_id(),
+        )
+        .await
+    }
+
+    async fn sync_check_keyhive_for_request(
+        &self,
+        target: &KeyhivePeerId,
+        our_syncpoint_for_target: u64,
+        request_id: RequestId,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let (our_total, our_digest) = self.compute_total_and_digest_for_peer(target).await?;
         let msg = Message::SyncCheck {
             sender_id: self.peer_id.clone(),
             target_id: target.clone(),
+            request_id,
             sender_total: our_total,
             sender_syncpoint: our_syncpoint_for_target,
             sender_digest: our_digest,
@@ -531,6 +575,7 @@ where
     async fn resolve_sync_check(
         &self,
         peer: &KeyhivePeerId,
+        request_id: RequestId,
         sender_total: u64,
         sender_syncpoint: u64,
         sender_digest: EventHash,
@@ -551,6 +596,7 @@ where
             let confirmation = Message::SyncConfirmation {
                 sender_id: self.peer_id.clone(),
                 target_id: peer.clone(),
+                request_id,
                 confirmer_total: our_total,
             };
             self.sign_and_send(peer, confirmation, false).await?;
@@ -564,7 +610,7 @@ where
                 digests_match,
                 "sync check mismatch, falling back to full sync"
             );
-            self.sync_keyhive(Some(peer)).await?;
+            self.sync_keyhive_for_request(peer, request_id).await?;
         }
         Ok(())
     }
@@ -628,6 +674,7 @@ where
                 .map(|()| SyncStatus::Pending),
             Message::SyncCheck {
                 sender_id,
+                request_id,
                 sender_total,
                 sender_syncpoint,
                 sender_digest,
@@ -642,6 +689,7 @@ where
                     self.syncpoints.lock().await.get(sender_id).unwrap_or(0);
                 self.resolve_sync_check(
                     sender_id,
+                    request_id.clone(),
                     *sender_total,
                     *sender_syncpoint,
                     *sender_digest,
@@ -652,6 +700,7 @@ where
             }
             Message::SyncConfirmation {
                 sender_id,
+                request_id,
                 confirmer_total,
                 ..
             } => {
@@ -659,7 +708,9 @@ where
                     .lock()
                     .await
                     .set(sender_id.clone(), *confirmer_total);
-                Ok(SyncStatus::Done)
+                Ok(SyncStatus::Done {
+                    request_id: request_id.clone(),
+                })
             }
         }?;
 
@@ -674,6 +725,7 @@ where
     ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::SyncRequest {
             sender_id,
+            request_id,
             found: peer_found,
             pending: peer_pending,
             ..
@@ -702,6 +754,7 @@ where
                 let msg = Message::RequestContactCard {
                     sender_id: self.peer_id.clone(),
                     target_id: sender_id.clone(),
+                    request_id,
                 };
                 self.sign_and_send(&sender_id, msg, true).await?;
                 return Ok(());
@@ -745,6 +798,7 @@ where
         let response = Message::SyncResponse {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
+            request_id,
             requested,
             found: found_ops,
             sync_responder_total,
@@ -767,6 +821,7 @@ where
     ) -> Result<SyncStatus, ProtocolError<Conn::SendError>> {
         let Message::SyncResponse {
             sender_id,
+            request_id,
             requested: requested_hashes,
             found: found_events,
             sync_responder_total,
@@ -813,6 +868,7 @@ where
                 let msg = Message::SyncOps {
                     sender_id: self.peer_id.clone(),
                     target_id: sender_id.clone(),
+                    request_id: request_id.clone(),
                     ops,
                     sync_responder_total,
                     sync_requester_total,
@@ -832,6 +888,7 @@ where
         let confirmation = Message::SyncConfirmation {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
+            request_id: request_id.clone(),
             confirmer_total: sync_requester_total,
         };
         self.sign_and_send(&sender_id, confirmation, false).await?;
@@ -844,7 +901,7 @@ where
             map.set(sender_id, sync_responder_total);
         }
 
-        Ok(SyncStatus::Done)
+        Ok(SyncStatus::Done { request_id })
     }
 
     /// Handle `SyncOps`: ingest received operations and send confirmation.
@@ -854,6 +911,7 @@ where
     ) -> Result<SyncStatus, ProtocolError<Conn::SendError>> {
         let Message::SyncOps {
             sender_id,
+            request_id,
             ops,
             sync_responder_total,
             sync_requester_total,
@@ -886,6 +944,7 @@ where
         let confirmation = Message::SyncConfirmation {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
+            request_id: request_id.clone(),
             confirmer_total: sync_responder_total,
         };
         self.sign_and_send(&sender_id, confirmation, false).await?;
@@ -898,7 +957,7 @@ where
             map.set(sender_id, sync_requester_total);
         }
 
-        Ok(SyncStatus::Done)
+        Ok(SyncStatus::Done { request_id })
     }
 
     /// Handle `RequestContactCard`: send our contact card to the requesting
@@ -907,7 +966,12 @@ where
         &self,
         message: Message,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::RequestContactCard { sender_id, .. } = message else {
+        let Message::RequestContactCard {
+            sender_id,
+            request_id,
+            ..
+        } = message
+        else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "RequestContactCard",
                 actual: message.variant_name(),
@@ -922,6 +986,7 @@ where
         let msg = Message::MissingContactCard {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
+            request_id,
         };
 
         self.sign_and_send(&sender_id, msg, true).await?;
@@ -934,7 +999,12 @@ where
         &self,
         message: Message,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::MissingContactCard { sender_id, .. } = message else {
+        let Message::MissingContactCard {
+            sender_id,
+            request_id,
+            ..
+        } = message
+        else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "MissingContactCard",
                 actual: message.variant_name(),
@@ -946,7 +1016,7 @@ where
             "received contact card, initiating sync"
         );
 
-        self.sync_keyhive(Some(&sender_id)).await?;
+        self.sync_keyhive_for_request(&sender_id, request_id).await?;
         Ok(())
     }
 
@@ -1089,9 +1159,16 @@ where
         };
 
         let mut result = Vec::with_capacity(requested.len().min(pair.len()));
+        let mut found_count = 0;
+        let mut not_found: Vec<String> = Vec::new();
         for h in requested {
             if let Some(bytes) = pair.get(h) {
                 result.push(bytes.dupe());
+                found_count += 1;
+            } else {
+                if not_found.len() < 8 {
+                    not_found.push(format!("{:02x?}", &h[..4]));
+                }
             }
         }
         Ok(result)
@@ -1296,11 +1373,28 @@ where
         &self,
         peer: &KeyhivePeerId,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
+        self.initiate_sync_with_request(peer, self.next_request_id())
+            .await
+    }
+
+    /// Initiate a sync using a caller-provided request identifier.
+    ///
+    /// Runtime integrations use this to correlate the protocol completion with
+    /// the operation that admitted the round. The identifier is echoed through
+    /// every message in the exchange.
+    pub async fn initiate_sync_with_request(
+        &self,
+        peer: &KeyhivePeerId,
+        request_id: RequestId,
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let syncpoint = self.syncpoints.lock().await.get(peer);
 
         match syncpoint {
-            Some(sp) => self.sync_check_keyhive(peer, sp).await,
-            None => self.sync_keyhive(Some(peer)).await,
+            Some(sp) => {
+                self.sync_check_keyhive_for_request(peer, sp, request_id)
+                    .await
+            }
+            None => self.sync_keyhive_for_request(peer, request_id).await,
         }
     }
 
@@ -1350,11 +1444,24 @@ where
     Listener: MembershipListener<Async, Signer, CRef>,
     Rng: rand::CryptoRng + rand::RngCore,
 {
-    keyhive
+    let results = keyhive
         .static_events_for_agent(agent)
         .await
         .into_iter()
-        .collect()
+        .collect::<Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>>();
+
+    let total = results.len();
+    let cgka_count = results
+        .values()
+        .filter(|ev| matches!(ev, StaticEvent::CgkaOperation(_)))
+        .count();
+    let first_few_hashes: Vec<String> = results
+        .keys()
+        .take(5)
+        .map(|d| format!("{:02x?}", &d.raw.as_bytes()[..4]))
+        .collect();
+
+    results
 }
 
 /// Hash, serialize, and deduplicate events into `event_data`, returning hashes.
@@ -3071,7 +3178,7 @@ mod tests {
             .handle_message(&bob_id, confirmation, None)
             .await
             .expect("alice failed to handle sync confirmation");
-        assert_eq!(status, SyncStatus::Done);
+        assert!(matches!(status, SyncStatus::Done { .. }));
         assert!(
             alice_conn.inbound_rx.try_recv().is_err(),
             "only a sync confirmation should be sent when peers are in sync"
@@ -4234,7 +4341,7 @@ mod protocol_behavioural {
             .handle_message(&alice_id, confirmation, None)
             .await
             .expect("handle sync confirmation");
-        assert_eq!(status, SyncStatus::Done);
+        assert!(matches!(status, SyncStatus::Done { .. }));
         let alice_messages = drain_channel(&bob_conn, &alice_id);
         assert!(
             alice_messages.is_empty(),

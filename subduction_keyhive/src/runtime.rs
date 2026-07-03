@@ -10,7 +10,9 @@ use alloc::{format, string::ToString, sync::Arc, vec::Vec};
 use core::time::Duration;
 
 use keyhive_core::{
-    contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
+    contact_card::ContactCard, keyhive::Keyhive, listener::{
+        membership::MembershipListener, no_listener::NoListener,
+    },
     principal::identifier::Identifier, store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -308,18 +310,27 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     tracing::debug!("keyhive actors shutting down");
 }
 
-/// Initialize a `Sendable` keyhive instance.
+/// Initialize a `Sendable` keyhive instance with a custom listener.
+///
+/// The listener is consumed by the returned [`Keyhive`]. For a default
+/// [`NoListener`] see [`SendableRuntimeKeyhive`] and the original
+/// parameterless version.
 ///
 /// # Errors
 ///
 /// Returns an error if keyhive generation fails.
-pub async fn init_sendable_keyhive(
+pub async fn init_sendable_keyhive<L: MembershipListener<future_form::Sendable, MemorySigner, Vec<u8>>>(
     signer: MemorySigner,
-) -> Result<(SendableRuntimeKeyhive, KeyhivePeerId, ContactCard), alloc::string::String> {
+    listener: L,
+) -> Result<(
+    Keyhive<future_form::Sendable, MemorySigner, Vec<u8>, Vec<u8>, MemoryCiphertextStore<Vec<u8>, Vec<u8>>, L, OsRng>,
+    KeyhivePeerId,
+    ContactCard,
+), alloc::string::String> {
     let keyhive = Keyhive::generate(
         signer,
         MemoryCiphertextStore::<Vec<u8>, Vec<u8>>::new(),
-        NoListener,
+        listener,
         OsRng,
     )
     .await

@@ -7,7 +7,10 @@
 use alloc::vec::Vec;
 use sedimentree_core::loose_commit::id::CommitId;
 
-use crate::remote_heads::RemoteHeads;
+use crate::{
+    remote_heads::RemoteHeads,
+    sync_session::SyncRemoteRejection,
+};
 
 /// Statistics from a sync operation.
 ///
@@ -32,6 +35,9 @@ pub struct SyncStats {
     /// The remote peer's heads for this sedimentree, as reported
     /// in the `BatchSyncResponse`.
     pub remote_heads: RemoteHeads,
+
+    /// The remote peer's explicit rejection, if it refused the sedimentree.
+    pub remote_rejection: Option<SyncRemoteRejection>,
 }
 
 impl SyncStats {
@@ -44,6 +50,7 @@ impl SyncStats {
             commits_sent: 0,
             fragments_sent: 0,
             remote_heads: RemoteHeads::default(),
+            remote_rejection: None,
         }
     }
 
@@ -66,6 +73,7 @@ impl SyncStats {
             && self.fragments_received == 0
             && self.commits_sent == 0
             && self.fragments_sent == 0
+            && self.remote_rejection.is_none()
     }
 }
 

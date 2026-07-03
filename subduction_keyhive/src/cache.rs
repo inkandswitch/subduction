@@ -15,7 +15,6 @@ use alloc::{
 
 use dupe::Dupe;
 use keyhive_core::{
-    keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::public::Public,
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},

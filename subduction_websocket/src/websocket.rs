@@ -119,7 +119,7 @@ impl core::fmt::Debug for ListenerTask<'_> {
 impl<'a> ListenerTask<'a> {
     // Only called from `tokio::client`; silences the dead-code warning
     // when building without the `tokio_*` features.
-    #[cfg_attr(not(feature = "tokio_base"), allow(dead_code))]
+    #[cfg_attr(not(feature = "tokio_client_any"), allow(dead_code))]
     pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
         Self(fut)
     }
@@ -148,7 +148,7 @@ impl core::fmt::Debug for SenderTask<'_> {
 impl<'a> SenderTask<'a> {
     // Only called from `tokio::client`; silences the dead-code warning
     // when building without the `tokio_*` features.
-    #[cfg_attr(not(feature = "tokio_base"), allow(dead_code))]
+    #[cfg_attr(not(feature = "tokio_client_any"), allow(dead_code))]
     pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
         Self(fut)
     }

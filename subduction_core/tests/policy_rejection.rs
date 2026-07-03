@@ -24,6 +24,7 @@ use subduction_core::{
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+    sync_session::SyncPolicyRejectionKind,
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
     timeout::call::CallTimeout,
@@ -513,10 +514,10 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
     Ok(())
 }
 
-/// When fetch policy rejects, `recv_batch_sync_request` should respond
-/// with `SyncResult::Unauthorized` so the peer knows they're not authorized.
+/// When fetch policy rejects, `recv_batch_sync_request` should preserve a
+/// structured policy-rejection category for the peer.
 #[tokio::test]
-async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
+async fn unauthorized_fetch_returns_structured_policy_result() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
@@ -559,7 +560,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     // Wait for the dispatch to process
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Should receive a BatchSyncResponse with SyncResult::Unauthorized
+    // Should receive a BatchSyncResponse with a structured policy result.
     let response = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
         .await?
         .map_err(|e| format!("channel closed: {e}"))?;
@@ -573,8 +574,8 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
         "response should be for the requested sedimentree"
     );
     assert!(
-        matches!(result, SyncResult::Unauthorized),
-        "expected SyncResult::Unauthorized, got {result:?}"
+        matches!(result, SyncResult::PolicyRejected(SyncPolicyRejectionKind::Other)),
+        "expected structured policy rejection, got {result:?}"
     );
 
     actor_task.abort();

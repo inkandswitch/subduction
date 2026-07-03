@@ -543,6 +543,9 @@ impl<
                     SyncResult::Unauthorized => {
                         tracing::debug!(peer = %from, tree = ?id, "peer reports we are unauthorized for sedimentree");
                     }
+                    SyncResult::PolicyRejected(kind) => {
+                        tracing::debug!(peer = %from, tree = ?id, ?kind, "peer reports a structured policy rejection for sedimentree");
+                    }
                 }
                 None
             }
@@ -841,7 +844,11 @@ impl<
         #[cfg(feature = "metrics")]
         self.requestor_tally.record(peer_id).await;
 
-        let mut session = SyncSession::new(id, peer_id, SyncSessionKind::InboundBatch);
+        let mut session = SyncSession::new(
+            id,
+            peer_id,
+            SyncSessionKind::InboundBatch { request_id: req_id },
+        );
         let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
@@ -854,7 +861,9 @@ impl<
                 let msg: SyncMessage = BatchSyncResponse {
                     id,
                     req_id,
-                    result: SyncResult::Unauthorized,
+                    result: SyncResult::PolicyRejected(
+                        self.storage.policy().classify_fetch_rejection(&e),
+                    ),
                     responder_heads: RemoteHeads::default(),
                 }
                 .into();
@@ -1175,7 +1184,14 @@ impl<
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<Async, Store, Conn, SyncMessage>> {
-        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
+        drop(ingest::recv_batch_sync_response(
+            &self.sedimentrees,
+            &self.storage,
+            from,
+            id,
+            diff,
+        )
+        .await?);
         self.minimize_tree(id).await;
         Ok(())
     }

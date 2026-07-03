@@ -126,6 +126,16 @@ where
 {
     let hash = hash_event_bytes(&bytes);
 
+    // Quick type detection
+    let kind = bincode_deserialize::<StaticEvent<Vec<u8>>>(&bytes)
+        .ok()
+        .map(|ev| match &ev {
+            StaticEvent::Delegated(_) | StaticEvent::Revoked(_) => "delegation",
+            StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => "prekey",
+            StaticEvent::CgkaOperation(_) => "cgka",
+        })
+        .unwrap_or("unknown");
+
     tracing::debug!(
         hash = %hash.to_hex(),
         bytes = bytes.len(),
