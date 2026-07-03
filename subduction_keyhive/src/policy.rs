@@ -31,6 +31,7 @@ use serde::Deserialize;
 use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+    sync_session::SyncPolicyRejectionKind,
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
 
@@ -172,6 +173,33 @@ impl<
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
         filter_authorized_fetch_with(&self.0, peer, ids).boxed()
     }
+
+    fn classify_fetch_rejection(
+        &self,
+        error: &Self::FetchDisallowed,
+    ) -> SyncPolicyRejectionKind {
+        match error {
+            FetchDisallowedError::DocumentNotFound => SyncPolicyRejectionKind::DocumentNotFound,
+            FetchDisallowedError::InsufficientAccess => {
+                SyncPolicyRejectionKind::InsufficientAccess
+            }
+            FetchDisallowedError::InvalidPeerId
+            | FetchDisallowedError::InvalidSedimentreeId => {
+                SyncPolicyRejectionKind::InvalidIdentifier
+            }
+        }
+    }
+
+    fn classify_put_rejection(
+        &self,
+        error: &Self::PutDisallowed,
+    ) -> SyncPolicyRejectionKind {
+        match error {
+            PutDisallowedError::DocumentNotFound => SyncPolicyRejectionKind::DocumentNotFound,
+            PutDisallowedError::InsufficientAccess => SyncPolicyRejectionKind::InsufficientAccess,
+            PutDisallowedError::InvalidSedimentreeId => SyncPolicyRejectionKind::InvalidIdentifier,
+        }
+    }
 }
 
 impl<
@@ -263,6 +291,33 @@ impl<
         ids: Vec<SedimentreeId>,
     ) -> LocalBoxFuture<'_, Vec<SedimentreeId>> {
         filter_authorized_fetch_with(&self.0, peer, ids).boxed_local()
+    }
+
+    fn classify_fetch_rejection(
+        &self,
+        error: &Self::FetchDisallowed,
+    ) -> SyncPolicyRejectionKind {
+        match error {
+            FetchDisallowedError::DocumentNotFound => SyncPolicyRejectionKind::DocumentNotFound,
+            FetchDisallowedError::InsufficientAccess => {
+                SyncPolicyRejectionKind::InsufficientAccess
+            }
+            FetchDisallowedError::InvalidPeerId
+            | FetchDisallowedError::InvalidSedimentreeId => {
+                SyncPolicyRejectionKind::InvalidIdentifier
+            }
+        }
+    }
+
+    fn classify_put_rejection(
+        &self,
+        error: &Self::PutDisallowed,
+    ) -> SyncPolicyRejectionKind {
+        match error {
+            PutDisallowedError::DocumentNotFound => SyncPolicyRejectionKind::DocumentNotFound,
+            PutDisallowedError::InsufficientAccess => SyncPolicyRejectionKind::InsufficientAccess,
+            PutDisallowedError::InvalidSedimentreeId => SyncPolicyRejectionKind::InvalidIdentifier,
+        }
     }
 }
 

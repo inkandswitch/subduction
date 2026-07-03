@@ -34,10 +34,30 @@ use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use super::error::IoError;
 
-#[derive(Debug, Default)]
-pub(crate) struct IngestSummary {
+#[derive(Debug)]
+pub(crate) struct IngestSummary<Rejection> {
     pub(crate) commit_ids: Vec<CommitId>,
     pub(crate) fragment_ids: Vec<CommitId>,
+    pub(crate) rejected_commit_ids: Vec<(CommitId, Rejection)>,
+    pub(crate) rejected_fragment_ids: Vec<(CommitId, Rejection)>,
+}
+
+impl<Rejection> IngestSummary<Rejection> {
+    #[must_use]
+    pub(crate) const fn new() -> Self {
+        Self {
+            commit_ids: Vec::new(),
+            fragment_ids: Vec::new(),
+            rejected_commit_ids: Vec::new(),
+            rejected_fragment_ids: Vec::new(),
+        }
+    }
+}
+
+impl<Rejection> Default for IngestSummary<Rejection> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Process an incoming batch sync response: verify and store all commits
@@ -58,7 +78,7 @@ pub(crate) async fn recv_batch_sync_response<
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
-) -> Result<IngestSummary, IoError<Async, Store, Conn, WireMsg>> {
+) -> Result<IngestSummary<Auth::PutDisallowed>, IoError<Async, Store, Conn, WireMsg>> {
     tracing::info!(
         tree = ?id,
         peer = %from,
@@ -94,6 +114,7 @@ pub(crate) async fn recv_batch_sync_response<
             }
         };
 
+        let commit_id = verified_meta.payload().head();
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
@@ -111,6 +132,7 @@ pub(crate) async fn recv_batch_sync_response<
                         error = %e,
                         "policy rejected commit"
                     );
+                    summary.rejected_commit_ids.push((commit_id, e));
                     continue;
                 }
             }
@@ -144,6 +166,7 @@ pub(crate) async fn recv_batch_sync_response<
             }
         };
 
+        let fragment_id = verified_meta.payload().head();
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
@@ -161,6 +184,7 @@ pub(crate) async fn recv_batch_sync_response<
                         error = %e,
                         "policy rejected fragment"
                     );
+                    summary.rejected_fragment_ids.push((fragment_id, e));
                     continue;
                 }
             }

@@ -89,7 +89,7 @@ use crate::{
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     spawn::Spawn,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
-    sync_session::{DynSyncSessionObserver, SyncSession, SyncSessionKind},
+    sync_session::{DynSyncSessionObserver, SyncPolicyRejection, SyncSession, SyncSessionKind},
     timeout::{Timeout, call::CallTimeout},
 };
 use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
@@ -1147,6 +1147,10 @@ where
                             tracing::debug!(peer = %conn.peer_id(), tree = ?id, "peer reports we are unauthorized for sedimentree");
                             continue;
                         }
+                        SyncResult::PolicyRejected(kind) => {
+                            tracing::debug!(peer = %conn.peer_id(), tree = ?id, ?kind, "peer reports a structured policy rejection for sedimentree");
+                            continue;
+                        }
                     };
 
                     // Send back data the responder requested (bidirectional sync)
@@ -1780,7 +1784,14 @@ where
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<Async, Store, Conn, Hdl::Message>> {
-        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
+        drop(ingest::recv_batch_sync_response(
+            &self.sedimentrees,
+            &self.storage,
+            from,
+            id,
+            diff,
+        )
+        .await?);
         self.minimize_tree(id).await;
         Ok(())
     }
@@ -2216,7 +2227,6 @@ where
 
         for conn in peer_conns {
             tracing::info!(peer = %to_ask, "using connection to peer");
-            let mut session = SyncSession::new(id, conn.peer_id(), SyncSessionKind::OutboundBatch);
             let seed = FingerprintSeed::random();
             // A nonexistent tree syncs as empty: we advertise nothing and the
             // peer sends us everything it has. The hydrated tree is already
@@ -2243,6 +2253,11 @@ where
             };
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
             let req_id = managed.next_request_id();
+            let mut session = SyncSession::new(
+                id,
+                conn.peer_id(),
+                SyncSessionKind::OutboundBatch { request_id: req_id },
+            );
 
             let result = ManagedCall::<Async, Hdl::Message>::call(
                 &managed,
@@ -2275,10 +2290,26 @@ where
                         SyncResult::Ok(diff) => diff,
                         SyncResult::NotFound => {
                             tracing::debug!(peer = %to_ask, tree = ?id, "peer reports sedimentree not found");
+                            session.remote_rejection =
+                                Some(crate::sync_session::SyncRemoteRejection::NotFound);
+                            stats.remote_rejection = session.remote_rejection;
+                            self.emit_sync_session(session).await;
                             continue;
                         }
                         SyncResult::Unauthorized => {
                             tracing::debug!(peer = %to_ask, tree = ?id, "peer reports we are unauthorized for sedimentree");
+                            session.remote_rejection =
+                                Some(crate::sync_session::SyncRemoteRejection::Unauthorized);
+                            stats.remote_rejection = session.remote_rejection;
+                            self.emit_sync_session(session).await;
+                            continue;
+                        }
+                        SyncResult::PolicyRejected(kind) => {
+                            tracing::debug!(peer = %to_ask, tree = ?id, ?kind, "peer reports a structured policy rejection for sedimentree");
+                            session.remote_rejection =
+                                Some(crate::sync_session::SyncRemoteRejection::Policy(kind));
+                            stats.remote_rejection = session.remote_rejection;
+                            self.emit_sync_session(session).await;
                             continue;
                         }
                     };
@@ -2304,6 +2335,32 @@ where
                     session
                         .received_fragment_ids
                         .extend(ingest_summary.fragment_ids);
+                    session
+                        .rejected_commit_ids
+                        .extend(ingest_summary.rejected_commit_ids.into_iter().map(
+                            |(commit_id, rejection)| {
+                                (
+                                    commit_id,
+                                    SyncPolicyRejection::new(
+                                        self.storage.policy().classify_put_rejection(&rejection),
+                                        rejection.to_string(),
+                                    ),
+                                )
+                            },
+                        ));
+                    session
+                        .rejected_fragment_ids
+                        .extend(ingest_summary.rejected_fragment_ids.into_iter().map(
+                            |(fragment_id, rejection)| {
+                                (
+                                    fragment_id,
+                                    SyncPolicyRejection::new(
+                                        self.storage.policy().classify_put_rejection(&rejection),
+                                        rejection.to_string(),
+                                    ),
+                                )
+                            },
+                        ));
                     self.minimize_tree(id).await;
 
                     stats.commits_received += session.received_commit_ids.len();
@@ -2455,8 +2512,6 @@ where
 
                     for conn in peer_conns {
                         tracing::debug!(peer = %conn.peer_id(), "using connection to peer");
-                        let mut session =
-                            SyncSession::new(id, conn.peer_id(), SyncSessionKind::OutboundBatch);
                         let seed = FingerprintSeed::random();
                         let resolver = shared_tree.fingerprint_resolver(&seed);
 
@@ -2476,6 +2531,11 @@ where
                         };
                         let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
                         let req_id = managed.next_request_id();
+                        let mut session = SyncSession::new(
+                            id,
+                            conn.peer_id(),
+                            SyncSessionKind::OutboundBatch { request_id: req_id },
+                        );
 
                         let result = ManagedCall::<Async, Hdl::Message>::call(
                                 &managed,
@@ -2511,10 +2571,28 @@ where
                                     SyncResult::Ok(diff) => diff,
                                     SyncResult::NotFound => {
                                         tracing::debug!(peer = %peer_id, tree = ?id, "peer reports sedimentree not found");
+                                        session.remote_rejection =
+                                            Some(crate::sync_session::SyncRemoteRejection::NotFound);
+                                        stats.remote_rejection = session.remote_rejection;
+                                        self.emit_sync_session(session).await;
                                         continue;
                                     }
                                     SyncResult::Unauthorized => {
                                         tracing::debug!(peer = %peer_id, tree = ?id, "peer reports we are unauthorized for sedimentree");
+                                        session.remote_rejection = Some(
+                                            crate::sync_session::SyncRemoteRejection::Unauthorized,
+                                        );
+                                        stats.remote_rejection = session.remote_rejection;
+                                        self.emit_sync_session(session).await;
+                                        continue;
+                                    }
+                                    SyncResult::PolicyRejected(kind) => {
+                                        tracing::debug!(peer = %peer_id, tree = ?id, ?kind, "peer reports a structured policy rejection for sedimentree");
+                                        session.remote_rejection = Some(
+                                            crate::sync_session::SyncRemoteRejection::Policy(kind),
+                                        );
+                                        stats.remote_rejection = session.remote_rejection;
+                                        self.emit_sync_session(session).await;
                                         continue;
                                     }
                                 };
@@ -2537,6 +2615,38 @@ where
                                 session
                                     .received_fragment_ids
                                     .extend(ingest_summary.fragment_ids);
+                                session.rejected_commit_ids.extend(
+                                    ingest_summary
+                                        .rejected_commit_ids
+                                        .into_iter()
+                                        .map(|(commit_id, rejection)| {
+                                            (
+                                                commit_id,
+                                                SyncPolicyRejection::new(
+                                                    self.storage
+                                                        .policy()
+                                                        .classify_put_rejection(&rejection),
+                                                    rejection.to_string(),
+                                                ),
+                                            )
+                                        }),
+                                );
+                                session.rejected_fragment_ids.extend(
+                                    ingest_summary
+                                        .rejected_fragment_ids
+                                        .into_iter()
+                                        .map(|(fragment_id, rejection)| {
+                                            (
+                                                fragment_id,
+                                                SyncPolicyRejection::new(
+                                                    self.storage
+                                                        .policy()
+                                                        .classify_put_rejection(&rejection),
+                                                    rejection.to_string(),
+                                                ),
+                                            )
+                                        }),
+                                );
                                 self.minimize_tree(id).await;
 
                                 stats.commits_received += session.received_commit_ids.len();
