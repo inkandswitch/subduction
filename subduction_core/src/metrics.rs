@@ -36,6 +36,10 @@ pub mod names {
     /// Time spent waiting to acquire a per-peer dispatch permit (0 on the
     /// fast path; grows as a peer saturates its cap).
     pub const DISPATCH_PERMIT_WAIT_SECONDS: &str = "subduction_dispatch_permit_wait_seconds";
+    /// Time an inbound message spent in the shared message queue between the
+    /// connection reader (permit already held) and the listener spawning its
+    /// dispatch task. Growth means the listen loop itself is the bottleneck.
+    pub const MSG_QUEUE_DWELL_SECONDS: &str = "subduction_msg_queue_dwell_seconds";
     /// Total batch sync requests received.
     pub const BATCH_SYNC_REQUESTS_TOTAL: &str = "subduction_batch_sync_requests_total";
     /// Total batch sync responses received.
@@ -225,6 +229,13 @@ pub fn dispatch_completed(outcome: &'static str) {
 pub fn dispatch_permit_waited(wait_secs: f64) {
     metrics::counter!(names::DISPATCH_THROTTLED_TOTAL).increment(1);
     metrics::histogram!(names::DISPATCH_PERMIT_WAIT_SECONDS).record(wait_secs);
+}
+
+/// Record how long an inbound message dwelled in the shared message queue
+/// before the listener picked it up for dispatch.
+#[inline]
+pub fn msg_queue_dwell(dwell_secs: f64) {
+    metrics::histogram!(names::MSG_QUEUE_DWELL_SECONDS).record(dwell_secs);
 }
 
 /// Record a batch sync request.
@@ -491,6 +502,11 @@ pub fn describe_all() {
         names::DISPATCH_PERMIT_WAIT_SECONDS,
         metrics::Unit::Seconds,
         "Time spent waiting to acquire a per-peer dispatch permit (recorded only when the fast-path acquire fails)."
+    );
+    metrics::describe_histogram!(
+        names::MSG_QUEUE_DWELL_SECONDS,
+        metrics::Unit::Seconds,
+        "Time an inbound message spent queued between the connection reader and the listener spawning its dispatch task."
     );
     metrics::describe_counter!(
         names::BATCH_SYNC_REQUESTS_TOTAL,

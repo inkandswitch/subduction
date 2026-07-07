@@ -1019,3 +1019,111 @@ async fn relay_topology_unauthorized_upstream_response_rolls_back_claim() -> Tes
 
     Ok(())
 }
+
+/// A peer's last-connection teardown must drop the outgoing-subscription
+/// claims held toward it. The remote forgets our subscriptions when the
+/// connection dies, so a surviving claim would suppress re-establishment
+/// forever (silent unsubscription) and the map would grow without bound
+/// as peers come and go.
+#[tokio::test]
+async fn relay_drops_outgoing_claims_on_peer_disconnect() -> TestResult {
+    let (a, r, _b, _a_s, r_signer, b_signer) = setup_relay_topology().await?;
+
+    let sed_id = SedimentreeId::new([43u8; 32]);
+    let r_peer = PeerId::from(r_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    // A subscribes to R; R propagates upstream to B and claims (B, id).
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
+    let established = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(established, "propagation to B never established");
+
+    // Drop R's last connection to B.
+    r.disconnect_from_peer(&b_peer).await?;
+
+    let cleared = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.is_empty() }
+    })
+    .await;
+    assert!(
+        cleared,
+        "teardown left stale outgoing-subscription claims toward B: {:?}",
+        r.get_peer_subscriptions(b_peer).await
+    );
+
+    Ok(())
+}
+
+/// After an upstream peer disconnects and reconnects, a fresh inbound
+/// subscribe must re-propagate — re-establishing both the upstream
+/// subscription and the mutual push link — so updates flow end-to-end
+/// again. Guards the "silent unsubscription" regression: with a stale
+/// claim surviving the disconnect, R would skip re-propagation and B
+/// would never see A's commits.
+#[tokio::test]
+async fn relay_repropagates_subscription_after_peer_reconnect() -> TestResult {
+    let (a, r, b, _a_s, r_signer, b_signer) = setup_relay_topology().await?;
+
+    let sed_id = SedimentreeId::new([44u8; 32]);
+    let r_peer = PeerId::from(r_signer.verifying_key());
+    let b_peer = PeerId::from(b_signer.verifying_key());
+
+    // Establish: A subscribes to R; R propagates to B.
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
+    let established = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(established, "initial propagation to B never established");
+
+    // Sever R↔B (both sides), then reconnect with fresh transports.
+    r.disconnect_from_peer(&b_peer).await?;
+    let _ = b.disconnect_from_peer(&r_peer).await;
+    let cleared = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.is_empty() }
+    })
+    .await;
+    assert!(cleared, "claims not cleared before reconnect");
+    connect_pair(&r, &r_signer, &b, &b_signer).await?;
+
+    // A re-subscribes; R must re-propagate to the reconnected B.
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
+    let reestablished = wait_until(|| {
+        let r = Arc::clone(&r);
+        async move { r.get_peer_subscriptions(b_peer).await.contains(&sed_id) }
+    })
+    .await;
+    assert!(
+        reestablished,
+        "R did not re-propagate A's subscription after B reconnected"
+    );
+
+    // End-to-end: A's new commit must reach B through R. R forwards
+    // received commits to *subscribers only* (no broadcast fallback on
+    // the relay path), so delivery proves the mutual push link to B was
+    // genuinely re-established rather than assumed from stale state.
+    a.add_commit(sed_id, make_head(77), BTreeSet::new(), make_blob(77))
+        .await?;
+    let delivered = wait_until(|| {
+        let b = Arc::clone(&b);
+        async move { b.get_commits(sed_id).await.map(|c| c.len()) == Some(1) }
+    })
+    .await;
+    assert!(
+        delivered,
+        "A's commit never reached B after reconnect: B has {:?}",
+        b.get_commits(sed_id).await.map(|c| c.len())
+    );
+
+    Ok(())
+}

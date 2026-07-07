@@ -75,7 +75,10 @@ in {
       timeout = lib.mkOption {
         type = lib.types.int;
         default = 5;
-        description = "Request timeout in seconds.";
+        description = ''
+          Roundtrip timeout in seconds for sync calls to peers (passes
+          `--timeout`).
+        '';
       };
 
       logFormat = lib.mkOption {

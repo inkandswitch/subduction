@@ -73,7 +73,7 @@ use crate::{
         backoff::Backoff,
         id::ConnectionId,
         managed::{CallError, ManagedCall, ManagedConnection},
-        manager::{Command, ConnectionManager, RunManager},
+        manager::{Command, ConnectionManager, QueuedDispatch, RunManager},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
             SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
@@ -211,8 +211,7 @@ pub struct Subduction<
     send_counter: PeerCounter,
 
     manager_channel: Sender<Command<Authenticated<Conn, Async>>>,
-    msg_queue:
-        async_channel::Receiver<(Authenticated<Conn, Async>, Hdl::Message, SemaphoreGuardArc)>,
+    msg_queue: async_channel::Receiver<QueuedDispatch<Authenticated<Conn, Async>, Hdl::Message>>,
     response_queue: async_channel::Receiver<(Authenticated<Conn, Async>, Hdl::Message)>,
     connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<Conn, Async>)>,
 
@@ -436,9 +435,15 @@ where
         backoff.next_delay()
     }
 
-    /// Get the sedimentrees we're subscribed to from a peer.
+    /// Get the outgoing-subscription claims held toward a peer: the
+    /// sedimentrees this node has (or is establishing) an upstream
+    /// subscription to via that peer.
     ///
-    /// Used to restore subscriptions after successful reconnection.
+    /// Observability accessor (used by integration tests). Claims are
+    /// dropped on the peer's last-connection teardown and re-established
+    /// by [`propagate_subscription`](Self::propagate_subscription) when a
+    /// later inbound subscribe retriggers it — there is no replay-on-
+    /// reconnect mechanism.
     pub async fn get_peer_subscriptions(&self, peer_id: PeerId) -> Set<SedimentreeId> {
         self.outgoing_subscriptions
             .lock()
@@ -851,6 +856,19 @@ where
     ) {
         Self::cancel_detached_muxes(muxes).await;
         peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+
+        // Drop the peer's outgoing-subscription claims. The remote forgets
+        // our subscriptions when the connection dies, so a surviving claim
+        // would make `propagate_subscription` skip re-establishing them
+        // after a reconnect — leaving this node silently unsubscribed
+        // upstream. Clearing here also keeps the claim map bounded to
+        // currently-connected peers.
+        //
+        // Unconditional, unlike the send-counter clear below: under a
+        // concurrent reconnect, clearing a fresh claim merely costs one
+        // redundant (idempotent) re-propagation, while keeping a stale
+        // claim suppresses re-establishment entirely.
+        self.outgoing_subscriptions.lock().await.remove(peer_id);
 
         // Clear the send counter while holding the `connections` lock and
         // only if the peer is still gone. The caller removed the peer
@@ -1969,11 +1987,18 @@ where
     /// Any other outcome — `Err`, timeout, or `NotFound`/`Unauthorized`
     /// (both `Ok((false, ..))`) — rolls the claim back so a later
     /// subscribe retries, keeping [`outgoing_subscriptions`] limited to
-    /// established subscriptions (as [`get_peer_subscriptions`] assumes
-    /// when replaying them on reconnect).
+    /// established subscriptions.
+    ///
+    /// # Lifecycle
+    ///
+    /// Claims live only as long as the target peer's connection: the
+    /// peer's last-connection teardown drops them (the remote forgot our
+    /// subscriptions when the connection died), and a later inbound
+    /// subscribe re-establishes them through this method. There is no
+    /// replay-on-reconnect; re-propagation is driven entirely by
+    /// subsequent subscribes.
     ///
     /// [`outgoing_subscriptions`]: Self::outgoing_subscriptions
-    /// [`get_peer_subscriptions`]: Self::get_peer_subscriptions
     pub(crate) async fn propagate_subscription(&self, id: SedimentreeId, originator: PeerId) {
         let peers: Vec<PeerId> = {
             let conns = self.connections.lock().await;
@@ -3110,7 +3135,10 @@ where
                     // The per-peer permit was acquired upstream in the
                     // connection reader and rides the queue here; it's moved
                     // into the dispatch task and released on completion.
-                    if let Ok((conn, msg, permit)) = received {
+                    if let Ok(queued) = received {
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::msg_queue_dwell(queued.enqueued_at.elapsed().as_secs_f64());
+                        let QueuedDispatch { conn, msg, permit, .. } = queued;
                         let peer_id = conn.peer_id();
                         // Don't Debug-format `msg` — it can embed commit/blob bytes.
                         tracing::trace!(peer = %peer_id, "listener received message");

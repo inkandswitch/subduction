@@ -101,7 +101,9 @@ pub(crate) struct ServerArgs {
     #[arg(long)]
     pub(crate) service_name: Option<String>,
 
-    /// Request timeout in seconds
+    /// Roundtrip timeout in seconds for sync calls to peers.
+    ///
+    /// Applied wherever a call resolves [`CallTimeout::Default`].
     #[arg(short, long, default_value = "5")]
     pub(crate) timeout: u64,
 
@@ -509,7 +511,8 @@ where
         .signer(signer.clone())
         .storage(storage, storage_policy)
         .spawner(TokioSpawn)
-        .timer(FuturesTimerTimeout);
+        .timer(FuturesTimerTimeout)
+        .roundtrip_timeout(Duration::from_secs(args.timeout));
 
     let builder = if let Some(max) = args.max_resident_trees {
         tracing::info!(
