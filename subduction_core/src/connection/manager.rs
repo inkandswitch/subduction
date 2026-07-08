@@ -92,6 +92,34 @@ pub enum Command<Conn> {
     Remove(Conn),
 }
 
+/// An inbound message admitted past the per-peer dispatch gate, waiting in
+/// the shared message queue for the listener to spawn its handler.
+///
+/// The [`SemaphoreGuardArc`] is the peer's dispatch permit: acquired in
+/// [`connection_loop`] before enqueueing, moved into the dispatch task, and
+/// released on drop when the handler completes.
+pub struct QueuedDispatch<Conn, WireMsg> {
+    /// The connection the message arrived on.
+    pub conn: Conn,
+    /// The decoded wire message.
+    pub msg: WireMsg,
+    /// The peer's dispatch permit, held until the handler completes.
+    pub permit: SemaphoreGuardArc,
+    /// When the message entered the queue; measures queue dwell.
+    #[cfg(feature = "metrics")]
+    pub enqueued_at: std::time::Instant,
+}
+
+impl<Conn: core::fmt::Debug, WireMsg> core::fmt::Debug for QueuedDispatch<Conn, WireMsg> {
+    // Deliberately skips `msg` (it can embed commit/blob bytes) and the
+    // permit (no useful representation).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("QueuedDispatch")
+            .field("conn", &self.conn)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Manages connections by spawning an independent task for each one.
 ///
 /// Unlike [`SelectAll`]-based approaches, each connection runs in its own task,
@@ -125,7 +153,7 @@ pub struct ConnectionManager<
     /// Each message carries a [`SemaphoreGuardArc`] from its peer's dispatch
     /// semaphore, acquired in [`connection_loop`] and held until the spawned
     /// handler completes, which caps in-flight dispatches per peer.
-    messages: async_channel::Sender<(Conn, WireMsg, SemaphoreGuardArc)>,
+    messages: async_channel::Sender<QueuedDispatch<Conn, WireMsg>>,
 
     /// Fast path for response messages (bounded at high capacity).
     ///
@@ -156,7 +184,7 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>>
     pub fn new(
         spawner: Spawner,
         commands: async_channel::Receiver<Command<Conn>>,
-        messages: async_channel::Sender<(Conn, WireMsg, SemaphoreGuardArc)>,
+        messages: async_channel::Sender<QueuedDispatch<Conn, WireMsg>>,
         responses: async_channel::Sender<(Conn, WireMsg)>,
         is_response: fn(&WireMsg) -> bool,
         closed: async_channel::Sender<(ConnectionId, Conn)>,
@@ -382,7 +410,7 @@ async fn connection_loop<
 >(
     conn: Conn,
     peer_id: PeerId,
-    messages: async_channel::Sender<(Conn, WireMsg, SemaphoreGuardArc)>,
+    messages: async_channel::Sender<QueuedDispatch<Conn, WireMsg>>,
     responses: async_channel::Sender<(Conn, WireMsg)>,
     is_response: fn(&WireMsg) -> bool,
     dispatch_slots: Arc<Semaphore>,
@@ -416,7 +444,14 @@ async fn connection_loop<
                     };
                     #[cfg(not(feature = "metrics"))]
                     let permit = dispatch_slots.acquire_arc().await;
-                    if messages.send((conn.clone(), msg, permit)).await.is_err() {
+                    let queued = QueuedDispatch {
+                        conn: conn.clone(),
+                        msg,
+                        permit,
+                        #[cfg(feature = "metrics")]
+                        enqueued_at: std::time::Instant::now(),
+                    };
+                    if messages.send(queued).await.is_err() {
                         tracing::warn!(peer = %peer_id, "connection message channel closed");
                         break;
                     }

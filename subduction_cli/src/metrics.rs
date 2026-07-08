@@ -5,8 +5,7 @@
 
 use axum::{Router, routing::get};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
-use metrics_util::MetricKindMask;
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 // Histogram buckets must be configured, or `metrics-exporter-prometheus`
@@ -20,25 +19,27 @@ use tokio::net::TcpListener;
 
 /// Fine buckets (seconds) for sub-millisecond/low-millisecond operations:
 /// per-message dispatch and individual storage operations. Resolves down to
-/// 50µs so fast ops don't collapse into one bucket, and extends to 10s so a
-/// write that stalls for seconds under redb write contention isn't clamped to
-/// the 1s bucket (which would hide the real p99).
+/// 50µs so fast ops don't collapse into one bucket, and extends to 60s so a
+/// stalled dispatch or write isn't clamped to a saturated top bucket
+/// (which reads as "p99 = ceiling").
 const FINE_BUCKETS_SECONDS: &[f64] = &[
     0.000_05, 0.000_1, 0.000_25, 0.000_5, 0.001, 0.002_5, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
-    1.0, 2.5, 5.0, 10.0,
+    1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
 ];
 
 /// Coarse buckets (seconds) for whole-round operations measured in
 /// milliseconds-to-seconds: foreground sync rounds. Sub-ms resolution would be
-/// wasted series here.
+/// wasted series here. Extends to 300s so rounds queued behind a congested
+/// outbound path stay observable.
 const COARSE_BUCKETS_SECONDS: &[f64] = &[
-    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
 ];
 
 /// Buckets (seconds) for outbound send-queue dwell — sub-millisecond
-/// (WebSocket) to tens of seconds (long-poll), so both transports resolve.
+/// (WebSocket) to minutes (congested consumers), so both transports resolve.
 const DWELL_BUCKETS_SECONDS: &[f64] = &[
-    0.000_5, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+    0.000_5, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0,
+    300.0,
 ];
 
 /// Buckets (message count) for outbound send-queue depth sampled at drain, up
@@ -50,17 +51,12 @@ const DEPTH_BUCKETS: &[f64] = &[
     0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0,
 ];
 
-/// Idle series are evicted after this long with no updates. A safety valve:
-/// our label cardinality is bounded (`&'static str` only), but this bounds
-/// memory if a label value stops being produced. Applied to histograms only —
-/// counters/gauges are kept so `rate()`/`increase()` stay continuous.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60); // 1 hour
-
 /// Initialize the metrics recorder and return a handle for the HTTP endpoint.
 ///
 /// This must be called once at startup before any metrics are recorded.
-/// Configures histogram buckets (so latency panels work) and an idle-eviction
-/// safety valve, then registers HELP/TYPE descriptions for all emitted metrics.
+/// Configures histogram buckets (so latency panels work), then registers
+/// HELP/TYPE descriptions for all emitted metrics. There is no idle-series
+/// eviction; see the builder comment for why.
 ///
 /// # Panics
 ///
@@ -107,12 +103,22 @@ pub fn init_metrics() -> PrometheusHandle {
             FINE_BUCKETS_SECONDS,
         )
         .expect("fine buckets are non-empty and sorted")
+        // Msg-queue dwell is µs on a healthy listener and seconds when the
+        // listen loop is the bottleneck; fine buckets resolve both regimes.
+        .set_buckets_for_metric(
+            Matcher::Full(names::MSG_QUEUE_DWELL_SECONDS.to_owned()),
+            FINE_BUCKETS_SECONDS,
+        )
+        .expect("fine buckets are non-empty and sorted")
         .set_buckets_for_metric(
             Matcher::Suffix("_duration_seconds".to_owned()),
             COARSE_BUCKETS_SECONDS,
         )
         .expect("coarse buckets are non-empty and sorted")
-        .idle_timeout(MetricKindMask::HISTOGRAM, Some(IDLE_TIMEOUT))
+        // No idle eviction: histogram counts are cumulative, so evicting an
+        // idle series silently resets it and breaks `rate()`/`increase()`.
+        // Label cardinality is bounded (`&'static str` values only), so
+        // unbounded-series growth is not a risk.
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     subduction_core::metrics::describe_all();
@@ -165,6 +171,7 @@ mod tests {
         subduction_core::metrics::sync_duration(2.0);
         subduction_core::metrics::outbound_queue_dwell("longpoll", 5.0, 3);
         subduction_core::metrics::dispatch_permit_waited(0.001);
+        subduction_core::metrics::msg_queue_dwell(0.000_2);
         subduction_core::metrics::mux_pending_duration(0.5);
 
         // Cache counters: 2 hits + 1 miss must render with exactly those totals
@@ -208,29 +215,30 @@ mod tests {
             "storage op histogram should use the fine 50us bucket:\n{storage_lines}"
         );
 
-        // The fine set extends past 1s so a contended storage write (seconds)
-        // isn't clamped to the 1s top bucket — p99 must stay observable.
+        // The fine set extends past 1s so a dispatch or storage write that
+        // stalls for seconds isn't clamped to a low top bucket — the tail
+        // must stay observable up to 60s.
         assert!(
-            storage_lines.contains("le=\"2.5\"") && storage_lines.contains("le=\"10\""),
+            storage_lines.contains("le=\"2.5\"") && storage_lines.contains("le=\"60\""),
             "storage op histogram should carry the >1s tail buckets:\n{storage_lines}"
         );
 
-        // The coarse-only 60s boundary must NOT appear on the fine storage
+        // The coarse-only 300s boundary must NOT appear on the fine storage
         // metric (proving the per-metric override took effect).
         assert!(
-            !storage_lines.contains("le=\"60\""),
-            "storage op histogram should NOT carry the coarse 60s bucket:\n{storage_lines}"
+            !storage_lines.contains("le=\"300\""),
+            "storage op histogram should NOT carry the coarse 300s bucket:\n{storage_lines}"
         );
 
-        // Sync rounds use the coarse set: the 60s boundary exists there.
+        // Sync rounds use the coarse set: the 300s boundary exists there.
         let sync_lines: String = rendered
             .lines()
             .filter(|l| l.contains("subduction_sync_duration_seconds_bucket"))
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            sync_lines.contains("le=\"60\""),
-            "sync duration histogram should use the coarse 60s bucket:\n{sync_lines}"
+            sync_lines.contains("le=\"300\""),
+            "sync duration histogram should use the coarse 300s bucket:\n{sync_lines}"
         );
 
         // Outbound dwell/depth render as histograms (not summaries), carry the
@@ -262,6 +270,10 @@ mod tests {
         assert!(
             rendered.contains("subduction_dispatch_permit_wait_seconds_bucket"),
             "permit-wait histogram should render as buckets:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_msg_queue_dwell_seconds_bucket"),
+            "msg-queue dwell histogram should render as buckets:\n{rendered}"
         );
         assert!(
             rendered.contains("subduction_mux_pending_duration_seconds_bucket"),

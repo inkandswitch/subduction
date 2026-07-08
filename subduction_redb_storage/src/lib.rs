@@ -133,6 +133,14 @@ pub const BLOBS_DIR_NAME: &str = "blobs";
 /// 64 KiB values.
 pub const DEFAULT_INLINE_THRESHOLD: usize = 16 * 1024;
 
+/// Default redb page-cache budget in bytes (1 GiB).
+///
+/// This matches redb's own built-in default, but is set explicitly so the
+/// process memory budget is visible here rather than buried in a
+/// dependency. The cache lives on the *heap* (counts toward RSS and any
+/// cgroup memory limit), not in the kernel page cache.
+pub const DEFAULT_CACHE_SIZE: usize = 1024 * 1024 * 1024;
+
 /// Hybrid redb + filesystem storage.
 ///
 /// Cheap to clone (the database handle and paths are shared). All
@@ -159,7 +167,7 @@ impl RedbStorage {
     ///
     /// Returns an error if the directories or database cannot be
     /// created/opened, or the tables cannot be initialized.
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, RedbStorageError> {
+    pub fn new<P: AsRef<Path>>(root: P) -> Result<Self, RedbStorageError> {
         Self::with_inline_threshold(root, DEFAULT_INLINE_THRESHOLD)
     }
 
@@ -177,9 +185,27 @@ impl RedbStorage {
     ///
     /// Returns an error if the directories or database cannot be
     /// created/opened, or the tables cannot be initialized.
-    pub fn with_inline_threshold(
-        root: impl AsRef<Path>,
+    pub fn with_inline_threshold<P: AsRef<Path>>(
+        root: P,
         inline_threshold: usize,
+    ) -> Result<Self, RedbStorageError> {
+        Self::with_settings(root, inline_threshold, DEFAULT_CACHE_SIZE)
+    }
+
+    /// Open (or create) hybrid storage with a custom inline threshold and
+    /// redb page-cache budget.
+    ///
+    /// `cache_size` bounds redb's in-heap page cache; see
+    /// [`DEFAULT_CACHE_SIZE`] for the memory-accounting caveat.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directories or database cannot be
+    /// created/opened, or the tables cannot be initialized.
+    pub fn with_settings<P: AsRef<Path>>(
+        root: P,
+        inline_threshold: usize,
+        cache_size: usize,
     ) -> Result<Self, RedbStorageError> {
         let root = root.as_ref();
         std::fs::create_dir_all(root).file_context(FileOp::CreateDir, root)?;
@@ -193,7 +219,9 @@ impl RedbStorage {
             fsync_dir_sync(parent)?;
         }
 
-        let db = Database::create(root.join(DB_FILE_NAME))?;
+        let db = Database::builder()
+            .set_cache_size(cache_size)
+            .create(root.join(DB_FILE_NAME))?;
 
         // Materialize all tables up front so read transactions never hit
         // `TableDoesNotExist`.
