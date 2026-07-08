@@ -9,17 +9,19 @@
 ignore = [
     # ─── Vulnerabilities (temporary suppression) ───────────────────
     #
-    # Both pulled in by iroh-relay 0.98.0's exact pin
-    # `hickory-resolver = "=0.26.0-beta.4"`. Upstream fix exists at
-    # hickory-* >= 0.26.1. Revisit when iroh-relay relaxes the pin or
-    # bumps to >= 0.99.
+    # Both in quick-xml 0.26.0, pulled in by pprof 0.15's pin
+    # `inferno = "^0.11"`. inferno only parses/writes flamegraph SVGs in
+    # benches (dev-only, behind the off-by-default `pprof-profile`
+    # feature — no untrusted XML input, no production code path). The fix
+    # is quick-xml >= 0.41, which arrives via inferno 0.12; pprof 0.15 is
+    # already the latest release. Revisit when pprof bumps inferno.
 
-    # hickory-net NSEC3 closest-encloser proof unbounded loop on
-    # cross-zone responses (DoS).
-    "RUSTSEC-2026-0120",
-    # hickory-proto CPU exhaustion via O(n²) name compression during
-    # message encoding (DoS).
-    "RUSTSEC-2026-0119",
+    # quick-xml quadratic run time checking start tags for duplicate
+    # attribute names (DoS).
+    "RUSTSEC-2026-0194",
+    # quick-xml unbounded namespace-declaration allocation in `NsReader`
+    # (memory-exhaustion DoS).
+    "RUSTSEC-2026-0195",
 
     # ─── Unmaintained warnings (transitive, no fix on our side) ────
 
