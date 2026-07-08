@@ -167,7 +167,7 @@ impl RedbStorage {
     ///
     /// Returns an error if the directories or database cannot be
     /// created/opened, or the tables cannot be initialized.
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, RedbStorageError> {
+    pub fn new<P: AsRef<Path>>(root: P) -> Result<Self, RedbStorageError> {
         Self::with_inline_threshold(root, DEFAULT_INLINE_THRESHOLD)
     }
 
@@ -185,8 +185,8 @@ impl RedbStorage {
     ///
     /// Returns an error if the directories or database cannot be
     /// created/opened, or the tables cannot be initialized.
-    pub fn with_inline_threshold(
-        root: impl AsRef<Path>,
+    pub fn with_inline_threshold<P: AsRef<Path>>(
+        root: P,
         inline_threshold: usize,
     ) -> Result<Self, RedbStorageError> {
         Self::with_settings(root, inline_threshold, DEFAULT_CACHE_SIZE)
@@ -202,8 +202,8 @@ impl RedbStorage {
     ///
     /// Returns an error if the directories or database cannot be
     /// created/opened, or the tables cannot be initialized.
-    pub fn with_settings(
-        root: impl AsRef<Path>,
+    pub fn with_settings<P: AsRef<Path>>(
+        root: P,
         inline_threshold: usize,
         cache_size: usize,
     ) -> Result<Self, RedbStorageError> {
