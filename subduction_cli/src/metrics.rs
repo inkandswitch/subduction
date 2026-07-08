@@ -20,9 +20,8 @@ use tokio::net::TcpListener;
 /// Fine buckets (seconds) for sub-millisecond/low-millisecond operations:
 /// per-message dispatch and individual storage operations. Resolves down to
 /// 50µs so fast ops don't collapse into one bucket, and extends to 60s so a
-/// dispatch or write that stalls under memory pressure or write contention
-/// isn't clamped to a low top bucket (a saturated top bucket reads as
-/// "p99 = ceiling" and hides how bad the tail really is).
+/// stalled dispatch or write isn't clamped to a saturated top bucket
+/// (which reads as "p99 = ceiling").
 const FINE_BUCKETS_SECONDS: &[f64] = &[
     0.000_05, 0.000_1, 0.000_25, 0.000_5, 0.001, 0.002_5, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
     1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
@@ -30,15 +29,14 @@ const FINE_BUCKETS_SECONDS: &[f64] = &[
 
 /// Coarse buckets (seconds) for whole-round operations measured in
 /// milliseconds-to-seconds: foreground sync rounds. Sub-ms resolution would be
-/// wasted series here. Extends to 300s: round-trips queue for minutes when
-/// outbound queues congest, and the previous 60s ceiling clipped the tail.
+/// wasted series here. Extends to 300s so rounds queued behind a congested
+/// outbound path stay observable.
 const COARSE_BUCKETS_SECONDS: &[f64] = &[
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
 ];
 
 /// Buckets (seconds) for outbound send-queue dwell — sub-millisecond
-/// (WebSocket) to minutes (congested consumers), so both transports resolve
-/// and a saturated queue's dwell distribution stays observable past 60s.
+/// (WebSocket) to minutes (congested consumers), so both transports resolve.
 const DWELL_BUCKETS_SECONDS: &[f64] = &[
     0.000_5, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0,
     300.0,
@@ -56,8 +54,9 @@ const DEPTH_BUCKETS: &[f64] = &[
 /// Initialize the metrics recorder and return a handle for the HTTP endpoint.
 ///
 /// This must be called once at startup before any metrics are recorded.
-/// Configures histogram buckets (so latency panels work) and an idle-eviction
-/// safety valve, then registers HELP/TYPE descriptions for all emitted metrics.
+/// Configures histogram buckets (so latency panels work), then registers
+/// HELP/TYPE descriptions for all emitted metrics. There is no idle-series
+/// eviction; see the builder comment for why.
 ///
 /// # Panics
 ///
@@ -116,12 +115,10 @@ pub fn init_metrics() -> PrometheusHandle {
             COARSE_BUCKETS_SECONDS,
         )
         .expect("coarse buckets are non-empty and sorted")
-        // No idle eviction. Histogram counts are cumulative; evicting an idle
-        // series silently resets it, which breaks `rate()`/`increase()` and
-        // any offline analysis of the counters (observed as non-monotonic
-        // histogram counts and whole families vanishing from `/metrics`).
-        // Label cardinality is bounded by design (`&'static str` values
-        // only), so unbounded-series growth is not a risk here.
+        // No idle eviction: histogram counts are cumulative, so evicting an
+        // idle series silently resets it and breaks `rate()`/`increase()`.
+        // Label cardinality is bounded (`&'static str` values only), so
+        // unbounded-series growth is not a risk.
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     subduction_core::metrics::describe_all();

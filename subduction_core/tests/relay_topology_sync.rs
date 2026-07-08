@@ -1110,8 +1110,8 @@ async fn relay_repropagates_subscription_after_peer_reconnect() -> TestResult {
 
     // End-to-end: A's new commit must reach B through R. R forwards
     // received commits to *subscribers only* (no broadcast fallback on
-    // the relay path), so delivery proves the mutual push link to B was
-    // genuinely re-established rather than assumed from stale state.
+    // the relay path), so delivery proves the push link to B was
+    // re-established rather than assumed from stale state.
     a.add_commit(sed_id, make_head(77), BTreeSet::new(), make_blob(77))
         .await?;
     let delivered = wait_until(|| {

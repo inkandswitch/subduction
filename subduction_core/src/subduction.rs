@@ -198,9 +198,12 @@ pub struct Subduction<
     /// Backoff state per connection, keyed by [`ConnectionId`].
     reconnect_backoff: Arc<Mutex<Map<ConnectionId, Backoff>>>,
 
-    /// Outgoing subscriptions: sedimentrees we're subscribed to from each peer.
+    /// Outgoing-subscription claims: the sedimentrees this node has (or is
+    /// establishing) an upstream subscription to via each peer. Doubles as
+    /// the dedup/claim map for concurrent propagation.
     ///
-    /// Used to restore subscriptions after reconnection.
+    /// See [`propagate_subscription`](Self::propagate_subscription) for the
+    /// claim lifecycle.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
 
     /// Shared monotonic counter for outgoing messages, per peer.
@@ -439,11 +442,8 @@ where
     /// sedimentrees this node has (or is establishing) an upstream
     /// subscription to via that peer.
     ///
-    /// Observability accessor (used by integration tests). Claims are
-    /// dropped on the peer's last-connection teardown and re-established
-    /// by [`propagate_subscription`](Self::propagate_subscription) when a
-    /// later inbound subscribe retriggers it — there is no replay-on-
-    /// reconnect mechanism.
+    /// Observability accessor (used by integration tests). Claims drop on
+    /// the peer's last-connection teardown; there is no replay-on-reconnect.
     pub async fn get_peer_subscriptions(&self, peer_id: PeerId) -> Set<SedimentreeId> {
         self.outgoing_subscriptions
             .lock()
@@ -513,9 +513,12 @@ where
         self.reconnect_backoff.lock().await.remove(&conn_id);
     }
 
-    /// Track an outgoing subscription for reconnection restoration.
+    /// Record an established outgoing-subscription claim toward a peer.
     ///
-    /// Called internally when `sync_with_peer` is called with `subscribe: true`.
+    /// Called internally when `sync_with_peer` establishes a subscription
+    /// (`subscribe: true`). See
+    /// [`propagate_subscription`](Self::propagate_subscription) for the
+    /// claim lifecycle.
     async fn track_outgoing_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
         self.outgoing_subscriptions
             .lock()
@@ -865,9 +868,9 @@ where
         // currently-connected peers.
         //
         // Unconditional, unlike the send-counter clear below: under a
-        // concurrent reconnect, clearing a fresh claim merely costs one
-        // redundant (idempotent) re-propagation, while keeping a stale
-        // claim suppresses re-establishment entirely.
+        // concurrent reconnect, clearing a fresh claim costs one redundant
+        // (idempotent) re-propagation, while keeping a stale claim
+        // suppresses re-establishment entirely.
         self.outgoing_subscriptions.lock().await.remove(peer_id);
 
         // Clear the send counter while holding the `connections` lock and
