@@ -266,7 +266,7 @@ impl RedbStorage {
             // Enqueue-to-start is pure pool queue wait; the per-operation
             // duration histogram (recorded a layer up) includes it.
             #[cfg(feature = "metrics")]
-            subduction_core::metrics::storage_queue_wait(enqueued.elapsed().as_secs_f64());
+            subduction_core::metrics::storage_blocking_queue_wait(enqueued.elapsed().as_secs_f64());
             f(&db, &blobs_dir)
         })
         .await?

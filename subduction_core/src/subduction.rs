@@ -1087,14 +1087,18 @@ where
                                     "peer disconnected while sending DataRequestRejected"
                                 );
                             }
+                        } else {
+                            // Policy rejections aren't send failures; count
+                            // only transport/preparation errors (matching the
+                            // safety-net path's classification).
+                            #[cfg(feature = "metrics")]
+                            crate::metrics::requested_data_send_failure();
                         }
                         tracing::warn!(
                             peer = %conn.peer_id(),
                             error = %e,
                             "failed to send requested data to peer"
                         );
-                        #[cfg(feature = "metrics")]
-                        crate::metrics::requested_data_send_failure();
                     }
 
                     if let Err(e) = self
@@ -2250,8 +2254,10 @@ where
                             }
                             Err(e) => {
                                 tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
-                                #[cfg(feature = "metrics")]
-                                crate::metrics::requested_data_send_failure();
+                                if !matches!(e, SendRequestedDataError::Unauthorized(_)) {
+                                    #[cfg(feature = "metrics")]
+                                    crate::metrics::requested_data_send_failure();
+                                }
                             }
                         }
                     }

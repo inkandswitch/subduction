@@ -14,12 +14,16 @@ pub const CONNECTIONS_CLOSED: &str = "subduction_connections_closed";
 /// (auth/clock-drift/decode) that never become a connection, which
 /// `CONNECTIONS_TOTAL` (successes only) can't show.
 pub const HANDSHAKE_TOTAL: &str = "subduction_handshake_total";
-/// Handshake duration (challenge receipt to accept/reject), labeled by
-/// `outcome` (`ok`/`err`).
+/// Accept-side WebSocket handshake duration, labeled by `outcome`
+/// (`ok`/`err`). Spans from upgrade completion to accept/reject, so it
+/// includes waiting for the client's challenge (client think-time and
+/// network latency, not just server work). Other transports are not yet
+/// instrumented.
 pub const HANDSHAKE_DURATION_SECONDS: &str = "subduction_handshake_duration_seconds";
-/// Wire frame sizes, labeled by `transport` and `direction`
-/// (`sent`/`received`). The `_sum` is total bandwidth; the buckets show
-/// whale frames approaching the message-size cap.
+/// Wire frame sizes, labeled by `transport` (`websocket`/`longpoll`; iroh
+/// not yet instrumented) and `direction` (`sent`/`received`). The `_sum`
+/// is total bandwidth; the buckets resolve frames approaching the
+/// message-size caps.
 pub const NETWORK_FRAME_BYTES: &str = "subduction_network_frame_bytes";
 /// Total messages processed, labeled by type.
 pub const MESSAGES_TOTAL: &str = "subduction_messages_total";
@@ -62,12 +66,17 @@ pub const SYNC_CALL_FAILURES_TOTAL: &str = "subduction_sync_call_failures_total"
 /// retrying data that can never be accepted.
 pub const SYNC_VERIFY_FAILURES_TOTAL: &str = "subduction_sync_verify_failures_total";
 /// Batch-sync requests in the last refresh window from the rank-N most
-/// active peer (`rank` = `"1"`..`"10"`, a bounded label). Shows request
-/// skew — is one peer dominating? — without peer-id labels; the ids are
-/// in the paired "top requestors" log line.
+/// active peer (`rank` = `"1"`..`"10"`). Shows request skew — is one peer
+/// dominating? — with the actual ids in the paired "top requestors" log
+/// line (see [`requestor_tally`](crate::metrics::requestor_tally)).
 pub const TOP_REQUESTOR_REQUESTS: &str = "subduction_top_requestor_requests";
-/// Failed sends of requested data to a peer (the connection closed or
-/// broke mid-push) — wasted work the requestor will re-request.
+/// Batch-sync requests in the last refresh window across *all* tracked
+/// requestors — the honest denominator for rank-share comparisons (the
+/// rank gauges alone cover only the top ten).
+pub const REQUESTOR_WINDOW_REQUESTS: &str = "subduction_requestor_window_requests";
+/// Failed deliveries of requested data to a peer: the connection closed
+/// or broke mid-push, or reading the data for the send failed. Policy
+/// rejections are excluded. Wasted work the requestor will re-request.
 pub const REQUESTED_DATA_SEND_FAILURES_TOTAL: &str =
     "subduction_requested_data_send_failures_total";
 /// `BatchSyncResponse`s that arrived after their pending caller was gone
@@ -95,7 +104,8 @@ pub const MUX_PENDING_DURATION_SECONDS: &str = "subduction_mux_pending_duration_
 
 // Transport outbound queue (per-connection send buffer).
 /// Time an outbound message waits in the per-connection send queue before
-/// the peer grabs it, labeled by `transport` (`websocket`/`longpoll`/`iroh`).
+/// the peer grabs it, labeled by `transport` (`websocket`/`longpoll`; the
+/// iroh transport is not yet instrumented).
 pub const OUTBOUND_QUEUE_DWELL_SECONDS: &str = "subduction_outbound_queue_dwell_seconds";
 /// Outbound send-queue depth sampled when a message is drained, labeled by
 /// `transport`. Rising depth signals a slow/absent peer backing up the
@@ -164,11 +174,13 @@ pub const STORAGE_BLOCKING_QUEUE_WAIT_SECONDS: &str =
 pub const REDB_DRAIN_BATCH_SIZE: &str = "subduction_redb_drain_batch_size";
 /// Total redb group-commit drains.
 pub const REDB_DRAINS_TOTAL: &str = "subduction_redb_drains_total";
-/// Sedimentree hydrations (cache-miss rebuilds from storage) currently in
-/// flight. Sustained high values mean a hydration storm.
+/// Full-tree metadata loads from storage (cache-miss reads and
+/// write-path loads) currently in flight. Sustained high values mean a
+/// hydration storm.
 pub const HYDRATION_INFLIGHT: &str = "subduction_hydration_inflight";
-/// Duration of a sedimentree hydration: metadata loads from storage plus
-/// rebuild and minimize.
+/// Duration of a completed full-tree metadata load (cache-miss reads
+/// and write-path loads); cancelled and tree-not-found probes are not
+/// sampled.
 pub const HYDRATION_DURATION_SECONDS: &str = "subduction_hydration_duration_seconds";
 
 // Tokio runtime saturation (published by the host process's refresh loop;

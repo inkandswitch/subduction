@@ -94,8 +94,8 @@ pub struct SyncHandler<
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
     spawner: Sp,
-    /// Windowed per-peer counts of inbound `BatchSyncRequest`s, drained by
-    /// [`requestor_tally`](Self::requestor_tally) holders. `Arc`-shared so
+    /// Windowed per-peer counts of inbound `BatchSyncRequest`s; see
+    /// [`requestor_tally`](crate::metrics::requestor_tally). `Arc`-shared so
     /// an operator loop can drain it without reaching through the handler.
     #[cfg(feature = "metrics")]
     requestor_tally: Arc<crate::metrics::requestor_tally::RequestorTally>,
@@ -221,11 +221,10 @@ impl<
         }
     }
 
-    /// The shared per-peer tally of inbound `BatchSyncRequest`s.
-    ///
-    /// Peer ids can't be Prometheus labels (unbounded cardinality), so an
-    /// operator loop drains this instead, publishing rank-shaped gauges and
-    /// logging the ids; see [`requestor_tally`](crate::metrics::requestor_tally).
+    /// The shared per-peer tally of inbound `BatchSyncRequest`s, for an
+    /// operator loop to drain periodically; see
+    /// [`requestor_tally`](crate::metrics::requestor_tally) for why this
+    /// exists instead of a peer-labeled metric.
     #[cfg(feature = "metrics")]
     #[must_use]
     pub fn requestor_tally(&self) -> Arc<crate::metrics::requestor_tally::RequestorTally> {
@@ -1252,5 +1251,83 @@ impl ResponderDiff {
             requesting_commit_fingerprints: diff.remote_only_commit_fingerprints,
             requesting_fragment_fingerprints: diff.remote_only_fragment_fingerprints,
         }
+    }
+}
+
+#[cfg(all(test, feature = "metrics"))]
+mod tests {
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use sedimentree_core::id::SedimentreeId;
+
+    use super::FanOut;
+    use crate::{
+        connection::{message::DataRequestRejected, test_utils::FailingSendMockConnection},
+        metrics::names,
+        peer::id::PeerId,
+    };
+
+    /// Pins which `FanOut::run` arm feeds which `outcome` of
+    /// `subscription_pushes_total` — a swapped classification would corrupt
+    /// the dead-connection push signal while every render-level test still
+    /// passes.
+    #[test]
+    fn fan_out_counts_push_outcomes_by_arm() {
+        // Asymmetric counts (2 ok, 1 failed) so a swapped classification
+        // cannot pass by symmetry.
+        let ok_a = FailingSendMockConnection::with_peer_id_failing(PeerId::new([1u8; 32]), false)
+            .authenticated();
+        let ok_b = FailingSendMockConnection::with_peer_id_failing(PeerId::new([2u8; 32]), false)
+            .authenticated();
+        let failing_conn =
+            FailingSendMockConnection::with_peer_id_failing(PeerId::new([3u8; 32]), true)
+                .authenticated();
+        let ack_conn =
+            FailingSendMockConnection::with_peer_id_failing(PeerId::new([4u8; 32]), false)
+                .authenticated();
+
+        let msg =
+            crate::connection::message::SyncMessage::DataRequestRejected(DataRequestRejected {
+                id: SedimentreeId::new([0u8; 32]),
+            });
+        let fan_out = FanOut {
+            ack_conn,
+            ack_msg: msg.clone(),
+            pushes: vec![
+                (ok_a, msg.clone()),
+                (ok_b, msg.clone()),
+                (failing_conn, msg),
+            ],
+        };
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(fan_out.run());
+        });
+
+        let mut ok_count = None;
+        let mut failed_count = None;
+        for (key, _, _, value) in snapshotter.snapshot().into_vec() {
+            let (_, key) = key.into_parts();
+            if key.name() != names::SUBSCRIPTION_PUSHES_TOTAL {
+                continue;
+            }
+            let outcome = key
+                .labels()
+                .find(|label| label.key() == "outcome")
+                .map(|label| label.value().to_owned());
+            match (outcome.as_deref(), value) {
+                (Some("ok"), DebugValue::Counter(n)) => ok_count = Some(n),
+                (Some("failed"), DebugValue::Counter(n)) => failed_count = Some(n),
+                _ => {}
+            }
+        }
+
+        assert_eq!(ok_count, Some(2), "two successful pushes must count as ok");
+        assert_eq!(
+            failed_count,
+            Some(1),
+            "one dead-connection push must count as failed"
+        );
     }
 }

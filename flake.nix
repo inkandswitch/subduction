@@ -223,6 +223,11 @@
             buildInputs = [ pkgs.openssl ];
             nativeBuildInputs = [ pkgs.pkg-config ];
 
+            # Nix sources have no `.git`; hand the build script the rev so
+            # `subduction_build_info{git_sha}` identifies the deploy instead
+            # of reading "unknown".
+            SUBDUCTION_GIT_SHA = self.rev or self.dirtyRev or "unknown";
+
             cargoBuildFlags = [ "--bin" "subduction_cli" ];
 
             doCheck = !pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;

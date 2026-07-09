@@ -237,8 +237,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Top Requestor Skew (rank 1/2/3 vs total, per window)",
-      "description": "Batch-sync requests per refresh window from the most active peers, by rank (bounded labels). A rank-1 line dominating the total means one peer is hammering the server — its id is in the paired 'top requestors' log line.",
+      "title": "Top Requestor Skew (rank 1/2/3 vs window total)",
+      "description": "Batch-sync requests per refresh window (default 60s; lags by up to one window) from the most active peers, by rank. The denominator is the whole window across all tracked peers, so rank-1 share is honest even with a long tail. Peer ids are in the paired 'top requestors' log line.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 29 },
       "id": 122,
@@ -246,7 +246,7 @@
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_top_requestor_requests{rank=~\"1|2|3\"}", "legendFormat": "rank {{rank}}", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(subduction_top_requestor_requests)", "legendFormat": "top-10 total", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_requestor_window_requests", "legendFormat": "window total (all peers)", "refId": "B" }
       ]
     },
     {
@@ -379,7 +379,7 @@
     {
       "type": "timeseries",
       "title": "Hydration: in-flight + duration p95 (bucket est.)",
-      "description": "Cache-miss tree rebuilds from storage. Sustained in-flight means a hydration storm (e.g. a cold-cache full-catalog sweep); duration includes the metadata loads, rebuild, and minimize.",
+      "description": "Full-tree metadata loads from storage (cache-miss reads and write-path loads). Sustained in-flight means a hydration storm (e.g. a cold-cache full-catalog sweep); duration samples completed loads only.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 59 },
       "id": 119,
@@ -505,7 +505,7 @@
     {
       "type": "timeseries",
       "title": "Network Bandwidth by Transport",
-      "description": "Wire bytes per second by transport and direction (the _sum of the frame-size histogram). Frame-size distribution — whales approaching the message cap — is in the same metric's buckets.",
+      "description": "Wire bytes per second by transport and direction (the _sum of the frame-size histogram). Iroh is not yet instrumented. Frame-size distribution — whales approaching the message cap — is in the same metric's buckets.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 100 },
       "id": 123,
@@ -518,7 +518,7 @@
     {
       "type": "timeseries",
       "title": "Frame Size p99 by Transport (bucket est.)",
-      "description": "p99 wire frame size by transport and direction. Climbing toward the message-size cap (100 MiB in production) predicts over-cap failures — see the BlobsResponse chunking FIXME.",
+      "description": "p99 wire frame size by transport and direction. Climbing toward the message-size cap (50 MiB default; 100 MiB in production config) predicts over-cap failures — bucket boundaries sit at both caps. Iroh is not yet instrumented. See the BlobsResponse chunking FIXME.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 100 },
       "id": 124,

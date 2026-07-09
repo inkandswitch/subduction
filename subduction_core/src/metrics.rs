@@ -65,23 +65,37 @@ pub fn set_build_info(version: &'static str, git_sha: &'static str) {
     .set(1.0);
 }
 
-/// Publish tokio runtime saturation gauges (values sampled by the host).
+/// One sample of tokio runtime saturation, taken by the host process.
+///
+/// Named fields rather than positional arguments: four of the six values
+/// share a type, and a silent swap at the call site would corrupt exactly
+/// the gauges meant to diagnose saturation.
+#[derive(Debug, Clone, Copy)]
+pub struct TokioRuntimeSample {
+    /// Async worker threads in the runtime.
+    pub workers: usize,
+    /// Tasks currently alive (spawned and not yet completed).
+    pub alive_tasks: usize,
+    /// Threads in the blocking pool (busy + idle).
+    pub blocking_threads: usize,
+    /// Idle threads in the blocking pool.
+    pub idle_blocking_threads: usize,
+    /// Tasks queued for the blocking pool but not yet running.
+    pub blocking_queue_depth: usize,
+    /// Tasks in the runtime's global (injection) queue awaiting a worker.
+    pub global_queue_depth: usize,
+}
+
+/// Publish tokio runtime saturation gauges from one sample.
 #[inline]
 #[allow(clippy::cast_precision_loss)]
-pub fn set_tokio_runtime(
-    workers: usize,
-    alive_tasks: usize,
-    blocking_threads: usize,
-    idle_blocking_threads: usize,
-    blocking_queue_depth: usize,
-    global_queue_depth: usize,
-) {
-    metrics::gauge!(names::TOKIO_WORKERS).set(workers as f64);
-    metrics::gauge!(names::TOKIO_ALIVE_TASKS).set(alive_tasks as f64);
-    metrics::gauge!(names::TOKIO_BLOCKING_THREADS).set(blocking_threads as f64);
-    metrics::gauge!(names::TOKIO_IDLE_BLOCKING_THREADS).set(idle_blocking_threads as f64);
-    metrics::gauge!(names::TOKIO_BLOCKING_QUEUE_DEPTH).set(blocking_queue_depth as f64);
-    metrics::gauge!(names::TOKIO_GLOBAL_QUEUE_DEPTH).set(global_queue_depth as f64);
+pub fn set_tokio_runtime(sample: TokioRuntimeSample) {
+    metrics::gauge!(names::TOKIO_WORKERS).set(sample.workers as f64);
+    metrics::gauge!(names::TOKIO_ALIVE_TASKS).set(sample.alive_tasks as f64);
+    metrics::gauge!(names::TOKIO_BLOCKING_THREADS).set(sample.blocking_threads as f64);
+    metrics::gauge!(names::TOKIO_IDLE_BLOCKING_THREADS).set(sample.idle_blocking_threads as f64);
+    metrics::gauge!(names::TOKIO_BLOCKING_QUEUE_DEPTH).set(sample.blocking_queue_depth as f64);
+    metrics::gauge!(names::TOKIO_GLOBAL_QUEUE_DEPTH).set(sample.global_queue_depth as f64);
 }
 
 /// Record a message being dispatched.
@@ -213,19 +227,20 @@ pub fn sync_verify_failure(kind: &'static str) {
     metrics::counter!(names::SYNC_VERIFY_FAILURES_TOTAL, "kind" => kind).increment(1);
 }
 
-/// Rank labels for [`set_top_requestors`] (bounded cardinality by
-/// construction: exactly ten series, ever).
+/// Rank labels for [`set_top_requestors`]: exactly ten series, ever.
 const TOP_REQUESTOR_RANKS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
 
 /// Publish the per-window top-requestor gauges from counts sorted
-/// descending. Ranks beyond `counts.len()` are zeroed so a quieter window
+/// descending, plus the whole-window total (the denominator for rank-share
+/// comparisons). Ranks beyond `counts.len()` are zeroed so a quieter window
 /// doesn't inherit stale values.
 #[allow(clippy::cast_precision_loss)]
-pub fn set_top_requestors(counts: &[u64]) {
+pub fn set_top_requestors(counts: &[u64], window_total: u64) {
     for (i, rank) in TOP_REQUESTOR_RANKS.iter().enumerate() {
         let value = counts.get(i).copied().unwrap_or(0);
         metrics::gauge!(names::TOP_REQUESTOR_REQUESTS, "rank" => *rank).set(value as f64);
     }
+    metrics::gauge!(names::REQUESTOR_WINDOW_REQUESTS).set(window_total as f64);
 }
 
 /// Record a failed send of requested data to a peer.
@@ -422,7 +437,7 @@ pub fn storage_blocking_dec() {
 
 /// Record how long a storage op waited on the blocking pool before executing.
 #[inline]
-pub fn storage_queue_wait(wait_secs: f64) {
+pub fn storage_blocking_queue_wait(wait_secs: f64) {
     metrics::histogram!(names::STORAGE_BLOCKING_QUEUE_WAIT_SECONDS).record(wait_secs);
 }
 
@@ -435,8 +450,10 @@ pub fn redb_drain(batch_size: usize) {
 }
 
 /// RAII guard for one sedimentree hydration: raises the in-flight gauge for
-/// its lifetime and records the duration histogram on drop (any exit path,
-/// including errors and cancellation).
+/// its lifetime (released on drop — any exit path, including errors and
+/// cancellation) and records the duration histogram only via
+/// [`complete`](Self::complete), so cancelled or tree-not-found probes don't
+/// pollute the distribution with truncated or trivial samples.
 #[derive(Debug)]
 pub struct HydrationGuard {
     started: std::time::Instant,
@@ -451,6 +468,13 @@ impl HydrationGuard {
             started: std::time::Instant::now(),
         }
     }
+
+    /// Record the duration of a hydration that actually loaded a tree,
+    /// consuming the guard (which releases the in-flight gauge).
+    pub fn complete(self) {
+        metrics::histogram!(names::HYDRATION_DURATION_SECONDS)
+            .record(self.started.elapsed().as_secs_f64());
+    }
 }
 
 impl Default for HydrationGuard {
@@ -462,8 +486,6 @@ impl Default for HydrationGuard {
 impl Drop for HydrationGuard {
     fn drop(&mut self) {
         metrics::gauge!(names::HYDRATION_INFLIGHT).decrement(1.0);
-        metrics::histogram!(names::HYDRATION_DURATION_SECONDS)
-            .record(self.started.elapsed().as_secs_f64());
     }
 }
 
@@ -510,12 +532,12 @@ pub fn describe_all() {
     metrics::describe_histogram!(
         names::HANDSHAKE_DURATION_SECONDS,
         metrics::Unit::Seconds,
-        "Handshake duration from challenge receipt to accept/reject, labeled by `outcome` (ok/err)."
+        "Accept-side WebSocket handshake duration by `outcome` (ok/err); includes waiting for the client's challenge."
     );
     metrics::describe_histogram!(
         names::NETWORK_FRAME_BYTES,
         metrics::Unit::Bytes,
-        "Wire frame sizes by `transport` and `direction` (sent/received); the _sum is total bandwidth."
+        "Wire frame sizes by `transport` (websocket/longpoll) and `direction` (sent/received); the _sum is total bandwidth."
     );
     metrics::describe_gauge!(
         names::BUILD_INFO,
@@ -591,7 +613,11 @@ pub fn describe_all() {
     );
     metrics::describe_gauge!(
         names::TOP_REQUESTOR_REQUESTS,
-        "Batch-sync requests in the last refresh window from the rank-N most active peer (bounded rank label; peer ids are in the paired 'top requestors' log line)."
+        "Batch-sync requests in the last refresh window (default 60s; lags by up to one window) from the rank-N most active peer. Peer ids are in the paired 'top requestors' log line."
+    );
+    metrics::describe_gauge!(
+        names::REQUESTOR_WINDOW_REQUESTS,
+        "Batch-sync requests in the last refresh window across all tracked requestors (denominator for rank-share comparisons)."
     );
     metrics::describe_counter!(
         names::REQUESTED_DATA_SEND_FAILURES_TOTAL,
@@ -727,6 +753,7 @@ pub fn describe_all() {
     );
     metrics::describe_histogram!(
         names::REDB_DRAIN_BATCH_SIZE,
+        metrics::Unit::Count,
         "Write jobs coalesced into one redb group-commit drain (a distribution stuck at 1 under write load means coalescing isn't engaging)."
     );
     metrics::describe_counter!(
@@ -735,12 +762,12 @@ pub fn describe_all() {
     );
     metrics::describe_gauge!(
         names::HYDRATION_INFLIGHT,
-        "Sedimentree hydrations (cache-miss rebuilds from storage) currently in flight."
+        "Full-tree metadata loads from storage (cache-miss reads and write-path loads) currently in flight."
     );
     metrics::describe_histogram!(
         names::HYDRATION_DURATION_SECONDS,
         metrics::Unit::Seconds,
-        "Duration of a sedimentree hydration: metadata loads plus rebuild and minimize."
+        "Duration of a completed full-tree metadata load; cancelled and not-found probes are not sampled."
     );
     metrics::describe_gauge!(
         names::DISK_FREE_BYTES,

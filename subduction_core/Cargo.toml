@@ -37,6 +37,7 @@ bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
+metrics-util = { workspace = true }
 rand = { workspace = true, features = ["std_rng"] }
 subduction_core = { path = ".", features = ["bolero", "std", "test_utils"] }
 testresult = { workspace = true }

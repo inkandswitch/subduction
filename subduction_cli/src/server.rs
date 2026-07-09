@@ -1,6 +1,11 @@
 //! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use eyre::Result;
 use future_form::Sendable;
@@ -450,12 +455,14 @@ impl SetupCommon {
                             {
                                 let rt = tokio::runtime::Handle::current().metrics();
                                 subduction_core::metrics::set_tokio_runtime(
-                                    rt.num_workers(),
-                                    rt.num_alive_tasks(),
-                                    rt.num_blocking_threads(),
-                                    rt.num_idle_blocking_threads(),
-                                    rt.blocking_queue_depth(),
-                                    rt.global_queue_depth(),
+                                    subduction_core::metrics::TokioRuntimeSample {
+                                        workers: rt.num_workers(),
+                                        alive_tasks: rt.num_alive_tasks(),
+                                        blocking_threads: rt.num_blocking_threads(),
+                                        idle_blocking_threads: rt.num_idle_blocking_threads(),
+                                        blocking_queue_depth: rt.blocking_queue_depth(),
+                                        global_queue_depth: rt.global_queue_depth(),
+                                    },
                                 );
                             }
                         }
@@ -587,26 +594,33 @@ where
     // from `Subduction`/handler state, not the storage backend. The resident
     // count, compared against `subduction_storage_sedimentrees`, shows
     // eviction pressure.
-    if args.metrics {
+    //
+    // Runs even without `--metrics` (gauge sets are no-ops with no recorder):
+    // the tally must be drained regardless — an undrained map sits at its cap
+    // doing eviction scans forever — and the "top requestors" log line is
+    // useful on its own.
+    {
         let resident_subduction = subduction.clone();
         let resident_token = token.clone();
         let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
         tokio::spawn(async move {
             let mut interval = time::interval(refresh_interval);
+            // Skip the immediate first tick: nothing to report at t=0.
+            interval.tick().await;
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
                         let resident = resident_subduction.resident_sedimentree_count().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
-                        // Rank-shaped gauges carry the skew (bounded labels);
-                        // the log line carries the actual peer ids, which
-                        // must never become label values.
+                        // Rank-shaped gauges carry the skew; the log line
+                        // carries the peer ids (see `requestor_tally` docs).
                         if let Some(tally) = &requestor_tally {
                             let ranked = tally.take_window().await;
                             let counts: Vec<u64> =
                                 ranked.iter().map(|(_, count)| *count).collect();
-                            subduction_core::metrics::set_top_requestors(&counts);
+                            let total: u64 = counts.iter().sum();
+                            subduction_core::metrics::set_top_requestors(&counts, total);
                             if !ranked.is_empty() {
                                 let top: Vec<String> = ranked
                                     .iter()
@@ -1101,7 +1115,7 @@ async fn handle_websocket<H: CliWireHandler>(
     tracing::debug!(addr = %addr, "WebSocket upgrade complete");
 
     let now = TimestampSeconds::now();
-    let handshake_started = std::time::Instant::now();
+    let handshake_started = Instant::now();
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         |ws_handshake, peer_id| {
