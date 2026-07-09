@@ -10,130 +10,8 @@
 //! permanent series in the recorder registry and slows every scrape.
 //! Expose per-entity data via on-demand endpoints instead.
 
-/// Metric names used throughout the application.
-pub mod names {
-    /// Number of currently active connections.
-    pub const CONNECTIONS_ACTIVE: &str = "subduction_connections_active";
-    /// Total number of connections established.
-    pub const CONNECTIONS_TOTAL: &str = "subduction_connections_total";
-    /// Total number of connections closed.
-    pub const CONNECTIONS_CLOSED: &str = "subduction_connections_closed";
-    /// Completed handshake attempts, labeled by `outcome`. Counts rejections
-    /// (auth/clock-drift/decode) that never become a connection, which
-    /// `CONNECTIONS_TOTAL` (successes only) can't show.
-    pub const HANDSHAKE_TOTAL: &str = "subduction_handshake_total";
-    /// Total messages processed, labeled by type.
-    pub const MESSAGES_TOTAL: &str = "subduction_messages_total";
-    /// Message dispatch duration in seconds.
-    pub const DISPATCH_DURATION_SECONDS: &str = "subduction_dispatch_duration_seconds";
-    /// Inbound messages currently being dispatched across all peers.
-    pub const DISPATCH_INFLIGHT: &str = "subduction_dispatch_inflight";
-    /// Completed dispatch tasks, labeled by `outcome` (`ok`/`err`/`aborted`).
-    pub const DISPATCH_COMPLETED_TOTAL: &str = "subduction_dispatch_completed_total";
-    /// Times an inbound message had to wait for a per-peer dispatch permit
-    /// (the peer was at its concurrency cap — the rate limiter engaging).
-    pub const DISPATCH_THROTTLED_TOTAL: &str = "subduction_dispatch_throttled_total";
-    /// Time spent waiting to acquire a per-peer dispatch permit (0 on the
-    /// fast path; grows as a peer saturates its cap).
-    pub const DISPATCH_PERMIT_WAIT_SECONDS: &str = "subduction_dispatch_permit_wait_seconds";
-    /// Time an inbound message spent in the shared message queue between the
-    /// connection reader (permit already held) and the listener spawning its
-    /// dispatch task. Growth means the listen loop itself is the bottleneck.
-    pub const MSG_QUEUE_DWELL_SECONDS: &str = "subduction_msg_queue_dwell_seconds";
-    /// Total batch sync requests received.
-    pub const BATCH_SYNC_REQUESTS_TOTAL: &str = "subduction_batch_sync_requests_total";
-    /// Total batch sync responses received.
-    pub const BATCH_SYNC_RESPONSES_TOTAL: &str = "subduction_batch_sync_responses_total";
-
-    // Foreground sync health (`sync_with_peer` / `full_sync_with_peer`).
-    /// Duration of a foreground sync round in seconds.
-    pub const SYNC_DURATION_SECONDS: &str = "subduction_sync_duration_seconds";
-    /// Cumulative commits received via foreground sync.
-    pub const SYNC_COMMITS_RECEIVED_TOTAL: &str = "subduction_sync_commits_received_total";
-    /// Cumulative fragments received via foreground sync.
-    pub const SYNC_FRAGMENTS_RECEIVED_TOTAL: &str = "subduction_sync_fragments_received_total";
-    /// Cumulative commits sent via foreground sync.
-    pub const SYNC_COMMITS_SENT_TOTAL: &str = "subduction_sync_commits_sent_total";
-    /// Cumulative fragments sent via foreground sync.
-    pub const SYNC_FRAGMENTS_SENT_TOTAL: &str = "subduction_sync_fragments_sent_total";
-    /// Per-connection sync call failures, labeled by `reason`.
-    pub const SYNC_CALL_FAILURES_TOTAL: &str = "subduction_sync_call_failures_total";
-
-    // Multiplexer (request/response correlation).
-    /// Outstanding correlated requests awaiting a response (across all muxes).
-    pub const MUX_PENDING: &str = "subduction_mux_pending";
-    /// Cumulative correlated requests registered.
-    pub const MUX_REQUESTS_TOTAL: &str = "subduction_mux_requests_total";
-    /// Cumulative pending requests cancelled (timeout or disconnect teardown).
-    pub const MUX_CANCELLED_TOTAL: &str = "subduction_mux_cancelled_total";
-    /// Time a correlated request stays pending until resolved by a response
-    /// (successful round-trips): the full request→response wait at the
-    /// correlation layer. Cancellations/timeouts are excluded (counted in
-    /// [`MUX_CANCELLED_TOTAL`]).
-    pub const MUX_PENDING_DURATION_SECONDS: &str = "subduction_mux_pending_duration_seconds";
-
-    // Transport outbound queue (per-connection send buffer).
-    /// Time an outbound message waits in the per-connection send queue before
-    /// the peer grabs it, labeled by `transport` (`websocket`/`longpoll`/`iroh`).
-    pub const OUTBOUND_QUEUE_DWELL_SECONDS: &str = "subduction_outbound_queue_dwell_seconds";
-    /// Outbound send-queue depth sampled when a message is drained, labeled by
-    /// `transport`. Rising depth signals a slow/absent peer backing up the
-    /// bounded per-connection channel.
-    pub const OUTBOUND_QUEUE_DEPTH: &str = "subduction_outbound_queue_depth";
-    /// Times a send had to block because the bounded outbound channel was full
-    /// (head-of-line backpressure from a slow peer), labeled by `transport`.
-    pub const OUTBOUND_SEND_BLOCKED_TOTAL: &str = "subduction_outbound_send_blocked_total";
-
-    // Subscriptions (live update fan-out).
-    /// Number of sedimentrees with at least one subscriber.
-    pub const SUBSCRIBED_SEDIMENTREES: &str = "subduction_subscribed_sedimentrees";
-    /// Cumulative incremental updates pushed to subscribers.
-    pub const SUBSCRIPTION_PUSHES_TOTAL: &str = "subduction_subscription_pushes_total";
-
-    /// Current number of sedimentrees in storage.
-    ///
-    /// Refreshed from `load_all_sedimentree_ids`: an O(1) id-cache clone on the
-    /// FS backend, or an O(trees) `trees` B+tree scan on redb (no per-tree
-    /// contents read either way).
-    pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
-
-    /// Cumulative resident-cache hits when resolving a sedimentree (the tree
-    /// was already in the in-memory LRU; no storage hydration needed).
-    pub const SEDIMENTREE_CACHE_HITS_TOTAL: &str = "subduction_sedimentree_cache_hits_total";
-    /// Cumulative resident-cache misses (the tree had to be hydrated from
-    /// durable storage). A high miss ratio means hydration — and the
-    /// minimization it triggers — is on the hot path.
-    pub const SEDIMENTREE_CACHE_MISSES_TOTAL: &str = "subduction_sedimentree_cache_misses_total";
-    /// Sedimentrees currently resident in the in-memory LRU cache. Compare
-    /// against the cache cap to see eviction pressure (which drives misses).
-    pub const SEDIMENTREE_CACHE_RESIDENT: &str = "subduction_sedimentree_cache_resident";
-    /// Cumulative loose-commit write operations (CAS; includes idempotent
-    /// no-ops). Maintained incrementally — never scanned.
-    pub const STORAGE_COMMITS_WRITTEN_TOTAL: &str = "subduction_storage_commits_written_total";
-    /// Cumulative fragment write operations (CAS; includes idempotent no-ops).
-    pub const STORAGE_FRAGMENTS_WRITTEN_TOTAL: &str = "subduction_storage_fragments_written_total";
-    /// Cumulative loose-commit delete operations.
-    pub const STORAGE_COMMITS_DELETED_TOTAL: &str = "subduction_storage_commits_deleted_total";
-    /// Cumulative fragment delete operations.
-    pub const STORAGE_FRAGMENTS_DELETED_TOTAL: &str = "subduction_storage_fragments_deleted_total";
-    /// Storage operation duration in seconds.
-    pub const STORAGE_OPERATION_DURATION_SECONDS: &str =
-        "subduction_storage_operation_duration_seconds";
-    /// Cumulative storage operation errors, labeled by `operation`.
-    pub const STORAGE_OPERATION_ERRORS_TOTAL: &str = "subduction_storage_operation_errors_total";
-    /// Storage operations currently executing on the blocking pool. A proxy for
-    /// blocking-pool pressure (redb funnels every op through `spawn_blocking`):
-    /// sustained high values mean storage ops are queueing for a thread.
-    pub const STORAGE_BLOCKING_INFLIGHT: &str = "subduction_storage_blocking_inflight";
-
-    // On-disk footprint (published from the metrics refresh loop).
-    /// Free bytes on the filesystem holding the data directory.
-    pub const DISK_FREE_BYTES: &str = "subduction_disk_free_bytes";
-    /// Total bytes of the filesystem holding the data directory.
-    pub const DISK_TOTAL_BYTES: &str = "subduction_disk_total_bytes";
-    /// Size of the redb database file on disk.
-    pub const REDB_FILE_BYTES: &str = "subduction_redb_file_bytes";
-}
+pub mod names;
+pub mod requestor_tally;
 
 /// Record a new connection being established.
 #[inline]
@@ -154,6 +32,70 @@ pub fn connection_closed() {
 #[inline]
 pub fn handshake_outcome(outcome: &'static str) {
     metrics::counter!(names::HANDSHAKE_TOTAL, "outcome" => outcome).increment(1);
+}
+
+/// Record a handshake's duration, labeled by `outcome` (`ok`/`err`).
+#[inline]
+pub fn handshake_duration(outcome: &'static str, secs: f64) {
+    metrics::histogram!(names::HANDSHAKE_DURATION_SECONDS, "outcome" => outcome).record(secs);
+}
+
+/// Record one wire frame, labeled by `transport` and `direction`
+/// (`sent`/`received`).
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn network_frame(transport: &'static str, direction: &'static str, bytes: usize) {
+    metrics::histogram!(
+        names::NETWORK_FRAME_BYTES,
+        "transport" => transport,
+        "direction" => direction,
+    )
+    .record(bytes as f64);
+}
+
+/// Publish the build identity once at startup: a constant `1` gauge whose
+/// `version`/`git_sha` labels identify the running binary.
+#[inline]
+pub fn set_build_info(version: &'static str, git_sha: &'static str) {
+    metrics::gauge!(
+        names::BUILD_INFO,
+        "version" => version,
+        "git_sha" => git_sha,
+    )
+    .set(1.0);
+}
+
+/// One sample of tokio runtime saturation, taken by the host process.
+///
+/// Named fields rather than positional arguments: four of the six values
+/// share a type, and a silent swap at the call site would corrupt exactly
+/// the gauges meant to diagnose saturation.
+#[derive(Debug, Clone, Copy)]
+pub struct TokioRuntimeSample {
+    /// Async worker threads in the runtime.
+    pub workers: usize,
+    /// Tasks currently alive (spawned and not yet completed).
+    pub alive_tasks: usize,
+    /// Threads in the blocking pool (busy + idle).
+    pub blocking_threads: usize,
+    /// Idle threads in the blocking pool.
+    pub idle_blocking_threads: usize,
+    /// Tasks queued for the blocking pool but not yet running.
+    pub blocking_queue_depth: usize,
+    /// Tasks in the runtime's global (injection) queue awaiting a worker.
+    pub global_queue_depth: usize,
+}
+
+/// Publish tokio runtime saturation gauges from one sample.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_tokio_runtime(sample: TokioRuntimeSample) {
+    metrics::gauge!(names::TOKIO_WORKERS).set(sample.workers as f64);
+    metrics::gauge!(names::TOKIO_ALIVE_TASKS).set(sample.alive_tasks as f64);
+    metrics::gauge!(names::TOKIO_BLOCKING_THREADS).set(sample.blocking_threads as f64);
+    metrics::gauge!(names::TOKIO_IDLE_BLOCKING_THREADS).set(sample.idle_blocking_threads as f64);
+    metrics::gauge!(names::TOKIO_BLOCKING_QUEUE_DEPTH).set(sample.blocking_queue_depth as f64);
+    metrics::gauge!(names::TOKIO_GLOBAL_QUEUE_DEPTH).set(sample.global_queue_depth as f64);
 }
 
 /// Record a message being dispatched.
@@ -279,6 +221,52 @@ pub fn sync_call_failure(reason: &'static str) {
     metrics::counter!(names::SYNC_CALL_FAILURES_TOTAL, "reason" => reason).increment(1);
 }
 
+/// Record a signature verification failure on a received sync item.
+#[inline]
+pub fn sync_verify_failure(kind: &'static str) {
+    metrics::counter!(names::SYNC_VERIFY_FAILURES_TOTAL, "kind" => kind).increment(1);
+}
+
+/// Rank labels for [`set_top_requestors`]: exactly ten series, ever.
+const TOP_REQUESTOR_RANKS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+
+/// Publish the per-window top-requestor gauges from counts sorted
+/// descending, plus the whole-window total (the denominator for rank-share
+/// comparisons). Ranks beyond `counts.len()` are zeroed so a quieter window
+/// doesn't inherit stale values.
+#[allow(clippy::cast_precision_loss)]
+pub fn set_top_requestors(counts: &[u64], window_total: u64) {
+    for (i, rank) in TOP_REQUESTOR_RANKS.iter().enumerate() {
+        let value = counts.get(i).copied().unwrap_or(0);
+        metrics::gauge!(names::TOP_REQUESTOR_REQUESTS, "rank" => *rank).set(value as f64);
+    }
+    metrics::gauge!(names::REQUESTOR_WINDOW_REQUESTS).set(window_total as f64);
+}
+
+/// Record a failed send of requested data to a peer.
+#[inline]
+pub fn requested_data_send_failure() {
+    metrics::counter!(names::REQUESTED_DATA_SEND_FAILURES_TOTAL).increment(1);
+}
+
+/// Record a `BatchSyncResponse` that found no pending caller.
+#[inline]
+pub fn late_response() {
+    metrics::counter!(names::LATE_RESPONSES_TOTAL).increment(1);
+}
+
+/// Record a missed keepalive pong.
+#[inline]
+pub fn keepalive_pong_missed() {
+    metrics::counter!(names::KEEPALIVE_PONGS_MISSED_TOTAL).increment(1);
+}
+
+/// Record a connection closed by keepalive (pong-miss threshold reached).
+#[inline]
+pub fn keepalive_close() {
+    metrics::counter!(names::KEEPALIVE_CLOSES_TOTAL).increment(1);
+}
+
 /// A correlated request was registered (pending++).
 #[inline]
 pub fn mux_request_registered() {
@@ -338,13 +326,23 @@ pub fn set_subscribed_sedimentrees(count: usize) {
     metrics::gauge!(names::SUBSCRIBED_SEDIMENTREES).set(count as f64);
 }
 
-/// Record `n` incremental updates pushed to subscribers.
+/// Record incremental updates pushed to subscribers: `ok` delivered into
+/// the outbound queue, `failed` rejected by a dead connection.
 #[inline]
-pub fn subscription_pushes(n: u64) {
-    if n == 0 {
-        return;
+pub fn subscription_pushes(ok: u64, failed: u64) {
+    if ok > 0 {
+        metrics::counter!(names::SUBSCRIPTION_PUSHES_TOTAL, "outcome" => "ok").increment(ok);
     }
-    metrics::counter!(names::SUBSCRIPTION_PUSHES_TOTAL).increment(n);
+    if failed > 0 {
+        metrics::counter!(names::SUBSCRIPTION_PUSHES_TOTAL, "outcome" => "failed")
+            .increment(failed);
+    }
+}
+
+/// Record an upstream subscription propagation attempt.
+#[inline]
+pub fn subscription_propagation(outcome: &'static str) {
+    metrics::counter!(names::SUBSCRIPTION_PROPAGATIONS_TOTAL, "outcome" => outcome).increment(1);
 }
 
 /// Set the current number of sedimentrees in storage.
@@ -437,6 +435,60 @@ pub fn storage_blocking_dec() {
     metrics::gauge!(names::STORAGE_BLOCKING_INFLIGHT).decrement(1.0);
 }
 
+/// Record how long a storage op waited on the blocking pool before executing.
+#[inline]
+pub fn storage_blocking_queue_wait(wait_secs: f64) {
+    metrics::histogram!(names::STORAGE_BLOCKING_QUEUE_WAIT_SECONDS).record(wait_secs);
+}
+
+/// Record one redb group-commit drain that coalesced `batch_size` write jobs.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn redb_drain(batch_size: usize) {
+    metrics::counter!(names::REDB_DRAINS_TOTAL).increment(1);
+    metrics::histogram!(names::REDB_DRAIN_BATCH_SIZE).record(batch_size as f64);
+}
+
+/// RAII guard for one sedimentree hydration: raises the in-flight gauge for
+/// its lifetime (released on drop — any exit path, including errors and
+/// cancellation) and records the duration histogram only via
+/// [`complete`](Self::complete), so cancelled or tree-not-found probes don't
+/// pollute the distribution with truncated or trivial samples.
+#[derive(Debug)]
+pub struct HydrationGuard {
+    started: std::time::Instant,
+}
+
+impl HydrationGuard {
+    /// Mark a hydration as started.
+    #[must_use]
+    pub fn new() -> Self {
+        metrics::gauge!(names::HYDRATION_INFLIGHT).increment(1.0);
+        Self {
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// Record the duration of a hydration that actually loaded a tree,
+    /// consuming the guard (which releases the in-flight gauge).
+    pub fn complete(self) {
+        metrics::histogram!(names::HYDRATION_DURATION_SECONDS)
+            .record(self.started.elapsed().as_secs_f64());
+    }
+}
+
+impl Default for HydrationGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for HydrationGuard {
+    fn drop(&mut self) {
+        metrics::gauge!(names::HYDRATION_INFLIGHT).decrement(1.0);
+    }
+}
+
 /// Publish the on-disk footprint: filesystem free/total bytes for the data
 /// directory and the redb database file size.
 #[inline]
@@ -476,6 +528,20 @@ pub fn describe_all() {
     metrics::describe_counter!(
         names::HANDSHAKE_TOTAL,
         "Completed handshake attempts, labeled by `outcome` (ok/rejected/drift/decode/io/closed). Rejections never become connections, so `connections_total` can't show them."
+    );
+    metrics::describe_histogram!(
+        names::HANDSHAKE_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Accept-side WebSocket handshake duration by `outcome` (ok/err); includes waiting for the client's challenge."
+    );
+    metrics::describe_histogram!(
+        names::NETWORK_FRAME_BYTES,
+        metrics::Unit::Bytes,
+        "Wire frame sizes by `transport` (websocket/longpoll) and `direction` (sent/received); the _sum is total bandwidth."
+    );
+    metrics::describe_gauge!(
+        names::BUILD_INFO,
+        "Build identity: constant 1 with `version` and `git_sha` labels identifying the running binary."
     );
     metrics::describe_counter!(
         names::MESSAGES_TOTAL,
@@ -541,6 +607,34 @@ pub fn describe_all() {
         names::SYNC_CALL_FAILURES_TOTAL,
         "Per-connection sync call failures, labeled by `reason`."
     );
+    metrics::describe_counter!(
+        names::SYNC_VERIFY_FAILURES_TOTAL,
+        "Signature verification failures on received sync items, labeled by `kind` (commit/fragment)."
+    );
+    metrics::describe_gauge!(
+        names::TOP_REQUESTOR_REQUESTS,
+        "Batch-sync requests in the last refresh window (default 60s; lags by up to one window) from the rank-N most active peer. Peer ids are in the paired 'top requestors' log line."
+    );
+    metrics::describe_gauge!(
+        names::REQUESTOR_WINDOW_REQUESTS,
+        "Batch-sync requests in the last refresh window across all tracked requestors (denominator for rank-share comparisons)."
+    );
+    metrics::describe_counter!(
+        names::REQUESTED_DATA_SEND_FAILURES_TOTAL,
+        "Failed sends of requested data to a peer (connection closed or broke mid-push); wasted work the requestor will re-request."
+    );
+    metrics::describe_counter!(
+        names::LATE_RESPONSES_TOTAL,
+        "BatchSyncResponses that arrived after their pending caller was gone (timed out or cancelled); dead on arrival."
+    );
+    metrics::describe_counter!(
+        names::KEEPALIVE_PONGS_MISSED_TOTAL,
+        "Keepalive pongs missed (one per miss, before the close threshold)."
+    );
+    metrics::describe_counter!(
+        names::KEEPALIVE_CLOSES_TOTAL,
+        "Connections closed by keepalive after the pong-miss threshold (the server reaping an unresponsive peer)."
+    );
     metrics::describe_gauge!(
         names::MUX_PENDING,
         "Outstanding correlated requests awaiting a response (across all multiplexers)."
@@ -577,7 +671,35 @@ pub fn describe_all() {
     );
     metrics::describe_counter!(
         names::SUBSCRIPTION_PUSHES_TOTAL,
-        "Cumulative incremental updates pushed to subscribers."
+        "Incremental updates pushed to subscribers, labeled by `outcome` (ok/failed); failed pushes are sends into dead connections."
+    );
+    metrics::describe_counter!(
+        names::SUBSCRIPTION_PROPAGATIONS_TOTAL,
+        "Upstream subscription propagation attempts, labeled by `outcome` (established/rejected/failed); rejected/failed roll the claim back and retry on the next inbound subscribe."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_WORKERS,
+        "Async worker threads in the tokio runtime."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_ALIVE_TASKS,
+        "Tokio tasks currently alive (spawned and not yet completed)."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_BLOCKING_THREADS,
+        "Threads in the tokio blocking pool (busy + idle)."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_IDLE_BLOCKING_THREADS,
+        "Idle threads in the tokio blocking pool."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_BLOCKING_QUEUE_DEPTH,
+        "Tasks queued for the tokio blocking pool but not yet running (nonzero: the pool is at its thread cap)."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_GLOBAL_QUEUE_DEPTH,
+        "Tasks in the tokio global (injection) queue awaiting a worker."
     );
     metrics::describe_gauge!(
         names::STORAGE_SEDIMENTREES,
@@ -614,7 +736,7 @@ pub fn describe_all() {
     metrics::describe_histogram!(
         names::STORAGE_OPERATION_DURATION_SECONDS,
         metrics::Unit::Seconds,
-        "Duration of individual storage operations, labeled by `operation`."
+        "Duration of individual storage operations, labeled by `operation`. Measures enqueue to completion, so it includes blocking-pool queue wait; see subduction_storage_blocking_queue_wait_seconds for the wait alone."
     );
     metrics::describe_counter!(
         names::STORAGE_OPERATION_ERRORS_TOTAL,
@@ -623,6 +745,29 @@ pub fn describe_all() {
     metrics::describe_gauge!(
         names::STORAGE_BLOCKING_INFLIGHT,
         "Storage operations currently executing on the blocking pool (proxy for blocking-pool pressure; redb funnels every op through spawn_blocking)."
+    );
+    metrics::describe_histogram!(
+        names::STORAGE_BLOCKING_QUEUE_WAIT_SECONDS,
+        metrics::Unit::Seconds,
+        "Time a storage op spent queued on the blocking pool before executing (pool saturation, split out of the total operation duration)."
+    );
+    metrics::describe_histogram!(
+        names::REDB_DRAIN_BATCH_SIZE,
+        metrics::Unit::Count,
+        "Write jobs coalesced into one redb group-commit drain (a distribution stuck at 1 under write load means coalescing isn't engaging)."
+    );
+    metrics::describe_counter!(
+        names::REDB_DRAINS_TOTAL,
+        "Total redb group-commit drains (normally one fsync'd transaction each; a failed batch retries per-job)."
+    );
+    metrics::describe_gauge!(
+        names::HYDRATION_INFLIGHT,
+        "Full-tree metadata loads from storage (cache-miss reads and write-path loads) currently in flight."
+    );
+    metrics::describe_histogram!(
+        names::HYDRATION_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Duration of a completed full-tree metadata load; cancelled and not-found probes are not sampled."
     );
     metrics::describe_gauge!(
         names::DISK_FREE_BYTES,

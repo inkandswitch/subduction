@@ -5407,6 +5407,7 @@ dependencies = [
  "futures",
  "getrandom 0.2.17",
  "metrics",
+ "metrics-util",
  "nonempty 0.12.0",
  "pprof",
  "rand 0.8.6",

@@ -1,6 +1,11 @@
 //! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use eyre::Result;
 use future_form::Sendable;
@@ -385,6 +390,10 @@ impl SetupCommon {
             let metrics_handle = metrics::init_metrics();
             let metrics_addr: SocketAddr = ([0, 0, 0, 0], args.metrics_port).into();
             metrics::start_metrics_server(metrics_addr, metrics_handle).await?;
+            subduction_core::metrics::set_build_info(
+                env!("CARGO_PKG_VERSION"),
+                env!("SUBDUCTION_GIT_SHA"),
+            );
         }
 
         tracing::info!(dir = ?data_dir, "Initializing redb storage");
@@ -438,6 +447,23 @@ impl SetupCommon {
                             {
                                 process_collector.collect();
                                 publish_disk_usage(&metrics_data_dir);
+                            }
+                            // Runtime saturation: blocking-pool occupancy and
+                            // queue depths (the unstable counters need
+                            // `--cfg tokio_unstable`, set in .cargo/config.toml).
+                            #[cfg(tokio_unstable)]
+                            {
+                                let rt = tokio::runtime::Handle::current().metrics();
+                                subduction_core::metrics::set_tokio_runtime(
+                                    subduction_core::metrics::TokioRuntimeSample {
+                                        workers: rt.num_workers(),
+                                        alive_tasks: rt.num_alive_tasks(),
+                                        blocking_threads: rt.num_blocking_threads(),
+                                        idle_blocking_threads: rt.num_idle_blocking_threads(),
+                                        blocking_queue_depth: rt.blocking_queue_depth(),
+                                        global_queue_depth: rt.global_queue_depth(),
+                                    },
+                                );
                             }
                         }
                         () = metrics_token.cancelled() => {
@@ -530,8 +556,10 @@ where
         builder
     };
 
+    let mut requestor_tally = None;
     let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction<H>, _, _, _) = builder
         .build_composed(|sync_handler| {
+            requestor_tally = Some(sync_handler.requestor_tally());
             let connections = sync_handler.connections();
 
             let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
@@ -561,21 +589,52 @@ where
 
     let server_peer_id = subduction.peer_id();
 
-    // Periodically publish the in-memory cache occupancy. Lives here (not in
-    // the storage refresh task) because the resident count comes from
-    // `Subduction`'s LRU, not the storage backend. Compared against
-    // `subduction_storage_sedimentrees`, this shows eviction pressure.
-    if args.metrics {
+    // Periodically publish the in-memory cache occupancy and the top-requestor
+    // window. Lives here (not in the storage refresh task) because both come
+    // from `Subduction`/handler state, not the storage backend. The resident
+    // count, compared against `subduction_storage_sedimentrees`, shows
+    // eviction pressure.
+    //
+    // Runs even without `--metrics` (gauge sets are no-ops with no recorder):
+    // the tally must be drained regardless — an undrained map sits at its cap
+    // doing eviction scans forever — and the "top requestors" log line is
+    // useful on its own.
+    {
         let resident_subduction = subduction.clone();
         let resident_token = token.clone();
         let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
         tokio::spawn(async move {
             let mut interval = time::interval(refresh_interval);
+            // Skip the immediate first tick: nothing to report at t=0.
+            interval.tick().await;
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
                         let resident = resident_subduction.resident_sedimentree_count().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
+
+                        // Rank-shaped gauges carry the skew; the log line
+                        // carries the peer ids (see `requestor_tally` docs).
+                        if let Some(tally) = &requestor_tally {
+                            let ranked = tally.take_window().await;
+                            let counts: Vec<u64> =
+                                ranked.iter().map(|(_, count)| *count).collect();
+                            let total: u64 = counts.iter().sum();
+                            subduction_core::metrics::set_top_requestors(&counts, total);
+                            if !ranked.is_empty() {
+                                let top: Vec<String> = ranked
+                                    .iter()
+                                    .take(10)
+                                    .map(|(peer, count)| format!("{peer}={count}"))
+                                    .collect();
+                                tracing::info!(
+                                    window_secs = refresh_interval.as_secs(),
+                                    total_requestors = ranked.len(),
+                                    top = ?top,
+                                    "top requestors by batch-sync requests"
+                                );
+                            }
+                        }
                     }
                     () = resident_token.cancelled() => break,
                 }
@@ -1021,7 +1080,7 @@ async fn accept_loop<H: CliWireHandler>(
 }
 
 /// Handle a WebSocket connection: upgrade, handshake, add connection.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn handle_websocket<H: CliWireHandler>(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
@@ -1056,6 +1115,7 @@ async fn handle_websocket<H: CliWireHandler>(
     tracing::debug!(addr = %addr, "WebSocket upgrade complete");
 
     let now = TimestampSeconds::now();
+    let handshake_started = Instant::now();
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         |ws_handshake, peer_id| {
@@ -1102,6 +1162,10 @@ async fn handle_websocket<H: CliWireHandler>(
     let authenticated = match result {
         Ok((auth, ())) => {
             subduction_core::metrics::handshake_outcome("ok");
+            subduction_core::metrics::handshake_duration(
+                "ok",
+                handshake_started.elapsed().as_secs_f64(),
+            );
             tracing::info!(
                 peer = %auth.peer_id(),
                 addr = %addr,
@@ -1126,6 +1190,10 @@ async fn handle_websocket<H: CliWireHandler>(
                 _ => "rejected",
             };
             subduction_core::metrics::handshake_outcome(outcome);
+            subduction_core::metrics::handshake_duration(
+                "err",
+                handshake_started.elapsed().as_secs_f64(),
+            );
             tracing::warn!(addr = %addr, error = %e, "WebSocket handshake failed");
             return;
         }

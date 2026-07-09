@@ -260,7 +260,16 @@ impl RedbStorage {
         // (drops on return, including cancellation) — a proxy for pool pressure.
         #[cfg(feature = "metrics")]
         let _blocking = BlockingGuard::new();
-        tokio::task::spawn_blocking(move || f(&db, &blobs_dir)).await?
+        #[cfg(feature = "metrics")]
+        let enqueued = std::time::Instant::now();
+        tokio::task::spawn_blocking(move || {
+            // Enqueue-to-start is pure pool queue wait; the per-operation
+            // duration histogram (recorded a layer up) includes it.
+            #[cfg(feature = "metrics")]
+            subduction_core::metrics::storage_blocking_queue_wait(enqueued.elapsed().as_secs_f64());
+            f(&db, &blobs_dir)
+        })
+        .await?
     }
 
     /// The group-commit writer's queue, spawning the writer task on first use.

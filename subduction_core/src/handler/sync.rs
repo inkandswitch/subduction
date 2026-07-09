@@ -94,6 +94,11 @@ pub struct SyncHandler<
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
     spawner: Sp,
+    /// Windowed per-peer counts of inbound `BatchSyncRequest`s; see
+    /// [`requestor_tally`](crate::metrics::requestor_tally). `Arc`-shared so
+    /// an operator loop can drain it without reaching through the handler.
+    #[cfg(feature = "metrics")]
+    requestor_tally: Arc<crate::metrics::requestor_tally::RequestorTally>,
 }
 
 impl<
@@ -133,6 +138,8 @@ impl<
             heads_notifier: self.heads_notifier.clone(),
             send_counter: self.send_counter.clone(),
             spawner: self.spawner.clone(),
+            #[cfg(feature = "metrics")]
+            requestor_tally: Arc::clone(&self.requestor_tally),
         }
     }
 }
@@ -172,6 +179,8 @@ impl<
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
             send_counter: PeerCounter::default(),
             spawner,
+            #[cfg(feature = "metrics")]
+            requestor_tally: Arc::default(),
         }
     }
 }
@@ -207,7 +216,19 @@ impl<
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
             send_counter: PeerCounter::default(),
             spawner,
+            #[cfg(feature = "metrics")]
+            requestor_tally: Arc::default(),
         }
+    }
+
+    /// The shared per-peer tally of inbound `BatchSyncRequest`s, for an
+    /// operator loop to drain periodically; see
+    /// [`requestor_tally`](crate::metrics::requestor_tally) for why this
+    /// exists instead of a peer-labeled metric.
+    #[cfg(feature = "metrics")]
+    #[must_use]
+    pub fn requestor_tally(&self) -> Arc<crate::metrics::requestor_tally::RequestorTally> {
+        Arc::clone(&self.requestor_tally)
     }
 
     /// Returns the shared connections map.
@@ -354,6 +375,8 @@ where
 
         #[cfg(feature = "metrics")]
         let mut pushed: u64 = 0;
+        #[cfg(feature = "metrics")]
+        let mut failed: u64 = 0;
         for (conn, result) in results {
             match result {
                 Ok(()) => {
@@ -364,12 +387,16 @@ where
                 }
                 Err(e) => {
                     tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
+                    #[cfg(feature = "metrics")]
+                    {
+                        failed += 1;
+                    }
                 }
             }
         }
 
         #[cfg(feature = "metrics")]
-        crate::metrics::subscription_pushes(pushed);
+        crate::metrics::subscription_pushes(pushed, failed);
     }
 }
 
@@ -525,6 +552,8 @@ impl<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(peer = %from, error = %e, "commit signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("commit");
                 return Ok(None);
             }
         };
@@ -664,6 +693,8 @@ impl<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(peer = %from, error = %e, "fragment signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("fragment");
                 return Ok(None);
             }
         };
@@ -744,6 +775,8 @@ impl<
     ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
         let peer_id = conn.peer_id();
         tracing::info!(peer = %peer_id, tree = ?id, "recv_batch_sync_request");
+        #[cfg(feature = "metrics")]
+        self.requestor_tally.record(peer_id).await;
 
         let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
             Ok(f) => f,
@@ -1218,5 +1251,83 @@ impl ResponderDiff {
             requesting_commit_fingerprints: diff.remote_only_commit_fingerprints,
             requesting_fragment_fingerprints: diff.remote_only_fragment_fingerprints,
         }
+    }
+}
+
+#[cfg(all(test, feature = "metrics"))]
+mod tests {
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use sedimentree_core::id::SedimentreeId;
+
+    use super::FanOut;
+    use crate::{
+        connection::{message::DataRequestRejected, test_utils::FailingSendMockConnection},
+        metrics::names,
+        peer::id::PeerId,
+    };
+
+    /// Pins which `FanOut::run` arm feeds which `outcome` of
+    /// `subscription_pushes_total` — a swapped classification would corrupt
+    /// the dead-connection push signal while every render-level test still
+    /// passes.
+    #[test]
+    fn fan_out_counts_push_outcomes_by_arm() {
+        // Asymmetric counts (2 ok, 1 failed) so a swapped classification
+        // cannot pass by symmetry.
+        let ok_a = FailingSendMockConnection::with_peer_id_failing(PeerId::new([1u8; 32]), false)
+            .authenticated();
+        let ok_b = FailingSendMockConnection::with_peer_id_failing(PeerId::new([2u8; 32]), false)
+            .authenticated();
+        let failing_conn =
+            FailingSendMockConnection::with_peer_id_failing(PeerId::new([3u8; 32]), true)
+                .authenticated();
+        let ack_conn =
+            FailingSendMockConnection::with_peer_id_failing(PeerId::new([4u8; 32]), false)
+                .authenticated();
+
+        let msg =
+            crate::connection::message::SyncMessage::DataRequestRejected(DataRequestRejected {
+                id: SedimentreeId::new([0u8; 32]),
+            });
+        let fan_out = FanOut {
+            ack_conn,
+            ack_msg: msg.clone(),
+            pushes: vec![
+                (ok_a, msg.clone()),
+                (ok_b, msg.clone()),
+                (failing_conn, msg),
+            ],
+        };
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(fan_out.run());
+        });
+
+        let mut ok_count = None;
+        let mut failed_count = None;
+        for (key, _, _, value) in snapshotter.snapshot().into_vec() {
+            let (_, key) = key.into_parts();
+            if key.name() != names::SUBSCRIPTION_PUSHES_TOTAL {
+                continue;
+            }
+            let outcome = key
+                .labels()
+                .find(|label| label.key() == "outcome")
+                .map(|label| label.value().to_owned());
+            match (outcome.as_deref(), value) {
+                (Some("ok"), DebugValue::Counter(n)) => ok_count = Some(n),
+                (Some("failed"), DebugValue::Counter(n)) => failed_count = Some(n),
+                _ => {}
+            }
+        }
+
+        assert_eq!(ok_count, Some(2), "two successful pushes must count as ok");
+        assert_eq!(
+            failed_count,
+            Some(1),
+            "one dead-connection push must count as failed"
+        );
     }
 }

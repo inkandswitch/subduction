@@ -73,6 +73,8 @@ pub(crate) async fn recv_batch_sync_response<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "batch sync commit signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("commit");
                 continue;
             }
         };
@@ -121,6 +123,8 @@ pub(crate) async fn recv_batch_sync_response<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "batch sync fragment signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("fragment");
                 continue;
             }
         };
@@ -394,6 +398,8 @@ pub(crate) async fn get_or_hydrate<
     // to here on its own miss, so it must not also count one.
     #[cfg(feature = "metrics")]
     crate::metrics::sedimentree_cache_miss();
+    #[cfg(feature = "metrics")]
+    let hydration = crate::metrics::HydrationGuard::new();
     tracing::debug!(tree = ?id, "sedimentree cache miss; hydrating from storage");
     let local_access = storage.hydration_access();
     // Metadata-only: hydration rebuilds the tree from payloads and never
@@ -419,9 +425,12 @@ pub(crate) async fn get_or_hydrate<
                     MinimizedSedimentree::already_minimal(Sedimentree::default())
                 })
                 .await;
+            #[cfg(feature = "metrics")]
+            hydration.complete();
             return Ok(Some(Sedimentree::default()));
         }
         tracing::trace!(tree = ?id, "sedimentree not found in storage");
+        // Not-found probes drop the guard without a duration sample.
         return Ok(None);
     }
 
@@ -435,6 +444,8 @@ pub(crate) async fn get_or_hydrate<
             MinimizedSedimentree::already_minimal(hydrated.clone())
         })
         .await;
+    #[cfg(feature = "metrics")]
+    hydration.complete();
     Ok(Some(hydrated))
 }
 
@@ -504,13 +515,18 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
     access: &crate::storage::local_access::LocalStorageAccess<Store>,
     id: SedimentreeId,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
+    #[cfg(feature = "metrics")]
+    let hydration = crate::metrics::HydrationGuard::new();
     // Metadata-only: the rebuilt tree holds no blobs (see `get_or_hydrate`).
     let loose_commits = access.load_loose_commit_metas::<Async>(id).await?;
     let fragments = access.load_fragment_metas::<Async>(id).await?;
 
     if loose_commits.is_empty() && fragments.is_empty() {
+        // Not-found probes drop the guard without a duration sample.
         return Ok(None);
     }
+    #[cfg(feature = "metrics")]
+    hydration.complete();
     // Full history, not yet minimized: wrap dirty so the next read minimizes.
     Ok(Some(MinimizedSedimentree::new(Sedimentree::new(
         fragments,
@@ -525,14 +541,19 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
 async fn load_tree_via_putter<Async: FutureForm, Store: Storage<Async>>(
     putter: &Putter<Async, Store>,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
+    #[cfg(feature = "metrics")]
+    let hydration = crate::metrics::HydrationGuard::new();
     let fetcher = putter.as_fetcher();
     // Metadata-only: the rebuilt tree holds no blobs (see `get_or_hydrate`).
     let loose_commits = fetcher.load_loose_commit_metas().await?;
     let fragments = fetcher.load_fragment_metas().await?;
 
     if loose_commits.is_empty() && fragments.is_empty() {
+        // Not-found probes drop the guard without a duration sample.
         return Ok(None);
     }
+    #[cfg(feature = "metrics")]
+    hydration.complete();
     // Full history, not yet minimized: wrap dirty so the next read minimizes.
     Ok(Some(MinimizedSedimentree::new(Sedimentree::new(
         fragments,

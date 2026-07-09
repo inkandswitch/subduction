@@ -24,7 +24,7 @@ use tokio::net::TcpListener;
 /// (which reads as "p99 = ceiling").
 const FINE_BUCKETS_SECONDS: &[f64] = &[
     0.000_05, 0.000_1, 0.000_25, 0.000_5, 0.001, 0.002_5, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
-    1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+    1.0, 1.5, 2.5, 3.5, 5.0, 10.0, 30.0, 60.0,
 ];
 
 /// Coarse buckets (seconds) for whole-round operations measured in
@@ -49,6 +49,32 @@ const DWELL_BUCKETS_SECONDS: &[f64] = &[
 /// quiet queue instead of 0.
 const DEPTH_BUCKETS: &[f64] = &[
     0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0,
+];
+
+/// Buckets (bytes) for wire frame sizes: ~2-octave steps from small sync
+/// messages (64 B), then denser boundaries around the message-size caps —
+/// 50 MiB (`DEFAULT_MAX_MESSAGE_SIZE`) and 100 MiB (the production
+/// `maxMessageSize`) — so a distribution climbing toward a cap is
+/// distinguishable from mid-size traffic. The boundary *at* each cap is the
+/// alerting edge that matters.
+#[allow(clippy::cast_precision_loss)]
+const FRAME_BYTES_BUCKETS: &[f64] = &[
+    64.0,
+    256.0,
+    1024.0,
+    4096.0,
+    16384.0,
+    65536.0,
+    262_144.0,
+    1_048_576.0,
+    4_194_304.0,
+    16_777_216.0,
+    33_554_432.0,  // 32 MiB
+    50_331_648.0,  // 48 MiB
+    52_428_800.0,  // 50 MiB: DEFAULT_MAX_MESSAGE_SIZE
+    67_108_864.0,  // 64 MiB
+    104_857_600.0, // 100 MiB: production maxMessageSize
+    134_217_728.0, // 128 MiB headroom
 ];
 
 /// Initialize the metrics recorder and return a handle for the HTTP endpoint.
@@ -110,6 +136,34 @@ pub fn init_metrics() -> PrometheusHandle {
             FINE_BUCKETS_SECONDS,
         )
         .expect("fine buckets are non-empty and sorted")
+        // Blocking-pool queue wait: µs when the pool is healthy, seconds
+        // when saturated; fine buckets resolve both regimes.
+        .set_buckets_for_metric(
+            Matcher::Full(names::STORAGE_BLOCKING_QUEUE_WAIT_SECONDS.to_owned()),
+            FINE_BUCKETS_SECONDS,
+        )
+        .expect("fine buckets are non-empty and sorted")
+        // Drain batch size is a count bounded by the writer queue capacity
+        // (1024), same shape as outbound queue depth.
+        .set_buckets_for_metric(
+            Matcher::Full(names::REDB_DRAIN_BATCH_SIZE.to_owned()),
+            DEPTH_BUCKETS,
+        )
+        .expect("depth buckets are non-empty and sorted")
+        // Frame sizes span 64 B sync messages to 128 MiB blob responses;
+        // `_bytes` misses the duration-suffix fallback, so set explicitly.
+        .set_buckets_for_metric(
+            Matcher::Full(names::NETWORK_FRAME_BYTES.to_owned()),
+            FRAME_BYTES_BUCKETS,
+        )
+        .expect("frame-bytes buckets are non-empty and sorted")
+        // Hydrations of small page-cached trees are sub-millisecond, which
+        // the coarse suffix fallback (1ms floor) would boundary-snap.
+        .set_buckets_for_metric(
+            Matcher::Full(names::HYDRATION_DURATION_SECONDS.to_owned()),
+            FINE_BUCKETS_SECONDS,
+        )
+        .expect("fine buckets are non-empty and sorted")
         .set_buckets_for_metric(
             Matcher::Suffix("_duration_seconds".to_owned()),
             COARSE_BUCKETS_SECONDS,
@@ -162,6 +216,10 @@ mod tests {
     /// fast-vs-slow metrics must get their respective fine/coarse bucket sets.
     /// Without `set_buckets_for_metric`, the exporter emits quantile summaries
     /// and `histogram_quantile(rate(..._bucket))` dashboard panels show no data.
+    //
+    // One long test by necessity: `install_recorder` installs a process-global
+    // recorder, so all render assertions must share a single test.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn duration_histograms_render_as_buckets() {
         let handle = init_metrics();
@@ -180,6 +238,20 @@ mod tests {
         subduction_core::metrics::sedimentree_cache_hit();
         subduction_core::metrics::sedimentree_cache_miss();
         subduction_core::metrics::set_sedimentree_cache_resident(7);
+        subduction_core::metrics::storage_blocking_queue_wait(0.001);
+        subduction_core::metrics::redb_drain(3);
+        subduction_core::metrics::HydrationGuard::new().complete();
+        subduction_core::metrics::sync_verify_failure("commit");
+        subduction_core::metrics::requested_data_send_failure();
+        subduction_core::metrics::late_response();
+        subduction_core::metrics::keepalive_pong_missed();
+        subduction_core::metrics::keepalive_close();
+        subduction_core::metrics::set_top_requestors(&[5, 3], 12);
+        subduction_core::metrics::network_frame("websocket", "sent", 300);
+        subduction_core::metrics::handshake_duration("ok", 0.05);
+        subduction_core::metrics::subscription_pushes(2, 1);
+        subduction_core::metrics::subscription_propagation("established");
+        subduction_core::metrics::set_build_info("0.0.0-test", "deadbeef");
 
         let rendered = handle.render();
 
@@ -278,6 +350,127 @@ mod tests {
         assert!(
             rendered.contains("subduction_mux_pending_duration_seconds_bucket"),
             "mux pending-duration histogram should render as buckets:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_storage_blocking_queue_wait_seconds_bucket"),
+            "storage queue-wait histogram should render as buckets:\n{rendered}"
+        );
+
+        // Drain batch size uses the depth (count) bucket set, not a summary.
+        let drain_lines: String = rendered
+            .lines()
+            .filter(|l| l.contains("subduction_redb_drain_batch_size_bucket"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            drain_lines.contains("le=\"1024\""),
+            "drain batch-size histogram should render count buckets up to the queue capacity:\n{drain_lines}"
+        );
+        // Presence only: other tests in this binary (e.g. `migrate`) drive
+        // real `RedbStorage` writes into the same process-global recorder,
+        // so an exact total would be a parallel-test flake.
+        assert!(
+            rendered.contains("subduction_redb_drains_total"),
+            "drain counter should render:\n{rendered}"
+        );
+
+        // The hydration guard round-trips: `complete()` records one duration
+        // sample, and the in-flight gauge returns to 0 once the guard drops.
+        assert!(
+            rendered.contains("subduction_hydration_duration_seconds_bucket"),
+            "hydration duration histogram should render as buckets:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_hydration_inflight 0"),
+            "hydration in-flight gauge should return to 0 after the guard drops:\n{rendered}"
+        );
+
+        // Incident-signal counters render with their labels.
+        assert!(
+            rendered.contains("subduction_sync_verify_failures_total{kind=\"commit\"} 1"),
+            "verify-failure counter should render with kind label:\n{rendered}"
+        );
+        for counter in [
+            "subduction_requested_data_send_failures_total 1",
+            "subduction_late_responses_total 1",
+            "subduction_keepalive_pongs_missed_total 1",
+            "subduction_keepalive_closes_total 1",
+        ] {
+            assert!(
+                rendered.contains(counter),
+                "{counter} should render:\n{rendered}"
+            );
+        }
+
+        // Top-requestor gauges: ranked counts land on their rank labels and
+        // unfilled ranks are zeroed (no stale values from a busier window).
+        assert!(
+            rendered.contains("subduction_top_requestor_requests{rank=\"1\"} 5")
+                && rendered.contains("subduction_top_requestor_requests{rank=\"2\"} 3")
+                && rendered.contains("subduction_top_requestor_requests{rank=\"3\"} 0"),
+            "top-requestor gauges should rank and zero-fill:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_requestor_window_requests 12"),
+            "window-total gauge should carry the full (untruncated) sum:\n{rendered}"
+        );
+
+        // Frame sizes render as byte-bucketed histograms with both labels.
+        let frame_lines: String = rendered
+            .lines()
+            .filter(|l| l.contains("subduction_network_frame_bytes_bucket"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            frame_lines.contains("transport=\"websocket\"")
+                && frame_lines.contains("direction=\"sent\"")
+                && frame_lines.contains("le=\"134217728\""),
+            "frame-bytes histogram should carry transport/direction and the 128MiB top bucket:\n{frame_lines}"
+        );
+        // The 300 B frame lands in le="1024" but not le="256", pinning the
+        // custom bucket boundaries.
+        let bucket_count = |le: &str| {
+            frame_lines
+                .lines()
+                .find(|l| l.contains(&format!("le=\"{le}\"")))
+                .and_then(|l| l.rsplit(' ').next())
+        };
+        assert_eq!(
+            bucket_count("256"),
+            Some("0"),
+            "300 B frame must not land in le=256:\n{frame_lines}"
+        );
+        assert_eq!(
+            bucket_count("1024"),
+            Some("1"),
+            "300 B frame must land in le=1024:\n{frame_lines}"
+        );
+
+        // Handshake duration histogram renders with the outcome label.
+        assert!(
+            rendered.contains("subduction_handshake_duration_seconds_bucket{outcome=\"ok\"")
+                || rendered.contains("outcome=\"ok\",le="),
+            "handshake duration should render as an outcome-labeled histogram:\n{rendered}"
+        );
+
+        // Subscription outcomes: pushes split ok/failed; propagation labeled.
+        assert!(
+            rendered.contains("subduction_subscription_pushes_total{outcome=\"ok\"} 2")
+                && rendered.contains("subduction_subscription_pushes_total{outcome=\"failed\"} 1"),
+            "subscription pushes should split by outcome:\n{rendered}"
+        );
+        assert!(
+            rendered
+                .contains("subduction_subscription_propagations_total{outcome=\"established\"} 1"),
+            "propagation counter should render with outcome:\n{rendered}"
+        );
+
+        // Build info: constant 1 carrying identity labels (order may vary).
+        assert!(
+            rendered.contains("subduction_build_info")
+                && rendered.contains("version=\"0.0.0-test\"")
+                && rendered.contains("git_sha=\"deadbeef\""),
+            "build info gauge should carry version and git_sha labels:\n{rendered}"
         );
 
         // Cache counters render with their exact totals; the resident gauge too.

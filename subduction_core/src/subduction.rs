@@ -1087,6 +1087,12 @@ where
                                     "peer disconnected while sending DataRequestRejected"
                                 );
                             }
+                        } else {
+                            // Policy rejections aren't send failures; count
+                            // only transport/preparation errors (matching the
+                            // safety-net path's classification).
+                            #[cfg(feature = "metrics")]
+                            crate::metrics::requested_data_send_failure();
                         }
                         tracing::warn!(
                             peer = %conn.peer_id(),
@@ -2031,9 +2037,19 @@ where
                     .sync_with_peer(&peer, id, true, CallTimeout::Default)
                     .await
                 {
-                    Ok((had_success, _, _)) => had_success,
+                    Ok((had_success, _, _)) => {
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::subscription_propagation(if had_success {
+                            "established"
+                        } else {
+                            "rejected"
+                        });
+                        had_success
+                    }
                     Err(e) => {
                         tracing::debug!(peer = %peer, tree = ?id, error = %e, "subscribe propagation failed");
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::subscription_propagation("failed");
                         false
                     }
                 };
@@ -2238,6 +2254,10 @@ where
                             }
                             Err(e) => {
                                 tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
+                                if !matches!(e, SendRequestedDataError::Unauthorized(_)) {
+                                    #[cfg(feature = "metrics")]
+                                    crate::metrics::requested_data_send_failure();
+                                }
                             }
                         }
                     }
@@ -2459,6 +2479,8 @@ where
                                         }
                                         Err(e) => {
                                             tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
+                                            #[cfg(feature = "metrics")]
+                                            crate::metrics::requested_data_send_failure();
                                         }
                                     }
                                 }
@@ -2904,6 +2926,8 @@ where
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to send requested data");
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::requested_data_send_failure();
                 }
             }
         }
@@ -3121,6 +3145,8 @@ where
                                     peer = %peer_id,
                                     "BatchSyncResponse had no pending caller"
                                 );
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::late_response();
                             }
                         } else {
                             tracing::warn!(
@@ -3169,6 +3195,8 @@ where
                                     peer = %peer_id,
                                     "BatchSyncResponse via safety net had no pending caller"
                                 );
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::late_response();
                             }
                             // Not a dispatch — `permit` drops here, releasing the slot.
                             continue;

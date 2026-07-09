@@ -97,6 +97,8 @@ async fn run(
         while let Ok(job) = rx.try_recv() {
             jobs.push(job);
         }
+        #[cfg(feature = "metrics")]
+        subduction_core::metrics::redb_drain(jobs.len());
 
         // Upgrade only for the write: a live caller awaiting its ack keeps the
         // storage (hence the database) alive, so this succeeds whenever there's
