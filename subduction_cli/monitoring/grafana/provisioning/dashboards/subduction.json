@@ -209,13 +209,16 @@
     {
       "type": "timeseries",
       "title": "Sync Failures /s by Reason",
-      "description": "Per-connection foreground sync call failures per second, by reason (timeout, dropped, ...). Timeouts excluded from Sync Round Duration land here.",
+      "description": "Per-connection foreground sync call failures per second, by reason (timeout, dropped, ...). Timeouts excluded from Sync Round Duration land here. Also charts signature-verification failures by kind (a peer retrying data that can never be accepted).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 4, "x": 20, "y": 22 },
       "id": 22,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [] },
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (reason) (rate(subduction_sync_call_failures_total[5m]))", "legendFormat": "{{reason}}", "refId": "A" }]
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (reason) (rate(subduction_sync_call_failures_total[5m]))", "legendFormat": "{{reason}}", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (kind) (rate(subduction_sync_verify_failures_total[5m]))", "legendFormat": "verify {{kind}}", "refId": "V" }
+      ]
     },
     {
       "type": "timeseries",
@@ -232,6 +235,20 @@
       ]
     },
     {
+      "type": "timeseries",
+      "title": "Top Requestor Skew (rank 1/2/3 vs total, per window)",
+      "description": "Batch-sync requests per refresh window from the most active peers, by rank (bounded labels). A rank-1 line dominating the total means one peer is hammering the server — its id is in the paired 'top requestors' log line.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 29 },
+      "id": 122,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_top_requestor_requests{rank=~\"1|2|3\"}", "legendFormat": "rank {{rank}}", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(subduction_top_requestor_requests)", "legendFormat": "top-10 total", "refId": "B" }
+      ]
+    },
+    {
       "type": "row",
       "title": "Connections & Multiplexer",
       "collapsed": false,
@@ -242,7 +259,7 @@
     {
       "type": "timeseries",
       "title": "Connection Open/Close /min",
-      "description": "Connections established vs closed per minute — connection churn. A high close rate can indicate unstable clients or handshake rejections (see Handshake Outcomes).",
+      "description": "Connections established vs closed per minute — connection churn. A high close rate can indicate unstable clients or handshake rejections (see Handshake Outcomes). Keepalive reaps are closes from missed pongs — an unresponsive (often ingest-wedged) client.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 37 },
       "id": 30,
@@ -250,7 +267,8 @@
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_connections_total[5m]) * 60", "legendFormat": "opened/min", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_connections_closed[5m]) * 60", "legendFormat": "closed/min", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_connections_closed[5m]) * 60", "legendFormat": "closed/min", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(subduction_keepalive_closes_total[5m])) * 60", "legendFormat": "keepalive reaps/min", "refId": "K" }
       ]
     },
     {
@@ -276,7 +294,8 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_mux_pending", "legendFormat": "pending", "refId": "A" },
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_mux_requests_total[1m])", "legendFormat": "requests/s", "refId": "B" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_mux_cancelled_total[1m])", "legendFormat": "cancels/s", "refId": "C" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_mux_cancelled_total[1m])", "legendFormat": "cancels/s", "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(subduction_late_responses_total[1m]))", "legendFormat": "late responses/s", "refId": "L" }
       ]
     },
     {
@@ -583,7 +602,8 @@
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "ops" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (transport) (rate(subduction_outbound_send_blocked_total[5m]))", "legendFormat": "{{transport}}", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (transport) (rate(subduction_outbound_send_blocked_total[5m]))", "legendFormat": "{{transport}}", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(subduction_requested_data_send_failures_total[5m]))", "legendFormat": "requested-data send failures/s", "refId": "F" }
       ]
     },
     {

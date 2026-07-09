@@ -94,6 +94,11 @@ pub struct SyncHandler<
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
     spawner: Sp,
+    /// Windowed per-peer counts of inbound `BatchSyncRequest`s, drained by
+    /// [`requestor_tally`](Self::requestor_tally) holders. `Arc`-shared so
+    /// an operator loop can drain it without reaching through the handler.
+    #[cfg(feature = "metrics")]
+    requestor_tally: Arc<crate::metrics::requestor_tally::RequestorTally>,
 }
 
 impl<
@@ -133,6 +138,8 @@ impl<
             heads_notifier: self.heads_notifier.clone(),
             send_counter: self.send_counter.clone(),
             spawner: self.spawner.clone(),
+            #[cfg(feature = "metrics")]
+            requestor_tally: Arc::clone(&self.requestor_tally),
         }
     }
 }
@@ -172,6 +179,8 @@ impl<
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
             send_counter: PeerCounter::default(),
             spawner,
+            #[cfg(feature = "metrics")]
+            requestor_tally: Arc::default(),
         }
     }
 }
@@ -207,7 +216,20 @@ impl<
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
             send_counter: PeerCounter::default(),
             spawner,
+            #[cfg(feature = "metrics")]
+            requestor_tally: Arc::default(),
         }
+    }
+
+    /// The shared per-peer tally of inbound `BatchSyncRequest`s.
+    ///
+    /// Peer ids can't be Prometheus labels (unbounded cardinality), so an
+    /// operator loop drains this instead, publishing rank-shaped gauges and
+    /// logging the ids; see [`requestor_tally`](crate::metrics::requestor_tally).
+    #[cfg(feature = "metrics")]
+    #[must_use]
+    pub fn requestor_tally(&self) -> Arc<crate::metrics::requestor_tally::RequestorTally> {
+        Arc::clone(&self.requestor_tally)
     }
 
     /// Returns the shared connections map.
@@ -525,6 +547,8 @@ impl<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(peer = %from, error = %e, "commit signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("commit");
                 return Ok(None);
             }
         };
@@ -664,6 +688,8 @@ impl<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(peer = %from, error = %e, "fragment signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("fragment");
                 return Ok(None);
             }
         };
@@ -744,6 +770,8 @@ impl<
     ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
         let peer_id = conn.peer_id();
         tracing::info!(peer = %peer_id, tree = ?id, "recv_batch_sync_request");
+        #[cfg(feature = "metrics")]
+        self.requestor_tally.record(peer_id).await;
 
         let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
             Ok(f) => f,

@@ -202,6 +202,12 @@ mod tests {
         subduction_core::metrics::storage_queue_wait(0.001);
         subduction_core::metrics::redb_drain(3);
         drop(subduction_core::metrics::HydrationGuard::new());
+        subduction_core::metrics::sync_verify_failure("commit");
+        subduction_core::metrics::requested_data_send_failure();
+        subduction_core::metrics::late_response();
+        subduction_core::metrics::keepalive_pong_missed();
+        subduction_core::metrics::keepalive_close();
+        subduction_core::metrics::set_top_requestors(&[5, 3]);
 
         let rendered = handle.render();
 
@@ -330,6 +336,32 @@ mod tests {
         assert!(
             rendered.contains("subduction_hydration_inflight 0"),
             "hydration in-flight gauge should return to 0 after the guard drops:\n{rendered}"
+        );
+
+        // Incident-signal counters render with their labels.
+        assert!(
+            rendered.contains("subduction_sync_verify_failures_total{kind=\"commit\"} 1"),
+            "verify-failure counter should render with kind label:\n{rendered}"
+        );
+        for counter in [
+            "subduction_requested_data_send_failures_total 1",
+            "subduction_late_responses_total 1",
+            "subduction_keepalive_pongs_missed_total 1",
+            "subduction_keepalive_closes_total 1",
+        ] {
+            assert!(
+                rendered.contains(counter),
+                "{counter} should render:\n{rendered}"
+            );
+        }
+
+        // Top-requestor gauges: ranked counts land on their rank labels and
+        // unfilled ranks are zeroed (no stale values from a busier window).
+        assert!(
+            rendered.contains("subduction_top_requestor_requests{rank=\"1\"} 5")
+                && rendered.contains("subduction_top_requestor_requests{rank=\"2\"} 3")
+                && rendered.contains("subduction_top_requestor_requests{rank=\"3\"} 0"),
+            "top-requestor gauges should rank and zero-fill:\n{rendered}"
         );
 
         // Cache counters render with their exact totals; the resident gauge too.

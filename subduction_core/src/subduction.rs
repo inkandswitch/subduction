@@ -1093,6 +1093,8 @@ where
                             error = %e,
                             "failed to send requested data to peer"
                         );
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::requested_data_send_failure();
                     }
 
                     if let Err(e) = self
@@ -2238,6 +2240,8 @@ where
                             }
                             Err(e) => {
                                 tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::requested_data_send_failure();
                             }
                         }
                     }
@@ -2459,6 +2463,8 @@ where
                                         }
                                         Err(e) => {
                                             tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
+                                            #[cfg(feature = "metrics")]
+                                            crate::metrics::requested_data_send_failure();
                                         }
                                     }
                                 }
@@ -2904,6 +2910,8 @@ where
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to send requested data");
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::requested_data_send_failure();
                 }
             }
         }
@@ -3121,6 +3129,8 @@ where
                                     peer = %peer_id,
                                     "BatchSyncResponse had no pending caller"
                                 );
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::late_response();
                             }
                         } else {
                             tracing::warn!(
@@ -3169,6 +3179,8 @@ where
                                     peer = %peer_id,
                                     "BatchSyncResponse via safety net had no pending caller"
                                 );
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::late_response();
                             }
                             // Not a dispatch — `permit` drops here, releasing the slot.
                             continue;

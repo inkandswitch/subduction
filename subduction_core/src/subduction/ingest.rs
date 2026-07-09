@@ -73,6 +73,8 @@ pub(crate) async fn recv_batch_sync_response<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "batch sync commit signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("commit");
                 continue;
             }
         };
@@ -121,6 +123,8 @@ pub(crate) async fn recv_batch_sync_response<
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "batch sync fragment signature verification failed");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("fragment");
                 continue;
             }
         };

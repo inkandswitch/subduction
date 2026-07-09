@@ -530,8 +530,10 @@ where
         builder
     };
 
+    let mut requestor_tally = None;
     let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction<H>, _, _, _) = builder
         .build_composed(|sync_handler| {
+            requestor_tally = Some(sync_handler.requestor_tally());
             let connections = sync_handler.connections();
 
             let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
@@ -561,10 +563,11 @@ where
 
     let server_peer_id = subduction.peer_id();
 
-    // Periodically publish the in-memory cache occupancy. Lives here (not in
-    // the storage refresh task) because the resident count comes from
-    // `Subduction`'s LRU, not the storage backend. Compared against
-    // `subduction_storage_sedimentrees`, this shows eviction pressure.
+    // Periodically publish the in-memory cache occupancy and the top-requestor
+    // window. Lives here (not in the storage refresh task) because both come
+    // from `Subduction`/handler state, not the storage backend. The resident
+    // count, compared against `subduction_storage_sedimentrees`, shows
+    // eviction pressure.
     if args.metrics {
         let resident_subduction = subduction.clone();
         let resident_token = token.clone();
@@ -576,6 +579,29 @@ where
                     _ = interval.tick() => {
                         let resident = resident_subduction.resident_sedimentree_count().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
+
+                        // Rank-shaped gauges carry the skew (bounded labels);
+                        // the log line carries the actual peer ids, which
+                        // must never become label values.
+                        if let Some(tally) = &requestor_tally {
+                            let ranked = tally.take_window().await;
+                            let counts: Vec<u64> =
+                                ranked.iter().map(|(_, count)| *count).collect();
+                            subduction_core::metrics::set_top_requestors(&counts);
+                            if !ranked.is_empty() {
+                                let top: Vec<String> = ranked
+                                    .iter()
+                                    .take(10)
+                                    .map(|(peer, count)| format!("{peer}={count}"))
+                                    .collect();
+                                tracing::info!(
+                                    window_secs = refresh_interval.as_secs(),
+                                    total_requestors = ranked.len(),
+                                    top = ?top,
+                                    "top requestors by batch-sync requests"
+                                );
+                            }
+                        }
                     }
                     () = resident_token.cancelled() => break,
                 }

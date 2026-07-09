@@ -700,6 +700,8 @@ where
             threshold,
             "keepalive: pong missed"
         );
+        #[cfg(feature = "metrics")]
+        subduction_core::metrics::keepalive_pong_missed();
 
         if consecutive_misses >= threshold {
             tracing::warn!(
@@ -707,6 +709,8 @@ where
                 misses = consecutive_misses,
                 "keepalive: threshold reached; closing connection"
             );
+            #[cfg(feature = "metrics")]
+            subduction_core::metrics::keepalive_close();
             // Best-effort Close frame; non-blocking since we're closing
             // the channel right after.
             let close_frame = tungstenite::Message::Close(Some(CloseFrame {
