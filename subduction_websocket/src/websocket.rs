@@ -342,11 +342,18 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                 while let Ok(item) = outbound_rx.recv().await {
                     tracing::trace!("sender task: sending message to WebSocket");
                     #[cfg(feature = "metrics")]
-                    subduction_core::metrics::outbound_queue_dwell(
-                        "websocket",
-                        item.enqueued.elapsed().as_secs_f64(),
-                        outbound_rx.len(),
-                    );
+                    {
+                        subduction_core::metrics::outbound_queue_dwell(
+                            "websocket",
+                            item.enqueued.elapsed().as_secs_f64(),
+                            outbound_rx.len(),
+                        );
+                        subduction_core::metrics::network_frame(
+                            "websocket",
+                            "sent",
+                            item.msg.len(),
+                        );
+                    }
                     ws_sender.send(item.msg).await?;
                 }
 
@@ -421,6 +428,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
 
                 match ws_msg {
                     Ok(tungstenite::Message::Binary(bytes)) => {
+                        #[cfg(feature = "metrics")]
+                        subduction_core::metrics::network_frame(
+                            "websocket",
+                            "received",
+                            bytes.len(),
+                        );
                         if let Err(e) = self.inbound_writer.send(bytes.to_vec()).await {
                             tracing::error!(
                                 conn = %self.chan_id,

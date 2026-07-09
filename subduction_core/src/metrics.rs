@@ -34,6 +34,56 @@ pub fn handshake_outcome(outcome: &'static str) {
     metrics::counter!(names::HANDSHAKE_TOTAL, "outcome" => outcome).increment(1);
 }
 
+/// Record a handshake's duration, labeled by `outcome` (`ok`/`err`).
+#[inline]
+pub fn handshake_duration(outcome: &'static str, secs: f64) {
+    metrics::histogram!(names::HANDSHAKE_DURATION_SECONDS, "outcome" => outcome).record(secs);
+}
+
+/// Record one wire frame, labeled by `transport` and `direction`
+/// (`sent`/`received`).
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn network_frame(transport: &'static str, direction: &'static str, bytes: usize) {
+    metrics::histogram!(
+        names::NETWORK_FRAME_BYTES,
+        "transport" => transport,
+        "direction" => direction,
+    )
+    .record(bytes as f64);
+}
+
+/// Publish the build identity once at startup: a constant `1` gauge whose
+/// `version`/`git_sha` labels identify the running binary.
+#[inline]
+pub fn set_build_info(version: &'static str, git_sha: &'static str) {
+    metrics::gauge!(
+        names::BUILD_INFO,
+        "version" => version,
+        "git_sha" => git_sha,
+    )
+    .set(1.0);
+}
+
+/// Publish tokio runtime saturation gauges (values sampled by the host).
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_tokio_runtime(
+    workers: usize,
+    alive_tasks: usize,
+    blocking_threads: usize,
+    idle_blocking_threads: usize,
+    blocking_queue_depth: usize,
+    global_queue_depth: usize,
+) {
+    metrics::gauge!(names::TOKIO_WORKERS).set(workers as f64);
+    metrics::gauge!(names::TOKIO_ALIVE_TASKS).set(alive_tasks as f64);
+    metrics::gauge!(names::TOKIO_BLOCKING_THREADS).set(blocking_threads as f64);
+    metrics::gauge!(names::TOKIO_IDLE_BLOCKING_THREADS).set(idle_blocking_threads as f64);
+    metrics::gauge!(names::TOKIO_BLOCKING_QUEUE_DEPTH).set(blocking_queue_depth as f64);
+    metrics::gauge!(names::TOKIO_GLOBAL_QUEUE_DEPTH).set(global_queue_depth as f64);
+}
+
 /// Record a message being dispatched.
 #[inline]
 pub fn message_dispatched(message_type: &'static str) {
@@ -261,13 +311,23 @@ pub fn set_subscribed_sedimentrees(count: usize) {
     metrics::gauge!(names::SUBSCRIBED_SEDIMENTREES).set(count as f64);
 }
 
-/// Record `n` incremental updates pushed to subscribers.
+/// Record incremental updates pushed to subscribers: `ok` delivered into
+/// the outbound queue, `failed` rejected by a dead connection.
 #[inline]
-pub fn subscription_pushes(n: u64) {
-    if n == 0 {
-        return;
+pub fn subscription_pushes(ok: u64, failed: u64) {
+    if ok > 0 {
+        metrics::counter!(names::SUBSCRIPTION_PUSHES_TOTAL, "outcome" => "ok").increment(ok);
     }
-    metrics::counter!(names::SUBSCRIPTION_PUSHES_TOTAL).increment(n);
+    if failed > 0 {
+        metrics::counter!(names::SUBSCRIPTION_PUSHES_TOTAL, "outcome" => "failed")
+            .increment(failed);
+    }
+}
+
+/// Record an upstream subscription propagation attempt.
+#[inline]
+pub fn subscription_propagation(outcome: &'static str) {
+    metrics::counter!(names::SUBSCRIPTION_PROPAGATIONS_TOTAL, "outcome" => outcome).increment(1);
 }
 
 /// Set the current number of sedimentrees in storage.
@@ -447,6 +507,20 @@ pub fn describe_all() {
         names::HANDSHAKE_TOTAL,
         "Completed handshake attempts, labeled by `outcome` (ok/rejected/drift/decode/io/closed). Rejections never become connections, so `connections_total` can't show them."
     );
+    metrics::describe_histogram!(
+        names::HANDSHAKE_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Handshake duration from challenge receipt to accept/reject, labeled by `outcome` (ok/err)."
+    );
+    metrics::describe_histogram!(
+        names::NETWORK_FRAME_BYTES,
+        metrics::Unit::Bytes,
+        "Wire frame sizes by `transport` and `direction` (sent/received); the _sum is total bandwidth."
+    );
+    metrics::describe_gauge!(
+        names::BUILD_INFO,
+        "Build identity: constant 1 with `version` and `git_sha` labels identifying the running binary."
+    );
     metrics::describe_counter!(
         names::MESSAGES_TOTAL,
         "Total number of sync messages dispatched, labeled by `SyncMessage` variant."
@@ -571,7 +645,35 @@ pub fn describe_all() {
     );
     metrics::describe_counter!(
         names::SUBSCRIPTION_PUSHES_TOTAL,
-        "Cumulative incremental updates pushed to subscribers."
+        "Incremental updates pushed to subscribers, labeled by `outcome` (ok/failed); failed pushes are sends into dead connections."
+    );
+    metrics::describe_counter!(
+        names::SUBSCRIPTION_PROPAGATIONS_TOTAL,
+        "Upstream subscription propagation attempts, labeled by `outcome` (established/rejected/failed); rejected/failed roll the claim back and retry on the next inbound subscribe."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_WORKERS,
+        "Async worker threads in the tokio runtime."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_ALIVE_TASKS,
+        "Tokio tasks currently alive (spawned and not yet completed)."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_BLOCKING_THREADS,
+        "Threads in the tokio blocking pool (busy + idle)."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_IDLE_BLOCKING_THREADS,
+        "Idle threads in the tokio blocking pool."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_BLOCKING_QUEUE_DEPTH,
+        "Tasks queued for the tokio blocking pool but not yet running (nonzero: the pool is at its thread cap)."
+    );
+    metrics::describe_gauge!(
+        names::TOKIO_GLOBAL_QUEUE_DEPTH,
+        "Tasks in the tokio global (injection) queue awaiting a worker."
     );
     metrics::describe_gauge!(
         names::STORAGE_SEDIMENTREES,

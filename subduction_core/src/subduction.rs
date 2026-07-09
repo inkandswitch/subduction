@@ -2033,9 +2033,19 @@ where
                     .sync_with_peer(&peer, id, true, CallTimeout::Default)
                     .await
                 {
-                    Ok((had_success, _, _)) => had_success,
+                    Ok((had_success, _, _)) => {
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::subscription_propagation(if had_success {
+                            "established"
+                        } else {
+                            "rejected"
+                        });
+                        had_success
+                    }
                     Err(e) => {
                         tracing::debug!(peer = %peer, tree = ?id, error = %e, "subscribe propagation failed");
+                        #[cfg(feature = "metrics")]
+                        crate::metrics::subscription_propagation("failed");
                         false
                     }
                 };

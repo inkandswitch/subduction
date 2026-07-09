@@ -376,6 +376,8 @@ where
 
         #[cfg(feature = "metrics")]
         let mut pushed: u64 = 0;
+        #[cfg(feature = "metrics")]
+        let mut failed: u64 = 0;
         for (conn, result) in results {
             match result {
                 Ok(()) => {
@@ -386,12 +388,16 @@ where
                 }
                 Err(e) => {
                     tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
+                    #[cfg(feature = "metrics")]
+                    {
+                        failed += 1;
+                    }
                 }
             }
         }
 
         #[cfg(feature = "metrics")]
-        crate::metrics::subscription_pushes(pushed);
+        crate::metrics::subscription_pushes(pushed, failed);
     }
 }
 

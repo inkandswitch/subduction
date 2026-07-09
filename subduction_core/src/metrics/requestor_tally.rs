@@ -89,6 +89,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn cap_evicts_minimum_not_heavy_hitters() {
         futures::executor::block_on(async {
             let tally = RequestorTally::new();
@@ -97,7 +98,6 @@ mod tests {
                 tally.record(peer(0)).await;
             }
             for i in 0..MAX_TRACKED_REQUESTORS {
-                #[allow(clippy::cast_possible_truncation)]
                 let mut id = [0u8; 32];
                 id[0] = (i % 256) as u8;
                 id[1] = (i / 256) as u8;

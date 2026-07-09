@@ -51,6 +51,25 @@ const DEPTH_BUCKETS: &[f64] = &[
     0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0,
 ];
 
+/// Buckets (bytes) for wire frame sizes: one per ~2 octaves from typical
+/// small sync messages (64 B) up to the 128 MiB frame ceiling, so whale
+/// frames approaching the message-size cap stay visible.
+#[allow(clippy::cast_precision_loss)]
+const FRAME_BYTES_BUCKETS: &[f64] = &[
+    64.0,
+    256.0,
+    1024.0,
+    4096.0,
+    16384.0,
+    65536.0,
+    262_144.0,
+    1_048_576.0,
+    4_194_304.0,
+    16_777_216.0,
+    67_108_864.0,
+    134_217_728.0,
+];
+
 /// Initialize the metrics recorder and return a handle for the HTTP endpoint.
 ///
 /// This must be called once at startup before any metrics are recorded.
@@ -125,6 +144,13 @@ pub fn init_metrics() -> PrometheusHandle {
             DEPTH_BUCKETS,
         )
         .expect("depth buckets are non-empty and sorted")
+        // Frame sizes span 64 B sync messages to 128 MiB blob responses;
+        // `_bytes` misses the duration-suffix fallback, so set explicitly.
+        .set_buckets_for_metric(
+            Matcher::Full(names::NETWORK_FRAME_BYTES.to_owned()),
+            FRAME_BYTES_BUCKETS,
+        )
+        .expect("frame-bytes buckets are non-empty and sorted")
         .set_buckets_for_metric(
             Matcher::Suffix("_duration_seconds".to_owned()),
             COARSE_BUCKETS_SECONDS,
@@ -208,6 +234,11 @@ mod tests {
         subduction_core::metrics::keepalive_pong_missed();
         subduction_core::metrics::keepalive_close();
         subduction_core::metrics::set_top_requestors(&[5, 3]);
+        subduction_core::metrics::network_frame("websocket", "sent", 300);
+        subduction_core::metrics::handshake_duration("ok", 0.05);
+        subduction_core::metrics::subscription_pushes(2, 1);
+        subduction_core::metrics::subscription_propagation("established");
+        subduction_core::metrics::set_build_info("0.0.0-test", "deadbeef");
 
         let rendered = handle.render();
 
@@ -362,6 +393,47 @@ mod tests {
                 && rendered.contains("subduction_top_requestor_requests{rank=\"2\"} 3")
                 && rendered.contains("subduction_top_requestor_requests{rank=\"3\"} 0"),
             "top-requestor gauges should rank and zero-fill:\n{rendered}"
+        );
+
+        // Frame sizes render as byte-bucketed histograms with both labels; a
+        // 300 B frame lands in le="1024" but not le="256".
+        let frame_lines: String = rendered
+            .lines()
+            .filter(|l| l.contains("subduction_network_frame_bytes_bucket"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            frame_lines.contains("transport=\"websocket\"")
+                && frame_lines.contains("direction=\"sent\"")
+                && frame_lines.contains("le=\"134217728\""),
+            "frame-bytes histogram should carry transport/direction and the 128MiB top bucket:\n{frame_lines}"
+        );
+
+        // Handshake duration histogram renders with the outcome label.
+        assert!(
+            rendered.contains("subduction_handshake_duration_seconds_bucket{outcome=\"ok\"")
+                || rendered.contains("outcome=\"ok\",le="),
+            "handshake duration should render as an outcome-labeled histogram:\n{rendered}"
+        );
+
+        // Subscription outcomes: pushes split ok/failed; propagation labeled.
+        assert!(
+            rendered.contains("subduction_subscription_pushes_total{outcome=\"ok\"} 2")
+                && rendered.contains("subduction_subscription_pushes_total{outcome=\"failed\"} 1"),
+            "subscription pushes should split by outcome:\n{rendered}"
+        );
+        assert!(
+            rendered
+                .contains("subduction_subscription_propagations_total{outcome=\"established\"} 1"),
+            "propagation counter should render with outcome:\n{rendered}"
+        );
+
+        // Build info: constant 1 carrying identity labels (order may vary).
+        assert!(
+            rendered.contains("subduction_build_info")
+                && rendered.contains("version=\"0.0.0-test\"")
+                && rendered.contains("git_sha=\"deadbeef\""),
+            "build info gauge should carry version and git_sha labels:\n{rendered}"
         );
 
         // Cache counters render with their exact totals; the resident gauge too.

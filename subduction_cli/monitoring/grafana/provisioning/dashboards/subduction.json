@@ -223,7 +223,7 @@
     {
       "type": "timeseries",
       "title": "Subscriptions & Pushes",
-      "description": "Sedimentrees with at least one subscriber, and incremental update pushes to subscribers per second.",
+      "description": "Sedimentrees with at least one subscriber, incremental update pushes to subscribers per second (by outcome — failed pushes are sends into dead connections), and upstream propagation attempts by outcome (rejected/failed attempts are the solicitation tax and retry on the next subscribe).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 29 },
       "id": 25,
@@ -231,7 +231,8 @@
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_subscribed_sedimentrees", "legendFormat": "subscribed trees", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(subduction_subscription_pushes_total[1m])", "legendFormat": "pushes/s", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (outcome) (rate(subduction_subscription_pushes_total[1m]))", "legendFormat": "pushes/s ({{outcome}})", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (outcome) (rate(subduction_subscription_propagations_total[5m]))", "legendFormat": "propagation {{outcome}}/s", "refId": "P" }
       ]
     },
     {
@@ -502,10 +503,36 @@
       ]
     },
     {
+      "type": "timeseries",
+      "title": "Network Bandwidth by Transport",
+      "description": "Wire bytes per second by transport and direction (the _sum of the frame-size histogram). Frame-size distribution — whales approaching the message cap — is in the same metric's buckets.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 100 },
+      "id": 123,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "Bps" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (transport, direction) (rate(subduction_network_frame_bytes_sum[5m]))", "legendFormat": "{{transport}} {{direction}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Frame Size p99 by Transport (bucket est.)",
+      "description": "p99 wire frame size by transport and direction. Climbing toward the message-size cap (100 MiB in production) predicts over-cap failures — see the BlobsResponse chunking FIXME.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 100 },
+      "id": 124,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.99, sum by (le, transport, direction) (rate(subduction_network_frame_bytes_bucket[5m])))", "legendFormat": "{{transport}} {{direction}} p99", "refId": "A" }
+      ]
+    },
+    {
       "type": "row",
       "title": "System & Saturation",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 100 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 107 },
       "id": 110,
       "panels": []
     },
@@ -514,7 +541,7 @@
       "title": "Process Memory (RSS / virtual)",
       "description": "Resident and virtual memory of the server process. RSS is the OOM-relevant figure (bedrock runs ManagedOOMMemoryPressure=kill); watch the trend against the droplet's RAM. Updated each metrics-refresh tick from /proc.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 101 },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 108 },
       "id": 111,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "bytes" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -528,7 +555,7 @@
       "title": "Open File Descriptors vs Max",
       "description": "Open FDs against the process limit (bedrock raises LimitNOFILE to 1048576). One FD per connection plus storage files; a climb toward max precedes 'Too many open files'.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 101 },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 108 },
       "id": 112,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "short" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -542,7 +569,7 @@
       "title": "Disk: data-dir free + redb file size",
       "description": "Filesystem free bytes for the data directory (statvfs) and the redb database file size. The external blob store is not periodically scanned (too many files); use `subduction inspect` for the per-blob breakdown.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 101 },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 108 },
       "id": 113,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "bytes" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -557,12 +584,13 @@
       "title": "Handshake Outcomes /s",
       "description": "Inbound handshake attempts by outcome. Rejections (rejected/decode/io/closed) never become connections, so they're invisible in the connection counters. A spike in `rejected` can mean auth failures, clock drift, or a misbehaving/attacking client.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 108 },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 115 },
       "id": 114,
-      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ok" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }, { "matcher": { "id": "byName", "options": "rejected" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }] },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "ops" }, "overrides": [{ "matcher": { "id": "byName", "options": "ok" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }, { "matcher": { "id": "byName", "options": "rejected" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "duration p95 (bucket est.)" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "custom.stacking", "value": { "mode": "none" } }] }] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (outcome) (rate(subduction_handshake_total[5m]))", "legendFormat": "{{outcome}}", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (outcome) (rate(subduction_handshake_total[5m]))", "legendFormat": "{{outcome}}", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(subduction_handshake_duration_seconds_bucket[5m])))", "legendFormat": "duration p95 (bucket est.)", "refId": "D" }
       ]
     },
     {
@@ -570,7 +598,7 @@
       "title": "Dispatch Throttle: rate + permit wait p95 (bucket est.)",
       "description": "Per-peer dispatch rate limiting (cap 512 in-flight/peer). 'throttled/s' is how often a message waited for a permit; 'permit wait p95' is how long. Sustained values mean peers are saturating their dispatch cap.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 108 },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 115 },
       "id": 115,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "short" }, "overrides": [{ "matcher": { "id": "byName", "options": "permit wait p95" }, "properties": [{ "id": "unit", "value": "s" }] }, { "matcher": { "id": "byName", "options": "throttled/s" }, "properties": [{ "id": "unit", "value": "ops" }] }] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -584,7 +612,7 @@
       "title": "Storage Blocking-Pool In-Flight",
       "description": "Storage ops concurrently on the blocking pool (redb funnels every op through spawn_blocking). A proxy for blocking-pool pressure: sustained high values mean storage ops are queueing for a thread and storage latency will climb.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 108 },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 115 },
       "id": 116,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "short" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -597,7 +625,7 @@
       "title": "Outbound Send Blocked /s by Transport",
       "description": "Rate of sends that blocked on a full bounded outbound channel (slow-peer backpressure / head-of-line stalls), by transport. Pairs with 'Outbound Queue Depth'.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 115 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 122 },
       "id": 117,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "ops" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -611,7 +639,7 @@
       "title": "Mux Pending Duration (request→response, p50 / p95 / p99, bucket est.)",
       "description": "Time a correlated request stays pending at the multiplexer — the full request→response wait. Compare against 'Outbound Queue Dwell' to split the wait into our-queue time vs client-side time.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 115 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 122 },
       "id": 118,
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "s" }, "overrides": [] },
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
@@ -619,6 +647,24 @@
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(subduction_mux_pending_duration_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(subduction_mux_pending_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" },
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.99, sum by (le) (rate(subduction_mux_pending_duration_seconds_bucket[5m])))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokio Runtime: blocking pool + queues",
+      "description": "Runtime saturation sampled each metrics-refresh interval. Blocking threads busy = total − idle; a nonzero blocking queue depth means the pool is at its thread cap and storage ops are queueing behind it. Alive tasks growing without bound indicates a task leak.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 129 },
+      "id": 125,
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_tokio_blocking_threads", "legendFormat": "blocking threads", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_tokio_idle_blocking_threads", "legendFormat": "idle blocking threads", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_tokio_blocking_queue_depth", "legendFormat": "blocking queue depth", "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_tokio_global_queue_depth", "legendFormat": "global queue depth", "refId": "D" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_tokio_alive_tasks", "legendFormat": "alive tasks", "refId": "E" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "subduction_tokio_workers", "legendFormat": "workers", "refId": "F" }
       ]
     }
   ]

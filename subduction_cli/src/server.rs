@@ -385,6 +385,10 @@ impl SetupCommon {
             let metrics_handle = metrics::init_metrics();
             let metrics_addr: SocketAddr = ([0, 0, 0, 0], args.metrics_port).into();
             metrics::start_metrics_server(metrics_addr, metrics_handle).await?;
+            subduction_core::metrics::set_build_info(
+                env!("CARGO_PKG_VERSION"),
+                env!("SUBDUCTION_GIT_SHA"),
+            );
         }
 
         tracing::info!(dir = ?data_dir, "Initializing redb storage");
@@ -438,6 +442,21 @@ impl SetupCommon {
                             {
                                 process_collector.collect();
                                 publish_disk_usage(&metrics_data_dir);
+                            }
+                            // Runtime saturation: blocking-pool occupancy and
+                            // queue depths (the unstable counters need
+                            // `--cfg tokio_unstable`, set in .cargo/config.toml).
+                            #[cfg(tokio_unstable)]
+                            {
+                                let rt = tokio::runtime::Handle::current().metrics();
+                                subduction_core::metrics::set_tokio_runtime(
+                                    rt.num_workers(),
+                                    rt.num_alive_tasks(),
+                                    rt.num_blocking_threads(),
+                                    rt.num_idle_blocking_threads(),
+                                    rt.blocking_queue_depth(),
+                                    rt.global_queue_depth(),
+                                );
                             }
                         }
                         () = metrics_token.cancelled() => {
@@ -1047,7 +1066,7 @@ async fn accept_loop<H: CliWireHandler>(
 }
 
 /// Handle a WebSocket connection: upgrade, handshake, add connection.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn handle_websocket<H: CliWireHandler>(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
@@ -1082,6 +1101,7 @@ async fn handle_websocket<H: CliWireHandler>(
     tracing::debug!(addr = %addr, "WebSocket upgrade complete");
 
     let now = TimestampSeconds::now();
+    let handshake_started = std::time::Instant::now();
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
         |ws_handshake, peer_id| {
@@ -1128,6 +1148,10 @@ async fn handle_websocket<H: CliWireHandler>(
     let authenticated = match result {
         Ok((auth, ())) => {
             subduction_core::metrics::handshake_outcome("ok");
+            subduction_core::metrics::handshake_duration(
+                "ok",
+                handshake_started.elapsed().as_secs_f64(),
+            );
             tracing::info!(
                 peer = %auth.peer_id(),
                 addr = %addr,
@@ -1152,6 +1176,10 @@ async fn handle_websocket<H: CliWireHandler>(
                 _ => "rejected",
             };
             subduction_core::metrics::handshake_outcome(outcome);
+            subduction_core::metrics::handshake_duration(
+                "err",
+                handshake_started.elapsed().as_secs_f64(),
+            );
             tracing::warn!(addr = %addr, error = %e, "WebSocket handshake failed");
             return;
         }

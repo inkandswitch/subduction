@@ -128,6 +128,8 @@ impl HttpLongPollTransport {
         &self,
         bytes: Vec<u8>,
     ) -> Result<(), async_channel::SendError<Vec<u8>>> {
+        #[cfg(feature = "metrics")]
+        subduction_core::metrics::network_frame("longpoll", "received", bytes.len());
         self.inner.inbound_writer.send(bytes).await
     }
 
@@ -142,11 +144,14 @@ impl HttpLongPollTransport {
         let item = self.outbound_rx.recv().await?;
 
         #[cfg(feature = "metrics")]
-        subduction_core::metrics::outbound_queue_dwell(
-            "longpoll",
-            item.enqueued.elapsed().as_secs_f64(),
-            self.outbound_rx.len(),
-        );
+        {
+            subduction_core::metrics::outbound_queue_dwell(
+                "longpoll",
+                item.enqueued.elapsed().as_secs_f64(),
+                self.outbound_rx.len(),
+            );
+            subduction_core::metrics::network_frame("longpoll", "sent", item.bytes.len());
+        }
 
         Ok(item.bytes)
     }

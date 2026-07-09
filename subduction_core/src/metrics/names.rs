@@ -1,5 +1,9 @@
 //! Metric names used throughout the application.
 
+/// Build identity: constant `1` carrying `version` and `git_sha` labels
+/// (one series per running binary), so dashboards can correlate behavior
+/// changes with deploys.
+pub const BUILD_INFO: &str = "subduction_build_info";
 /// Number of currently active connections.
 pub const CONNECTIONS_ACTIVE: &str = "subduction_connections_active";
 /// Total number of connections established.
@@ -10,6 +14,13 @@ pub const CONNECTIONS_CLOSED: &str = "subduction_connections_closed";
 /// (auth/clock-drift/decode) that never become a connection, which
 /// `CONNECTIONS_TOTAL` (successes only) can't show.
 pub const HANDSHAKE_TOTAL: &str = "subduction_handshake_total";
+/// Handshake duration (challenge receipt to accept/reject), labeled by
+/// `outcome` (`ok`/`err`).
+pub const HANDSHAKE_DURATION_SECONDS: &str = "subduction_handshake_duration_seconds";
+/// Wire frame sizes, labeled by `transport` and `direction`
+/// (`sent`/`received`). The `_sum` is total bandwidth; the buckets show
+/// whale frames approaching the message-size cap.
+pub const NETWORK_FRAME_BYTES: &str = "subduction_network_frame_bytes";
 /// Total messages processed, labeled by type.
 pub const MESSAGES_TOTAL: &str = "subduction_messages_total";
 /// Message dispatch duration in seconds.
@@ -97,8 +108,15 @@ pub const OUTBOUND_SEND_BLOCKED_TOTAL: &str = "subduction_outbound_send_blocked_
 // Subscriptions (live update fan-out).
 /// Number of sedimentrees with at least one subscriber.
 pub const SUBSCRIBED_SEDIMENTREES: &str = "subduction_subscribed_sedimentrees";
-/// Cumulative incremental updates pushed to subscribers.
+/// Incremental updates pushed to subscribers, labeled by `outcome`
+/// (`ok`/`failed`). Failed pushes are sends into dead connections — the
+/// push-path twin of `subduction_requested_data_send_failures_total`.
 pub const SUBSCRIPTION_PUSHES_TOTAL: &str = "subduction_subscription_pushes_total";
+/// Upstream subscription propagation attempts, labeled by `outcome`
+/// (`established`/`rejected`/`failed`). Rejected/failed attempts roll their
+/// claim back and retry on the next inbound subscribe — a sustained rate is
+/// the solicitation tax on peers that don't hold the tree.
+pub const SUBSCRIPTION_PROPAGATIONS_TOTAL: &str = "subduction_subscription_propagations_total";
 
 /// Current number of sedimentrees in storage.
 ///
@@ -152,6 +170,22 @@ pub const HYDRATION_INFLIGHT: &str = "subduction_hydration_inflight";
 /// Duration of a sedimentree hydration: metadata loads from storage plus
 /// rebuild and minimize.
 pub const HYDRATION_DURATION_SECONDS: &str = "subduction_hydration_duration_seconds";
+
+// Tokio runtime saturation (published by the host process's refresh loop;
+// the unstable counters require `--cfg tokio_unstable`).
+/// Async worker threads in the runtime.
+pub const TOKIO_WORKERS: &str = "subduction_tokio_workers";
+/// Tasks currently alive (spawned and not yet completed).
+pub const TOKIO_ALIVE_TASKS: &str = "subduction_tokio_alive_tasks";
+/// Threads in the blocking pool (busy + idle).
+pub const TOKIO_BLOCKING_THREADS: &str = "subduction_tokio_blocking_threads";
+/// Idle threads in the blocking pool.
+pub const TOKIO_IDLE_BLOCKING_THREADS: &str = "subduction_tokio_idle_blocking_threads";
+/// Tasks queued for the blocking pool but not yet running — nonzero means
+/// the pool is at its thread cap and storage ops are queueing.
+pub const TOKIO_BLOCKING_QUEUE_DEPTH: &str = "subduction_tokio_blocking_queue_depth";
+/// Tasks in the runtime's global (injection) queue awaiting a worker.
+pub const TOKIO_GLOBAL_QUEUE_DEPTH: &str = "subduction_tokio_global_queue_depth";
 
 // On-disk footprint (published from the metrics refresh loop).
 /// Free bytes on the filesystem holding the data directory.
