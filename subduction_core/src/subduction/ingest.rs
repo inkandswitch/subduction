@@ -394,6 +394,8 @@ pub(crate) async fn get_or_hydrate<
     // to here on its own miss, so it must not also count one.
     #[cfg(feature = "metrics")]
     crate::metrics::sedimentree_cache_miss();
+    #[cfg(feature = "metrics")]
+    let _hydration = crate::metrics::HydrationGuard::new();
     tracing::debug!(tree = ?id, "sedimentree cache miss; hydrating from storage");
     let local_access = storage.hydration_access();
     // Metadata-only: hydration rebuilds the tree from payloads and never
@@ -504,6 +506,8 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
     access: &crate::storage::local_access::LocalStorageAccess<Store>,
     id: SedimentreeId,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
+    #[cfg(feature = "metrics")]
+    let _hydration = crate::metrics::HydrationGuard::new();
     // Metadata-only: the rebuilt tree holds no blobs (see `get_or_hydrate`).
     let loose_commits = access.load_loose_commit_metas::<Async>(id).await?;
     let fragments = access.load_fragment_metas::<Async>(id).await?;
@@ -525,6 +529,8 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
 async fn load_tree_via_putter<Async: FutureForm, Store: Storage<Async>>(
     putter: &Putter<Async, Store>,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
+    #[cfg(feature = "metrics")]
+    let _hydration = crate::metrics::HydrationGuard::new();
     let fetcher = putter.as_fetcher();
     // Metadata-only: the rebuilt tree holds no blobs (see `get_or_hydrate`).
     let loose_commits = fetcher.load_loose_commit_metas().await?;

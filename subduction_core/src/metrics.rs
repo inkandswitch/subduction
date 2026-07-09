@@ -125,6 +125,24 @@ pub mod names {
     /// blocking-pool pressure (redb funnels every op through `spawn_blocking`):
     /// sustained high values mean storage ops are queueing for a thread.
     pub const STORAGE_BLOCKING_INFLIGHT: &str = "subduction_storage_blocking_inflight";
+    /// Time a storage op spent queued on the blocking pool before its closure
+    /// started executing. Splits pool saturation out of
+    /// [`STORAGE_OPERATION_DURATION_SECONDS`], which measures enqueue to
+    /// completion (queue wait *plus* execution).
+    pub const STORAGE_BLOCKING_QUEUE_WAIT_SECONDS: &str =
+        "subduction_storage_blocking_queue_wait_seconds";
+    /// Jobs coalesced into one redb group-commit drain (normally one fsync'd
+    /// transaction; a failed batch retries per-job). A distribution stuck at
+    /// 1 under write load means coalescing isn't engaging.
+    pub const REDB_DRAIN_BATCH_SIZE: &str = "subduction_redb_drain_batch_size";
+    /// Total redb group-commit drains.
+    pub const REDB_DRAINS_TOTAL: &str = "subduction_redb_drains_total";
+    /// Sedimentree hydrations (cache-miss rebuilds from storage) currently in
+    /// flight. Sustained high values mean a hydration storm.
+    pub const HYDRATION_INFLIGHT: &str = "subduction_hydration_inflight";
+    /// Duration of a sedimentree hydration: metadata loads from storage plus
+    /// rebuild and minimize.
+    pub const HYDRATION_DURATION_SECONDS: &str = "subduction_hydration_duration_seconds";
 
     // On-disk footprint (published from the metrics refresh loop).
     /// Free bytes on the filesystem holding the data directory.
@@ -437,6 +455,53 @@ pub fn storage_blocking_dec() {
     metrics::gauge!(names::STORAGE_BLOCKING_INFLIGHT).decrement(1.0);
 }
 
+/// Record how long a storage op waited on the blocking pool before executing.
+#[inline]
+pub fn storage_queue_wait(wait_secs: f64) {
+    metrics::histogram!(names::STORAGE_BLOCKING_QUEUE_WAIT_SECONDS).record(wait_secs);
+}
+
+/// Record one redb group-commit drain that coalesced `batch_size` write jobs.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn redb_drain(batch_size: usize) {
+    metrics::counter!(names::REDB_DRAINS_TOTAL).increment(1);
+    metrics::histogram!(names::REDB_DRAIN_BATCH_SIZE).record(batch_size as f64);
+}
+
+/// RAII guard for one sedimentree hydration: raises the in-flight gauge for
+/// its lifetime and records the duration histogram on drop (any exit path,
+/// including errors and cancellation).
+#[derive(Debug)]
+pub struct HydrationGuard {
+    started: std::time::Instant,
+}
+
+impl HydrationGuard {
+    /// Mark a hydration as started.
+    #[must_use]
+    pub fn new() -> Self {
+        metrics::gauge!(names::HYDRATION_INFLIGHT).increment(1.0);
+        Self {
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Default for HydrationGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for HydrationGuard {
+    fn drop(&mut self) {
+        metrics::gauge!(names::HYDRATION_INFLIGHT).decrement(1.0);
+        metrics::histogram!(names::HYDRATION_DURATION_SECONDS)
+            .record(self.started.elapsed().as_secs_f64());
+    }
+}
+
 /// Publish the on-disk footprint: filesystem free/total bytes for the data
 /// directory and the redb database file size.
 #[inline]
@@ -614,7 +679,7 @@ pub fn describe_all() {
     metrics::describe_histogram!(
         names::STORAGE_OPERATION_DURATION_SECONDS,
         metrics::Unit::Seconds,
-        "Duration of individual storage operations, labeled by `operation`."
+        "Duration of individual storage operations, labeled by `operation`. Measures enqueue to completion, so it includes blocking-pool queue wait; see subduction_storage_blocking_queue_wait_seconds for the wait alone."
     );
     metrics::describe_counter!(
         names::STORAGE_OPERATION_ERRORS_TOTAL,
@@ -623,6 +688,28 @@ pub fn describe_all() {
     metrics::describe_gauge!(
         names::STORAGE_BLOCKING_INFLIGHT,
         "Storage operations currently executing on the blocking pool (proxy for blocking-pool pressure; redb funnels every op through spawn_blocking)."
+    );
+    metrics::describe_histogram!(
+        names::STORAGE_BLOCKING_QUEUE_WAIT_SECONDS,
+        metrics::Unit::Seconds,
+        "Time a storage op spent queued on the blocking pool before executing (pool saturation, split out of the total operation duration)."
+    );
+    metrics::describe_histogram!(
+        names::REDB_DRAIN_BATCH_SIZE,
+        "Write jobs coalesced into one redb group-commit drain (a distribution stuck at 1 under write load means coalescing isn't engaging)."
+    );
+    metrics::describe_counter!(
+        names::REDB_DRAINS_TOTAL,
+        "Total redb group-commit drains (normally one fsync'd transaction each; a failed batch retries per-job)."
+    );
+    metrics::describe_gauge!(
+        names::HYDRATION_INFLIGHT,
+        "Sedimentree hydrations (cache-miss rebuilds from storage) currently in flight."
+    );
+    metrics::describe_histogram!(
+        names::HYDRATION_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Duration of a sedimentree hydration: metadata loads plus rebuild and minimize."
     );
     metrics::describe_gauge!(
         names::DISK_FREE_BYTES,

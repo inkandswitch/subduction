@@ -27,12 +27,37 @@ pub struct MetricsStorage<Store> {
     inner: Store,
 }
 
+/// Operations slower than this are logged with their tree id, so slow-storage
+/// incidents can name the offending tree (the histogram can't carry it:
+/// per-tree labels are unbounded cardinality).
+const SLOW_OP_THRESHOLD_SECS: f64 = 1.0;
+
 /// Record a storage operation's duration, and an error counter if it failed.
+///
+/// `tree` is `None` only for tree-independent operations; `items` is the
+/// result's item count where the operation has one.
 #[inline]
-fn observe<T, E>(operation: &'static str, start: Instant, result: &Result<T, E>) {
-    metrics::storage_operation_duration(operation, start.elapsed().as_secs_f64());
+fn observe<T, E>(
+    operation: &'static str,
+    tree: Option<SedimentreeId>,
+    items: Option<usize>,
+    start: Instant,
+    result: &Result<T, E>,
+) {
+    let elapsed_secs = start.elapsed().as_secs_f64();
+    metrics::storage_operation_duration(operation, elapsed_secs);
     if result.is_err() {
         metrics::storage_operation_error(operation);
+    }
+    if elapsed_secs > SLOW_OP_THRESHOLD_SECS {
+        tracing::warn!(
+            operation,
+            tree = ?tree,
+            items,
+            elapsed_secs,
+            ok = result.is_ok(),
+            "slow storage operation"
+        );
     }
 }
 
@@ -113,7 +138,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_sedimentree_id(sedimentree_id).await;
-            observe("save_sedimentree_id", start, &result);
+            observe(
+                "save_sedimentree_id",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             result
         })
     }
@@ -125,7 +156,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_sedimentree_id(sedimentree_id).await;
-            observe("delete_sedimentree_id", start, &result);
+            observe(
+                "delete_sedimentree_id",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             result
         })
     }
@@ -136,7 +173,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_all_sedimentree_ids().await;
-            observe("load_all_sedimentree_ids", start, &result);
+            observe(
+                "load_all_sedimentree_ids",
+                None,
+                result.as_ref().ok().map(Set::len),
+                start,
+                &result,
+            );
             result
         })
     }
@@ -148,7 +191,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.contains_sedimentree_id(sedimentree_id).await;
-            observe("contains_sedimentree_id", start, &result);
+            observe(
+                "contains_sedimentree_id",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             result
         })
     }
@@ -163,7 +212,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_loose_commit(sedimentree_id, verified).await;
-            observe("save_loose_commit", start, &result);
+            observe(
+                "save_loose_commit",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             if result.is_ok() {
                 metrics::storage_commit_written();
             }
@@ -178,7 +233,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.list_commit_ids(sedimentree_id).await;
-            observe("list_commit_ids", start, &result);
+            observe(
+                "list_commit_ids",
+                Some(sedimentree_id),
+                result.as_ref().ok().map(Set::len),
+                start,
+                &result,
+            );
             result
         })
     }
@@ -190,7 +251,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_loose_commits(sedimentree_id).await;
-            observe("load_loose_commits", start, &result);
+            observe(
+                "load_loose_commits",
+                Some(sedimentree_id),
+                result.as_ref().ok().map(Vec::len),
+                start,
+                &result,
+            );
             result
         })
     }
@@ -202,7 +269,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_loose_commit_metas(sedimentree_id).await;
-            observe("load_loose_commit_metas", start, &result);
+            observe(
+                "load_loose_commit_metas",
+                Some(sedimentree_id),
+                result.as_ref().ok().map(Vec::len),
+                start,
+                &result,
+            );
             result
         })
     }
@@ -218,7 +291,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
                 .inner
                 .load_loose_commit(sedimentree_id, commit_id)
                 .await;
-            observe("load_loose_commit", start, &result);
+            observe(
+                "load_loose_commit",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             result
         })
     }
@@ -234,7 +313,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
                 .inner
                 .delete_loose_commit(sedimentree_id, commit_id)
                 .await;
-            observe("delete_loose_commit", start, &result);
+            observe(
+                "delete_loose_commit",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             if result.is_ok() {
                 metrics::storage_commit_deleted();
             }
@@ -249,7 +334,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_loose_commits(sedimentree_id).await;
-            observe("delete_loose_commits", start, &result);
+            observe(
+                "delete_loose_commits",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             result
         })
     }
@@ -264,7 +355,7 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_fragment(sedimentree_id, verified).await;
-            observe("save_fragment", start, &result);
+            observe("save_fragment", Some(sedimentree_id), None, start, &result);
             if result.is_ok() {
                 metrics::storage_fragment_written();
             }
@@ -283,7 +374,7 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
                 .inner
                 .load_fragment(sedimentree_id, fragment_head)
                 .await;
-            observe("load_fragment", start, &result);
+            observe("load_fragment", Some(sedimentree_id), None, start, &result);
             result
         })
     }
@@ -295,7 +386,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.list_fragment_ids(sedimentree_id).await;
-            observe("list_fragment_ids", start, &result);
+            observe(
+                "list_fragment_ids",
+                Some(sedimentree_id),
+                result.as_ref().ok().map(Set::len),
+                start,
+                &result,
+            );
             result
         })
     }
@@ -307,7 +404,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_fragments(sedimentree_id).await;
-            observe("load_fragments", start, &result);
+            observe(
+                "load_fragments",
+                Some(sedimentree_id),
+                result.as_ref().ok().map(Vec::len),
+                start,
+                &result,
+            );
             result
         })
     }
@@ -319,7 +422,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_fragment_metas(sedimentree_id).await;
-            observe("load_fragment_metas", start, &result);
+            observe(
+                "load_fragment_metas",
+                Some(sedimentree_id),
+                result.as_ref().ok().map(Vec::len),
+                start,
+                &result,
+            );
             result
         })
     }
@@ -335,7 +444,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
                 .inner
                 .delete_fragment(sedimentree_id, fragment_head)
                 .await;
-            observe("delete_fragment", start, &result);
+            observe(
+                "delete_fragment",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             if result.is_ok() {
                 metrics::storage_fragment_deleted();
             }
@@ -350,7 +465,13 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         Async::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_fragments(sedimentree_id).await;
-            observe("delete_fragments", start, &result);
+            observe(
+                "delete_fragments",
+                Some(sedimentree_id),
+                None,
+                start,
+                &result,
+            );
             result
         })
     }
@@ -364,17 +485,23 @@ impl<Async: FutureForm, Store> Storage<Async> for MetricsStorage<Store> {
         fragments: Vec<VerifiedMeta<Fragment>>,
     ) -> Async::Future<'_, Result<usize, Self::Error>> {
         Async::from_future(async move {
-            let n_commits = commits.len() as u64;
-            let n_fragments = fragments.len() as u64;
+            let n_commits = commits.len();
+            let n_fragments = fragments.len();
             let start = Instant::now();
             let result = self
                 .inner
                 .save_batch(sedimentree_id, commits, fragments)
                 .await;
-            observe("save_batch", start, &result);
+            observe(
+                "save_batch",
+                Some(sedimentree_id),
+                Some(n_commits + n_fragments),
+                start,
+                &result,
+            );
             if result.is_ok() {
-                metrics::storage_commits_written(n_commits);
-                metrics::storage_fragments_written(n_fragments);
+                metrics::storage_commits_written(n_commits as u64);
+                metrics::storage_fragments_written(n_fragments as u64);
             }
             result
         })

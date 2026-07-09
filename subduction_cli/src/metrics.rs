@@ -24,7 +24,7 @@ use tokio::net::TcpListener;
 /// (which reads as "p99 = ceiling").
 const FINE_BUCKETS_SECONDS: &[f64] = &[
     0.000_05, 0.000_1, 0.000_25, 0.000_5, 0.001, 0.002_5, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
-    1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+    1.0, 1.5, 2.5, 3.5, 5.0, 10.0, 30.0, 60.0,
 ];
 
 /// Coarse buckets (seconds) for whole-round operations measured in
@@ -110,6 +110,21 @@ pub fn init_metrics() -> PrometheusHandle {
             FINE_BUCKETS_SECONDS,
         )
         .expect("fine buckets are non-empty and sorted")
+        // Blocking-pool queue wait: µs when the pool is healthy, seconds when
+        // saturated. `_wait_seconds` misses the coarse suffix fallback, so set
+        // it explicitly (it would otherwise render as a summary).
+        .set_buckets_for_metric(
+            Matcher::Full(names::STORAGE_BLOCKING_QUEUE_WAIT_SECONDS.to_owned()),
+            FINE_BUCKETS_SECONDS,
+        )
+        .expect("fine buckets are non-empty and sorted")
+        // Drain batch size is a count bounded by the writer queue capacity
+        // (1024), same shape as outbound queue depth.
+        .set_buckets_for_metric(
+            Matcher::Full(names::REDB_DRAIN_BATCH_SIZE.to_owned()),
+            DEPTH_BUCKETS,
+        )
+        .expect("depth buckets are non-empty and sorted")
         .set_buckets_for_metric(
             Matcher::Suffix("_duration_seconds".to_owned()),
             COARSE_BUCKETS_SECONDS,
@@ -162,6 +177,10 @@ mod tests {
     /// fast-vs-slow metrics must get their respective fine/coarse bucket sets.
     /// Without `set_buckets_for_metric`, the exporter emits quantile summaries
     /// and `histogram_quantile(rate(..._bucket))` dashboard panels show no data.
+    //
+    // One long test by necessity: `install_recorder` installs a process-global
+    // recorder, so all render assertions must share a single test.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn duration_histograms_render_as_buckets() {
         let handle = init_metrics();
@@ -180,6 +199,9 @@ mod tests {
         subduction_core::metrics::sedimentree_cache_hit();
         subduction_core::metrics::sedimentree_cache_miss();
         subduction_core::metrics::set_sedimentree_cache_resident(7);
+        subduction_core::metrics::storage_queue_wait(0.001);
+        subduction_core::metrics::redb_drain(3);
+        drop(subduction_core::metrics::HydrationGuard::new());
 
         let rendered = handle.render();
 
@@ -278,6 +300,36 @@ mod tests {
         assert!(
             rendered.contains("subduction_mux_pending_duration_seconds_bucket"),
             "mux pending-duration histogram should render as buckets:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_storage_blocking_queue_wait_seconds_bucket"),
+            "storage queue-wait histogram should render as buckets:\n{rendered}"
+        );
+
+        // Drain batch size uses the depth (count) bucket set, not a summary.
+        let drain_lines: String = rendered
+            .lines()
+            .filter(|l| l.contains("subduction_redb_drain_batch_size_bucket"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            drain_lines.contains("le=\"1024\""),
+            "drain batch-size histogram should render count buckets up to the queue capacity:\n{drain_lines}"
+        );
+        assert!(
+            rendered.contains("subduction_redb_drains_total 1"),
+            "drain counter should render a total of 1:\n{rendered}"
+        );
+
+        // The hydration guard round-trips: one duration sample recorded, and
+        // the in-flight gauge returns to 0 after drop.
+        assert!(
+            rendered.contains("subduction_hydration_duration_seconds_bucket"),
+            "hydration duration histogram should render as buckets:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("subduction_hydration_inflight 0"),
+            "hydration in-flight gauge should return to 0 after the guard drops:\n{rendered}"
         );
 
         // Cache counters render with their exact totals; the resident gauge too.
