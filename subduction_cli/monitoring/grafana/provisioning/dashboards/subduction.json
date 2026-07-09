@@ -387,7 +387,7 @@
     {
       "type": "timeseries",
       "title": "redb Write Coalescing: drains/s + batch size p95 (bucket est.)",
-      "description": "Group-commit efficacy: each drain is normally one fsync'd transaction. Batch size pinned at 1 under write load means coalescing isn't engaging (fsync per write); larger batches mean fewer fsyncs.",
+      "description": "Group-commit efficacy: each drain is normally one fsync'd transaction. Batch size pinned at 1 under write load means coalescing isn't engaging (fsync per write).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 59 },
       "id": 121,

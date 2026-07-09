@@ -131,9 +131,8 @@ pub mod names {
     /// completion (queue wait *plus* execution).
     pub const STORAGE_BLOCKING_QUEUE_WAIT_SECONDS: &str =
         "subduction_storage_blocking_queue_wait_seconds";
-    /// Jobs coalesced into one redb group-commit drain (normally one fsync'd
-    /// transaction; a failed batch retries per-job). A distribution stuck at
-    /// 1 under write load means coalescing isn't engaging.
+    /// Jobs coalesced into one redb group-commit drain. A distribution stuck
+    /// at 1 under write load means coalescing isn't engaging.
     pub const REDB_DRAIN_BATCH_SIZE: &str = "subduction_redb_drain_batch_size";
     /// Total redb group-commit drains.
     pub const REDB_DRAINS_TOTAL: &str = "subduction_redb_drains_total";
