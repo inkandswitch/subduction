@@ -28,6 +28,7 @@ use sedimentree_core::{
     blob::Blob,
     codec::error::DecodeError,
     collections::Set,
+    crypto::digest::Digest,
     depth::DepthMetric,
     fragment::Fragment,
     id::SedimentreeId,
@@ -398,8 +399,12 @@ impl<S: Sql> SqlStore<S> {
     }
 
     fn commit_metas(&self, tree: SedimentreeId) -> Result<Vec<LooseCommit>, DoStorageError> {
+        // Deterministic `(head, digest)` order (matching the primary key and the
+        // full `load_loose_commits`) so meta-only and full loads resolve to the
+        // same first-wins representative per `CommitId` under equivocation — the
+        // storage conformance contract (`assert_metas_match_full_load`).
         let rows = self.query(
-            "SELECT signed FROM commits WHERE tree = ?;",
+            "SELECT signed FROM commits WHERE tree = ? ORDER BY head, digest;",
             vec![SqlValue::Blob(tree.as_bytes().to_vec())],
         )?;
         let mut out = Vec::with_capacity(rows.len());
@@ -411,8 +416,10 @@ impl<S: Sql> SqlStore<S> {
     }
 
     fn fragment_metas(&self, tree: SedimentreeId) -> Result<Vec<Fragment>, DoStorageError> {
+        // See `commit_metas`: deterministic `(head, digest)` order so meta-only
+        // and full fragment loads pick the same representative per `CommitId`.
         let rows = self.query(
-            "SELECT signed FROM fragments WHERE tree = ?;",
+            "SELECT signed FROM fragments WHERE tree = ? ORDER BY head, digest;",
             vec![SqlValue::Blob(tree.as_bytes().to_vec())],
         )?;
         let mut out = Vec::with_capacity(rows.len());
@@ -462,10 +469,10 @@ impl<S: Sql> SqlStore<S> {
         table: &str,
         tree: SedimentreeId,
         head: CommitId,
+        digest: &[u8; 32],
         signed_bytes: &[u8],
         blob: &[u8],
     ) -> Result<(), DoStorageError> {
-        let digest = blake3::hash(signed_bytes).as_bytes().to_vec();
         // Register the tree id atomically-ish with the item (same synchronous
         // storage, no concurrent writers inside a single-threaded DO).
         self.run(
@@ -480,7 +487,7 @@ impl<S: Sql> SqlStore<S> {
             vec![
                 SqlValue::Blob(tree.as_bytes().to_vec()),
                 SqlValue::Blob(head.as_bytes().to_vec()),
-                SqlValue::Blob(digest),
+                SqlValue::Blob(digest.to_vec()),
                 SqlValue::Blob(signed_bytes.to_vec()),
                 SqlValue::Blob(blob.to_vec()),
             ],
@@ -635,10 +642,12 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
             let head = verified.payload().head();
+            let digest = Digest::hash(verified.payload());
             self.save_item(
                 "commits",
                 sedimentree_id,
                 head,
+                digest.as_bytes(),
                 verified.signed().as_bytes(),
                 verified.blob().as_slice(),
             )
@@ -670,8 +679,10 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Local::from_future(async move {
+            // Deterministic `(head, digest)` order matching `commit_metas` (see
+            // its note) so both loads resolve the same representative per id.
             let rows = self.query(
-                "SELECT signed, blob FROM commits WHERE tree = ?;",
+                "SELECT signed, blob FROM commits WHERE tree = ? ORDER BY head, digest;",
                 vec![SqlValue::Blob(sedimentree_id.as_bytes().to_vec())],
             )?;
             let mut out = Vec::new();
@@ -752,10 +763,12 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
             let head = verified.payload().head();
+            let digest = Digest::hash(verified.payload());
             let result = self.save_item(
                 "fragments",
                 sedimentree_id,
                 head,
+                digest.as_bytes(),
                 verified.signed().as_bytes(),
                 verified.blob().as_slice(),
             );
@@ -817,8 +830,10 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         Local::from_future(async move {
+            // Deterministic `(head, digest)` order matching `fragment_metas` so
+            // both loads resolve the same representative per id.
             let rows = self.query(
-                "SELECT signed, blob FROM fragments WHERE tree = ?;",
+                "SELECT signed, blob FROM fragments WHERE tree = ? ORDER BY head, digest;",
                 vec![SqlValue::Blob(sedimentree_id.as_bytes().to_vec())],
             )?;
             let mut out = Vec::new();
@@ -885,6 +900,7 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
                     "commits",
                     sedimentree_id,
                     vm.payload().head(),
+                    Digest::hash(vm.payload()).as_bytes(),
                     vm.signed().as_bytes(),
                     vm.blob().as_slice(),
                 )?;
@@ -894,6 +910,7 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
                     "fragments",
                     sedimentree_id,
                     vm.payload().head(),
+                    Digest::hash(vm.payload()).as_bytes(),
                     vm.signed().as_bytes(),
                     vm.blob().as_slice(),
                 )?;

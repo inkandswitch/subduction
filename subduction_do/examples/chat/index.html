@@ -240,9 +240,17 @@
               const parsed = JSON.parse(dec.decode(bytes));
               const msgs = Array.isArray(parsed) ? parsed : [parsed];
               for (const m of msgs) {
-                // Only accept well-formed messages so one malformed blob can't
-                // break the whole render.
-                if (m && typeof m.id === "string" && typeof m.author === "string") {
+                // Only accept fully well-formed messages so one malformed blob
+                // can't break the whole render — `ts` and `text` are used later
+                // (sorting, `new Date(m.ts)`, and the body), so validate them
+                // here too, not just `id`/`author`.
+                if (
+                  m &&
+                  typeof m.id === "string" &&
+                  typeof m.author === "string" &&
+                  typeof m.text === "string" &&
+                  Number.isFinite(m.ts)
+                ) {
                   seen.set(m.id, m);
                 }
               }
