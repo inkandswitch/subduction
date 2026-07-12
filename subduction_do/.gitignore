@@ -4,4 +4,3 @@
 /public
 /examples/chat/pkg
 .wrangler
-Cargo.lock
