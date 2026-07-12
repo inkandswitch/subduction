@@ -208,11 +208,16 @@ impl<S: Sql> SqlStore<S> {
     /// keeps outgoing counters monotonic across hibernation, as long as one
     /// lifetime never issues more than `stride` messages to a single peer.
     ///
-    /// The advance is `saturating`: once the base reaches `u64::MAX` it stops
-    /// growing and successive lifetimes reuse it, which could let counters
-    /// collide. With the deployed `stride` of `2^32` that needs `2^32` isolate
-    /// re-creations of a single document — practically unreachable — so we cap
-    /// rather than wrap (which would silently rewind the sequence).
+    /// The advance is `saturating` and clamped to `u64::MAX - 1`: once the base
+    /// reaches that ceiling it stops growing and successive lifetimes reuse it,
+    /// which could let counters collide. With the deployed `stride` of `2^32`
+    /// that needs `2^32` isolate re-creations of a single document —
+    /// practically unreachable — so we cap rather than wrap (which would
+    /// silently rewind the sequence). The base is never `u64::MAX` because
+    /// seeding `PeerCounter` with it would force the next stamp to wrap to `0`
+    /// (see [`PeerCounter::advance_to`], which also clamps defensively).
+    ///
+    /// [`PeerCounter::advance_to`]: subduction_core::peer::counter::PeerCounter::advance_to
     ///
     /// # Errors
     ///
@@ -221,10 +226,14 @@ impl<S: Sql> SqlStore<S> {
         let base = self
             .get_meta(COUNTER_BASE_KEY)?
             .and_then(|b| <[u8; 8]>::try_from(b).ok())
-            .map_or(0, u64::from_le_bytes);
+            .map_or(0, u64::from_le_bytes)
+            .min(u64::MAX - 1);
         self.put_meta(
             COUNTER_BASE_KEY,
-            base.saturating_add(stride).to_le_bytes().to_vec(),
+            base.saturating_add(stride)
+                .min(u64::MAX - 1)
+                .to_le_bytes()
+                .to_vec(),
         )?;
         Ok(base)
     }
@@ -1177,6 +1186,26 @@ mod tests {
         assert_eq!(s.reserve_counter_base(1000).expect("reserve"), 1000);
         assert_eq!(s.reserve_counter_base(500).expect("reserve"), 2000);
         assert_eq!(s.reserve_counter_base(1).expect("reserve"), 2500);
+    }
+
+    #[test]
+    fn counter_base_never_reserves_the_wrapping_value() {
+        let s = store();
+        // A max-width stride saturates the persisted high-water, but the base is
+        // clamped below u64::MAX so seeding PeerCounter with it can never force
+        // the next stamp to wrap to 0.
+        assert_eq!(s.reserve_counter_base(u64::MAX).expect("reserve"), 0);
+        let second = s.reserve_counter_base(u64::MAX).expect("reserve");
+        assert_eq!(
+            second,
+            u64::MAX - 1,
+            "saturated base is clamped one below the wrapping value"
+        );
+        // And it stays there across further lifetimes rather than reaching MAX.
+        assert_eq!(
+            s.reserve_counter_base(u64::MAX).expect("reserve"),
+            u64::MAX - 1
+        );
     }
 
     #[test]

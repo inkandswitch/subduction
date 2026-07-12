@@ -57,7 +57,14 @@ impl PeerCounter {
     /// value handed out in prior lifetimes keeps the sequence monotonic across
     /// restarts, so receivers' staleness filters (drop `counter <= last seen`)
     /// don't blackhole post-hibernation updates.
+    ///
+    /// `floor` is clamped to `u64::MAX - 1`: [`next`](Self::next) increments
+    /// with `fetch_add(1)`, so a counter seeded to `u64::MAX` would wrap to `0`
+    /// on the next stamp and break monotonicity. `u64::MAX` is therefore not a
+    /// representable stamp — the largest value `next` can return is `u64::MAX`,
+    /// reached only by natural increment, never by seeding.
     pub async fn advance_to(&self, peer: PeerId, floor: u64) {
+        let floor = floor.min(u64::MAX - 1);
         let counter = {
             let mut map = self.0.lock().await;
             map.entry(peer).or_default().clone()
@@ -124,5 +131,17 @@ mod tests {
         // A higher floor jumps it forward.
         counter.advance_to(peer, 500).await;
         assert_eq!(counter.next(peer).await, 501);
+    }
+
+    #[tokio::test]
+    async fn advance_to_clamps_floor_below_wraparound() {
+        let counter = PeerCounter::default();
+        let peer = PeerId::new([11u8; 32]);
+
+        // A floor of u64::MAX must not force the counter to the wrapping value:
+        // `next` (fetch_add(1)) would otherwise return 0 and rewind the
+        // sequence. Clamped, the next stamp is the largest representable value.
+        counter.advance_to(peer, u64::MAX).await;
+        assert_eq!(counter.next(peer).await, u64::MAX);
     }
 }
