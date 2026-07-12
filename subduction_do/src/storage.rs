@@ -217,6 +217,13 @@ impl<S: Sql> SqlStore<S> {
     /// Called after handling any message that could mutate subscriptions, so
     /// the on-disk set stays in sync with the in-memory map across hibernation.
     ///
+    /// The `DELETE` and the per-row `INSERT`s run as a single **synchronous**
+    /// burst with no intervening `await`. On the Durable Object SQLite backend
+    /// that makes them one atomic implicit transaction via automatic write
+    /// coalescing, so a mid-way failure never leaves a partial/empty set on
+    /// disk. Do **not** wrap this in `BEGIN`/`COMMIT`: `sql.exec()` rejects
+    /// transaction statements and would error at runtime.
+    ///
     /// # Errors
     ///
     /// Returns any SQL error.

@@ -465,7 +465,13 @@ impl SyncDurableObject {
             return;
         }
 
-        self.ensure_subscriptions_loaded().await.ok();
+        if let Err(e) = self.ensure_subscriptions_loaded().await {
+            // Surface storage faults (corruption, quota, ...) instead of hiding
+            // them: swallowing the error here can leave stale subscriptions on
+            // disk that get reloaded after hibernation.
+            tracing::warn!(error = %e, "teardown: failed to load subscriptions");
+            return;
+        }
         let changed = {
             let mut subs = self.subscriptions.lock().await;
             let mut changed = false;
@@ -476,7 +482,9 @@ impl SyncDurableObject {
             changed
         };
         if changed {
-            self.persist_subscriptions().await.ok();
+            if let Err(e) = self.persist_subscriptions().await {
+                tracing::warn!(error = %e, "teardown: failed to persist subscriptions");
+            }
         }
     }
 }
