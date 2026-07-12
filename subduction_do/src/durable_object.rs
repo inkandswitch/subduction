@@ -444,14 +444,27 @@ impl SyncDurableObject {
     /// Best-effort teardown when a socket closes or errors: prune the peer from
     /// every subscription so we stop trying to fan out to a dead transport.
     ///
-    /// NOTE: this prunes by peer id, which assumes one socket per peer. If a
-    /// single identity held multiple sockets, closing one would unsubscribe the
-    /// identity entirely; the demo gives every tab a distinct identity so this
-    /// does not arise in practice.
+    /// A peer may hold more than one socket (e.g. two tabs sharing an identity),
+    /// so we only unsubscribe it once its *last* socket is gone. We check the
+    /// live sockets for any other one bound to the same peer, excluding the one
+    /// being torn down by identity (`get_websockets()` may or may not still
+    /// include it during the close callback).
     async fn teardown(&self, ws: &WebSocket) {
         let Some(peer) = attachment_peer(ws) else {
             return;
         };
+
+        let peer_still_connected = self
+            .state
+            .get_websockets()
+            .into_iter()
+            .filter(|other| other != ws)
+            .filter_map(|other| attachment_peer(&other))
+            .any(|other_peer| other_peer == peer);
+        if peer_still_connected {
+            return;
+        }
+
         self.ensure_subscriptions_loaded().await.ok();
         let changed = {
             let mut subs = self.subscriptions.lock().await;
