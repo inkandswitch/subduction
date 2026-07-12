@@ -489,10 +489,14 @@ fn clamp_i64(value: u64) -> i64 {
 }
 
 /// Extract the blob bytes from column `idx` of a row.
+///
+/// Every blob column we read is declared `NOT NULL`, and an empty blob comes
+/// back as a zero-length `Blob`, not `Null`. So a `Null` here means corruption
+/// or a type mismatch and is surfaced as an error rather than masked as an
+/// empty value (which would, e.g., turn a bad signer seed into an empty one).
 fn blob_at(row: &[SqlValue], idx: usize, ctx: &'static str) -> Result<Vec<u8>, DoStorageError> {
     match row.get(idx) {
         Some(SqlValue::Blob(b)) => Ok(b.clone()),
-        Some(SqlValue::Null) => Ok(Vec::new()),
         _ => Err(DoStorageError::UnexpectedColumn(ctx)),
     }
 }
@@ -509,25 +513,35 @@ fn array32(bytes: &[u8], ctx: &'static str) -> Result<[u8; 32], DoStorageError> 
     <[u8; 32]>::try_from(bytes).map_err(|_| DoStorageError::UnexpectedColumn(ctx))
 }
 
-/// An order-independent fingerprint of a `(tree, peer)` subscription set, used
-/// to detect whether the set changed before rewriting it to SQLite. Summing
-/// per-pair hashes is commutative, so map iteration order does not matter.
+/// An order-independent, collision-resistant fingerprint of a `(tree, peer)`
+/// subscription set, used to detect whether the set changed before rewriting it
+/// to SQLite.
+///
+/// The pairs are sorted into a canonical order and fed, length-prefixed, into a
+/// single blake3 hash whose full 32-byte digest is returned. Sorting makes the
+/// result independent of map iteration order; the full digest (rather than a
+/// truncated 64-bit sum) means `persist_subscriptions` won't skip a real change
+/// on a fingerprint collision and reload a stale set after hibernation.
 ///
 /// Only referenced from the wasm Durable Object and host tests; `allow(dead_code)`
 /// keeps the plain host `lib` build quiet.
 #[must_use]
 #[allow(dead_code)]
-pub(crate) fn subscriptions_fingerprint(pairs: &[(SedimentreeId, [u8; 32])]) -> u64 {
-    let mut acc = pairs.len() as u64;
-    for (tree, peer) in pairs {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(tree.as_bytes());
+pub(crate) fn subscriptions_fingerprint(pairs: &[(SedimentreeId, [u8; 32])]) -> [u8; 32] {
+    let mut sorted: Vec<(&[u8; 32], &[u8; 32])> = pairs
+        .iter()
+        .map(|(tree, peer)| (tree.as_bytes(), peer))
+        .collect();
+    sorted.sort_unstable();
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(sorted.len() as u64).to_le_bytes());
+    for (tree, peer) in sorted {
+        // Both fields are fixed 32 bytes, so concatenation is unambiguous.
+        hasher.update(tree);
         hasher.update(peer);
-        let digest = hasher.finalize();
-        let head = <[u8; 8]>::try_from(&digest.as_bytes()[..8]).expect("blake3 digest >= 8 bytes");
-        acc = acc.wrapping_add(u64::from_le_bytes(head));
     }
-    acc
+    *hasher.finalize().as_bytes()
 }
 
 fn row_to_commit(
@@ -571,7 +585,11 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
             let id = SqlValue::Blob(sedimentree_id.as_bytes().to_vec());
             self.run("DELETE FROM trees WHERE id = ?;", vec![id.clone()])?;
             self.run("DELETE FROM commits WHERE tree = ?;", vec![id.clone()])?;
-            self.run("DELETE FROM fragments WHERE tree = ?;", vec![id])?;
+            self.run("DELETE FROM fragments WHERE tree = ?;", vec![id.clone()])?;
+            // Drop the tree's subscriptions too, otherwise they'd be reloaded
+            // after hibernation and drive stale fan-out for a tree we no longer
+            // hold.
+            self.run("DELETE FROM subscriptions WHERE tree = ?;", vec![id])?;
             Ok(())
         })
     }
@@ -1116,7 +1134,16 @@ mod tests {
         let fp3 = subscriptions_fingerprint(&[(tree, a)]);
         assert_ne!(fp1, fp3, "removing a pair must change the fingerprint");
 
-        assert_eq!(subscriptions_fingerprint(&[]), 0);
+        // The empty set has a stable fingerprint distinct from any non-empty one.
+        assert_eq!(
+            subscriptions_fingerprint(&[]),
+            subscriptions_fingerprint(&[])
+        );
+        assert_ne!(
+            fp3,
+            subscriptions_fingerprint(&[]),
+            "empty must differ from non-empty"
+        );
     }
 
     #[test]

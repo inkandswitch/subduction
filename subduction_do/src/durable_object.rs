@@ -110,7 +110,7 @@ pub struct SyncDurableObject {
     subs_loaded: Cell<bool>,
     /// Order-independent fingerprint of the subscription set last written to
     /// SQLite, so we can skip the (full-table) rewrite when nothing changed.
-    subs_fingerprint: Cell<u64>,
+    subs_fingerprint: Cell<[u8; 32]>,
 }
 
 impl DurableObject for SyncDurableObject {
@@ -152,7 +152,7 @@ impl DurableObject for SyncDurableObject {
             spawner,
             nonce_cache: NonceCache::default(),
             subs_loaded: Cell::new(false),
-            subs_fingerprint: Cell::new(0),
+            subs_fingerprint: Cell::new([0u8; 32]),
         }
     }
 
@@ -185,9 +185,14 @@ impl DurableObject for SyncDurableObject {
     ) -> WorkerResult<()> {
         let bytes = match message {
             WebSocketIncomingMessage::Binary(bytes) => bytes,
-            // The subduction wire protocol is binary; a text frame on this
-            // socket is not something we speak.
-            WebSocketIncomingMessage::String(_) => return Ok(()),
+            // The subduction wire protocol is binary. Reject text frames
+            // explicitly (close code 1003 = "unsupported data") rather than
+            // silently ignoring them, so a misbehaving client can't keep the
+            // object awake pushing frames we'll never act on.
+            WebSocketIncomingMessage::String(_) => {
+                let _ = ws.close(Some(1003), Some("binary protocol only"));
+                return Ok(());
+            }
         };
 
         match ws.deserialize_attachment::<Vec<u8>>()? {
