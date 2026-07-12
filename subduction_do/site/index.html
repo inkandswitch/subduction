@@ -9,6 +9,20 @@
       name="description"
       content="A hibernatable CRDT sync service: one Cloudflare Durable Object per document, signed commits over WebSocket, SQLite persistence, and alarm-driven compaction."
     />
+    <link rel="canonical" href="https://subduct.io/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://subduct.io/" />
+    <meta property="og:title" content="Subduction · CRDT sync on Cloudflare Durable Objects" />
+    <meta
+      property="og:description"
+      content="A hibernatable CRDT sync service: one Cloudflare Durable Object per document, signed commits over WebSocket, SQLite persistence, and alarm-driven compaction."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Subduction · CRDT sync on Cloudflare Durable Objects" />
+    <meta
+      name="twitter:description"
+      content="One Cloudflare Durable Object per document, signed commits over WebSocket, SQLite persistence, and alarm-driven compaction."
+    />
     <style>
       :root {
         --bg: #0d1117;
@@ -284,7 +298,7 @@
           <div class="label">WebSocket endpoint</div>
           <div class="row">
             <code id="endpoint"
-              >wss://<span id="host">this-worker.example.workers.dev</span>/sync/<span class="ph">&lt;document-id&gt;</span></code
+              >wss://<span id="host">subduct.io</span>/sync/<span class="ph">&lt;document-id&gt;</span></code
             >
             <button class="copy" id="copy">Copy</button>
           </div>
@@ -419,7 +433,7 @@
       // Show the real host this page is served from, so the endpoint is
       // copy-pasteable straight from a deployment.
       (function () {
-        const host = location.host || "this-worker.example.workers.dev";
+        const host = location.host || "subduct.io";
         document.getElementById("host").textContent = host;
 
         const btn = document.getElementById("copy");

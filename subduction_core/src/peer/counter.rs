@@ -47,6 +47,24 @@ impl PeerCounter {
         counter.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Raise a peer's counter so the next [`next`](Self::next) returns a value
+    /// strictly greater than `floor`, without ever lowering it.
+    ///
+    /// This is for callers whose identity is stable but whose in-memory counter
+    /// can be reconstructed from scratch (e.g. a hibernatable Cloudflare Durable
+    /// Object: it keeps a persisted `peer_id` but rebuilds the `PeerCounter`
+    /// each time the isolate is re-created). Seeding the counter above every
+    /// value handed out in prior lifetimes keeps the sequence monotonic across
+    /// restarts, so receivers' staleness filters (drop `counter <= last seen`)
+    /// don't blackhole post-hibernation updates.
+    pub async fn advance_to(&self, peer: PeerId, floor: u64) {
+        let counter = {
+            let mut map = self.0.lock().await;
+            map.entry(peer).or_default().clone()
+        };
+        counter.fetch_max(floor, Ordering::Relaxed);
+    }
+
     /// Remove the counter for a peer that has fully disconnected.
     ///
     /// Call this from connection cleanup paths when a peer's last
@@ -75,5 +93,36 @@ impl PeerCounter {
             .await
             .get(peer)
             .map(|c| c.load(Ordering::Relaxed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn advance_to_seeds_then_next_exceeds_floor() {
+        let counter = PeerCounter::default();
+        let peer = PeerId::new([7u8; 32]);
+
+        counter.advance_to(peer, 1000).await;
+        // The next stamp is strictly greater than the floor.
+        assert_eq!(counter.next(peer).await, 1001);
+        assert_eq!(counter.next(peer).await, 1002);
+    }
+
+    #[tokio::test]
+    async fn advance_to_never_lowers_a_counter() {
+        let counter = PeerCounter::default();
+        let peer = PeerId::new([9u8; 32]);
+
+        assert_eq!(counter.next(peer).await, 1);
+        assert_eq!(counter.next(peer).await, 2);
+        // A lower (or equal) floor must not rewind the counter.
+        counter.advance_to(peer, 1).await;
+        assert_eq!(counter.next(peer).await, 3);
+        // A higher floor jumps it forward.
+        counter.advance_to(peer, 500).await;
+        assert_eq!(counter.next(peer).await, 501);
     }
 }

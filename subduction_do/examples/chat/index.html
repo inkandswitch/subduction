@@ -388,7 +388,7 @@
         // This example is a standalone front end — it is NOT served by the
         // Subduction worker. Point it at a service with `?server=<ws-base>`,
         // e.g. `?server=ws://127.0.0.1:8787` for a local `wrangler dev`, or
-        // `?server=wss://your-worker.workers.dev` for a deployment. Defaults to
+        // `?server=wss://subduct.io` for the hosted service. Defaults to
         // same-origin so it still works if you do serve it behind the worker.
         const params = new URLSearchParams(location.search);
         const defaultBase =

@@ -2,6 +2,13 @@ name = "subduction"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-04-07"
 
+# Serve the service on its own domain. `subduct.io` must be added as a zone in
+# the same Cloudflare account; wrangler provisions the custom domain (and TLS)
+# on deploy. The workers.dev route stays enabled as a fallback.
+routes = [
+  { pattern = "subduct.io", custom_domain = true }
+]
+
 # worker-build compiles the Rust cdylib to wasm and emits the JS shim.
 [build]
 command = "worker-build --release"

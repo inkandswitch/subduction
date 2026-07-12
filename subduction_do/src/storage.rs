@@ -39,6 +39,10 @@ use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use thiserror::Error;
 
+/// `meta` key holding the reserved high-water mark for the per-peer send
+/// counter base (see [`SqlStore::reserve_counter_base`]).
+const COUNTER_BASE_KEY: &str = "send_counter_base";
+
 /// A SQL value, mirroring the small subset of column types this layer uses.
 ///
 /// Deliberately backend-agnostic so the same query code runs against the DO's
@@ -192,6 +196,31 @@ impl<S: Sql> SqlStore<S> {
             "INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?);",
             vec![SqlValue::Text(key.to_string()), SqlValue::Blob(value)],
         )
+    }
+
+    /// Reserve a fresh, strictly-increasing base for the per-peer send counter
+    /// and return it.
+    ///
+    /// Each call reads the persisted high-water base, advances it by `stride`,
+    /// and persists the new value — so successive Durable Object lifetimes get
+    /// disjoint, increasing `[base, base + stride)` ranges. Seeding the
+    /// in-memory `PeerCounter` from this base (see `PeerCounter::advance_to`)
+    /// keeps outgoing counters monotonic across hibernation, as long as one
+    /// lifetime never issues more than `stride` messages to a single peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns any SQL error.
+    pub fn reserve_counter_base(&self, stride: u64) -> Result<u64, DoStorageError> {
+        let base = self
+            .get_meta(COUNTER_BASE_KEY)?
+            .and_then(|b| <[u8; 8]>::try_from(b).ok())
+            .map_or(0, u64::from_le_bytes);
+        self.put_meta(
+            COUNTER_BASE_KEY,
+            base.saturating_add(stride).to_le_bytes().to_vec(),
+        )?;
+        Ok(base)
     }
 
     // ---- subscriptions (persisted so they survive hibernation) -----------
@@ -1125,6 +1154,17 @@ mod tests {
         // Overwrite.
         s.put_meta("seed", vec![9]).expect("put");
         assert_eq!(s.get_meta("seed").expect("get"), Some(vec![9]));
+    }
+
+    #[test]
+    fn counter_base_reserves_disjoint_increasing_windows() {
+        let s = store();
+        // First reservation starts at 0; each call advances by the stride so
+        // successive Durable Object lifetimes get disjoint, increasing windows.
+        assert_eq!(s.reserve_counter_base(1000).expect("reserve"), 0);
+        assert_eq!(s.reserve_counter_base(1000).expect("reserve"), 1000);
+        assert_eq!(s.reserve_counter_base(500).expect("reserve"), 2000);
+        assert_eq!(s.reserve_counter_base(1).expect("reserve"), 2500);
     }
 
     #[test]

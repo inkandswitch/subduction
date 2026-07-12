@@ -25,7 +25,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use future_form::Local;
-use futures::{future::LocalBoxFuture, stream::AbortHandle};
+use futures::{
+    future::{Abortable, LocalBoxFuture},
+    stream::AbortHandle,
+};
 use subduction_core::spawn::Spawn;
 
 /// A single-threaded spawner that queues futures for later inline execution.
@@ -56,10 +59,17 @@ impl CollectingSpawner {
 
 impl Spawn<Local> for CollectingSpawner {
     fn spawn(&self, fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
-        self.queue.borrow_mut().push(fut);
-        // The engine ignores the handle in our flow (we never abort fan-out),
-        // but the trait requires one. Hand back a live-but-unregistered handle.
-        let (handle, _reg) = AbortHandle::new_pair();
+        // Wire the returned handle to the queued future so the `Spawn`
+        // contract holds ("the handle aborts the task"): wrapping in
+        // `Abortable` means that if a caller aborts before the Durable Object
+        // drains the queue, the future short-circuits to a no-op instead of
+        // sending. Our own fan-out never aborts, but honouring the contract
+        // avoids surprising a future caller that relies on cancellation.
+        let (handle, reg) = AbortHandle::new_pair();
+        let abortable = Abortable::new(fut, reg);
+        self.queue.borrow_mut().push(Box::pin(async move {
+            let _ = abortable.await;
+        }));
         handle
     }
 }

@@ -76,6 +76,14 @@ const SERVICE_NAME: &str = "subduction-do";
 /// object keeps a stable peer identity across hibernation and restarts.
 const SIGNER_SEED_KEY: &str = "signer_seed";
 
+/// Range of send-counter values reserved per Durable Object lifetime. Each time
+/// the isolate is (re)created it reserves a fresh `[base, base + stride)` window
+/// (persisted in SQLite) and seeds the per-peer counter above `base`, so
+/// outgoing `RemoteHeads` counters stay monotonic across hibernation and
+/// clients don't drop post-wake updates as stale. Comfortably larger than the
+/// number of messages any single lifetime could send to one peer.
+const COUNTER_STRIDE: u64 = 1 << 32;
+
 /// The concrete sync handler for the Durable Object environment: single-threaded
 /// futures ([`Local`]), SQLite storage, DO WebSocket connections, an open
 /// policy, the default depth metric, and the inline-draining spawner.
@@ -111,6 +119,10 @@ pub struct SyncDurableObject {
     /// Order-independent fingerprint of the subscription set last written to
     /// SQLite, so we can skip the (full-table) rewrite when nothing changed.
     subs_fingerprint: Cell<[u8; 32]>,
+    /// Base for this lifetime's per-peer send counters, reserved from SQLite in
+    /// [`Self::new`]. Peers are seeded above it so counters stay monotonic
+    /// across hibernation (see [`COUNTER_STRIDE`]).
+    counter_base: u64,
 }
 
 impl DurableObject for SyncDurableObject {
@@ -123,6 +135,12 @@ impl DurableObject for SyncDurableObject {
         let seed = load_or_create_seed(&sql);
         let signer = MemorySigner::from_bytes(&seed);
         let peer_id = PeerId::from(signer.verifying_key());
+
+        // Reserve a fresh counter window for this lifetime so send counters
+        // resume above every value issued before hibernation.
+        let counter_base = sql
+            .reserve_counter_base(COUNTER_STRIDE)
+            .expect("reserve send-counter base");
 
         let sedimentrees =
             Arc::new(BoundedShardedMap::<SedimentreeId, MinimizedSedimentree, 256>::new());
@@ -153,6 +171,7 @@ impl DurableObject for SyncDurableObject {
             nonce_cache: NonceCache::default(),
             subs_loaded: Cell::new(false),
             subs_fingerprint: Cell::new([0u8; 32]),
+            counter_base,
         }
     }
 
@@ -399,6 +418,15 @@ impl SyncDurableObject {
                     }
                 }
             }
+        }
+
+        // Seed each connected peer's send counter above this lifetime's reserved
+        // base so `RemoteHeads` counters keep increasing across hibernation.
+        // `advance_to` only ever raises the counter, so this is a no-op once the
+        // counter has climbed past the base within the current lifetime.
+        let counter = self.handler.send_counter();
+        for peer in conns.keys() {
+            counter.advance_to(*peer, self.counter_base).await;
         }
     }
 
