@@ -6,7 +6,8 @@ compatibility_date = "2026-04-07"
 # the same Cloudflare account; wrangler provisions the custom domain (and TLS)
 # on deploy.
 routes = [
-  { pattern = "subduct.io", custom_domain = true }
+  { pattern = "subduct.io", custom_domain = true },
+  { pattern = "www.subduct.io", custom_domain = true }
 ]
 # Keep the *.workers.dev URL live too (adding `routes` disables it by default),
 # so the existing demo link keeps working alongside the custom domain.
