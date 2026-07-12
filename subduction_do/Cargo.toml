@@ -52,6 +52,11 @@ console_error_panic_hook = "0.1"
 # An in-memory SQL backend implementing the `Sql` trait, so the storage layer,
 # replay-nonce table, and compaction are exercised without `workerd`.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Enable subduction_core's shared storage conformance suite (`test_utils`) for
+# host tests only, so the DO backend is checked against the same contract as
+# `MemoryStorage`/redb — equivocation ordering, metas-match-full-load, and
+# tree-id registration. Dev-dep features don't leak into the wasm build.
+subduction_core = { path = "../subduction_core", features = ["std", "test_utils"] }
 
 [profile.release]
 opt-level = 3

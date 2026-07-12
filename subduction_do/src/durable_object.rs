@@ -70,6 +70,10 @@ const ALARM_INTERVAL_MS: i64 = 5 * 60 * 1000;
 /// Discovery service name. The browser client hands the same string to
 /// `SubductionWebSocket.tryDiscover(url, signer, SERVICE_NAME)`; both sides
 /// derive the handshake audience from it, so it must match exactly.
+///
+/// This is effectively a **wire constant**: changing it rotates the derived
+/// audience and instantly invalidates every already-shipped client's
+/// handshake, so treat it as part of the protocol, not a tweakable config.
 const SERVICE_NAME: &str = "subduction-do";
 
 /// SQLite `meta` key under which the server's Ed25519 seed is persisted, so the
@@ -189,7 +193,14 @@ impl DurableObject for SyncDurableObject {
             .get("Upgrade")?
             .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
         if !is_upgrade {
-            return Response::error("expected a websocket upgrade on /sync/<doc>", 426);
+            // RFC 9110 §15.5.22: a 426 SHOULD advertise the protocol(s) the
+            // client must switch to via `Upgrade` (and the matching `Connection`
+            // token), so a well-behaved client knows exactly how to retry.
+            let mut resp = Response::error("expected a websocket upgrade on /sync/<doc>", 426)?;
+            let headers = resp.headers_mut();
+            headers.set("Upgrade", "websocket")?;
+            headers.set("Connection", "Upgrade")?;
+            return Ok(resp);
         }
 
         let pair = WebSocketPair::new()?;
@@ -265,7 +276,12 @@ impl DurableObject for SyncDurableObject {
 
         // Re-arm only if there is still something to expire later.
         if matches!(self.sql.active_nonce_count(now), Ok(n) if n > 0) {
-            let _ = self.state.storage().set_alarm(ALARM_INTERVAL_MS).await;
+            if let Err(e) = self.state.storage().set_alarm(ALARM_INTERVAL_MS).await {
+                // If re-arming fails the leftover nonces just get collected on
+                // the next event that arms the alarm; surface it so a persistent
+                // failure is visible rather than silently stalling GC.
+                tracing::warn!(error = %e, "durable object failed to re-arm cleanup alarm");
+            }
         }
 
         Response::empty()
@@ -354,14 +370,33 @@ impl SyncDurableObject {
     async fn on_sync(&self, ws: WebSocket, peer_bytes: &[u8], bytes: &[u8]) -> WorkerResult<()> {
         let peer = peer_from_bytes(peer_bytes).ok_or_else(|| werr("invalid peer attachment"))?;
 
+        // Decode before touching any state: a malformed frame from an
+        // authenticated peer is a protocol violation, so close the socket
+        // (1002 = protocol error) instead of returning an error that leaves the
+        // peer free to keep pushing garbage and holding the object awake.
+        let message = match SyncMessage::try_decode(bytes) {
+            Ok(message) => message,
+            Err(e) => {
+                let _ = ws.close(Some(1002), Some("malformed sync frame"));
+                tracing::warn!(error = %e, "durable object rejected malformed sync frame");
+                return Ok(());
+            }
+        };
+
         // Rebuild volatile state that hibernation may have wiped.
         self.rebuild_connections().await;
         self.ensure_subscriptions_loaded().await.map_err(werr)?;
 
         let conn = Authenticated::from_persisted_peer_id(DoConnection::new(ws), peer);
-        let message = SyncMessage::try_decode(bytes).map_err(werr)?;
 
-        self.handler.handle(&conn, message).await.map_err(werr)?;
+        if let Err(e) = self.handler.handle(&conn, message).await {
+            // The message was rejected mid-flight. Drop any fan-out it queued
+            // before failing rather than running it (partial sends could push
+            // inconsistent state) or leaving it to leak into the next event's
+            // drain against stale sockets.
+            drop(self.spawner.drain());
+            return Err(werr(e));
+        }
 
         // Drain and await the fan-out that `handle` queued. This is the crux of
         // hibernation-safety: the DO stays resident until every push has been
@@ -396,7 +431,9 @@ impl SyncDurableObject {
         if matches!(self.state.storage().get_alarm().await, Ok(Some(_))) {
             return;
         }
-        let _ = self.state.storage().set_alarm(ALARM_INTERVAL_MS).await;
+        if let Err(e) = self.state.storage().set_alarm(ALARM_INTERVAL_MS).await {
+            tracing::warn!(error = %e, "durable object failed to arm cleanup alarm");
+        }
     }
 
     /// Repopulate the connection map from the live hibernatable sockets. After

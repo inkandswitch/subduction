@@ -11,6 +11,10 @@ routes = [
 # Keep the *.workers.dev URL live too (adding `routes` disables it by default),
 # so the existing demo link keeps working alongside the custom domain.
 workers_dev = true
+# Don't publish a fresh preview URL for every uploaded version: this is an open
+# sync endpoint, and per-version `*.workers.dev` previews would multiply the
+# unauthenticated surface without adding value for a single-service deploy.
+preview_urls = false
 
 # worker-build compiles the Rust cdylib to wasm and emits the JS shim.
 [build]

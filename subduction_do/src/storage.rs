@@ -208,6 +208,12 @@ impl<S: Sql> SqlStore<S> {
     /// keeps outgoing counters monotonic across hibernation, as long as one
     /// lifetime never issues more than `stride` messages to a single peer.
     ///
+    /// The advance is `saturating`: once the base reaches `u64::MAX` it stops
+    /// growing and successive lifetimes reuse it, which could let counters
+    /// collide. With the deployed `stride` of `2^32` that needs `2^32` isolate
+    /// re-creations of a single document — practically unreachable — so we cap
+    /// rather than wrap (which would silently rewind the sequence).
+    ///
     /// # Errors
     ///
     /// Returns any SQL error.
@@ -1449,5 +1455,150 @@ mod tests {
             "nothing is redundant without a covering fragment"
         );
         assert_eq!(block_on(s.list_commit_ids(tree)).expect("list").len(), 3);
+    }
+
+    // ---- shared Storage conformance suite --------------------------------
+    //
+    // Run subduction_core's contract checks against the DO backend, so it is
+    // held to the same invariants as `MemoryStorage`/redb rather than only its
+    // own bespoke tests.
+
+    #[test]
+    fn metas_match_full_load_conformance_under_equivocation() {
+        // The metadata-only loads must resolve to the same first-wins
+        // representative per CommitId as the full loads — *including* under
+        // Byzantine equivocation (several payloads sharing one head). This is
+        // exactly what the content-digest key + `ORDER BY head, digest`
+        // guarantee; without them SQLite could order the two loads differently
+        // and pick divergent representatives.
+        use subduction_core::storage::conformance;
+
+        let s = store();
+        let signer = MemorySigner::generate();
+        let tree = SedimentreeId::new([0x24; 32]);
+
+        // A few well-behaved, distinct commits.
+        for i in 0..3u8 {
+            let vm = seal_commit(
+                &signer,
+                tree,
+                CommitId::new([i; 32]),
+                BTreeSet::new(),
+                &[i; 48],
+            );
+            block_on(s.save_loose_commit(tree, vm)).expect("save commit");
+        }
+        // An equivocating commit id: same head, two different payloads (distinct
+        // parents + blob → distinct content digests → both rows coexist).
+        let equ_head = CommitId::new([0x77; 32]);
+        block_on(s.save_loose_commit(
+            tree,
+            seal_commit(&signer, tree, equ_head, BTreeSet::new(), &[1; 32]),
+        ))
+        .expect("save equivocation A");
+        block_on(s.save_loose_commit(
+            tree,
+            seal_commit(
+                &signer,
+                tree,
+                equ_head,
+                BTreeSet::from([CommitId::new([0x66; 32])]),
+                &[2; 32],
+            ),
+        ))
+        .expect("save equivocation B");
+
+        // Distinct and equivocating fragments too.
+        block_on(s.save_fragment(
+            tree,
+            seal_fragment(
+                &signer,
+                tree,
+                id_with_depth(2, 1),
+                BTreeSet::from([id_with_depth(1, 10)]),
+                Vec::new(),
+                &[9; 24],
+            ),
+        ))
+        .expect("save fragment");
+        let equ_frag_head = id_with_depth(2, 2);
+        block_on(s.save_fragment(
+            tree,
+            seal_fragment(
+                &signer,
+                tree,
+                equ_frag_head,
+                BTreeSet::from([id_with_depth(1, 11)]),
+                Vec::new(),
+                &[3; 20],
+            ),
+        ))
+        .expect("save fragment equivocation A");
+        block_on(s.save_fragment(
+            tree,
+            seal_fragment(
+                &signer,
+                tree,
+                equ_frag_head,
+                BTreeSet::from([id_with_depth(1, 12)]),
+                vec![id_with_depth(1, 13)],
+                &[4; 20],
+            ),
+        ))
+        .expect("save fragment equivocation B");
+
+        block_on(conformance::assert_metas_match_full_load::<
+            future_form::Local,
+            _,
+        >(&s, tree));
+    }
+
+    #[test]
+    fn saves_register_tree_ids_conformance() {
+        // Each helper requires the tree to be unregistered before the save, so
+        // use a fresh in-memory store per assertion.
+        use subduction_core::storage::conformance;
+
+        let signer = MemorySigner::generate();
+
+        let tree_c = SedimentreeId::new([0xC0; 32]);
+        let commit = seal_commit(
+            &signer,
+            tree_c,
+            CommitId::new([1; 32]),
+            BTreeSet::new(),
+            &[1, 2, 3],
+        );
+        block_on(conformance::assert_commit_save_registers_tree_id::<
+            future_form::Local,
+            _,
+        >(&store(), commit));
+
+        let tree_f = SedimentreeId::new([0xF0; 32]);
+        let fragment = seal_fragment(
+            &signer,
+            tree_f,
+            id_with_depth(2, 1),
+            BTreeSet::from([id_with_depth(1, 5)]),
+            Vec::new(),
+            &[7],
+        );
+        block_on(conformance::assert_fragment_save_registers_tree_id::<
+            future_form::Local,
+            _,
+        >(&store(), fragment));
+
+        let tree_b = SedimentreeId::new([0xB0; 32]);
+        let batch_commit = seal_commit(
+            &signer,
+            tree_b,
+            CommitId::new([2; 32]),
+            BTreeSet::new(),
+            &[4, 5, 6],
+        );
+        block_on(conformance::assert_batch_save_registers_tree_id::<
+            future_form::Local,
+            _,
+        >(&store(), tree_b, vec![batch_commit], Vec::new()));
     }
 }
