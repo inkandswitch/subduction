@@ -744,7 +744,11 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
     ) -> LocalBoxFuture<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Local::from_future(async move {
             let rows = self.query(
-                "SELECT signed, blob FROM commits WHERE tree = ? AND head = ? LIMIT 1;",
+                // `ORDER BY digest` so that, under equivocation (several rows
+                // sharing this head), the single-item load picks the same
+                // first-wins representative as the ordered full/meta loads
+                // instead of an arbitrary one.
+                "SELECT signed, blob FROM commits WHERE tree = ? AND head = ? ORDER BY digest LIMIT 1;",
                 vec![
                     SqlValue::Blob(sedimentree_id.as_bytes().to_vec()),
                     SqlValue::Blob(commit_id.as_bytes().to_vec()),
@@ -823,7 +827,9 @@ impl<S: Sql> Storage<Local> for SqlStore<S> {
     ) -> LocalBoxFuture<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         Local::from_future(async move {
             let rows = self.query(
-                "SELECT signed, blob FROM fragments WHERE tree = ? AND head = ? LIMIT 1;",
+                // `ORDER BY digest` so an equivocating fragment head resolves to
+                // the same representative here as in the ordered full/meta loads.
+                "SELECT signed, blob FROM fragments WHERE tree = ? AND head = ? ORDER BY digest LIMIT 1;",
                 vec![
                     SqlValue::Blob(sedimentree_id.as_bytes().to_vec()),
                     SqlValue::Blob(fragment_head.as_bytes().to_vec()),

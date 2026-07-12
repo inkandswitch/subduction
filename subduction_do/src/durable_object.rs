@@ -309,10 +309,22 @@ impl SyncDurableObject {
         // can't be decoded/verified here, `respond` below will reject it anyway.
         let peeked = peek_challenge(&challenge);
         if let Some((peer, nonce, _ts)) = peeked {
-            if matches!(self.sql.nonce_seen(&peer, &nonce, now), Ok(true)) {
-                let _ = ws.close(Some(1008), Some("replayed handshake"));
-                tracing::warn!("durable object rejected replayed handshake");
-                return Ok(());
+            match self.sql.nonce_seen(&peer, &nonce, now) {
+                Ok(true) => {
+                    let _ = ws.close(Some(1008), Some("replayed handshake"));
+                    tracing::warn!("durable object rejected replayed handshake");
+                    return Ok(());
+                }
+                Ok(false) => {}
+                // Fail closed: if we can't consult the durable replay table we
+                // can't prove this challenge isn't a replay, so reject rather
+                // than silently accept without the protection this whole path
+                // exists to provide.
+                Err(e) => {
+                    let _ = ws.close(Some(1011), Some("replay check unavailable"));
+                    tracing::warn!(error = %e, "durable object replay check failed; rejecting handshake");
+                    return Ok(());
+                }
             }
         }
 
@@ -457,13 +469,20 @@ impl SyncDurableObject {
             }
         }
 
+        // Snapshot the peer set and drop the `connections` guard before awaiting:
+        // holding an async mutex guard across `.await` invites blocking (or, if
+        // the runtime ever reorders work around awaits, deadlock) against any
+        // other path that needs the same lock.
+        let peers: Vec<PeerId> = conns.keys().copied().collect();
+        drop(conns);
+
         // Seed each connected peer's send counter above this lifetime's reserved
         // base so `RemoteHeads` counters keep increasing across hibernation.
         // `advance_to` only ever raises the counter, so this is a no-op once the
         // counter has climbed past the base within the current lifetime.
         let counter = self.handler.send_counter();
-        for peer in conns.keys() {
-            counter.advance_to(*peer, self.counter_base).await;
+        for peer in peers {
+            counter.advance_to(peer, self.counter_base).await;
         }
     }
 
