@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subduction · CRDT sync on Cloudflare Durable Objects</title>
+    <meta
+      name="description"
+      content="A hibernatable CRDT sync service: one Cloudflare Durable Object per document, signed commits over WebSocket, SQLite persistence, and alarm-driven compaction."
+    />
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --panel-2: #1c2330;
+        --border: #2a3038;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --accent: #f78166;
+        --accent-2: #58a6ff;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --radius: 14px;
+        --maxw: 980px;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background:
+          radial-gradient(1200px 720px at 82% -12%, #1c2842 0%, rgba(13, 17, 23, 0) 55%),
+          radial-gradient(900px 620px at -8% 8%, #241a2e 0%, rgba(13, 17, 23, 0) 50%),
+          var(--bg);
+        color: var(--text);
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--accent-2); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+      /* ---- top nav ---- */
+      nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 24px;
+        max-width: var(--maxw);
+        margin: 0 auto;
+      }
+      .brand { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+      .brand .mark { width: 26px; height: 26px; display: block; }
+      .navlinks { display: flex; gap: 22px; align-items: center; font-size: 14px; }
+      .navlinks a { color: var(--muted); }
+      .navlinks a:hover { color: var(--text); text-decoration: none; }
+
+      /* ---- hero ---- */
+      header.hero { padding: 56px 0 40px; text-align: center; }
+      .eyebrow {
+        display: inline-block;
+        font-size: 12.5px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--accent);
+        background: rgba(247, 129, 102, 0.1);
+        border: 1px solid rgba(247, 129, 102, 0.25);
+        padding: 5px 12px;
+        border-radius: 999px;
+        margin-bottom: 22px;
+      }
+      h1 {
+        margin: 0 auto 18px;
+        font-size: clamp(32px, 6vw, 54px);
+        line-height: 1.05;
+        letter-spacing: -0.03em;
+        max-width: 16ch;
+      }
+      h1 .grad {
+        background: linear-gradient(100deg, var(--accent) 10%, var(--accent-2) 90%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .lede { margin: 0 auto; max-width: 62ch; font-size: 18px; color: var(--muted); }
+      .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 20px;
+        border-radius: 11px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
+      }
+      .btn:hover { text-decoration: none; transform: translateY(-1px); }
+      .btn.primary { background: var(--accent); color: #0d1117; }
+      .btn.primary:hover { background: #ff9277; }
+      .btn.ghost { background: var(--panel); color: var(--text); border-color: var(--border); }
+      .btn.ghost:hover { border-color: #3a4655; background: var(--panel-2); }
+
+      /* ---- endpoint pill ---- */
+      .endpoint {
+        margin: 34px auto 0;
+        max-width: 640px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+        text-align: left;
+      }
+      .endpoint .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+      .endpoint .row { display: flex; align-items: center; gap: 12px; }
+      .endpoint code {
+        flex: 1;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 14px;
+        color: var(--text);
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+      .endpoint code .ph { color: var(--accent-2); }
+      .copy {
+        flex: none;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: 8px;
+        padding: 7px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .copy:hover { color: var(--text); border-color: #3a4655; }
+      .copy.done { color: var(--ok); border-color: rgba(63, 185, 80, 0.4); }
+
+      /* ---- sections ---- */
+      section { padding: 30px 0; }
+      .section-head { text-align: center; margin-bottom: 8px; }
+      .section-head h2 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 8px; }
+      .section-head p { color: var(--muted); margin: 0 auto; max-width: 56ch; }
+
+      /* ---- features grid ---- */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-top: 26px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 20px;
+      }
+      .card .ico { font-size: 20px; margin-bottom: 10px; display: block; }
+      .card h3 { margin: 0 0 6px; font-size: 16px; letter-spacing: -0.01em; }
+      .card p { margin: 0; color: var(--muted); font-size: 14px; }
+
+      /* ---- connect ---- */
+      .connect { display: grid; grid-template-columns: 0.9fr 1.1fr; gap: 26px; align-items: start; }
+      .steps { counter-reset: step; list-style: none; padding: 0; margin: 6px 0 0; }
+      .steps li { position: relative; padding-left: 42px; margin-bottom: 20px; color: var(--muted); font-size: 15px; }
+      .steps li b { color: var(--text); font-weight: 600; }
+      .steps li::before {
+        counter-increment: step;
+        content: counter(step);
+        position: absolute; left: 0; top: -2px;
+        width: 28px; height: 28px;
+        display: grid; place-items: center;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 50%;
+        color: var(--accent);
+        font-weight: 700; font-size: 13px;
+      }
+      pre {
+        margin: 0;
+        background: #0b0f14;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 18px 20px;
+        overflow-x: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      pre .k { color: #ff7b72; }
+      pre .s { color: #a5d6ff; }
+      pre .c { color: #8b949e; font-style: italic; }
+      pre .f { color: #d2a8ff; }
+
+      /* ---- lifecycle ---- */
+      .flow { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+      .flow .step {
+        display: flex; gap: 14px; align-items: flex-start;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 18px;
+      }
+      .flow .tag {
+        flex: none;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        color: var(--accent);
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 3px 9px;
+        margin-top: 1px;
+      }
+      .flow .step div.body { color: var(--muted); font-size: 14.5px; }
+      .flow .step div.body b { color: var(--text); font-weight: 600; }
+
+      /* ---- footer ---- */
+      footer {
+        border-top: 1px solid var(--border);
+        margin-top: 30px;
+        padding: 28px 0 48px;
+        color: var(--muted);
+        font-size: 13.5px;
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .note {
+        margin: 22px auto 0;
+        max-width: 640px;
+        font-size: 13px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      @media (max-width: 760px) {
+        .grid { grid-template-columns: 1fr; }
+        .connect { grid-template-columns: 1fr; }
+        .navlinks .hide-sm { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <span class="brand">
+        <svg class="mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M2 22c5-9 9-9 14 0s9 9 14 0" stroke="#f78166" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M2 15c5-9 9-9 14 0s9 9 14 0" stroke="#58a6ff" stroke-width="2.4" stroke-linecap="round" opacity="0.7"/>
+        </svg>
+        Subduction
+      </span>
+      <span class="navlinks">
+        <a href="#features" class="hide-sm">Features</a>
+        <a href="#connect" class="hide-sm">Connect</a>
+        <a href="#architecture" class="hide-sm">Architecture</a>
+        <a href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">GitHub ↗</a>
+      </span>
+    </nav>
+
+    <header class="hero">
+      <div class="wrap">
+        <span class="eyebrow">CRDT sync · Cloudflare Durable Objects</span>
+        <h1>Real-time document sync that <span class="grad">hibernates</span> when idle</h1>
+        <p class="lede">
+          Subduction runs its peer-to-peer sync layer as a Cloudflare Durable
+          Object — <b style="color:var(--text)">one object per document</b>, each
+          with its own SQLite. Clients exchange signed commits over a single
+          WebSocket; the object evicts itself between bursts of activity and
+          rehydrates from storage on the next message. You pay for work, not for
+          waiting.
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="#connect">Start syncing</a>
+          <a class="btn ghost" href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">
+            View source ↗
+          </a>
+        </div>
+
+        <div class="endpoint">
+          <div class="label">WebSocket endpoint</div>
+          <div class="row">
+            <code id="endpoint"
+              >wss://<span id="host">this-worker.example.workers.dev</span>/sync/<span class="ph">&lt;document-id&gt;</span></code
+            >
+            <button class="copy" id="copy">Copy</button>
+          </div>
+        </div>
+        <p class="note">
+          Every client that names the same <code style="font-family:ui-monospace,monospace">&lt;document-id&gt;</code>
+          is routed to the same Durable Object — that is the whole coordination
+          primitive.
+        </p>
+      </div>
+    </header>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Built for the edge</h2>
+          <p>The sync engine is Rust compiled to WebAssembly, running inside the Durable Object next to its storage.</p>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <span class="ico">🗂️</span>
+            <h3>One object per document</h3>
+            <p>The document id maps to a stable Durable Object id, so load and storage spread across the fleet instead of a single hot instance.</p>
+          </div>
+          <div class="card">
+            <span class="ico">💤</span>
+            <h3>WebSocket hibernation</h3>
+            <p>Sockets stay open while the isolate is evicted from memory. Identity and connections rebuild from persisted state on the next frame.</p>
+          </div>
+          <div class="card">
+            <span class="ico">🔏</span>
+            <h3>Signed handshake</h3>
+            <p>Every peer proves an Ed25519 identity through a challenge/response handshake before it can read or write a document.</p>
+          </div>
+          <div class="card">
+            <span class="ico">🛡️</span>
+            <h3>Replay-safe across sleep</h3>
+            <p>Accepted handshake nonces are persisted to SQLite, so a captured challenge can't be replayed after the object hibernates.</p>
+          </div>
+          <div class="card">
+            <span class="ico">🧹</span>
+            <h3>Alarm-driven compaction</h3>
+            <p>An alarm fires only when there's work — expiring nonces and compacting redundant commits once they're covered by a fragment.</p>
+          </div>
+          <div class="card">
+            <span class="ico">💾</span>
+            <h3>Durable by default</h3>
+            <p>Commits, fragments, and subscriptions live in the object's SQLite, so nothing is lost across evictions or restarts.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="connect">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Connect in four steps</h2>
+          <p>Point a Subduction client at the endpoint, complete the handshake, and subscribe to a document.</p>
+        </div>
+        <div class="connect">
+          <ol class="steps">
+            <li><b>Open a WebSocket</b> to <code style="font-family:ui-monospace,monospace">/sync/&lt;document-id&gt;</code> — the worker routes it to that document's object.</li>
+            <li><b>Discover &amp; handshake</b> using the service name <code style="font-family:ui-monospace,monospace">subduction-do</code>; both sides derive the same audience from it.</li>
+            <li><b>Subscribe</b> to the document to receive server-pushed commits as other peers write them.</li>
+            <li><b>Sync</b> — pull existing history and push your commits; the object fans them out to subscribers inline.</li>
+          </ol>
+          <pre><code><span class="c">// Browser client, via the subduction_wasm bundle.</span>
+<span class="k">import</span> init, { Subduction, MemorySigner, MemoryStorage, SedimentreeId }
+  <span class="k">from</span> <span class="s">"./pkg/subduction_wasm.js"</span>;
+
+<span class="k">await</span> init();
+
+<span class="k">const</span> sync = <span class="k">new</span> <span class="f">Subduction</span>({
+  signer: MemorySigner.<span class="f">generate</span>(),
+  storage: <span class="k">new</span> <span class="f">MemoryStorage</span>(),
+  onRemoteHeads: () => render(),
+});
+
+<span class="k">const</span> doc = SedimentreeId.<span class="f">fromBytes</span>(docIdBytes);
+<span class="k">const</span> url = <span class="k">new</span> <span class="f">URL</span>(<span class="s">`wss://${host}/sync/${docIdHex}`</span>);
+
+<span class="c">// Handshake + identify the server peer.</span>
+<span class="k">await</span> sync.<span class="f">connectDiscover</span>(url, <span class="s">"subduction-do"</span>);
+<span class="k">await</span> sync.<span class="f">syncWithAllPeers</span>(doc, <span class="k">true</span>, <span class="s">5000</span>);</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>What happens on a message</h2>
+          <p>The lifecycle is designed so no work is lost when the isolate is evicted.</p>
+        </div>
+        <div class="flow">
+          <div class="step">
+            <span class="tag">route</span>
+            <div class="body"><b>/sync/&lt;doc&gt;</b> is upgraded and forwarded to <code style="font-family:ui-monospace,monospace">id_from_name(doc)</code> — a dedicated, individually-hibernatable object with its own SQLite.</div>
+          </div>
+          <div class="step">
+            <span class="tag">accept</span>
+            <div class="body">The server socket is registered as <b>hibernatable</b>. No long-lived receive loop is held open, so the isolate is free to sleep between frames.</div>
+          </div>
+          <div class="step">
+            <span class="tag">auth</span>
+            <div class="body">The first frame is a signed challenge. The object verifies it, rejects replayed nonces from its durable table, and pins the peer identity to the socket.</div>
+          </div>
+          <div class="step">
+            <span class="tag">sync</span>
+            <div class="body">Subsequent frames carry commits and fragments. They're persisted, then <b>fanned out to subscribers inline</b> — before the handler returns and the object can hibernate.</div>
+          </div>
+          <div class="step">
+            <span class="tag">alarm</span>
+            <div class="body">When a fragment lands or a nonce is recorded, an alarm is armed. It expires stale nonces and compacts commits made redundant by fragments — then only re-arms if there's still work.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap" style="width:100%; display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:0;">
+        <span>Subduction — a project by <a href="https://www.inkandswitch.com/" target="_blank" rel="noopener">Ink &amp; Switch</a>.</span>
+        <span>
+          <a href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">Source</a>
+          ·
+          <a href="https://github.com/inkandswitch/subduction/tree/main/subduction_do/examples/chat" target="_blank" rel="noopener">Chat example</a>
+        </span>
+      </div>
+    </footer>
+
+    <script>
+      // Show the real host this page is served from, so the endpoint is
+      // copy-pasteable straight from a deployment.
+      (function () {
+        const host = location.host || "this-worker.example.workers.dev";
+        document.getElementById("host").textContent = host;
+
+        const btn = document.getElementById("copy");
+        btn.addEventListener("click", async () => {
+          const scheme = location.protocol === "https:" ? "wss" : "ws";
+          const text = `${scheme}://${host}/sync/<document-id>`;
+          try {
+            await navigator.clipboard.writeText(text);
+            btn.textContent = "Copied";
+            btn.classList.add("done");
+            setTimeout(() => {
+              btn.textContent = "Copy";
+              btn.classList.remove("done");
+            }, 1400);
+          } catch (_) {
+            /* clipboard unavailable; ignore */
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subduction · chat example</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --panel-2: #1c2330;
+        --border: #2a3038;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --accent: #f78166;
+        --accent-2: #58a6ff;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --err: #f85149;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: radial-gradient(1200px 800px at 80% -10%, #1a2333 0%, var(--bg) 55%);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 32px 12px;
+        max-width: 900px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        letter-spacing: -0.01em;
+      }
+      h1 .accent { color: var(--accent); }
+      .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 12px 32px 60px;
+      }
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 20px;
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px 16px;
+        margin: 12px 0 20px;
+        font-size: 13px;
+      }
+      .dot {
+        display: inline-block;
+        width: 9px; height: 9px;
+        border-radius: 50%;
+        background: var(--muted);
+        margin-right: 7px;
+        vertical-align: middle;
+      }
+      .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+      .dot.err { background: var(--err); }
+      .dot.warn { background: var(--warn); }
+      .status .kv { color: var(--muted); }
+      .status .kv b { color: var(--text); font-weight: 600; }
+      code.mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        padding: 1px 6px;
+        border-radius: 6px;
+        font-size: 12px;
+      }
+      .composer {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 22px;
+      }
+      input[type="text"] {
+        flex: 1;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: var(--text);
+        padding: 12px 14px;
+        font-size: 15px;
+        outline: none;
+      }
+      input[type="text"]:focus { border-color: var(--accent-2); }
+      button {
+        background: var(--accent);
+        color: #0d1117;
+        border: 0;
+        border-radius: 10px;
+        padding: 0 20px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .feed { display: flex; flex-direction: column; gap: 10px; }
+      .msg {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px 16px;
+        animation: pop 0.18s ease-out;
+      }
+      .msg.mine { border-color: #3d2f2b; background: #1b1614; }
+      @keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+      .msg .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+      .msg .author { font-family: ui-monospace, monospace; }
+      .msg .text { font-size: 15px; white-space: pre-wrap; word-break: break-word; }
+      .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 24px; line-height: 1.6; }
+      .hint b { color: var(--text); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1><span class="accent">Subduction</span> on Cloudflare Durable Objects</h1>
+      <div class="sub">
+        A standalone example client for the Subduction sync service. Every
+        message is a signed commit synced through a hibernatable Durable Object.
+        Open this page in two tabs (or two browsers) and watch them converge —
+        the DO can evict itself between messages and rehydrate from SQLite.
+        Point it at a service with
+        <code class="mono">?server=ws://127.0.0.1:8787</code>.
+      </div>
+    </header>
+    <main>
+      <div class="status">
+        <span><span id="dot" class="dot"></span><b id="conn-state">connecting…</b></span>
+        <span class="kv">me: <b id="me">…</b></span>
+        <span class="kv">server: <b id="server">…</b></span>
+        <span class="kv">messages: <b id="count">0</b></span>
+      </div>
+
+      <div class="composer">
+        <input id="input" type="text" placeholder="Type a message and hit enter…" autocomplete="off" disabled />
+        <button id="send" disabled>Send</button>
+      </div>
+
+      <div id="feed" class="feed">
+        <div class="empty">No messages yet.</div>
+      </div>
+
+      <div class="hint">
+        <b>How it works:</b> each tab builds a Subduction client (a fresh
+        in-memory Ed25519 identity + in-memory storage), performs a signed
+        handshake with this document's Durable Object over
+        <code class="mono">/sync/&lt;doc&gt;</code>, and subscribes to the shared
+        document. There is <b>one Durable Object per document</b>, each with its
+        own SQLite. New commits are pushed to subscribed peers; the DO fans them
+        out inline before hibernating, persists commits + subscriptions so
+        nothing is lost across evictions, and runs an on-demand alarm to expire
+        replay nonces and compact redundant data. Messages are chained into a
+        commit DAG, and every few messages the client <b>sediments</b> the run
+        into a signed fragment — which is exactly what the DO's alarm compacts
+        the now-redundant loose commits down to.
+      </div>
+    </main>
+
+    <script type="module">
+      import init, {
+        Subduction,
+        MemorySigner,
+        MemoryStorage,
+        SedimentreeId,
+        CommitId,
+      } from "./pkg/subduction_wasm.js";
+
+      // The discovery service name MUST match the Durable Object's SERVICE_NAME.
+      const SERVICE_NAME = "subduction-do";
+      // A single shared document that every client reads and writes. Its id also
+      // selects the Durable Object: the worker routes /sync/<docId> to one DO
+      // instance per document, so every tab on this doc meets in the same DO.
+      const DOC_ID_BYTES = new Uint8Array(32).fill(7);
+      const DOC_ID_HEX = [...DOC_ID_BYTES]
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      const SYNC_INTERVAL_MS = 4000;
+
+      const el = (id) => document.getElementById(id);
+      const dot = el("dot");
+      const connState = el("conn-state");
+      const feed = el("feed");
+      const input = el("input");
+      const sendBtn = el("send");
+
+      const enc = new TextEncoder();
+      const dec = new TextDecoder();
+
+      let syncer = null;
+      let docId = null;
+      let myAuthor = "me";
+      let rendering = false;
+      // Persistent id -> DOM node map so we only create nodes for genuinely new
+      // messages (rebuilding innerHTML every poll caused the animation to flash).
+      const nodeById = new Map();
+
+      // --- Client-side sedimentation state --------------------------------
+      // Each message is chained onto the previous one (parent = last head) so
+      // the document is a real commit DAG rather than a bag of independent
+      // roots — only a chain can be losslessly compacted. Every FRAGMENT_EVERY
+      // messages we force a boundary head (a leading zero byte => depth >= 1),
+      // so addCommit returns a FragmentRequested; we answer it by minting a
+      // fragment that bundles the messages since the last boundary. The Durable
+      // Object's alarm then prunes those now-redundant loose commits.
+      const FRAGMENT_EVERY = 4;
+      let lastHead = null; // parent for the next commit
+      let msgCount = 0;
+      let pending = []; // messages accumulated since the last boundary
+
+      function setStatus(state, cls) {
+        connState.textContent = state;
+        dot.className = "dot " + (cls || "");
+      }
+
+      function shortId(s) {
+        return s.length > 12 ? s.slice(0, 6) + "…" + s.slice(-4) : s;
+      }
+
+      async function render() {
+        if (!syncer || rendering) return;
+        rendering = true;
+        try {
+          const blobs = await syncer.getBlobs(docId);
+          const seen = new Map();
+          for (const bytes of blobs) {
+            try {
+              // A loose commit blob is a single message; a sedimented fragment
+              // blob is a JSON array of the messages it bundled. Dedup by id so
+              // the two representations overlap harmlessly during compaction.
+              const parsed = JSON.parse(dec.decode(bytes));
+              const msgs = Array.isArray(parsed) ? parsed : [parsed];
+              for (const m of msgs) {
+                // Only accept well-formed messages so one malformed blob can't
+                // break the whole render.
+                if (m && typeof m.id === "string" && typeof m.author === "string") {
+                  seen.set(m.id, m);
+                }
+              }
+            } catch (_) {
+              /* ignore non-JSON blobs */
+            }
+          }
+          const messages = [...seen.values()].sort((a, b) => a.ts - b.ts);
+          el("count").textContent = String(messages.length);
+
+          if (messages.length === 0) {
+            if (!feed.querySelector(".empty")) {
+              feed.innerHTML = '<div class="empty">No messages yet.</div>';
+            }
+            return;
+          }
+
+          const empty = feed.querySelector(".empty");
+          if (empty) empty.remove();
+
+          let appended = false;
+          for (const m of messages) {
+            let div = nodeById.get(m.id);
+            if (!div) {
+              // New message: build its node once (animation plays once here).
+              div = document.createElement("div");
+              div.className = "msg" + (m.author === myAuthor ? " mine" : "");
+              const when = new Date(m.ts).toLocaleTimeString();
+              div.innerHTML =
+                '<div class="meta"><span class="author">' +
+                escapeHtml(shortId(m.author)) +
+                (m.author === myAuthor ? " (you)" : "") +
+                "</span><span>" +
+                when +
+                "</span></div>" +
+                '<div class="text">' +
+                escapeHtml(m.text) +
+                "</div>";
+              nodeById.set(m.id, div);
+              feed.appendChild(div);
+              appended = true;
+            }
+          }
+          if (appended) feed.lastChild?.scrollIntoView({ block: "nearest" });
+        } finally {
+          rendering = false;
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+        );
+      }
+
+      async function sendMessage(text) {
+        if (!text.trim() || !syncer) return;
+        const message = {
+          id: crypto.randomUUID(),
+          author: myAuthor,
+          text: text.trim(),
+          ts: Date.now(),
+        };
+        const blob = enc.encode(JSON.stringify(message));
+
+        // Chain onto the previous commit and periodically force a fragment
+        // boundary. Heads are random 32-byte ids; CountLeadingZeroBytes treats
+        // any leading zero byte as depth >= 1 (a boundary), so we clear byte 0
+        // every FRAGMENT_EVERY messages and otherwise keep it nonzero.
+        msgCount += 1;
+        const headBytes = crypto.getRandomValues(new Uint8Array(32));
+        if (msgCount % FRAGMENT_EVERY === 0) headBytes[0] = 0;
+        else if (headBytes[0] === 0) headBytes[0] = 1;
+        const head = new CommitId(headBytes);
+        const parents = lastHead ? [lastHead] : [];
+
+        const requested = await syncer.addCommit(docId, head, parents, blob);
+        lastHead = head;
+        pending.push(message);
+
+        if (requested) {
+          // The commit landed on a fragment boundary: sediment everything since
+          // the last boundary into one fragment (blob = the covered messages),
+          // headed at this boundary commit. addFragment stores it and pushes it
+          // to subscribers; the DO alarm later drops the covered loose commits.
+          //
+          // We hand-roll the degenerate linear case here (empty boundary, no
+          // checkpoints) because this demo only ever builds a single chain. The
+          // canonical, general way to compute a covering fragment's structure
+          // (members, checkpoints, boundary) from the commit DAG lives in
+          // `sedimentree_core`'s `CommitStore::fragment` / `FragmentState`; the
+          // blob itself is always application-defined (here, the JSON messages).
+          const fragBlob = enc.encode(JSON.stringify(pending));
+          try {
+            await syncer.addFragment(docId, head, [], [], fragBlob);
+          } catch (e) {
+            console.warn("sedimentation failed", e);
+          }
+          pending = [];
+        }
+
+        await render();
+        // Push to the server so it fans out to the other subscribers.
+        try {
+          await syncer.syncWithAllPeers(docId, true, 5000);
+        } catch (e) {
+          console.warn("push sync failed", e);
+        }
+      }
+
+      async function main() {
+        setStatus("initialising wasm…", "warn");
+        await init();
+
+        // A fresh in-memory identity per tab, so two tabs are two distinct
+        // peers (distinct authors, real server-side fan-out between them).
+        const signer = MemorySigner.generate();
+        const storage = new MemoryStorage();
+        myAuthor = signer.peerId().toString();
+        el("me").textContent = shortId(myAuthor);
+
+        syncer = new Subduction({
+          signer,
+          storage,
+          onRemoteHeads: () => {
+            // A peer's heads changed — the new commits have (or will shortly)
+            // arrive in storage, so just re-render.
+            render();
+          },
+        });
+
+        docId = SedimentreeId.fromBytes(DOC_ID_BYTES);
+
+        setStatus("connecting to durable object…", "warn");
+        // This example is a standalone front end — it is NOT served by the
+        // Subduction worker. Point it at a service with `?server=<ws-base>`,
+        // e.g. `?server=ws://127.0.0.1:8787` for a local `wrangler dev`, or
+        // `?server=wss://your-worker.workers.dev` for a deployment. Defaults to
+        // same-origin so it still works if you do serve it behind the worker.
+        const params = new URLSearchParams(location.search);
+        const defaultBase =
+          (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
+        const serverBase = (params.get("server") || defaultBase).replace(/\/+$/, "");
+        const wsUrl = new URL(serverBase + "/sync/" + DOC_ID_HEX);
+
+        let serverPeerId;
+        try {
+          serverPeerId = await syncer.connectDiscover(wsUrl, SERVICE_NAME);
+        } catch (e) {
+          console.error(e);
+          setStatus("connection failed", "err");
+          return;
+        }
+        el("server").textContent = shortId(serverPeerId.toString());
+        setStatus("connected", "ok");
+
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+
+        // Initial pull + subscribe, then render.
+        try {
+          await syncer.syncWithAllPeers(docId, true, 5000);
+        } catch (e) {
+          console.warn("initial sync failed", e);
+        }
+        await render();
+
+        // Backstop only: real-time delivery rides the server's push to
+        // subscribers (see onRemoteHeads). We reconcile on a slow timer to catch
+        // any missed push, and skip it while the tab is hidden so the Durable
+        // Object is free to actually hibernate instead of being polled awake.
+        setInterval(async () => {
+          if (document.hidden) return;
+          try {
+            await syncer.syncWithAllPeers(docId, true, 5000);
+            await render();
+          } catch (e) {
+            /* transient; will retry next tick */
+          }
+        }, SYNC_INTERVAL_MS);
+      }
+
+      sendBtn.addEventListener("click", async () => {
+        const text = input.value;
+        input.value = "";
+        await sendMessage(text);
+      });
+      input.addEventListener("keydown", async (e) => {
+        if (e.key === "Enter") {
+          const text = input.value;
+          input.value = "";
+          await sendMessage(text);
+        }
+      });
+
+      main().catch((e) => {
+        console.error(e);
+        setStatus("error: " + (e?.message || e), "err");
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+# worker-build invokes wasm-bindgen with `--experimental-reset-state-function`
+# and `--force-enable-abort-handler`, which need an externref table in the
+# module. That requires the `reference-types` wasm feature to be enabled at
+# compile time.
+#
+# NOTE: cargo does not merge `rustflags` across config files — the closest one
+# wins outright — so this must restate everything the DO build needs (it does
+# not inherit the workspace-root `.cargo/config.toml`). The DO uses getrandom
+# 0.2's `js` feature (selected in Cargo.toml), so no `getrandom_backend` cfg is
+# needed here.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+reference-types,+multivalue,+simd128"]
