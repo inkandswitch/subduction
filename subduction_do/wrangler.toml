@@ -4,10 +4,13 @@ compatibility_date = "2026-04-07"
 
 # Serve the service on its own domain. `subduct.io` must be added as a zone in
 # the same Cloudflare account; wrangler provisions the custom domain (and TLS)
-# on deploy. The workers.dev route stays enabled as a fallback.
+# on deploy.
 routes = [
   { pattern = "subduct.io", custom_domain = true }
 ]
+# Keep the *.workers.dev URL live too (adding `routes` disables it by default),
+# so the existing demo link keeps working alongside the custom domain.
+workers_dev = true
 
 # worker-build compiles the Rust cdylib to wasm and emits the JS shim.
 [build]
