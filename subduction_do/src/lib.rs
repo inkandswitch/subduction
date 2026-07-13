@@ -63,6 +63,19 @@ mod worker_entry {
     /// `SERVICE_DID` var so the same binary works on other hostnames.
     const DEFAULT_SERVICE_DID: &str = "did:web:subduct.io";
 
+    /// Build a coarse `401` for a rejected `/sync` upgrade. We deliberately do
+    /// **not** echo the verifier's error (which can carry resolution/alg detail)
+    /// so admission can't be used as a verification oracle — the detail is logged
+    /// server-side instead. `error` is an RFC 6750 `WWW-Authenticate` code.
+    fn unauthorized(error: &str) -> Result<Response> {
+        let mut resp = Response::error("unauthorized", 401)?;
+        resp.headers_mut().set(
+            "WWW-Authenticate",
+            &format!("Bearer realm=\"subduction\", error=\"{error}\""),
+        )?;
+        Ok(resp)
+    }
+
     /// Enforce atproto **service-auth** admission on a `/sync` request when the
     /// `REQUIRE_ATPROTO_AUTH` var is `"true"`. Returns `Ok(None)` to admit (or
     /// when auth is disabled), or `Ok(Some(response))` with the rejection to send.
@@ -94,7 +107,7 @@ mod worker_entry {
             .find(|(k, _)| k == "auth")
             .map(|(_, v)| v.into_owned());
         let Some(token) = token else {
-            return Ok(Some(Response::error("missing atproto auth token", 401)?));
+            return Ok(Some(unauthorized("invalid_request")?));
         };
 
         let now = (Date::now().as_millis() / 1000) as i64;
@@ -103,10 +116,11 @@ mod worker_entry {
                 worker::console_log!("admitted atproto identity {did}");
                 Ok(None)
             }
-            Err(e) => Ok(Some(Response::error(
-                format!("atproto auth failed: {e}"),
-                401,
-            )?)),
+            Err(e) => {
+                // Detail server-side only; caller gets a coarse rejection.
+                worker::console_log!("atproto admission rejected: {e}");
+                Ok(Some(unauthorized("invalid_token")?))
+            }
         }
     }
 

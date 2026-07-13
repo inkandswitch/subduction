@@ -277,12 +277,91 @@ fn decode_json<T: for<'de> Deserialize<'de>>(b64: &str) -> Result<T, AuthError> 
     serde_json::from_slice(&raw).map_err(|_| AuthError::MalformedJwt)
 }
 
+/// Build the HTTP URL that serves a DID's document.
+///
+/// Supports `did:plc` (resolved via plc.directory) and `did:web`. For `did:web`
+/// the method-specific id uses `:` as a path separator and may percent-encode
+/// reserved characters — notably `%3A` for a port — so we replace `:` with `/`
+/// and then percent-decode, per the did:web spec.
+///
+/// Pure (no I/O) so it's host-testable; the network fetch lives in `resolve`.
+///
+/// # Errors
+///
+/// Returns [`AuthError::UnsupportedDidMethod`] for other/empty DID methods.
+// Compiled for wasm (used by `resolve`) and for host tests; excluded from a
+// plain host `cargo build` where it would otherwise be dead code.
+#[cfg(any(target_arch = "wasm32", test))]
+fn did_document_url(did: &str) -> Result<String, AuthError> {
+    if let Some(rest) = did.strip_prefix("did:plc:") {
+        if rest.is_empty() {
+            return Err(AuthError::UnsupportedDidMethod);
+        }
+        // plc.directory serves the resolved DID document at /<did>.
+        Ok(format!("https://plc.directory/{did}"))
+    } else if let Some(rest) = did.strip_prefix("did:web:") {
+        if rest.is_empty() {
+            return Err(AuthError::UnsupportedDidMethod);
+        }
+        // did:web:<host>            -> https://<host>/.well-known/did.json
+        // did:web:<host>:<a>:<b>    -> https://<host>/<a>/<b>/did.json
+        // did:web:<host>%3A<port>   -> https://<host>:<port>/.well-known/did.json
+        let has_path = rest.contains(':');
+        let host_and_path = percent_decode(&rest.replace(':', "/"));
+        if has_path {
+            Ok(format!("https://{host_and_path}/did.json"))
+        } else {
+            Ok(format!("https://{host_and_path}/.well-known/did.json"))
+        }
+    } else {
+        Err(AuthError::UnsupportedDidMethod)
+    }
+}
+
+/// Percent-decode a string, leaving malformed `%` sequences untouched. Lenient
+/// on purpose: this only needs to recover reserved characters (e.g. `%3A`) in a
+/// did:web identifier, not validate arbitrary input.
+#[cfg(any(target_arch = "wasm32", test))]
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 // --- DID resolution + end-to-end admission (Workers runtime only) -----------
 
 #[cfg(target_arch = "wasm32")]
 mod resolve {
-    use super::{decode_multikey, AuthError, SigningKey};
+    use super::{decode_multikey, did_document_url, AuthError, SigningKey};
     use serde::Deserialize;
+
+    /// Maximum DID document we'll read (64 KiB). `did:web` resolution is driven
+    /// by an untrusted `iss`, so an attacker could point it at a host serving an
+    /// arbitrarily large body; capping the read keeps an admission check from
+    /// being turned into a memory/CPU sink.
+    const MAX_DID_DOC_BYTES: usize = 64 * 1024;
 
     #[derive(Debug, Deserialize)]
     struct DidDocument {
@@ -317,25 +396,6 @@ mod resolve {
         decode_multikey(&multibase)
     }
 
-    fn did_document_url(did: &str) -> Result<String, AuthError> {
-        if did.starts_with("did:plc:") {
-            // plc.directory serves the resolved DID document at /<did>.
-            Ok(format!("https://plc.directory/{did}"))
-        } else if let Some(rest) = did.strip_prefix("did:web:") {
-            // did:web:<host> -> https://<host>/.well-known/did.json
-            // did:web:<host>:<a>:<b> -> https://<host>/<a>/<b>/did.json
-            match rest.split_once(':') {
-                None => Ok(format!("https://{rest}/.well-known/did.json")),
-                Some((host, path)) => Ok(format!(
-                    "https://{host}/{}/did.json",
-                    path.replace(':', "/")
-                )),
-            }
-        } else {
-            Err(AuthError::UnsupportedDidMethod)
-        }
-    }
-
     async fn fetch_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, AuthError> {
         let parsed = worker::Url::parse(url).map_err(|e| AuthError::Resolution(e.to_string()))?;
         let mut resp = worker::Fetch::Url(parsed)
@@ -348,11 +408,27 @@ mod resolve {
                 resp.status_code()
             )));
         }
-        let text = resp
-            .text()
-            .await
+        // Reject an oversized body up front when the server declares one.
+        if let Ok(Some(len)) = resp.headers().get("content-length") {
+            if len.parse::<usize>().is_ok_and(|n| n > MAX_DID_DOC_BYTES) {
+                return Err(AuthError::Resolution("did document too large".into()));
+            }
+        }
+        // Bound the actual read too, so a chunked / undeclared-length response
+        // can't stream unbounded data into memory during an admission check.
+        use futures::StreamExt as _;
+        let mut stream = resp
+            .stream()
             .map_err(|e| AuthError::Resolution(e.to_string()))?;
-        serde_json::from_str(&text).map_err(|e| AuthError::Resolution(e.to_string()))
+        let mut buf = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| AuthError::Resolution(e.to_string()))?;
+            if buf.len() + chunk.len() > MAX_DID_DOC_BYTES {
+                return Err(AuthError::Resolution("did document too large".into()));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&buf).map_err(|e| AuthError::Resolution(e.to_string()))
     }
 }
 
@@ -624,5 +700,69 @@ mod tests {
         let (v, rest) = read_varint(&[0x80, 0x24, 0xaa]).unwrap();
         assert_eq!(v, 0x1200);
         assert_eq!(rest, &[0xaa]);
+    }
+
+    // ---- DID document URL building -------------------------------------
+
+    #[test]
+    fn did_plc_url() {
+        assert_eq!(
+            did_document_url("did:plc:abc123").unwrap(),
+            "https://plc.directory/did:plc:abc123"
+        );
+    }
+
+    #[test]
+    fn did_web_plain_host() {
+        assert_eq!(
+            did_document_url("did:web:example.com").unwrap(),
+            "https://example.com/.well-known/did.json"
+        );
+    }
+
+    #[test]
+    fn did_web_with_path() {
+        assert_eq!(
+            did_document_url("did:web:example.com:user:alice").unwrap(),
+            "https://example.com/user/alice/did.json"
+        );
+    }
+
+    #[test]
+    fn did_web_percent_encoded_port() {
+        // %3A must survive the ':' -> '/' path split and decode back to a port.
+        assert_eq!(
+            did_document_url("did:web:example.com%3A8443").unwrap(),
+            "https://example.com:8443/.well-known/did.json"
+        );
+        assert_eq!(
+            did_document_url("did:web:localhost%3A3000:path").unwrap(),
+            "https://localhost:3000/path/did.json"
+        );
+    }
+
+    #[test]
+    fn did_document_url_rejects_unknown_and_empty() {
+        assert_eq!(
+            did_document_url("did:key:z6Mk").unwrap_err(),
+            AuthError::UnsupportedDidMethod
+        );
+        assert_eq!(
+            did_document_url("did:web:").unwrap_err(),
+            AuthError::UnsupportedDidMethod
+        );
+        assert_eq!(
+            did_document_url("did:plc:").unwrap_err(),
+            AuthError::UnsupportedDidMethod
+        );
+    }
+
+    #[test]
+    fn percent_decode_leaves_malformed_sequences() {
+        assert_eq!(percent_decode("a%3Ab"), "a:b");
+        assert_eq!(percent_decode("no-escapes"), "no-escapes");
+        // Truncated / invalid escapes are passed through untouched.
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
     }
 }

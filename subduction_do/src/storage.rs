@@ -262,12 +262,19 @@ impl<S: Sql> SqlStore<S> {
     /// Called after handling any message that could mutate subscriptions, so
     /// the on-disk set stays in sync with the in-memory map across hibernation.
     ///
-    /// The `DELETE` and the per-row `INSERT`s run as a single **synchronous**
-    /// burst with no intervening `await`. On the Durable Object SQLite backend
-    /// that makes them one atomic implicit transaction via automatic write
-    /// coalescing, so a mid-way failure never leaves a partial/empty set on
-    /// disk. Do **not** wrap this in `BEGIN`/`COMMIT`: `sql.exec()` rejects
-    /// transaction statements and would error at runtime.
+    /// The `DELETE` and the per-row `INSERT`s run as one **synchronous** burst
+    /// with no intervening `await`. On the Durable Object backend such a burst is
+    /// coalesced and persisted atomically *if it runs to completion*, and
+    /// `sql.exec()` rejects explicit `BEGIN`/`COMMIT` — so do **not** add one, it
+    /// would error at runtime.
+    ///
+    /// This is **not** a hard all-or-nothing guarantee: the method returns the
+    /// SQL error instead of panicking, so a failure after the `DELETE` (quota,
+    /// corruption, …) can leave a partial/empty set on disk. That's acceptable
+    /// here because the in-memory subscription map stays authoritative for the
+    /// live isolate and the next mutating message rewrites the full set; callers
+    /// log the error (see `teardown`) rather than trusting the on-disk set after
+    /// a fault.
     ///
     /// # Errors
     ///
