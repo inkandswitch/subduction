@@ -4,24 +4,24 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
-    <title>Subduction · CRDT sync on Cloudflare Durable Objects</title>
+    <title>Subduction · peer-to-peer sync for local-first apps</title>
     <meta
       name="description"
-      content="A hibernatable CRDT sync service: one Cloudflare Durable Object per document, signed commits over WebSocket, SQLite persistence, and alarm-driven compaction."
+      content="Subduction is a peer-to-peer synchronization protocol and library for CRDTs: efficient, encryption-friendly sync between peers with no central server. Runs on Rust, WebAssembly, and the CLI — plus a free hosted sync endpoint at subduct.io."
     />
     <link rel="canonical" href="https://subduct.io/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://subduct.io/" />
-    <meta property="og:title" content="Subduction · CRDT sync on Cloudflare Durable Objects" />
+    <meta property="og:title" content="Subduction · peer-to-peer sync for local-first apps" />
     <meta
       property="og:description"
-      content="A hibernatable CRDT sync service: one Cloudflare Durable Object per document, signed commits over WebSocket, SQLite persistence, and alarm-driven compaction."
+      content="A peer-to-peer sync protocol and library for CRDTs — efficient, encryption-friendly, no central server. Plus a free hosted sync endpoint at subduct.io."
     />
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Subduction · CRDT sync on Cloudflare Durable Objects" />
+    <meta name="twitter:title" content="Subduction · peer-to-peer sync for local-first apps" />
     <meta
       name="twitter:description"
-      content="One Cloudflare Durable Object per document, signed commits over WebSocket, SQLite persistence, and alarm-driven compaction."
+      content="Peer-to-peer, encryption-friendly CRDT sync with no central server. Plus a free hosted sync endpoint at subduct.io."
     />
     <style>
       :root {
@@ -208,29 +208,6 @@
       pre .c { color: #8b949e; font-style: italic; }
       pre .f { color: #d2a8ff; }
 
-      /* ---- lifecycle ---- */
-      .flow { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
-      .flow .step {
-        display: flex; gap: 14px; align-items: flex-start;
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 14px 18px;
-      }
-      .flow .tag {
-        flex: none;
-        font-family: ui-monospace, monospace;
-        font-size: 12px;
-        color: var(--accent);
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        border-radius: 7px;
-        padding: 3px 9px;
-        margin-top: 1px;
-      }
-      .flow .step div.body { color: var(--muted); font-size: 14.5px; }
-      .flow .step div.body b { color: var(--text); font-weight: 600; }
-
       /* ---- footer ---- */
       footer {
         border-top: 1px solid var(--border);
@@ -251,6 +228,50 @@
         text-align: center;
       }
 
+      /* ---- chips (transports / platforms) ---- */
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 26px; }
+      .chip {
+        font-size: 12.5px;
+        color: var(--muted);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 5px 12px;
+      }
+      .chip b { color: var(--text); font-weight: 600; }
+
+      /* ---- service section ---- */
+      .service-head { text-align: center; margin-bottom: 6px; }
+      .service-head .eyebrow { color: var(--accent-2); background: rgba(88, 166, 255, 0.1); border-color: rgba(88, 166, 255, 0.28); }
+      .caveats {
+        margin-top: 18px;
+        border: 1px solid rgba(210, 153, 34, 0.35);
+        background: rgba(210, 153, 34, 0.08);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+      }
+      .caveats h4 { margin: 0 0 8px; font-size: 14px; color: var(--warn); letter-spacing: 0.01em; }
+      .caveats ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+      .caveats li { margin: 4px 0; }
+      .caveats li b { color: var(--text); font-weight: 600; }
+
+      /* ---- powered by Cloudflare ---- */
+      .powered {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        padding: 8px 14px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .powered:hover { color: var(--text); border-color: #3a4655; text-decoration: none; }
+      .powered .cf { width: 40px; height: auto; display: block; }
+      .powered b { color: var(--text); font-weight: 600; }
+
       @media (max-width: 760px) {
         .grid { grid-template-columns: 1fr; }
         .connect { grid-template-columns: 1fr; }
@@ -268,45 +289,41 @@
         Subduction
       </span>
       <span class="navlinks">
-        <a href="#features" class="hide-sm">Features</a>
-        <a href="#connect" class="hide-sm">Connect</a>
-        <a href="#architecture" class="hide-sm">Architecture</a>
+        <a href="#features" class="hide-sm">Library</a>
+        <a href="#service" class="hide-sm">Free service</a>
+        <a href="#how" class="hide-sm">How it runs</a>
         <a href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">GitHub ↗</a>
       </span>
     </nav>
 
     <header class="hero">
       <div class="wrap">
-        <span class="eyebrow">CRDT sync · Cloudflare Durable Objects</span>
-        <h1>Real-time document sync that <span class="grad">hibernates</span> when idle</h1>
+        <span class="eyebrow">Peer-to-peer · CRDT sync · local-first</span>
+        <h1>Peer-to-peer sync for <span class="grad">local-first</span> apps</h1>
         <p class="lede">
-          Subduction runs its peer-to-peer sync layer as a Cloudflare Durable
-          Object — <b style="color:var(--text)">one object per document</b>, each
-          with its own SQLite. Clients exchange signed commits over a single
-          WebSocket; the object evicts itself between bursts of activity and
-          rehydrates from storage on the next message. You pay for work, not for
-          waiting.
+          Subduction is a peer-to-peer synchronization protocol and library for
+          CRDTs. It syncs encrypted, partitioned data between peers
+          <b style="color:var(--text)">without a central server</b> — efficiently,
+          by comparing history metadata instead of shipping whole documents.
+          Written in Rust, with bindings for the browser, Node, and a CLI.
         </p>
         <div class="cta">
-          <a class="btn primary" href="#connect">Start syncing</a>
-          <a class="btn ghost" href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">
-            View source ↗
+          <a class="btn primary" href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">
+            Get started on GitHub ↗
           </a>
+          <a class="btn ghost" href="#service">Use the free service</a>
         </div>
 
-        <div class="endpoint">
-          <div class="label">WebSocket endpoint</div>
-          <div class="row">
-            <code id="endpoint"
-              >wss://<span id="host">subduct.io</span>/sync/<span class="ph">&lt;document-id&gt;</span></code
-            >
-            <button class="copy" id="copy">Copy</button>
-          </div>
+        <div class="chips">
+          <span class="chip"><b>Transports:</b> WebSocket · HTTP long-poll · Iroh/QUIC</span>
+          <span class="chip"><b>Runs on:</b> Rust · WebAssembly · Node · CLI</span>
+          <span class="chip"><b>Works with:</b> Automerge</span>
         </div>
+
         <p class="note">
-          Every client that names the same <code style="font-family:ui-monospace,monospace">&lt;document-id&gt;</code>
-          is routed to the same Durable Object — that is the whole coordination
-          primitive.
+          An <a href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">Ink&nbsp;&amp;&nbsp;Switch</a>
+          project. Early preview — the API is unstable and it isn't ready for
+          production yet.
         </p>
       </div>
     </header>
@@ -314,67 +331,80 @@
     <section id="features">
       <div class="wrap">
         <div class="section-head">
-          <h2>Built for the edge</h2>
-          <p>The sync engine is Rust compiled to WebAssembly, running inside the Durable Object next to its storage.</p>
+          <h2>What Subduction gives you</h2>
+          <p>A sync layer for local-first software — bring your own CRDT, storage, and transport.</p>
         </div>
         <div class="grid">
           <div class="card">
-            <span class="ico">🗂️</span>
-            <h3>One object per document</h3>
-            <p>The document id maps to a stable Durable Object id, so load and storage spread across the fleet instead of a single hot instance.</p>
+            <span class="ico">🪶</span>
+            <h3>Efficient incremental sync</h3>
+            <p>Sedimentree shards history into hashed layers, so peers diff compact metadata and transfer only the fragments that changed — not whole documents.</p>
           </div>
           <div class="card">
-            <span class="ico">💤</span>
-            <h3>WebSocket hibernation</h3>
-            <p>Sockets stay open while the isolate is evicted from memory. Identity and connections rebuild from persisted state on the next frame.</p>
+            <span class="ico">🔒</span>
+            <h3>Encryption-friendly</h3>
+            <p>Designed to sync encrypted, partitioned data. Peers can reconcile histories without decrypting the payloads they're relaying.</p>
           </div>
           <div class="card">
-            <span class="ico">🔏</span>
-            <h3>Signed handshake</h3>
-            <p>Every peer proves an Ed25519 identity through a challenge/response handshake before it can read or write a document.</p>
+            <span class="ico">🌐</span>
+            <h3>No central server</h3>
+            <p>True peer-to-peer over pluggable transports — WebSocket, HTTP long-poll, or Iroh/QUIC. Any peer can relay; none is authoritative.</p>
           </div>
           <div class="card">
-            <span class="ico">🛡️</span>
-            <h3>Replay-safe across sleep</h3>
-            <p>Accepted handshake nonces are persisted to SQLite, so a captured challenge can't be replayed after the object hibernates.</p>
+            <span class="ico">📦</span>
+            <h3>Multi-platform</h3>
+            <p>One protocol across native Rust, WebAssembly (browser &amp; Node), and a CLI, so the same documents sync everywhere your app runs.</p>
           </div>
           <div class="card">
-            <span class="ico">🧹</span>
-            <h3>Alarm-driven compaction</h3>
-            <p>An alarm fires only when there's work — expiring nonces and compacting redundant commits once they're covered by a fragment.</p>
+            <span class="ico">🧩</span>
+            <h3>Automerge-ready</h3>
+            <p>Automerge was the original target and ships as a first-class integration — but Subduction can carry any content-addressed data.</p>
           </div>
           <div class="card">
-            <span class="ico">💾</span>
-            <h3>Durable by default</h3>
-            <p>Commits, fragments, and subscriptions live in the object's SQLite, so nothing is lost across evictions or restarts.</p>
+            <span class="ico">🪪</span>
+            <h3>Verifiable identities</h3>
+            <p>Peers prove an Ed25519 identity through a challenge/response handshake, and authorization is pluggable via policies (e.g. Keyhive).</p>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="connect">
+    <section id="service">
       <div class="wrap">
-        <div class="section-head">
-          <h2>Connect in four steps</h2>
-          <p>Point a Subduction client at the endpoint, complete the handshake, and subscribe to a document.</p>
+        <div class="service-head">
+          <span class="eyebrow">Free hosted service</span>
+          <div class="section-head" style="margin-top:14px">
+            <h2>Sync for free on subduct.io</h2>
+            <p>Don't want to run your own relay? Point any Subduction client at this domain and sync over WebSocket — no account, no key, no cost.</p>
+          </div>
         </div>
-        <div class="connect">
+
+        <div class="endpoint">
+          <div class="label">WebSocket endpoint</div>
+          <div class="row">
+            <code id="endpoint"
+              >wss://<span id="host">subduct.io</span>/sync/<span class="ph">&lt;room&gt;</span></code
+            >
+            <button class="copy" id="copy">Copy</button>
+          </div>
+        </div>
+        <p class="note">
+          A <code style="font-family:ui-monospace,monospace">&lt;room&gt;</code> is any opaque key you choose. Every client that
+          names the same room syncs together — use a document id to give each
+          document its own room, or a shared workspace id to multiplex many
+          documents over one connection.
+        </p>
+
+        <div class="connect" style="margin-top:28px">
           <ol class="steps">
-            <li><b>Open a WebSocket</b> to <code style="font-family:ui-monospace,monospace">/sync/&lt;document-id&gt;</code> — the worker routes it to that document's object.</li>
-            <li><b>Discover &amp; handshake</b> using the service name <code style="font-family:ui-monospace,monospace">subduction-do</code>; both sides derive the same audience from it.</li>
-            <li><b>Subscribe</b> to the document to receive server-pushed commits as other peers write them.</li>
-            <li><b>Sync</b> — pull existing history and push your commits; the object fans them out to subscribers inline.</li>
+            <li><b>Open a WebSocket</b> to <code style="font-family:ui-monospace,monospace">wss://subduct.io/sync/&lt;room&gt;</code> from any Subduction client (browser, Node, Rust, or the CLI).</li>
+            <li><b>Handshake</b> with the discovery service name <code style="font-family:ui-monospace,monospace">subduction-do</code> — both sides derive the same audience from it.</li>
+            <li><b>Subscribe</b> to a document to receive commits pushed by other peers in the room in real time.</li>
+            <li><b>Sync</b> — pull existing history and push your commits; the room relays them to everyone else connected.</li>
           </ol>
-          <p style="margin-top:16px;padding:12px 16px;border:1px solid rgba(255,180,80,.35);border-radius:10px;background:rgba(255,180,80,.08);font-size:.92rem;line-height:1.5">
-            <b>Open demo:</b> this deployment runs a permissive policy — anyone who
-            knows a document id can read and write it, storage is uncapped, and
-            data may be reset at any time. It's for evaluation only; don't put
-            anything private or durable here. Self-host with your own auth policy
-            for real use.
-          </p>
           <pre><code><span class="c">// Browser client, via the subduction_wasm bundle.</span>
 <span class="k">import</span> init, { Subduction, MemorySigner, MemoryStorage, SedimentreeId }
-  <span class="k">from</span> <span class="s">"./pkg/subduction_wasm.js"</span>;
+  <span class="k">from</span> <span class="s">"@automerge/subduction"</span>;
 
 <span class="k">await</span> init();
 
@@ -385,54 +415,76 @@
 });
 
 <span class="k">const</span> doc = SedimentreeId.<span class="f">fromBytes</span>(docIdBytes);
-<span class="k">const</span> url = <span class="k">new</span> <span class="f">URL</span>(<span class="s">`wss://${host}/sync/${docIdHex}`</span>);
+<span class="k">const</span> url = <span class="k">new</span> <span class="f">URL</span>(<span class="s">"wss://subduct.io/sync/my-room"</span>);
 
-<span class="c">// Handshake + identify the server peer.</span>
+<span class="c">// Handshake, then sync + subscribe to a document.</span>
 <span class="k">await</span> sync.<span class="f">connectDiscover</span>(url, <span class="s">"subduction-do"</span>);
 <span class="k">await</span> sync.<span class="f">syncWithAllPeers</span>(doc, <span class="k">true</span>, <span class="s">5000</span>);</code></pre>
+        </div>
+
+        <div class="caveats">
+          <h4>⚠️ Before you rely on it</h4>
+          <ul>
+            <li><b>Open by default.</b> Anyone who knows a room key can read and write it — treat room keys as unguessable secrets, or self-host with your own auth policy.</li>
+            <li><b>Not private.</b> Bring your own encryption; don't put anything sensitive in a room on the shared service.</li>
+            <li><b>Not durable.</b> Storage is uncapped and best-effort — data may be reset or deleted at any time, with no backups and no SLA.</li>
+            <li><b>Preview quality.</b> Subduction is an early preview with an unstable API. Great for demos and experiments; not for production.</li>
+          </ul>
+          <p style="margin:10px 0 0;font-size:13px;color:var(--muted)">
+            Want guarantees? It's open source — <a href="https://github.com/inkandswitch/subduction/tree/main/subduction_do" target="_blank" rel="noopener">run your own</a> with your own policy, storage limits, and identity.
+          </p>
         </div>
       </div>
     </section>
 
-    <section id="architecture">
+    <section id="how">
       <div class="wrap">
         <div class="section-head">
-          <h2>What happens on a message</h2>
-          <p>The lifecycle is designed so no work is lost when the isolate is evicted.</p>
+          <h2>How the hosted service runs</h2>
+          <p>subduct.io packages Subduction's sync layer as a Cloudflare Durable Object — one hibernatable actor per room, each with its own SQLite.</p>
         </div>
-        <div class="flow">
-          <div class="step">
-            <span class="tag">route</span>
-            <div class="body"><b>/sync/&lt;doc&gt;</b> is upgraded and forwarded to <code style="font-family:ui-monospace,monospace">id_from_name(doc)</code> — a dedicated, individually-hibernatable object with its own SQLite.</div>
+        <div class="grid">
+          <div class="card">
+            <span class="ico">🗂️</span>
+            <h3>One object per room</h3>
+            <p>The room key maps to a stable Durable Object, so load and storage spread across the fleet instead of piling onto one instance.</p>
           </div>
-          <div class="step">
-            <span class="tag">accept</span>
-            <div class="body">The server socket is registered as <b>hibernatable</b>. No long-lived receive loop is held open, so the isolate is free to sleep between frames.</div>
+          <div class="card">
+            <span class="ico">💤</span>
+            <h3>Hibernates when idle</h3>
+            <p>WebSockets stay open while the isolate is evicted from memory; connection and identity rebuild from storage on the next frame. You pay for work, not waiting.</p>
           </div>
-          <div class="step">
-            <span class="tag">auth</span>
-            <div class="body">The first frame is a signed challenge. The object verifies it, rejects replayed nonces from its durable table, and pins the peer identity to the socket.</div>
-          </div>
-          <div class="step">
-            <span class="tag">sync</span>
-            <div class="body">Subsequent frames carry commits and fragments. They're persisted, then <b>fanned out to subscribers inline</b> — before the handler returns and the object can hibernate.</div>
-          </div>
-          <div class="step">
-            <span class="tag">alarm</span>
-            <div class="body">When a fragment lands or a nonce is recorded, an alarm is armed. It expires stale nonces and compacts commits made redundant by fragments — then only re-arms if there's still work.</div>
+          <div class="card">
+            <span class="ico">💾</span>
+            <h3>Durable &amp; self-tidying</h3>
+            <p>Commits, fragments, and subscriptions persist to SQLite, and an alarm compacts redundant history — firing only when there's actually work to do.</p>
           </div>
         </div>
+        <p class="note">
+          It's all open source — read the design, or deploy your own copy, in the
+          <a href="https://github.com/inkandswitch/subduction/tree/main/subduction_do" target="_blank" rel="noopener"><code style="font-family:ui-monospace,monospace">subduction_do</code></a> crate.
+        </p>
       </div>
     </section>
 
     <footer>
-      <div class="wrap" style="width:100%; display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:0;">
-        <span>Subduction — a project by <a href="https://www.inkandswitch.com/" target="_blank" rel="noopener">Ink &amp; Switch</a>.</span>
+      <div class="wrap" style="width:100%; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; padding:0;">
         <span>
+          Subduction — a project by <a href="https://www.inkandswitch.com/" target="_blank" rel="noopener">Ink &amp; Switch</a>.
+          <br />
           <a href="https://github.com/inkandswitch/subduction" target="_blank" rel="noopener">Source</a>
           ·
-          <a href="https://github.com/inkandswitch/subduction/tree/main/subduction_do/examples/chat" target="_blank" rel="noopener">Chat example</a>
+          <a href="https://github.com/inkandswitch/subduction/tree/main/subduction_do" target="_blank" rel="noopener">Hosted service</a>
+          ·
+          <a href="https://github.com/inkandswitch/subduction/blob/main/LICENSE-APACHE" target="_blank" rel="noopener">MIT / Apache-2.0</a>
         </span>
+        <a class="powered" href="https://developers.cloudflare.com/durable-objects/" target="_blank" rel="noopener">
+          <svg class="cf" viewBox="0 0 165 76" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path fill="#FBAD41" d="M132.234039,32.6977255 C131.681882,32.6977255 131.137255,32.7178039 130.592627,32.7353725 C130.504399,32.74012 130.417716,32.7605158 130.336627,32.7956078 C130.043802,32.8952613 129.82104,33.1359571 129.744314,33.4356078 L127.410196,41.5899608 C126.403765,45.0961569 126.777725,48.3338039 128.469333,50.7105882 C130.020392,52.9091765 132.600471,54.1992157 135.732706,54.3498039 L148.394667,55.1178039 C148.771137,55.1378824 149.097412,55.3185882 149.295686,55.6172549 C149.506101,55.9404326 149.55345,56.3433572 149.423686,56.7065098 C149.215453,57.3013753 148.678572,57.7194949 148.050824,57.7756863 L134.894431,58.5436863 C127.74651,58.8749804 120.056471,64.7077647 117.358431,71.820549 L116.409725,74.3303529 C116.326887,74.5414441 116.351,74.7795362 116.474478,74.9697327 C116.597957,75.1599293 116.805625,75.2788545 117.032157,75.289108 L162.344157,75.289108 C162.885644,75.2912846 163.362056,74.9319222 163.508706,74.4106667 C164.313479,71.5178763 164.718804,68.5286041 164.713465,65.5259608 C164.713465,47.4051765 150.184157,32.7178039 132.254118,32.7178039"/>
+            <path fill="#F6821F" d="M112.456784,74.2349804 L113.295059,71.2859608 C114.304,67.7797647 113.930039,64.5421176 112.240941,62.1653333 C110.684863,59.9667451 108.107294,58.6767059 104.972549,58.5261176 L45.5780392,57.7581176 C45.2032903,57.7512954 44.8544054,57.5656588 44.6393725,57.2586667 C44.428117,56.935899 44.3798374,56.5329504 44.5088627,56.1694118 C44.7189465,55.570659 45.2618255,55.151698 45.8942745,55.1002353 L105.843451,54.3322353 C112.961255,54.003451 120.651294,48.1681569 123.349333,41.0553725 L126.767686,32.0200784 C126.90567,31.6370238 126.94156,31.2237933 126.868078,30.822902 C122.972863,13.1990588 107.392,0 88.7642353,0 C71.5921569,0 57.0227451,11.1987451 51.7948235,26.7670588 C48.2750752,24.0904165 43.8669112,22.8571 39.4691765,23.3185882 C31.2370196,24.1468235 24.6111373,30.8530196 23.7929412,39.1755294 C23.5810953,41.2541362 23.7339814,43.3537722 24.2447059,45.3797647 C10.7921569,45.7813333 0,56.9198431 0,70.6083137 C0,71.8456471 0.0878431373,73.0654118 0.266039216,74.2550588 C0.339418496,74.8323928 0.831041709,75.2648491 1.41301961,75.2640012 L111.10149,75.2640012 C111.73592,75.2535572 112.287666,74.8264647 112.456784,74.214902"/>
+          </svg>
+          <span>Powered by <b>Cloudflare</b></span>
+        </a>
       </div>
     </footer>
 
@@ -446,7 +498,7 @@
         const btn = document.getElementById("copy");
         btn.addEventListener("click", async () => {
           const scheme = location.protocol === "https:" ? "wss" : "ws";
-          const text = `${scheme}://${host}/sync/<document-id>`;
+          const text = `${scheme}://${host}/sync/<room>`;
           try {
             await navigator.clipboard.writeText(text);
             btn.textContent = "Copied";
