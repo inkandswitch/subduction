@@ -77,7 +77,7 @@ use crate::{
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    remote_heads::RemoteHeadsNotifier,
+    remote_heads::{NoRemoteHeadsObserver, RemoteHeadsNotifier},
     spawn::Spawn,
     storage::{powerbox::StoragePowerbox, traits::Storage},
     timeout::Timeout,
@@ -114,12 +114,14 @@ pub struct SubductionBuilder<
     Store = Unset,
     Timer = Unset,
     Metric = CountLeadingZeroBytes,
+    HeadsObserver = NoRemoteHeadsObserver,
     const SHARDS: usize = 256,
 > {
     signer: Sign,
     spawner: Sp,
     storage: Store,
     timer: Timer,
+    heads_observer: HeadsObserver,
 
     discovery_id: Option<DiscoveryId>,
     default_roundtrip_timeout: Option<Duration>,
@@ -150,7 +152,15 @@ impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
 // -----------------------------------------------------------------------
 
 impl<const SHARDS: usize>
-    SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS>
+    SubductionBuilder<
+        Unset,
+        Unset,
+        Unset,
+        Unset,
+        CountLeadingZeroBytes,
+        NoRemoteHeadsObserver,
+        SHARDS,
+    >
 {
     /// Create a new builder with all defaults.
     ///
@@ -167,6 +177,7 @@ impl<const SHARDS: usize>
             spawner: Unset,
             storage: Unset,
             timer: Unset,
+            heads_observer: NoRemoteHeadsObserver,
             discovery_id: None,
             default_roundtrip_timeout: None,
             depth_metric: CountLeadingZeroBytes,
@@ -179,15 +190,23 @@ impl<const SHARDS: usize>
 }
 
 impl<const SHARDS: usize> Default
-    for SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS>
+    for SubductionBuilder<
+        Unset,
+        Unset,
+        Unset,
+        Unset,
+        CountLeadingZeroBytes,
+        NoRemoteHeadsObserver,
+        SHARDS,
+    >
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Sp, Store, Timer, Metric, const SHARDS: usize>
-    SubductionBuilder<Unset, Sp, Store, Timer, Metric, SHARDS>
+impl<Sp, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Unset, Sp, Store, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Set the signer for peer identity and handshake authentication.
     ///
@@ -195,12 +214,13 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
     pub fn signer<Sign>(
         self,
         signer: Sign,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
         SubductionBuilder {
             signer,
             spawner: self.spawner,
             storage: self.storage,
             timer: self.timer,
+            heads_observer: self.heads_observer,
             discovery_id: self.discovery_id,
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
@@ -212,8 +232,8 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
     }
 }
 
-impl<Sign, Store, Timer, Metric, const SHARDS: usize>
-    SubductionBuilder<Sign, Unset, Store, Timer, Metric, SHARDS>
+impl<Sign, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Unset, Store, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Set the task spawner for background work.
     ///
@@ -223,12 +243,13 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
     pub fn spawner<Sp>(
         self,
         spawner: Sp,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner,
             storage: self.storage,
             timer: self.timer,
+            heads_observer: self.heads_observer,
             discovery_id: self.discovery_id,
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
@@ -240,8 +261,8 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
     }
 }
 
-impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, SHARDS>
+impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Set the storage backend and authorization policy.
     ///
@@ -251,12 +272,21 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
         self,
         storage: Store,
         policy: Arc<Auth>,
-    ) -> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<
+        Sign,
+        Sp,
+        StoragePowerbox<Store, Auth>,
+        Timer,
+        Metric,
+        HeadsObserver,
+        SHARDS,
+    > {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
             storage: StoragePowerbox::new(storage, policy),
             timer: self.timer,
+            heads_observer: self.heads_observer,
             discovery_id: self.discovery_id,
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
@@ -268,20 +298,24 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
     }
 }
 
-impl<Sign, Sp, Store, Metric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Unset, Metric, SHARDS>
+impl<Sign, Sp, Store, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Unset, Metric, HeadsObserver, SHARDS>
 {
     /// Set the timeout strategy for roundtrip calls.
     ///
     /// This is a required field. Common implementations:
     /// - `TokioTimeout` for native async
     /// - `JsTimeout` for browser environments
-    pub fn timer<O>(self, timer: O) -> SubductionBuilder<Sign, Sp, Store, O, Metric, SHARDS> {
+    pub fn timer<O>(
+        self,
+        timer: O,
+    ) -> SubductionBuilder<Sign, Sp, Store, O, Metric, HeadsObserver, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
             storage: self.storage,
             timer,
+            heads_observer: self.heads_observer,
             discovery_id: self.discovery_id,
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
@@ -293,8 +327,32 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize>
     }
 }
 
-impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Timer, Met, SHARDS>
+impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, SHARDS>
+{
+    /// Set the heads observer function.
+    pub fn heads_observer<NewHeadsObserver>(
+        self,
+        heads_observer: NewHeadsObserver,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, NewHeadsObserver, SHARDS> {
+        SubductionBuilder {
+            signer: self.signer,
+            spawner: self.spawner,
+            storage: self.storage,
+            timer: self.timer,
+            heads_observer: heads_observer,
+            discovery_id: self.discovery_id,
+            default_roundtrip_timeout: self.default_roundtrip_timeout,
+            depth_metric: self.depth_metric,
+            nonce_cache: self.nonce_cache,
+            max_resident_trees: self.max_resident_trees,
+            sedimentrees: self.sedimentrees,
+        }
+    }
+}
+
+impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Timer, Met, HeadsObserver, SHARDS>
 {
     /// Set the discovery ID for discovery-mode connections.
     ///
@@ -332,12 +390,13 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     pub fn depth_metric<Metric: DepthMetric>(
         self,
         metric: Metric,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
             storage: self.storage,
             timer: self.timer,
+            heads_observer: self.heads_observer,
             discovery_id: self.discovery_id,
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: metric,
@@ -417,8 +476,8 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
 // Build methods (only available when all required fields are set)
 // -----------------------------------------------------------------------
 
-impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, SHARDS>
+impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
