@@ -90,7 +90,7 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
 #[tokio::test]
 async fn rejected_connection_is_not_registered() -> TestResult {
     let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
             .spawner(TestSpawn)
@@ -138,7 +138,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
 
     // Now create a subduction with reject policy and try to add a connection
     let (reject_subduction, _handler, _listener_fut2, _actor_fut2) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
             .spawner(TestSpawn)
