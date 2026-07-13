@@ -10,7 +10,8 @@
     "build:chat": "bash ./scripts/build-chat.sh",
     "chat": "npm run build:chat && npx --yes serve examples/chat",
     "build:workspace": "bash ./scripts/build-workspace.sh",
-    "workspace": "npm run build:workspace && npx --yes serve examples/workspace"
+    "workspace": "npm run build:workspace && npx --yes serve examples/workspace",
+    "mint:jwt": "node ./scripts/mint-service-jwt.mjs"
   },
   "devDependencies": {
     "wasm-pack": "^0.15.0",

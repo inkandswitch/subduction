@@ -28,10 +28,19 @@
 //! Because the DO body is identical either way, the granularity is purely this
 //! routing decision plus how the client groups its `syncWithAllPeers` calls.
 //!
+//! # Admission control (optional)
+//!
+//! When the `REQUIRE_ATPROTO_AUTH` var is `"true"`, [`fetch`] requires each
+//! `/sync` upgrade to carry a valid atproto service-auth JWT (`?auth=<jwt>`,
+//! `aud == SERVICE_DID`) and verifies it offline (see [`atproto`]) *before*
+//! waking a Durable Object. It is **admission only**: a valid identity admits
+//! the connection; the per-room `Policy` still governs reads/writes.
+//!
 //! Only [`storage`] is compiled for the host (it is backend-agnostic and unit
 //! tested with `cargo test`); the rest depends on the `worker` runtime and is
 //! wasm-only.
 
+pub mod atproto;
 pub mod routing;
 pub mod storage;
 
@@ -48,7 +57,58 @@ pub use durable_object::SyncDurableObject;
 #[cfg(target_arch = "wasm32")]
 mod worker_entry {
     use crate::routing::{route, Route};
-    use worker::{event, Context, Env, Request, Response, Result};
+    use worker::{event, Context, Date, Env, Request, Response, Result};
+
+    /// Default service DID clients target as the JWT `aud`. Overridable via the
+    /// `SERVICE_DID` var so the same binary works on other hostnames.
+    const DEFAULT_SERVICE_DID: &str = "did:web:subduct.io";
+
+    /// Enforce atproto **service-auth** admission on a `/sync` request when the
+    /// `REQUIRE_ATPROTO_AUTH` var is `"true"`. Returns `Ok(None)` to admit (or
+    /// when auth is disabled), or `Ok(Some(response))` with the rejection to send.
+    ///
+    /// The token rides on the WebSocket URL as `?auth=<jwt>` — browsers can't set
+    /// custom headers on `new WebSocket(...)`, and the wasm client doesn't expose
+    /// a subprotocol hook, so the query string is the only portable channel.
+    /// Service-auth JWTs are short-lived, which bounds the exposure of putting one
+    /// in the URL. Verification happens here, at the edge, so unauthenticated
+    /// requests never wake a Durable Object.
+    async fn admit_or_reject(req: &Request, env: &Env) -> Result<Option<Response>> {
+        let required = env
+            .var("REQUIRE_ATPROTO_AUTH")
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            == "true";
+        if !required {
+            return Ok(None);
+        }
+
+        let service_did = env
+            .var("SERVICE_DID")
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| DEFAULT_SERVICE_DID.to_string());
+
+        let token = req
+            .url()?
+            .query_pairs()
+            .find(|(k, _)| k == "auth")
+            .map(|(_, v)| v.into_owned());
+        let Some(token) = token else {
+            return Ok(Some(Response::error("missing atproto auth token", 401)?));
+        };
+
+        let now = (Date::now().as_millis() / 1000) as i64;
+        match crate::atproto::admit(&token, now, &service_did).await {
+            Ok(did) => {
+                worker::console_log!("admitted atproto identity {did}");
+                Ok(None)
+            }
+            Err(e) => Ok(Some(Response::error(
+                format!("atproto auth failed: {e}"),
+                401,
+            )?)),
+        }
+    }
 
     /// Worker entrypoint. `/sync/<room>` is upgraded and forwarded to the
     /// Durable Object for `<room>`; all other paths are served from the static
@@ -73,6 +133,11 @@ mod worker_entry {
             // the room key to a Durable Object id, so every client naming the
             // same room reaches the same instance.
             Route::Sync(room) => {
+                // Admission control (atproto service auth), enforced at the edge
+                // before we spin up / wake the object. No-op unless enabled.
+                if let Some(rejection) = admit_or_reject(&req, &env).await? {
+                    return Ok(rejection);
+                }
                 let namespace = env.durable_object("SYNC")?;
                 let stub = namespace.id_from_name(room)?.get_stub()?;
                 stub.fetch_with_request(req).await

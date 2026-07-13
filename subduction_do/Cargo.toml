@@ -29,6 +29,18 @@ blake3 = "1.8"
 thiserror = "2"
 tracing = "0.1"
 
+# atproto (Bluesky) service-auth verification. Compiled on all targets: the pure
+# JWT/claim/signature logic is host-tested, and DID resolution is wasm-only.
+# atproto repo signing keys are p256 (ES256) or k256 (ES256K); ed25519 is a bonus
+# (already in the graph via subduction_crypto) for other DID methods.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+bs58 = "0.5"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+ed25519-dalek = "2"
+
 # ---- wasm32 (Cloudflare Workers isolate) only -------------------------------
 # The Worker SDK, the wasm-bindgen glue its macros expand to, the JS getrandom
 # backend, and the panic hook are only meaningful inside the isolate. Keeping
@@ -57,6 +69,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # `MemoryStorage`/redb — equivocation ordering, metas-match-full-load, and
 # tree-id registration. Dev-dep features don't leak into the wasm build.
 subduction_core = { path = "../subduction_core", features = ["std", "test_utils"] }
+# Host-only RNG for minting test JWTs (p256/k256/ed25519 keypairs) in atproto
+# verification tests. Not compiled into the wasm build.
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [profile.release]
 opt-level = 3

@@ -32,6 +32,16 @@ binding = "ASSETS"
 # Let the Worker script run first so it can handle the WebSocket upgrade on /sync.
 run_worker_first = true
 
+# Admission control (atproto service auth). When `REQUIRE_ATPROTO_AUTH` is
+# "true", `/sync/<room>` upgrades must carry a valid atproto service-auth JWT as
+# `?auth=<jwt>` whose `aud` equals `SERVICE_DID`; the Worker verifies it offline
+# (DID resolution + signature) at the edge before waking a Durable Object. Left
+# "false" here so the open demo keeps working; flip it in the dashboard or via
+# `wrangler deploy --var REQUIRE_ATPROTO_AUTH:true` to gate the service.
+[vars]
+REQUIRE_ATPROTO_AUTH = "false"
+SERVICE_DID = "did:web:subduct.io"
+
 [durable_objects]
 bindings = [
   { name = "SYNC", class_name = "SyncDurableObject" }

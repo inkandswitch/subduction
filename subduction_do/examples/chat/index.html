@@ -395,6 +395,11 @@
           (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
         const serverBase = (params.get("server") || defaultBase).replace(/\/+$/, "");
         const wsUrl = new URL(serverBase + "/sync/" + DOC_ID_HEX);
+        // Forward ?auth=<jwt> to the service so this works against a deployment
+        // with atproto admission enabled (REQUIRE_ATPROTO_AUTH=true). No-op
+        // otherwise.
+        const authToken = params.get("auth");
+        if (authToken) wsUrl.searchParams.set("auth", authToken);
 
         let serverPeerId;
         try {

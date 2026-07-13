@@ -175,12 +175,57 @@ To multiplex many documents over one connection, connect once to a room and call
 `syncWithAllPeers(docId, true)` (or `syncWithPeer`) per document — see
 [`RoomClient`](examples/workspace/room-client.js).
 
+## Admission control (atproto service auth)
+
+The Worker can gate `/sync/<room>` behind [atproto](https://atproto.com) **service
+auth**, so only holders of a Bluesky (atproto) identity may connect. This is
+**admission only** — a valid identity admits the connection; once in, the
+per-room `Policy` still governs reads/writes (permissive by default; see below).
+
+It's off by default. Enable it with two vars in `wrangler.toml` (or the
+dashboard):
+
+```toml
+[vars]
+REQUIRE_ATPROTO_AUTH = "true"
+SERVICE_DID = "did:web:subduct.io"   # the JWT `aud` clients must target
+```
+
+**How it works.** A client mints a short-lived JWT with
+`com.atproto.server.getServiceAuth` (`iss` = their DID, `aud` = `SERVICE_DID`,
+signed by their atproto signing key) and passes it as `?auth=<jwt>` on the
+WebSocket URL. Browsers can't set custom headers on `new WebSocket(...)` and the
+wasm client has no subprotocol hook, so the query string is the portable channel;
+service-auth tokens are short-lived, which bounds putting one in a URL. The
+Worker verifies it **offline at the edge** — resolving `iss` (`did:plc` via
+plc.directory, or `did:web`) to its `#atproto` signing key and checking the
+signature (`ES256`/p256, `ES256K`/k256, or `EdDSA`/ed25519), plus `aud` and
+`exp` — *before* a Durable Object is ever woken. Unauthenticated upgrades get a
+`401`. The verifier is a pure, [host-tested module](src/atproto.rs); only DID
+resolution touches the network.
+
+**Minting a token for testing:**
+
+```bash
+npm run mint:jwt -- --identifier you.bsky.social --password <app-password>
+# create the app password at https://bsky.app/settings/app-passwords
+```
+
+It prints a JWT and a ready-to-open URL; both the chat and workspace examples
+forward `?auth=<jwt>` to the service, e.g.
+`examples/workspace/index.html?server=wss://subduct.io&auth=<jwt>`.
+
+**Not yet covered** (admission-only scope): no per-room/per-document ACLs (any
+valid identity reaches any room), no `jti` replay dedupe across the fleet (relies
+on short `exp`), and resolved DID docs aren't cached (one resolution per
+connect). All are additive follow-ups.
+
 ## Operational note
 
-The deployed service runs a **permissive policy**: anyone who knows a room key can
-read and write it, storage is uncapped, and data may be reset at any time. It is
-for evaluation only. Self-host with your own `Policy`/`EphemeralPolicy` for real
-use.
+Unless admission is enabled (above), the deployed service runs a **permissive,
+open policy**: anyone who knows a room key can read and write it, storage is
+uncapped, and data may be reset at any time. It is for evaluation only. Self-host
+with your own `Policy`/`EphemeralPolicy` for real use.
 
 ## License
 

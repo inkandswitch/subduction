@@ -240,7 +240,7 @@
       // connection (mux) vs one connection per document (per).
       async function runMode(mode, serverBase, docs, timeoutMs) {
         const room = randomHex(32); // workspace key (only used by mux)
-        const url = (key) => new URL(serverBase + "/sync/" + key);
+        const url = (key) => withAuth(new URL(serverBase + "/sync/" + key));
 
         // --- Writer: create the workspace and upload it to the service. ------
         const writer = newPeer();
@@ -416,6 +416,15 @@
         return el("server").value.replace(/\/+$/, "");
       }
 
+      // If this page was opened with ?auth=<jwt>, forward it on every
+      // /sync/<room> upgrade so the demo works against a deployment with atproto
+      // admission enabled (REQUIRE_ATPROTO_AUTH=true). No-op on the open demo.
+      function withAuth(url) {
+        const token = new URLSearchParams(location.search).get("auth");
+        if (token) url.searchParams.set("auth", token);
+        return url;
+      }
+
       function renderLiveRows() {
         if (!live) return;
         const rows = el("live-rows");
@@ -457,7 +466,7 @@
         try {
           await ensureWasm();
           const room = randomHex(32);
-          const url = new URL(serverBaseValue() + "/sync/" + room);
+          const url = withAuth(new URL(serverBaseValue() + "/sync/" + room));
 
           const docs = Array.from({ length: LIVE_N }, () => ({
             id: SedimentreeId.fromBytes(crypto.getRandomValues(new Uint8Array(32))),
