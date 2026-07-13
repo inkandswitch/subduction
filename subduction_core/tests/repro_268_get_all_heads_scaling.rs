@@ -270,7 +270,7 @@ async fn get_all_heads_rehydrates_whole_collection_past_resident_cap() -> TestRe
         // operations (deterministic; wall time is reported but not asserted).
         // The first call drains everything the add/converge phase recorded,
         // so the post-sweep snapshot holds exactly the sweep's window.
-        let _ = storage_op_counts(&snapshotter);
+        drop(storage_op_counts(&snapshotter));
         let sweep_start = Instant::now();
         let heads = b.get_all_heads().await;
         let sweep_ms = (sweep_start.elapsed().as_secs_f64() * 10_000.0).round() / 10.0;
