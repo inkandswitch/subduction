@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subduction · workspace multiplexing benchmark</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --panel-2: #1c2330;
+        --border: #2a3038;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --accent: #f78166;
+        --accent-2: #58a6ff;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --err: #f85149;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: radial-gradient(1200px 800px at 80% -10%, #1a2333 0%, var(--bg) 55%);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header { padding: 28px 32px 12px; max-width: 960px; margin: 0 auto; }
+      h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+      h1 .accent { color: var(--accent); }
+      .sub { color: var(--muted); font-size: 14px; margin-top: 6px; line-height: 1.6; }
+      .sub code { font-family: ui-monospace, monospace; background: var(--panel-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px; font-size: 12px; }
+      main { max-width: 960px; margin: 0 auto; padding: 12px 32px 60px; }
+      .controls {
+        display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-end;
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 12px; padding: 16px; margin: 12px 0 20px;
+      }
+      .field { display: flex; flex-direction: column; gap: 6px; }
+      .field label { font-size: 12px; color: var(--muted); }
+      .field input {
+        background: var(--panel-2); border: 1px solid var(--border);
+        border-radius: 8px; color: var(--text); padding: 9px 11px; font-size: 14px; outline: none;
+      }
+      .field input:focus { border-color: var(--accent-2); }
+      .field input[type="number"] { width: 110px; }
+      .field input#server { width: 300px; font-family: ui-monospace, monospace; }
+      button {
+        background: var(--accent); color: #0d1117; border: 0; border-radius: 10px;
+        padding: 10px 22px; font-size: 15px; font-weight: 600; cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      table { width: 100%; border-collapse: collapse; margin: 4px 0 18px; font-size: 14px; }
+      th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+      th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+      td.metric { color: var(--muted); }
+      td .big { font-size: 16px; font-weight: 700; color: var(--text); }
+      td .unit { color: var(--muted); font-size: 12px; margin-left: 3px; }
+      .win { color: var(--ok); }
+      .bar-wrap { background: var(--panel-2); border-radius: 6px; height: 8px; overflow: hidden; margin-top: 6px; }
+      .bar { height: 100%; border-radius: 6px; }
+      .bar.mux { background: var(--ok); }
+      .bar.per { background: var(--accent); }
+      .summary {
+        background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent-2);
+        border-radius: 10px; padding: 14px 18px; margin: 6px 0 18px; font-size: 14px; line-height: 1.6;
+      }
+      .summary b { color: var(--text); }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 4px 18px 8px; margin-bottom: 18px; }
+      .card h2 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 16px 0 8px; }
+      .kv { color: var(--muted); font-size: 13px; }
+      .kv b { color: var(--text); }
+      .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; text-transform: capitalize; }
+      .pill.connected { background: rgba(63,185,80,.15); color: var(--ok); }
+      .pill.connecting, .pill.reconnecting { background: rgba(210,153,34,.15); color: var(--warn); }
+      .pill.closed, .pill.idle { background: var(--panel-2); color: var(--muted); }
+      button.warn { background: var(--warn); }
+      button.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+      pre#log {
+        background: #0a0d12; border: 1px solid var(--border); border-radius: 10px;
+        padding: 14px; font-family: ui-monospace, monospace; font-size: 12px;
+        color: var(--muted); max-height: 320px; overflow: auto; white-space: pre-wrap; margin: 0 0 8px;
+      }
+      .dim { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1><span class="accent">Subduction</span> · workspace multiplexing benchmark</h1>
+      <div class="sub">
+        Measures the cost of bringing an <b>N-document workspace</b> online for a
+        fresh client under two routing topologies against the same Durable Object
+        service:
+        <br />• <b>Multiplexed</b> — one WebSocket to <code>/sync/&lt;workspace&gt;</code>,
+        every document synced over that single socket.
+        <br />• <b>Per-document</b> — one WebSocket per document
+        (<code>/sync/&lt;doc&gt;</code>), today's default.
+        <br />Same engine, same wire protocol — only the routing key and the
+        client's connection grouping differ. Point it at a service with
+        <code>?server=ws://127.0.0.1:8787</code> (defaults to same-origin).
+      </div>
+    </header>
+    <main>
+      <div class="controls">
+        <div class="field">
+          <label for="server">Server (ws base)</label>
+          <input id="server" type="text" />
+        </div>
+        <div class="field">
+          <label for="ndocs">Documents (N)</label>
+          <input id="ndocs" type="number" min="1" max="200" value="15" />
+        </div>
+        <div class="field">
+          <label for="timeout">Sync timeout (ms)</label>
+          <input id="timeout" type="number" min="1000" max="60000" value="15000" />
+        </div>
+        <button id="run">Run benchmark</button>
+      </div>
+
+      <div id="summary" class="summary dim">
+        Set N and hit <b>Run benchmark</b>. Each run uses fresh random document
+        ids (and a fresh workspace id), so no run benefits from another's
+        already-synced state. The first run also pays Durable Object cold-start.
+      </div>
+
+      <div class="card">
+        <table id="results">
+          <thead>
+            <tr>
+              <th>Metric (fresh reader)</th>
+              <th>Multiplexed</th>
+              <th>Per-document</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="metric">WebSocket connections</td><td id="mux-conns">—</td><td id="per-conns">—</td></tr>
+            <tr><td class="metric">Handshakes</td><td id="mux-hs">—</td><td id="per-hs">—</td></tr>
+            <tr><td class="metric">Connect time</td><td id="mux-connect">—</td><td id="per-connect">—</td></tr>
+            <tr><td class="metric">Sync time</td><td id="mux-sync">—</td><td id="per-sync">—</td></tr>
+            <tr><td class="metric">Total (connect + sync)</td><td id="mux-total">—</td><td id="per-total">—</td></tr>
+            <tr><td class="metric">Documents verified</td><td id="mux-docs">—</td><td id="per-docs">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Live room · resilient multiplexing</h2>
+        <p class="dim" style="font-size: 13px; line-height: 1.6; margin: 2px 0 12px">
+          Two peers — a writer and a reader — each hold <b>one</b> connection to a
+          single room and multiplex <b id="live-n">4</b> documents over it (via
+          <code style="font-family:ui-monospace,monospace">room-client.js</code>).
+          The writer appends a commit to a rotating document every ~2s; the reader
+          receives them through the Durable Object's push to subscribers. Hit
+          <b>Sever &amp; recover</b> to drop the reader's socket — it re-runs the
+          handshake, re-subscribes every document, and pulls anything missed
+          during the outage, so no data is lost.
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; margin-bottom: 14px">
+          <button id="live-start">Start</button>
+          <button id="live-drop" class="warn" disabled>Sever &amp; recover</button>
+          <button id="live-stop" class="ghost" disabled>Stop</button>
+          <span class="kv">reader: <span id="live-reader-pill" class="pill idle">idle</span></span>
+          <span class="kv">writer: <span id="live-writer-pill" class="pill idle">idle</span></span>
+          <span class="kv">reconnects: <b id="live-reconnects">0</b></span>
+          <span class="kv">server: <b id="live-server">—</b></span>
+        </div>
+        <table>
+          <thead><tr><th>Document</th><th>Commits (reader-observed)</th><th>Commits (written)</th></tr></thead>
+          <tbody id="live-rows"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Log</h2>
+        <pre id="log">idle.</pre>
+      </div>
+    </main>
+
+    <script type="module">
+      import init, {
+        Subduction,
+        MemorySigner,
+        MemoryStorage,
+        SedimentreeId,
+        CommitId,
+        SubductionWebSocket,
+      } from "./pkg/subduction_wasm.js";
+      import { RoomClient } from "./room-client.js";
+
+      // wasm init is shared by the benchmark and the live panel (idempotent).
+      let wasmReady = null;
+      const ensureWasm = () => (wasmReady ||= init());
+
+      // Must match the Durable Object's SERVICE_NAME so discovery derives the
+      // same handshake audience on both ends.
+      const SERVICE_NAME = "subduction-do";
+
+      const el = (id) => document.getElementById(id);
+      const enc = new TextEncoder();
+      const logEl = el("log");
+      let logBuf = "";
+      function log(line) {
+        logBuf += line + "\n";
+        logEl.textContent = logBuf;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      function resetLog() { logBuf = ""; logEl.textContent = ""; }
+
+      function randomHex(nbytes) {
+        return [...crypto.getRandomValues(new Uint8Array(nbytes))]
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+      }
+
+      // A document: a random SedimentreeId plus a single seed commit the writer
+      // will upload. Keeping payloads tiny isolates the connection/handshake/
+      // round-trip cost (the thing that differs between the two topologies)
+      // from bulk transfer.
+      function makeDoc(i) {
+        const idBytes = crypto.getRandomValues(new Uint8Array(32));
+        const id = SedimentreeId.fromBytes(idBytes);
+        const idHex = [...idBytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+        const head = new CommitId(crypto.getRandomValues(new Uint8Array(32)));
+        const blob = enc.encode(JSON.stringify({ doc: i, ts: Date.now() }));
+        return { id, idHex, head, blob };
+      }
+
+      function newPeer() {
+        return new Subduction({
+          signer: MemorySigner.generate(),
+          storage: new MemoryStorage(),
+        });
+      }
+
+      // Run one topology end to end and return the fresh-reader metrics.
+      //
+      // `mode` is "mux" or "per". In both we do exactly N sync calls; the only
+      // difference is how many WebSocket connections carry them: one shared room
+      // connection (mux) vs one connection per document (per).
+      async function runMode(mode, serverBase, docs, timeoutMs) {
+        const room = randomHex(32); // workspace key (only used by mux)
+        const url = (key) => new URL(serverBase + "/sync/" + key);
+
+        // --- Writer: create the workspace and upload it to the service. ------
+        const writer = newPeer();
+        for (const d of docs) {
+          await writer.storeCommit(d.id, d.head, [], d.blob);
+        }
+        // Connect the writer (peer id per connection so we can target syncs at
+        // the right object and never cross-talk between per-document objects).
+        let writerPeers; // parallel to `docs` (per) or length 1 (mux)
+        if (mode === "mux") {
+          const p = await writer.connectDiscover(url(room), SERVICE_NAME);
+          writerPeers = docs.map(() => p);
+        } else {
+          writerPeers = await Promise.all(
+            docs.map((d) => writer.connectDiscover(url(d.idHex), SERVICE_NAME))
+          );
+        }
+        // Upload each document to its object (subscribe=false: writer only pushes).
+        await Promise.all(
+          docs.map((d, i) =>
+            writer.syncWithPeer(writerPeers[i], d.id, false, timeoutMs)
+          )
+        );
+        log(`  [${mode}] writer uploaded ${docs.length} docs`);
+
+        // --- Reader: a brand-new client opening the whole workspace. ---------
+        // This is the headline: connection count + time to get every document.
+        const reader = newPeer();
+        let conns = 0;
+
+        const t0 = performance.now();
+        let readerPeers;
+        if (mode === "mux") {
+          const p = await reader.connectDiscover(url(room), SERVICE_NAME);
+          conns = 1;
+          readerPeers = docs.map(() => p);
+        } else {
+          readerPeers = await Promise.all(
+            docs.map((d) => reader.connectDiscover(url(d.idHex), SERVICE_NAME))
+          );
+          conns = docs.length;
+        }
+        const tConnect = performance.now();
+
+        // Pull + subscribe every document. Over one socket (mux) these
+        // multiplex via per-request ids; over N sockets (per) each rides its own.
+        await Promise.all(
+          docs.map((d, i) =>
+            reader.syncWithPeer(readerPeers[i], d.id, true, timeoutMs)
+          )
+        );
+        const tSync = performance.now();
+
+        // Verify the reader actually received every document.
+        let verified = 0;
+        for (const d of docs) {
+          const commits = await reader.getCommits(d.id);
+          if (commits && commits.length > 0) verified += 1;
+        }
+
+        await writer.disconnectAll();
+        await reader.disconnectAll();
+
+        return {
+          conns,
+          connectMs: tConnect - t0,
+          syncMs: tSync - tConnect,
+          totalMs: tSync - t0,
+          verified,
+          total: docs.length,
+        };
+      }
+
+      function fmtMs(ms) {
+        return `<span class="big">${ms.toFixed(0)}</span><span class="unit">ms</span>`;
+      }
+      function bar(cls, value, max) {
+        const pct = max > 0 ? Math.max(2, (value / max) * 100) : 0;
+        return `<div class="bar-wrap"><div class="bar ${cls}" style="width:${pct}%"></div></div>`;
+      }
+
+      function paint(mux, per) {
+        const maxTotal = Math.max(mux.totalMs, per.totalMs);
+        el("mux-conns").innerHTML = `<span class="big win">${mux.conns}</span>`;
+        el("per-conns").innerHTML = `<span class="big">${per.conns}</span>`;
+        el("mux-hs").innerHTML = `<span class="big win">${mux.conns}</span>`;
+        el("per-hs").innerHTML = `<span class="big">${per.conns}</span>`;
+        el("mux-connect").innerHTML = fmtMs(mux.connectMs);
+        el("per-connect").innerHTML = fmtMs(per.connectMs);
+        el("mux-sync").innerHTML = fmtMs(mux.syncMs);
+        el("per-sync").innerHTML = fmtMs(per.syncMs);
+        el("mux-total").innerHTML = fmtMs(mux.totalMs) + bar("mux", mux.totalMs, maxTotal);
+        el("per-total").innerHTML = fmtMs(per.totalMs) + bar("per", per.totalMs, maxTotal);
+        el("mux-docs").innerHTML = `${mux.verified}/${mux.total}`;
+        el("per-docs").innerHTML = `${per.verified}/${per.total}`;
+
+        const connFactor = (per.conns / Math.max(1, mux.conns)).toFixed(0);
+        const speedup = per.totalMs / Math.max(1, mux.totalMs);
+        const faster =
+          speedup >= 1
+            ? `<b>${speedup.toFixed(1)}× faster</b> to open`
+            : `<b>${(1 / speedup).toFixed(1)}× slower</b> to open (network variance at small N)`;
+        el("summary").className = "summary";
+        el("summary").innerHTML =
+          `For a fresh client opening a <b>${mux.total}-document</b> workspace: ` +
+          `multiplexing uses <b>${mux.conns}</b> connection${mux.conns === 1 ? "" : "s"} + ` +
+          `handshake${mux.conns === 1 ? "" : "s"} vs <b>${per.conns}</b> per-document ` +
+          `(<b>${connFactor}×</b> fewer), and is ${faster}.`;
+      }
+
+      async function run() {
+        const btn = el("run");
+        btn.disabled = true;
+        try {
+          resetLog();
+          const serverBase = el("server").value.replace(/\/+$/, "");
+          const n = Math.max(1, Math.min(200, parseInt(el("ndocs").value, 10) || 1));
+          const timeoutMs = Math.max(1000, parseInt(el("timeout").value, 10) || 15000);
+
+          log(`init wasm…`);
+          await ensureWasm();
+
+          const docs = Array.from({ length: n }, (_, i) => makeDoc(i));
+          log(`workspace: ${n} fresh documents → ${serverBase}`);
+
+          log(`\n== multiplexed (one connection) ==`);
+          const mux = await runMode("mux", serverBase, docs, timeoutMs);
+          log(
+            `  reader: ${mux.conns} conn, connect ${mux.connectMs.toFixed(0)}ms, ` +
+            `sync ${mux.syncMs.toFixed(0)}ms, ${mux.verified}/${mux.total} docs`
+          );
+
+          // Fresh ids for the per-document run so it can't reuse mux's objects.
+          const docs2 = Array.from({ length: n }, (_, i) => makeDoc(i));
+          log(`\n== per-document (one connection each) ==`);
+          const per = await runMode("per", serverBase, docs2, timeoutMs);
+          log(
+            `  reader: ${per.conns} conn, connect ${per.connectMs.toFixed(0)}ms, ` +
+            `sync ${per.syncMs.toFixed(0)}ms, ${per.verified}/${per.total} docs`
+          );
+
+          paint(mux, per);
+          log(`\ndone.`);
+        } catch (e) {
+          console.error(e);
+          log(`\nERROR: ${e?.message || e}`);
+          el("summary").className = "summary";
+          el("summary").innerHTML = `<b>Benchmark failed:</b> ${e?.message || e}. See the log / console.`;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      // --- Live resilience panel ------------------------------------------
+      // Two peers, one connection each, multiplexing LIVE_N documents over a
+      // single room — plus a writer loop and a "sever & recover" button to
+      // exercise RoomClient's automatic reconnect + resubscribe.
+      const LIVE_N = 4;
+      const LIVE_WRITE_MS = 2000;
+      el("live-n").textContent = String(LIVE_N);
+
+      let live = null; // active session, or null when stopped
+
+      function shortId(s) {
+        return s.length > 12 ? s.slice(0, 6) + "…" + s.slice(-4) : s;
+      }
+      function pill(elId, state) {
+        const p = el(elId);
+        p.className = "pill " + state;
+        p.textContent = state;
+      }
+      function serverBaseValue() {
+        return el("server").value.replace(/\/+$/, "");
+      }
+
+      function renderLiveRows() {
+        if (!live) return;
+        const rows = el("live-rows");
+        if (rows.children.length !== live.docs.length) {
+          rows.innerHTML = "";
+          live.docs.forEach((d, i) => {
+            const tr = document.createElement("tr");
+            tr.innerHTML =
+              `<td class="metric">doc ${i + 1} · ${shortId(d.id.toString())}</td>` +
+              `<td id="live-obs-${i}"><span class="big">0</span></td>` +
+              `<td id="live-wr-${i}" class="dim">0</td>`;
+            rows.appendChild(tr);
+          });
+        }
+        live.docs.forEach((d, i) => {
+          el(`live-wr-${i}`).textContent = String(d.written);
+        });
+      }
+
+      async function refreshObserved() {
+        if (!live || live.refreshing) return;
+        live.refreshing = true;
+        try {
+          for (let i = 0; i < live.docs.length; i++) {
+            const commits = await live.reader.getCommits(live.docs[i].id);
+            const n = commits ? commits.length : 0;
+            live.docs[i].observed = n;
+            const cell = el(`live-obs-${i}`);
+            if (cell) cell.innerHTML = `<span class="big">${n}</span>`;
+          }
+        } finally {
+          live.refreshing = false;
+        }
+      }
+
+      async function liveStart() {
+        if (live) return;
+        el("live-start").disabled = true;
+        try {
+          await ensureWasm();
+          const room = randomHex(32);
+          const url = new URL(serverBaseValue() + "/sync/" + room);
+
+          const docs = Array.from({ length: LIVE_N }, () => ({
+            id: SedimentreeId.fromBytes(crypto.getRandomValues(new Uint8Array(32))),
+            written: 0,
+            observed: 0,
+          }));
+
+          // Reader: refreshes observed counts on every push.
+          const readerSigner = MemorySigner.generate();
+          const reader = new Subduction({
+            signer: readerSigner,
+            storage: new MemoryStorage(),
+            onRemoteHeads: () => refreshObserved(),
+          });
+          // Writer: a distinct peer that pushes commits.
+          const writerSigner = MemorySigner.generate();
+          const writer = new Subduction({
+            signer: writerSigner,
+            storage: new MemoryStorage(),
+          });
+
+          const readerRoom = new RoomClient({
+            subduction: reader,
+            signer: readerSigner,
+            url,
+            serviceName: SERVICE_NAME,
+            SubductionWebSocket,
+            onStatus: (state) => {
+              pill("live-reader-pill", state);
+              el("live-reconnects").textContent = String(readerRoom.reconnects);
+              el("live-server").textContent = readerRoom.serverPeerId
+                ? shortId(readerRoom.serverPeerId.toString())
+                : "—";
+            },
+            onError: (e) => log(`  [live] reader: ${e?.message || e}`),
+          });
+          const writerRoom = new RoomClient({
+            subduction: writer,
+            signer: writerSigner,
+            url,
+            serviceName: SERVICE_NAME,
+            SubductionWebSocket,
+            onStatus: (state) => pill("live-writer-pill", state),
+            onError: (e) => log(`  [live] writer: ${e?.message || e}`),
+          });
+
+          live = { docs, reader, writer, readerRoom, writerRoom, timer: null, refreshing: false, stopped: false };
+          renderLiveRows();
+
+          log(`\n== live room ${shortId(room)} · ${LIVE_N} docs, one connection per peer ==`);
+          await readerRoom.open();
+          await writerRoom.open();
+          // Mutually subscribe both peers to every doc over their single sockets.
+          for (const d of docs) {
+            await readerRoom.addDoc(d.id);
+            await writerRoom.addDoc(d.id);
+          }
+          log(`  [live] reader + writer connected, ${LIVE_N} docs subscribed each`);
+
+          // Writer loop: append to a rotating document.
+          let cursor = 0;
+          live.timer = setInterval(async () => {
+            if (!live || live.stopped) return;
+            const d = docs[cursor % docs.length];
+            cursor += 1;
+            try {
+              const head = new CommitId(crypto.getRandomValues(new Uint8Array(32)));
+              const blob = enc.encode(JSON.stringify({ n: d.written + 1, ts: Date.now() }));
+              await writer.addCommit(d.id, head, [], blob);
+              d.written += 1;
+              renderLiveRows();
+            } catch (e) {
+              log(`  [live] write failed: ${e?.message || e}`);
+            }
+          }, LIVE_WRITE_MS);
+
+          el("live-drop").disabled = false;
+          el("live-stop").disabled = false;
+        } catch (e) {
+          console.error(e);
+          log(`\n[live] start failed: ${e?.message || e}`);
+          await liveStop();
+        }
+      }
+
+      async function liveDrop() {
+        if (!live) return;
+        el("live-drop").disabled = true;
+        const before = live.docs.reduce((a, d) => a + d.observed, 0);
+        log(`  [live] severing reader socket (observed=${before})…`);
+        try {
+          await live.readerRoom.forceReconnect();
+          await refreshObserved();
+          const after = live.docs.reduce((a, d) => a + d.observed, 0);
+          log(`  [live] reader recovered: reconnects=${live.readerRoom.reconnects}, observed=${after}`);
+        } catch (e) {
+          log(`  [live] recover failed: ${e?.message || e}`);
+        } finally {
+          if (live) el("live-drop").disabled = false;
+        }
+      }
+
+      async function liveStop() {
+        if (!live) return;
+        const session = live;
+        live = null;
+        session.stopped = true;
+        if (session.timer) clearInterval(session.timer);
+        try { await session.readerRoom.close(); } catch (e) { /* ignore */ }
+        try { await session.writerRoom.close(); } catch (e) { /* ignore */ }
+        pill("live-reader-pill", "closed");
+        pill("live-writer-pill", "closed");
+        el("live-drop").disabled = true;
+        el("live-stop").disabled = true;
+        el("live-start").disabled = false;
+      }
+
+      el("live-start").addEventListener("click", liveStart);
+      el("live-drop").addEventListener("click", liveDrop);
+      el("live-stop").addEventListener("click", liveStop);
+
+      // Default server: ?server=<ws-base> or same-origin.
+      const params = new URLSearchParams(location.search);
+      const defaultBase =
+        (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
+      el("server").value = (params.get("server") || defaultBase).replace(/\/+$/, "");
+      el("run").addEventListener("click", run);
+    </script>
+  </body>
+</html>

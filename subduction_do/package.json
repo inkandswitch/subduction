@@ -8,7 +8,9 @@
     "dev": "npm run build:site && wrangler dev",
     "deploy": "npm run build:site && wrangler deploy",
     "build:chat": "bash ./scripts/build-chat.sh",
-    "chat": "npm run build:chat && npx --yes serve examples/chat"
+    "chat": "npm run build:chat && npx --yes serve examples/chat",
+    "build:workspace": "bash ./scripts/build-workspace.sh",
+    "workspace": "npm run build:workspace && npx --yes serve examples/workspace"
   },
   "devDependencies": {
     "wasm-pack": "^0.15.0",

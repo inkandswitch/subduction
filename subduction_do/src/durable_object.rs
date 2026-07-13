@@ -196,7 +196,7 @@ impl DurableObject for SyncDurableObject {
             // RFC 9110 §15.5.22: a 426 SHOULD advertise the protocol(s) the
             // client must switch to via `Upgrade` (and the matching `Connection`
             // token), so a well-behaved client knows exactly how to retry.
-            let mut resp = Response::error("expected a websocket upgrade on /sync/<doc>", 426)?;
+            let mut resp = Response::error("expected a websocket upgrade on /sync/<room>", 426)?;
             let headers = resp.headers_mut();
             headers.set("Upgrade", "websocket")?;
             headers.set("Connection", "Upgrade")?;
