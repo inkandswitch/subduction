@@ -144,11 +144,7 @@ pub type TestProtocol = KeyhiveProtocol<
 /// uses, so mutations made through the Arc are visible to the protocol.
 pub async fn make_protocol_with_shared_keyhive(
     keyhive: SimpleKeyhive,
-) -> (
-    TestProtocol,
-    Arc<SimpleKeyhive>,
-    MemoryKeyhiveStorage,
-) {
+) -> (TestProtocol, Arc<SimpleKeyhive>, MemoryKeyhiveStorage) {
     let peer_id = keyhive_peer_id(&keyhive);
     let cc = keyhive
         .contact_card()

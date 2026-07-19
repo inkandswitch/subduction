@@ -99,7 +99,7 @@ where
 pub async fn save_event<T, S, Async>(
     storage: &S,
     event: &StaticEvent<T>,
-) -> Result<StorageHash, StorageError>
+) -> Result<(StorageHash, bool), StorageError>
 where
     T: ContentRef,
     S: KeyhiveStorage<Async>,
@@ -119,7 +119,7 @@ where
 pub async fn save_event_bytes<S, Async>(
     storage: &S,
     bytes: Vec<u8>,
-) -> Result<StorageHash, StorageError>
+) -> Result<(StorageHash, bool), StorageError>
 where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
@@ -138,16 +138,17 @@ where
 
     tracing::debug!(
         hash = %hash.to_hex(),
+        kind,
         bytes = bytes.len(),
         "saving event"
     );
 
-    storage
+    let inserted = storage
         .save_event(hash, bytes)
         .await
         .map_err(|e| StorageError::Save(e.to_string()))?;
 
-    Ok(hash)
+    Ok((hash, inserted))
 }
 
 /// Load and deserialize all archives from storage.
@@ -249,6 +250,25 @@ where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
+    Ok(ingest_from_storage_with_pending_progress(keyhive, storage)
+        .await?
+        .0)
+}
+
+pub async fn ingest_from_storage_with_pending_progress<Async, Signer, T, P, C, L, R, S>(
+    keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
+    storage: &S,
+) -> Result<(Vec<Arc<StaticEvent<T>>>, bool), StorageError>
+where
+    Signer: AsyncSigner<Async> + Clone,
+    T: ContentRef + serde::de::DeserializeOwned,
+    P: for<'de> serde::Deserialize<'de>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
+    R: rand::CryptoRng + rand::RngCore,
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
+{
     // Load archives
     let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage).await?;
 
@@ -269,14 +289,16 @@ where
     tracing::debug!(count = events.len(), "ingesting events from storage");
 
     let event_list: Vec<StaticEvent<T>> = events.into_iter().map(|(_, e)| e).collect();
-    let pending = keyhive.ingest_unsorted_static_events(event_list).await;
+    let (pending, resolved_pending) = keyhive
+        .ingest_unsorted_static_events_with_pending_progress(event_list)
+        .await;
 
     tracing::debug!(
         pending_count = pending.len(),
         "finished ingesting from storage"
     );
 
-    Ok(pending)
+    Ok((pending, resolved_pending))
 }
 
 /// Compact keyhive storage by consolidating archives and removing processed events.

@@ -203,9 +203,6 @@ pub enum SyncResult {
 
     /// Peer is not authorized to access this sedimentree.
     Unauthorized,
-
-    /// The peer's storage policy rejected the request with a structured reason.
-    PolicyRejected(crate::sync_session::SyncPolicyRejectionKind),
 }
 
 impl From<BatchSyncResponse> for SyncMessage {
@@ -410,7 +407,6 @@ mod result_tags {
     pub(super) const OK: u8 = 0x00;
     pub(super) const NOT_FOUND: u8 = 0x01;
     pub(super) const UNAUTHORIZED: u8 = 0x02;
-    pub(super) const POLICY_REJECTED: u8 = 0x03;
 }
 
 impl SyncMessage {
@@ -500,36 +496,10 @@ impl Decode for SyncMessage {
     }
 }
 
-fn encode_policy_rejection_kind(kind: crate::sync_session::SyncPolicyRejectionKind) -> u8 {
-    match kind {
-        crate::sync_session::SyncPolicyRejectionKind::DocumentNotFound => 0,
-        crate::sync_session::SyncPolicyRejectionKind::InsufficientAccess => 1,
-        crate::sync_session::SyncPolicyRejectionKind::InvalidIdentifier => 2,
-        crate::sync_session::SyncPolicyRejectionKind::Other => 3,
-    }
-}
-
-fn decode_policy_rejection_kind(
-    tag: u8,
-) -> Result<crate::sync_session::SyncPolicyRejectionKind, DecodeError> {
-    match tag {
-        0 => Ok(crate::sync_session::SyncPolicyRejectionKind::DocumentNotFound),
-        1 => Ok(crate::sync_session::SyncPolicyRejectionKind::InsufficientAccess),
-        2 => Ok(crate::sync_session::SyncPolicyRejectionKind::InvalidIdentifier),
-        3 => Ok(crate::sync_session::SyncPolicyRejectionKind::Other),
-        _ => Err(InvalidEnumTag {
-            tag,
-            type_name: "SyncPolicyRejectionKind",
-        }
-        .into()),
-    }
-}
-
 fn sync_result_size(result: &SyncResult) -> usize {
     match result {
         SyncResult::Ok(diff) => sync_diff_size(diff),
         SyncResult::NotFound | SyncResult::Unauthorized => 0,
-        SyncResult::PolicyRejected(_) => 1,
     }
 }
 
@@ -787,10 +757,6 @@ fn encode_batch_sync_response(buf: &mut Vec<u8>, resp: &BatchSyncResponse) {
         SyncResult::Unauthorized => {
             buf.push(result_tags::UNAUTHORIZED);
         }
-        SyncResult::PolicyRejected(kind) => {
-            buf.push(result_tags::POLICY_REJECTED);
-            buf.push(encode_policy_rejection_kind(*kind));
-        }
     }
 
     encode_remote_heads(buf, &resp.responder_heads);
@@ -973,12 +939,6 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<SyncMessage, DecodeError
         result_tags::OK => SyncResult::Ok(decode_sync_diff(payload, &mut offset)?),
         result_tags::NOT_FOUND => SyncResult::NotFound,
         result_tags::UNAUTHORIZED => SyncResult::Unauthorized,
-        result_tags::POLICY_REJECTED => {
-            SyncResult::PolicyRejected(decode_policy_rejection_kind(read_u8(
-                payload,
-                &mut offset,
-            )?)?)
-        }
         _ => {
             return Err(InvalidEnumTag {
                 tag: result_tag,

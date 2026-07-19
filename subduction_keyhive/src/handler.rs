@@ -19,9 +19,7 @@ use core::marker::PhantomData;
 use rand::rngs::OsRng;
 
 use crate::{
-    KeyhiveMessage, SignedMessage, SyncStatus,
-    message::RequestId,
-    signed_message::CborError,
+    KeyhiveMessage, SignedMessage, SyncStatus, message::RequestId, signed_message::CborError,
 };
 // ── Command enum ────────────────────────────────────────────────────────
 
@@ -258,9 +256,7 @@ where
 use crate::{KeyhivePeerId, connection::KeyhiveConnection, storage::KeyhiveStorage};
 
 use keyhive_core::{
-    listener::{
-        membership::MembershipListener, no_listener::NoListener,
-    },
+    listener::{membership::MembershipListener, no_listener::NoListener},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -297,8 +293,7 @@ where
 {
     protocol: Arc<SendableRuntimeProtocol<Listener, Conn, Store>>,
     conn_adapter: ConnAdapter,
-    sync_done_observer:
-        Option<Arc<dyn Fn(crate::KeyhivePeerId, RequestId) + Send + Sync>>,
+    sync_done_observer: Option<Arc<dyn Fn(crate::KeyhivePeerId, RequestId, bool) + Send + Sync>>,
     _phantom: PhantomData<SubConn>,
 }
 
@@ -326,7 +321,7 @@ where
     #[must_use]
     pub fn with_sync_done_observer(
         mut self,
-        observer: Arc<dyn Fn(crate::KeyhivePeerId, RequestId) + Send + Sync>,
+        observer: Arc<dyn Fn(crate::KeyhivePeerId, RequestId, bool) + Send + Sync>,
     ) -> Self {
         self.sync_done_observer = Some(observer);
         self
@@ -376,10 +371,13 @@ where
                 .handle_message(&kh_peer, signed_msg, Some(adapter))
                 .await
                 .map_err(|e| HandleError::Protocol(e.to_string()))?;
-            if let SyncStatus::Done { request_id } = status
+            if let SyncStatus::Done {
+                request_id,
+                changed,
+            } = status
                 && let Some(observer) = &self.sync_done_observer
             {
-                observer(kh_peer, request_id);
+                observer(kh_peer, request_id, changed);
             }
             Ok(())
         })
