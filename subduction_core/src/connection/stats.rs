@@ -9,7 +9,7 @@ use sedimentree_core::loose_commit::id::CommitId;
 
 use crate::{
     remote_heads::RemoteHeads,
-    sync_session::SyncRemoteRejection,
+    sync_session::{SyncPolicyRejection, SyncRemoteRejection},
 };
 
 /// Statistics from a sync operation.
@@ -38,6 +38,9 @@ pub struct SyncStats {
 
     /// The remote peer's explicit rejection, if it refused the sedimentree.
     pub remote_rejection: Option<SyncRemoteRejection>,
+
+    /// Items rejected by local storage policy while ingesting the response.
+    pub local_policy_rejections: Vec<SyncPolicyRejection>,
 }
 
 impl SyncStats {
@@ -51,6 +54,7 @@ impl SyncStats {
             fragments_sent: 0,
             remote_heads: RemoteHeads::default(),
             remote_rejection: None,
+            local_policy_rejections: Vec::new(),
         }
     }
 

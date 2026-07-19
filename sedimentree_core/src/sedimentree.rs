@@ -816,6 +816,10 @@ impl Sedimentree {
         // orientation varies). Horizon: any non-root commit whose FP is
         // in `remote.commit_fingerprints` — either a fragment boundary or
         // a loose-commit head we can't extend through.
+        //
+        // When the matching local fragment is available, narrow that walk to
+        // commits on a head-to-boundary path. Traversing every child of a
+        // fragment head would incorrectly cover newer descendants.
 
         let fragment_roots: Set<CommitId> = self
             .commits
@@ -829,7 +833,53 @@ impl Sedimentree {
             })
             .collect();
 
+        let matched_fragment_boundaries: Map<CommitId, Set<CommitId>> = self
+            .fragments
+            .iter()
+            .filter(|(head, _)| {
+                remote
+                    .fragment_fingerprints
+                    .contains(&Fingerprint::new(seed, head))
+            })
+            .map(|(head, fragment)| (*head, fragment.boundary().iter().copied().collect()))
+            .collect();
         if !fragment_roots.is_empty() {
+            fn walk_parents(
+                starts: impl IntoIterator<Item = CommitId>,
+                commits: &Map<CommitId, LooseCommit>,
+            ) -> Set<CommitId> {
+                let mut visited = Set::new();
+                let mut stack: Vec<CommitId> = starts.into_iter().collect();
+                while let Some(id) = stack.pop() {
+                    if !visited.insert(id) {
+                        continue;
+                    }
+                    if let Some(commit) = commits.get(&id) {
+                        for parent in commit.parents() {
+                            stack.push(*parent);
+                        }
+                    }
+                }
+                visited
+            }
+
+            fn walk_children(
+                starts: impl IntoIterator<Item = CommitId>,
+                children_of: &Map<CommitId, Vec<CommitId>>,
+            ) -> Set<CommitId> {
+                let mut visited = Set::new();
+                let mut stack: Vec<CommitId> = starts.into_iter().collect();
+                while let Some(id) = stack.pop() {
+                    if !visited.insert(id) {
+                        continue;
+                    }
+                    if let Some(children) = children_of.get(&id) {
+                        stack.extend(children.iter().copied());
+                    }
+                }
+                visited
+            }
+
             // Build a children index over local loose commits so we can
             // walk in both DAG directions from each root.
             let mut children_of: Map<CommitId, Vec<CommitId>> = Map::new();
@@ -840,7 +890,29 @@ impl Sedimentree {
             }
 
             let mut covered: Set<CommitId> = Set::new();
-            let mut stack: Vec<CommitId> = fragment_roots.iter().copied().collect();
+            for (&head, boundaries) in &matched_fragment_boundaries {
+                covered.insert(head);
+                if boundaries.is_empty() {
+                    continue;
+                }
+
+                let head_parents = walk_parents([head], &self.commits);
+                let head_children = walk_children([head], &children_of);
+                let boundary_parents = walk_parents(boundaries.iter().copied(), &self.commits);
+                let boundary_children = walk_children(boundaries.iter().copied(), &children_of);
+
+                for id in head_parents.intersection(&boundary_children) {
+                    covered.insert(*id);
+                }
+                for id in head_children.intersection(&boundary_parents) {
+                    covered.insert(*id);
+                }
+            }
+            let mut stack: Vec<CommitId> = fragment_roots
+                .iter()
+                .filter(|root| !matched_fragment_boundaries.contains_key(root))
+                .copied()
+                .collect();
             while let Some(id) = stack.pop() {
                 if !covered.insert(id) {
                     continue;
@@ -958,11 +1030,15 @@ impl Sedimentree {
 
         let mut heads = Vec::<CommitId>::new();
         for fragment in self.fragments.values() {
-            if !all_fragment_boundaries.contains(&fragment.head())
-                && fragment
-                    .boundary()
-                    .iter()
-                    .all(|end| !dag.contains_commit(end))
+            if all_fragment_boundaries.contains(&fragment.head()) {
+                continue;
+            }
+            if fragment.boundary().is_empty() {
+                heads.push(fragment.head());
+            } else if fragment
+                .boundary()
+                .iter()
+                .all(|end| !dag.contains_commit(end))
             {
                 heads.extend(fragment.boundary().iter().copied());
             }
@@ -1944,6 +2020,15 @@ mod tests {
                     });
             }
 
+            #[test]
+            fn root_fragment_head_is_the_frontier() {
+                let fragment =
+                    crate::test_utils::make_fragment_at_depth(2, 1, BTreeSet::new(), &[]);
+                let expected = fragment.head();
+                let tree = Sedimentree::new(vec![fragment], vec![]);
+
+                assert_eq!(tree.heads(&CountLeadingZeroBytes), vec![expected]);
+            }
             #[test]
             fn heads_empty_iff_tree_empty() {
                 bolero::check!()
@@ -3432,6 +3517,57 @@ mod tests {
                 diff_at_local.local_only_commits.is_empty(),
                 "fragment-aware walk should cover all loose commits inside \
                  the remote's fragment range"
+            );
+        }
+
+        /// A remote fragment must not be treated as covering loose commits
+        /// that are newer descendants of the fragment boundary. Those commits
+        /// are outside the fragment's covered range and must still be sent.
+        #[test]
+        fn diff_remote_fragment_does_not_cover_new_descendants() {
+            let mut rng = seeded_rng(205);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[("a", 2), ("b", 0), ("c", 0)],
+                &[("a", "b"), ("b", "c")],
+            );
+            let fragment = graph.make_fragment("a", &["b"], &[]);
+            let remote =
+                Sedimentree::new(vec![fragment.clone()], vec![]).minimize(graph.depth_metric());
+            let local = graph
+                .to_sedimentree_with_fragments(vec![fragment])
+                .minimize(graph.depth_metric());
+            let remote_summary = remote.fingerprint_summarize(&FingerprintSeed::new(42, 99));
+            let diff = local.diff_remote_fingerprints(&remote_summary);
+            assert_eq!(
+                diff.local_only_commits.len(),
+                1,
+                "the descendant after the fragment boundary must be sent",
+            );
+        }
+
+        /// The same descendant must remain visible when the fragment boundary
+        /// is on the ancestry side of the fragment head.
+        #[test]
+        fn diff_remote_fragment_does_not_cover_descendants_past_parent_boundary() {
+            let mut rng = seeded_rng(206);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[("a", 2), ("b", 0), ("c", 0)],
+                &[("a", "b"), ("b", "c")],
+            );
+            let fragment = graph.make_fragment("b", &["a"], &[]);
+            let remote =
+                Sedimentree::new(vec![fragment.clone()], vec![]).minimize(graph.depth_metric());
+            let local = graph
+                .to_sedimentree_with_fragments(vec![fragment])
+                .minimize(graph.depth_metric());
+            let remote_summary = remote.fingerprint_summarize(&FingerprintSeed::new(42, 99));
+            let diff = local.diff_remote_fingerprints(&remote_summary);
+            assert_eq!(
+                diff.local_only_commits.len(),
+                1,
+                "the descendant past the parent boundary must be sent",
             );
         }
 

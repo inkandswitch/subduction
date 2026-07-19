@@ -24,7 +24,6 @@ use subduction_core::{
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sync_session::SyncPolicyRejectionKind,
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
     timeout::call::CallTimeout,
@@ -514,10 +513,10 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
     Ok(())
 }
 
-/// When fetch policy rejects, `recv_batch_sync_request` should preserve a
-/// structured policy-rejection category for the peer.
+/// When fetch policy rejects, `recv_batch_sync_request` should preserve the
+/// existing unauthorized response for the peer.
 #[tokio::test]
-async fn unauthorized_fetch_returns_structured_policy_result() -> TestResult {
+async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
@@ -573,10 +572,7 @@ async fn unauthorized_fetch_returns_structured_policy_result() -> TestResult {
         id, sedimentree_id,
         "response should be for the requested sedimentree"
     );
-    assert!(
-        matches!(result, SyncResult::PolicyRejected(SyncPolicyRejectionKind::Other)),
-        "expected structured policy rejection, got {result:?}"
-    );
+    assert!(matches!(result, SyncResult::Unauthorized));
 
     actor_task.abort();
     listener_task.abort();

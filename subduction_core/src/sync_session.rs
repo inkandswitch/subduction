@@ -56,8 +56,6 @@ pub enum SyncRemoteRejection {
     NotFound,
     /// The remote peer refused the fetch without a finer policy category.
     Unauthorized,
-    /// The remote peer's storage policy rejected the fetch.
-    Policy(SyncPolicyRejectionKind),
 }
 
 /// The different categories of sync sessions.

@@ -102,12 +102,13 @@ pub trait KeyhiveStorage<Async: FutureForm> {
     /// Save an event to storage.
     ///
     /// Events are individual keyhive operations. The hash should be the BLAKE3
-    /// hash of the event bytes.
+    /// hash of the event bytes. Returns `true` only when the hash was newly
+    /// inserted; duplicate hashes leave storage unchanged and return `false`.
     fn save_event(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> Async::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<bool, Self::Error>>;
 
     /// Load all events from storage.
     ///
@@ -174,10 +175,10 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<bool, Self::Error>> {
         async move {
-            self.events.lock().await.insert(hash, data);
-            Ok(())
+            let inserted = self.events.lock().await.insert(hash, data).is_none();
+            Ok(inserted)
         }
         .boxed_local()
     }
@@ -234,10 +235,10 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+    ) -> BoxFuture<'_, Result<bool, Self::Error>> {
         async move {
-            self.events.lock().await.insert(hash, data);
-            Ok(())
+            let inserted = self.events.lock().await.insert(hash, data).is_none();
+            Ok(inserted)
         }
         .boxed()
     }

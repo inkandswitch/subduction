@@ -554,9 +554,6 @@ impl<
                     SyncResult::Unauthorized => {
                         tracing::debug!(peer = %from, tree = ?id, "peer reports we are unauthorized for sedimentree");
                     }
-                    SyncResult::PolicyRejected(kind) => {
-                        tracing::debug!(peer = %from, tree = ?id, ?kind, "peer reports a structured policy rejection for sedimentree");
-                    }
                 }
                 None
             }
@@ -893,9 +890,7 @@ impl<
                 let msg: SyncMessage = BatchSyncResponse {
                     id,
                     req_id,
-                    result: SyncResult::PolicyRejected(
-                        self.storage.policy().classify_fetch_rejection(&e),
-                    ),
+                    result: SyncResult::Unauthorized,
                     responder_heads: RemoteHeads::default(),
                 }
                 .into();
@@ -939,6 +934,16 @@ impl<
         let (diff, their_missing_commits, their_missing_fragments) = if let Some(diff) = cached {
             #[cfg(feature = "metrics")]
             crate::metrics::sedimentree_cache_hit();
+            tracing::debug!(
+                tree = ?id,
+                cache = "hit",
+                heads = ?diff.heads,
+                local_commit_ids = ?diff.local_commit_ids,
+                local_fragment_ids = ?diff.local_fragment_ids,
+                remote_commit_fingerprint_count = their_fingerprints.commit_fingerprints().len(),
+                remote_fragment_fingerprint_count = their_fingerprints.fragment_fingerprints().len(),
+                "computed responder diff from cached sedimentree",
+            );
 
             let missing = diff.local_commit_ids.len() + diff.local_fragment_ids.len();
             let crossover =
@@ -1126,7 +1131,16 @@ impl<
                 sedimentree.minimized(&self.depth_metric),
                 their_fingerprints,
             );
-
+            tracing::debug!(
+                tree = ?id,
+                cache = "miss",
+                heads = ?diff.heads,
+                local_commit_ids = ?diff.local_commit_ids,
+                local_fragment_ids = ?diff.local_fragment_ids,
+                remote_commit_fingerprint_count = their_fingerprints.commit_fingerprints().len(),
+                remote_fragment_fingerprint_count = their_fingerprints.fragment_fingerprints().len(),
+                "computed responder diff from hydrated sedimentree",
+            );
             let commits = diff
                 .local_commit_ids
                 .iter()
@@ -1177,6 +1191,7 @@ impl<
 
         tracing::info!(
             peer = %peer_id,
+            heads = ?responder_heads.heads,
             tree = ?id,
             req = ?req_id,
             missing_commits = their_missing_commits.len(),
@@ -1216,14 +1231,10 @@ impl<
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<Async, Store, Conn, SyncMessage>> {
-        drop(ingest::recv_batch_sync_response(
-            &self.sedimentrees,
-            &self.storage,
-            from,
-            id,
-            diff,
-        )
-        .await?);
+        drop(
+            ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
+                .await?,
+        );
         self.minimize_tree(id).await;
         Ok(())
     }
