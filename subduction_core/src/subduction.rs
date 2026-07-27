@@ -235,6 +235,26 @@ pub struct Subduction<
 
 impl<
     'a,
+    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
+    Store: Storage<Async>,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
+    Hdl: Handler<Async, Conn>,
+    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+    Sign: Signer<Async>,
+    Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async> + Clone,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> core::fmt::Debug
+    for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Subduction").finish_non_exhaustive()
+    }
+}
+
+impl<
+    'a,
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
     Store: Storage<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
