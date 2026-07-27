@@ -433,10 +433,6 @@ where
                 }
             }
             let peer = KeyhivePeerId::from_identifier(agent_id);
-            let cgka_in_hashset = hash_set
-                .iter()
-                .filter(|h| cgka_source_hashes.values().any(|v| v.contains(h)))
-                .count();
             agent_hashes.insert(peer, hash_set);
         }
 
@@ -1213,16 +1209,9 @@ where
         };
 
         let mut result = Vec::with_capacity(requested.len().min(pair.len()));
-        let mut found_count = 0;
-        let mut not_found: Vec<String> = Vec::new();
         for h in requested {
             if let Some(bytes) = pair.get(h) {
                 result.push(bytes.dupe());
-                found_count += 1;
-            } else {
-                if not_found.len() < 8 {
-                    not_found.push(format!("{:02x?}", &h[..4]));
-                }
             }
         }
         Ok(result)
@@ -1534,24 +1523,11 @@ where
     Listener: MembershipListener<Async, Signer, CRef>,
     Rng: rand::CryptoRng + rand::RngCore,
 {
-    let results = keyhive
+    keyhive
         .static_events_for_agent(agent)
         .await
         .into_iter()
-        .collect::<Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>>();
-
-    let total = results.len();
-    let cgka_count = results
-        .values()
-        .filter(|ev| matches!(ev, StaticEvent::CgkaOperation(_)))
-        .count();
-    let first_few_hashes: Vec<String> = results
-        .keys()
-        .take(5)
-        .map(|d| format!("{:02x?}", &d.raw.as_bytes()[..4]))
-        .collect();
-
-    results
+        .collect::<Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>>()
 }
 
 /// Hash, serialize, and deduplicate events into `event_data`, returning hashes.

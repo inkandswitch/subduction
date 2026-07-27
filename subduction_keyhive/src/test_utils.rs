@@ -252,9 +252,9 @@ pub struct TwoPeerHarness {
     /// Bob's protocol handler.
     pub bob_proto: TestProtocol,
     /// Shared reference to Alice's keyhive.
-    pub alice_kh: Arc<Mutex<SimpleKeyhive>>,
+    pub alice_kh: Arc<SimpleKeyhive>,
     /// Shared reference to Bob's keyhive.
-    pub bob_kh: Arc<Mutex<SimpleKeyhive>>,
+    pub bob_kh: Arc<SimpleKeyhive>,
     /// Alice's peer ID.
     pub alice_id: KeyhivePeerId,
     /// Bob's peer ID.
