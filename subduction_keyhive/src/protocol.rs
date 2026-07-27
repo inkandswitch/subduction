@@ -135,7 +135,6 @@ where
     peer_id: KeyhivePeerId,
     peers: Mutex<Map<KeyhivePeerId, Conn>>,
     contact_card: ContactCard,
-    archive_config: Option<(usize, StorageHash)>,
     /// Whether to reload and re-ingest the store when events remain pending
     /// after ingestion.
     ///
@@ -145,8 +144,6 @@ where
     cache: Mutex<PeriodicEventCache>,
     /// Serializes on-demand cache rebuilds; concurrent callers join the same rebuild.
     cache_refresh_lock: Mutex<()>,
-    /// Serializes multi-event Keyhive ingestion and its persistence outcome.
-    ingest_lock: Mutex<()>,
     /// Incremented whenever Keyhive changes and the cache becomes stale.
     cache_generation: AtomicU64,
     /// Generation represented by the published cache.
@@ -208,30 +205,16 @@ where
             peer_id,
             peers: Mutex::new(Map::new()),
             contact_card,
-            archive_config: None,
             attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             cache_refresh_lock: Mutex::new(()),
-            ingest_lock: Mutex::new(()),
             cache_generation: AtomicU64::new(1),
             cache_published_generation: AtomicU64::new(0),
             next_request_nonce: AtomicU64::new(0),
             outbound_requests: Mutex::new(Map::new()),
             _marker: core::marker::PhantomData,
         }
-    }
-
-    /// Write a single archive instead of N event files when ingesting more
-    /// than `threshold` events.
-    #[must_use]
-    pub const fn with_archive_threshold(
-        mut self,
-        threshold: usize,
-        storage_id: StorageHash,
-    ) -> Self {
-        self.archive_config = Some((threshold, storage_id));
-        self
     }
 
     /// Enable storage recovery when events remain pending after ingestion.
@@ -541,7 +524,10 @@ where
                     advertised_events,
                 },
             );
-            self.sign_and_send(target_id, message, false).await?;
+            if let Err(error) = self.sign_and_send(target_id, message, false).await {
+                self.outbound_requests.lock().await.remove(&request_id);
+                return Err(error);
+            }
         } else {
             tracing::debug!(
                 target = %target_id,
@@ -1250,7 +1236,6 @@ where
         &self,
         event_bytes_list: &[B],
     ) -> Result<bool, ProtocolError<Conn::SendError>> {
-        let _ingest_guard = self.ingest_lock.lock().await;
         let mut events: Vec<StaticEvent<CRef>> = Vec::with_capacity(event_bytes_list.len());
         for (idx, item) in event_bytes_list.iter().enumerate() {
             let bytes = item.as_ref();
@@ -1319,15 +1304,6 @@ where
             learned_new_event |= inserted;
         }
 
-        let use_archive = self
-            .archive_config
-            .filter(|(threshold, _)| event_bytes_list.len() > *threshold);
-
-        if let Some((_, storage_id)) = use_archive {
-            let archive = self.keyhive.into_archive().await;
-            storage_ops::save_keyhive_archive(&self.storage, storage_id, &archive).await?;
-        }
-
         let advanced = learned_new_event || resolved_pending;
         if advanced {
             self.note_local_keyhive_changed().await?;
@@ -1381,7 +1357,6 @@ where
         &self,
         contact_card: &ContactCard,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let _ingest_guard = self.ingest_lock.lock().await;
         // Validate first: only persist after keyhive accepts the card.
         self.keyhive
             .receive_contact_card(contact_card)
@@ -1418,7 +1393,6 @@ where
     ///
     /// Returns [`StorageError`] if loading or ingestion fails.
     pub async fn ingest_from_storage(&self) -> Result<(), StorageError> {
-        let _ingest_guard = self.ingest_lock.lock().await;
         storage_ops::ingest_from_storage(&self.keyhive, &self.storage).await?;
         Ok(())
     }
@@ -2183,13 +2157,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn ingest_events_writes_archive_when_threshold_exceeded() {
-        // Two peers exchange contact cards so Alice's keyhive ends up
-        // with several real events (delegations + prekey ops). Then
-        // feed those events back through `ingest_events` on a fresh
-        // protocol configured with a low `archive_threshold` and
-        // verify exactly one archive lands in storage and no
-        // individual event files.
+    async fn ingest_events_persists_individual_files() {
+        // Event ingestion persists each event; archive creation belongs to
+        // periodic compaction rather than the receive path.
         let alice_kh = make_keyhive().await;
         let bob_kh = make_keyhive().await;
         let alice_id = keyhive_peer_id(&alice_kh);
@@ -2201,62 +2171,8 @@ mod tests {
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
         let storage = MemoryKeyhiveStorage::new();
-        let storage_id = crate::storage::StorageHash::new([42u8; 32]);
         let shared = Arc::new(Mutex::new(alice_kh.clone()));
-        let protocol = TestProtocol::new(shared, storage.clone(), alice_id.clone(), alice_cc)
-            .with_archive_threshold(2, storage_id);
-
-        // Pull real event bytes off Bob's agent (these are the kind of
-        // events that arrive over the wire from a real peer).
-        let pair = protocol
-            .get_events_for_agent(&bob_id)
-            .await
-            .unwrap()
-            .expect("bob should resolve to an agent");
-        let event_bytes: Vec<Arc<[u8]>> = pair.values().map(Dupe::dupe).collect();
-        assert!(
-            event_bytes.len() > 2,
-            "need >2 events to exceed threshold of 2 (got {})",
-            event_bytes.len()
-        );
-
-        protocol.ingest_events(&event_bytes).await.unwrap();
-
-        let archives = crate::storage_ops::load_archives::<[u8; 32], _, Local>(&storage)
-            .await
-            .unwrap();
-        let events = crate::storage_ops::load_events::<[u8; 32], _, Local>(&storage)
-            .await
-            .unwrap();
-        assert_eq!(archives.len(), 1, "expected one archive write");
-        assert_eq!(archives[0].0, storage_id, "archive at expected storage_id");
-        assert!(
-            events.is_empty(),
-            "expected no individual event files when threshold path fires (got {})",
-            events.len()
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn ingest_events_writes_individual_files_below_threshold() {
-        // Mirror of the above with a high threshold: confirm the
-        // existing per-event write path still fires when the threshold
-        // isn't crossed.
-        let alice_kh = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let alice_id = keyhive_peer_id(&alice_kh);
-        let bob_id = keyhive_peer_id(&bob_kh);
-
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
-        alice_kh.receive_contact_card(&bob_cc).await.unwrap();
-        bob_kh.receive_contact_card(&alice_cc).await.unwrap();
-
-        let storage = MemoryKeyhiveStorage::new();
-        let storage_id = crate::storage::StorageHash::new([42u8; 32]);
-        let shared = Arc::new(Mutex::new(alice_kh.clone()));
-        let protocol = TestProtocol::new(shared, storage.clone(), alice_id.clone(), alice_cc)
-            .with_archive_threshold(10_000, storage_id);
+        let protocol = TestProtocol::new(shared, storage.clone(), alice_id.clone(), alice_cc);
 
         let pair = protocol
             .get_events_for_agent(&bob_id)
@@ -2274,7 +2190,7 @@ mod tests {
         let events = crate::storage_ops::load_events::<[u8; 32], _, Local>(&storage)
             .await
             .unwrap();
-        assert!(archives.is_empty(), "no archive expected below threshold");
+        assert!(archives.is_empty(), "ingestion does not create archives");
         assert_eq!(
             events.len(),
             event_bytes.len(),
