@@ -255,6 +255,8 @@ where
         .0)
 }
 
+/// A variant of [`ingest_from_storage`] that indicates if there were events
+/// that have missing deps and are thus pending.
 pub async fn ingest_from_storage_with_pending_progress<Async, Signer, T, P, C, L, R, S>(
     keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
     storage: &S,
