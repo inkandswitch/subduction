@@ -346,7 +346,7 @@ impl<Listener, Conn, Store, SubConn, ConnAdapter> Handler<future_form::Sendable,
 where
     Listener: MembershipListener<future_form::Sendable, MemorySigner, Vec<u8>> + Send + Sync,
     Conn: KeyhiveConnection<future_form::Sendable> + Send + Sync + 'static,
-    Conn::SendError: 'static,
+    Conn::SendError: Send + 'static,
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<future_form::Sendable> + Send + Sync + 'static,
     SubConn: Clone + Send + Sync + 'static,
