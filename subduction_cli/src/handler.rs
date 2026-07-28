@@ -41,7 +41,7 @@ pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
 
 /// The concrete ephemeral handler type for the CLI server.
 pub(crate) type CliEphemeralHandler =
-    EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock>;
+    EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock, TokioSpawn>;
 
 /// The concrete keyhive protocol type for the CLI server.
 pub(crate) type CliKeyhiveProtocol =

@@ -25,6 +25,7 @@ use nonempty::NonEmpty;
 use sedimentree_core::collections::{Map, Set};
 use subduction_core::{
     authenticated::Authenticated, connection::Connection, handler::Handler, peer::id::PeerId,
+    spawn::Spawn,
 };
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -39,11 +40,34 @@ use crate::{
     topic::Topic,
 };
 
+/// Maximum unfinished fan-out sends per peer before further ephemeral
+/// payloads to that peer are dropped.
+///
+/// Sends to a healthy peer complete as soon as the detached fan-out task is
+/// polled, so the in-flight count stays near zero; only a genuinely
+/// backpressured connection (e.g. a peer that stopped reading its socket)
+/// accumulates toward the cap. Dropping is safe — ephemeral messages are
+/// fire-and-forget by design, and a subscriber dozens of messages behind
+/// has no use for stale payloads anyway.
+///
+/// This bounds how many detached fan-out sends can park against a wedged
+/// connection between keepalive reaps. Sizing: large enough that a burst
+/// dispatched before the executor polls the fan-out tasks doesn't shed
+/// messages for healthy peers, small enough that a wedged peer holds at
+/// most `64 × max_payload_size` (4 MiB at the 64 KiB default) in parked
+/// sends.
+pub const MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER: usize = 64;
+
 /// Handler for ephemeral (non-persisted) messages.
 ///
 /// Manages ephemeral subscriptions, performs authorization via
 /// [`EphemeralPolicy`], verifies signatures on inbound messages,
 /// deduplicates by nonce, and fans out payloads to subscribers.
+///
+/// Inbound relay fan-out runs *off* the per-peer dispatch permit: `handle`
+/// spawns the sends via `Sp` so a backpressured subscriber parks a detached
+/// task instead of stalling inbound dispatch (see
+/// [`MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER`] for the parking bound).
 ///
 /// Construct via [`new()`](Self::new), which returns both the handler
 /// and a receiver for inbound [`EphemeralEvent`]s.
@@ -53,6 +77,7 @@ pub struct EphemeralHandler<
     Conn: Clone + 'static,
     E: EphemeralPolicy<Async>,
     Clk: Clock,
+    Sp,
 > {
     /// Inbound subscriptions: which peers are subscribed to receive ephemeral messages from us.
     ephemeral_subscriptions: Arc<Mutex<Map<Topic, Set<PeerId>>>>,
@@ -65,10 +90,19 @@ pub struct EphemeralHandler<
     max_message_age: core::time::Duration,
     clock: Clk,
     nonce_cache: Arc<Mutex<EphemeralNonceCache>>,
+    spawner: Sp,
+    /// Unfinished fan-out sends per peer; see
+    /// [`MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER`].
+    inflight_sends: Arc<Mutex<Map<PeerId, usize>>>,
 }
 
-impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async> + Clone, Clk: Clock> Clone
-    for EphemeralHandler<Async, Conn, E, Clk>
+impl<
+    Async: FutureForm,
+    Conn: Clone + 'static,
+    E: EphemeralPolicy<Async> + Clone,
+    Clk: Clock,
+    Sp: Clone,
+> Clone for EphemeralHandler<Async, Conn, E, Clk, Sp>
 {
     fn clone(&self) -> Self {
         Self {
@@ -81,31 +115,35 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async> + Clone
             max_message_age: self.max_message_age,
             clock: self.clock.clone(),
             nonce_cache: self.nonce_cache.clone(),
+            spawner: self.spawner.clone(),
+            inflight_sends: self.inflight_sends.clone(),
         }
     }
 }
 
-impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock>
-    core::fmt::Debug for EphemeralHandler<Async, Conn, E, Clk>
+impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock, Sp>
+    core::fmt::Debug for EphemeralHandler<Async, Conn, E, Clk, Sp>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("EphemeralHandler").finish_non_exhaustive()
     }
 }
 
-impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock>
-    EphemeralHandler<Async, Conn, E, Clk>
+impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: Clock, Sp>
+    EphemeralHandler<Async, Conn, E, Clk, Sp>
 {
     /// Create a new ephemeral handler.
     ///
     /// Returns the handler and a receiver for inbound [`EphemeralEvent`]s.
     /// The `connections` map is shared with `Subduction` / `SyncHandler`.
+    /// `spawner` runs relay fan-out sends detached from inbound dispatch.
     #[allow(clippy::type_complexity)]
     pub fn new(
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         policy: E,
         config: EphemeralConfig,
         clock: Clk,
+        spawner: Sp,
     ) -> (Self, async_channel::Receiver<EphemeralEvent>) {
         let (tx, rx) = async_channel::bounded(config.channel_capacity);
 
@@ -121,6 +159,8 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
             nonce_cache: Arc::new(Mutex::new(EphemeralNonceCache::new(
                 config.nonce_window_duration,
             ))),
+            spawner,
+            inflight_sends: Arc::new(Mutex::new(Map::new())),
         };
 
         (handler, rx)
@@ -237,20 +277,12 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
         };
 
         // Fan out concurrently so one backpressured peer can't head-of-line
-        // block delivery to the others.
-        let msg_ref = &msg;
-        let mut sends: FuturesUnordered<_> = targets
-            .iter()
-            .map(|conn| async move { (conn.peer_id(), conn.send(msg_ref).await) })
-            .collect();
-        while let Some((peer, result)) = sends.next().await {
-            if let Err(e) = result {
-                debug!(
-                    %peer,
-                    error = %e,
-                    "ephemeral fan-out send failed"
-                );
-            }
+        // block delivery to the others. Peers already at their in-flight cap
+        // are dropped (fire-and-forget semantics) instead of parked on, so a
+        // wedged subscriber can stall `publish` for at most
+        // MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER sends.
+        if let Some(fan_out) = self.admit_fan_out(msg, targets).await {
+            fan_out.run().await;
         }
     }
 
@@ -382,14 +414,16 @@ pub enum EphemeralHandlerError<SendErr: core::error::Error> {
         E::PublishDisallowed: Send + 'static,
         Conn::SendError: Send + 'static,
         Clk: Clock + Send + Sync,
+        Sp: Spawn<Sendable> + Send + Sync + 'static,
     Local where
         Conn: Connection<Local, EphemeralMessage>
             + Clone + 'static,
         E: EphemeralPolicy<Local>,
-        Clk: Clock
+        Clk: Clock,
+        Sp: Spawn<Local> + 'static
 )]
-impl<Async: FutureForm, Conn, E, Clk> Handler<Async, Conn>
-    for EphemeralHandler<Async, Conn, E, Clk>
+impl<Async: FutureForm, Conn, E, Clk, Sp> Handler<Async, Conn>
+    for EphemeralHandler<Async, Conn, E, Clk, Sp>
 {
     type Message = EphemeralMessage;
     type HandlerError = EphemeralHandlerError<Conn::SendError>;
@@ -399,7 +433,16 @@ impl<Async: FutureForm, Conn, E, Clk> Handler<Async, Conn>
         conn: &'a Authenticated<Conn, Async>,
         message: EphemeralMessage,
     ) -> Async::Future<'a, Result<(), Self::HandlerError>> {
-        Async::from_future(async move { self.dispatch(conn, message).await })
+        Async::from_future(async move {
+            // The relay fan-out is spawned OFF the per-peer dispatch permit
+            // so a backpressured subscriber parks a detached task instead of
+            // stalling inbound dispatch for this peer (and, transitively,
+            // every publisher sharing a topic with the slow subscriber).
+            if let Some(fan_out) = self.dispatch(conn, message).await? {
+                self.spawner.spawn(Async::from_future(fan_out.run()));
+            }
+            Ok(())
+        })
     }
 
     fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()> {
@@ -411,6 +454,7 @@ impl<Async: FutureForm, Conn, E, Clk> Handler<Async, Conn>
             });
 
             self.nonce_cache.lock().await.remove_peer(peer);
+            self.inflight_sends.lock().await.remove(&peer);
 
             debug!(peer = %peer, "cleaned ephemeral subscriptions and nonce cache on disconnect");
         })
@@ -422,16 +466,17 @@ impl<
     Conn: Connection<Async, EphemeralMessage> + Clone + 'static,
     E: EphemeralPolicy<Async>,
     Clk: Clock,
-> EphemeralHandler<Async, Conn, E, Clk>
+    Sp,
+> EphemeralHandler<Async, Conn, E, Clk, Sp>
 {
     async fn dispatch(
         &self,
         conn: &Authenticated<Conn, Async>,
         message: EphemeralMessage,
-    ) -> Result<(), EphemeralHandlerError<Conn::SendError>> {
+    ) -> Result<Option<EphemeralFanOut<Conn, Async>>, EphemeralHandlerError<Conn::SendError>> {
         match message {
             EphemeralMessage::Ephemeral { .. } => {
-                self.recv_ephemeral(conn, message).await;
+                return Ok(self.recv_ephemeral(conn, message).await);
             }
             EphemeralMessage::Subscribe { topics } => {
                 self.recv_subscribe(conn, topics).await;
@@ -444,7 +489,53 @@ impl<
                 debug!("received SubscribeRejected (informational)");
             }
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// Admit `targets` against the per-peer in-flight cap, incrementing the
+    /// counter for each admitted connection.
+    ///
+    /// Connections whose peer is already at
+    /// [`MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER`] are dropped from the
+    /// fan-out — fire-and-forget semantics make dropping safe, and it stops
+    /// a wedged connection from accumulating parked send tasks. Returns
+    /// `None` when nothing was admitted.
+    async fn admit_fan_out(
+        &self,
+        message: EphemeralMessage,
+        targets: Vec<Authenticated<Conn, Async>>,
+    ) -> Option<EphemeralFanOut<Conn, Async>> {
+        let admitted: Vec<Authenticated<Conn, Async>> = {
+            let mut inflight = self.inflight_sends.lock().await;
+            targets
+                .into_iter()
+                .filter(|conn| {
+                    let peer = conn.peer_id();
+                    let n = inflight.get(&peer).copied().unwrap_or(0);
+                    if n >= MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER {
+                        debug!(
+                            peer = %peer,
+                            inflight = n,
+                            "ephemeral send dropped: peer at in-flight cap"
+                        );
+                        false
+                    } else {
+                        inflight.insert(peer, n + 1);
+                        true
+                    }
+                })
+                .collect()
+        };
+
+        if admitted.is_empty() {
+            return None;
+        }
+
+        Some(EphemeralFanOut {
+            message,
+            targets: admitted,
+            inflight_sends: Arc::clone(&self.inflight_sends),
+        })
     }
 
     /// Handle an inbound signed ephemeral message from a peer.
@@ -461,9 +552,13 @@ impl<
     ///
     /// [`design/ephemeral.md`]: https://github.com/inkandswitch/subduction/blob/main/design/ephemeral.md#recv-ephemeralhandlerrecv_ephemeral
     #[allow(clippy::too_many_lines)]
-    async fn recv_ephemeral(&self, conn: &Authenticated<Conn, Async>, message: EphemeralMessage) {
+    async fn recv_ephemeral(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        message: EphemeralMessage,
+    ) -> Option<EphemeralFanOut<Conn, Async>> {
         let EphemeralMessage::Ephemeral(ref signed) = message else {
-            return;
+            return None;
         };
 
         let relay = conn.peer_id();
@@ -483,7 +578,7 @@ impl<
                     error = %e,
                     "ephemeral payload undecodable, dropping"
                 );
-                return;
+                return None;
             }
         };
 
@@ -503,7 +598,7 @@ impl<
                 max = max_payload,
                 "ephemeral payload too large, dropping"
             );
-            return;
+            return None;
         }
 
         // 2b. Message age (signature-independent).
@@ -522,7 +617,7 @@ impl<
                     max_age_secs = max_age.as_secs(),
                     "ephemeral message too old or too far in the future, dropping"
                 );
-                return;
+                return None;
             }
         }
 
@@ -537,7 +632,7 @@ impl<
                     nonce = untrusted_nonce,
                     "duplicate ephemeral nonce (pre-verify fast path), dropping"
                 );
-                return;
+                return None;
             }
         }
 
@@ -551,7 +646,7 @@ impl<
                     error = %e,
                     "ephemeral signature verification failed, dropping"
                 );
-                return;
+                return None;
             }
         };
 
@@ -572,7 +667,7 @@ impl<
                     nonce = nonce,
                     "duplicate ephemeral nonce (post-verify race), dropping"
                 );
-                return;
+                return None;
             }
         }
 
@@ -585,7 +680,7 @@ impl<
                 error = %e,
                 "ephemeral publish unauthorized"
             );
-            return;
+            return None;
         }
 
         // 6. Deliver to local callback channel.
@@ -616,7 +711,7 @@ impl<
         };
 
         if subscriber_peers.is_empty() {
-            return;
+            return None;
         }
 
         let authorized_peers = self
@@ -639,16 +734,11 @@ impl<
                 .collect()
         };
 
-        // Forward the original signed message as-is (preserving sender + signature).
-        for target_conn in &targets {
-            if let Err(e) = target_conn.send(&message).await {
-                debug!(
-                    peer = %target_conn.peer_id(),
-                    error = %e,
-                    "ephemeral fan-out send failed"
-                );
-            }
-        }
+        // Forward the original signed message as-is (preserving sender +
+        // signature). The returned fan-out is spawned by `handle` OFF this
+        // peer's dispatch permit; peers at their in-flight cap were dropped
+        // by `admit_fan_out`.
+        self.admit_fan_out(message, targets).await
     }
 
     /// Handle a subscribe request from a peer.
@@ -705,6 +795,62 @@ impl<
                 peers.remove(&peer);
                 if peers.is_empty() {
                     subs.remove(topic);
+                }
+            }
+        }
+    }
+}
+
+/// Deferred fan-out of an ephemeral payload to subscriber connections.
+///
+/// Built on the dispatch path but **run off it**: [`EphemeralHandler`]'s
+/// `handle` spawns [`run`](Self::run) via the handler's spawner, so a
+/// backpressured subscriber parks a detached task instead of holding the
+/// originating peer's dispatch permit. `publish` runs it inline (the
+/// application controls its own concurrency there).
+///
+/// Each target was admitted against the per-peer in-flight cap
+/// ([`MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER`]) with its counter already
+/// incremented; [`run`](Self::run) decrements as each send completes.
+struct EphemeralFanOut<Conn: Clone + 'static, Async: FutureForm> {
+    message: EphemeralMessage,
+    targets: Vec<Authenticated<Conn, Async>>,
+    inflight_sends: Arc<Mutex<Map<PeerId, usize>>>,
+}
+
+impl<Conn, Async> EphemeralFanOut<Conn, Async>
+where
+    Conn: Connection<Async, EphemeralMessage> + Clone + 'static,
+    Async: FutureForm,
+{
+    /// Send the payload to every admitted target concurrently.
+    ///
+    /// Sends run via `FuturesUnordered` so one slow target can't
+    /// head-of-line block the others. Failures are logged and dropped
+    /// (fire-and-forget). Per-peer in-flight counters are decremented as
+    /// sends complete, re-admitting the peer for future fan-outs.
+    async fn run(self) {
+        let msg = &self.message;
+        let mut sends: FuturesUnordered<_> = self
+            .targets
+            .iter()
+            .map(|conn| async move { (conn.peer_id(), conn.send(msg).await) })
+            .collect();
+
+        while let Some((peer, result)) = sends.next().await {
+            if let Err(e) = result {
+                debug!(
+                    %peer,
+                    error = %e,
+                    "ephemeral fan-out send failed"
+                );
+            }
+
+            let mut inflight = self.inflight_sends.lock().await;
+            if let Some(n) = inflight.get_mut(&peer) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    inflight.remove(&peer);
                 }
             }
         }

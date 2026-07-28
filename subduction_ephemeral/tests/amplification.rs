@@ -20,8 +20,11 @@ use future_form::Sendable;
 use nonempty::NonEmpty;
 use sedimentree_core::collections::Map;
 use subduction_core::{
-    authenticated::Authenticated, connection::test_utils::ChannelMockConnection, handler::Handler,
-    peer::id::PeerId, timestamp::TimestampSeconds,
+    authenticated::Authenticated,
+    connection::test_utils::{ChannelMockConnection, TokioSpawn},
+    handler::Handler,
+    peer::id::PeerId,
+    timestamp::TimestampSeconds,
 };
 use subduction_crypto::{
     signed::Signed,
@@ -49,7 +52,8 @@ const fn peer(n: u8) -> PeerId {
     PeerId::new([n; 32])
 }
 
-type OpenHandler = Arc<EphemeralHandler<Sendable, EphConn, OpenEphemeralPolicy, FakeClock>>;
+type OpenHandler =
+    Arc<EphemeralHandler<Sendable, EphConn, OpenEphemeralPolicy, FakeClock, TokioSpawn>>;
 
 fn make_open_handler(
     connections: Connections,
@@ -59,6 +63,7 @@ fn make_open_handler(
         OpenEphemeralPolicy,
         EphemeralConfig::default(),
         FakeClock::new(TEST_CLOCK_SECS),
+        TokioSpawn,
     );
     (Arc::new(handler), rx)
 }
@@ -96,15 +101,21 @@ async fn make_signed_ephemeral_for(
     EphemeralMessage::Ephemeral(Box::new(verified.into_signed()))
 }
 
-/// Drain all immediately-available messages from a connection handle.
+/// Drain all messages produced by already-completed handler calls.
 ///
-/// `EphemeralHandler::handle` awaits each fan-out send sequentially over
-/// the mock's unbounded channel, so by the time the caller reaches
-/// `drain`, every message produced by the just-completed handler call is
-/// already queued. `try_recv` is therefore non-blocking and not subject
-/// to CI-scheduling jitter — replacing an earlier polling drain that
-/// could intermittently stop early on slow runners.
-fn drain(handle: &EphHandle) -> Vec<EphemeralMessage> {
+/// `EphemeralHandler::handle` *spawns* the relay fan-out (so a slow
+/// subscriber can't stall dispatch), so the sends land only after the
+/// detached task runs. Every operation in that task is immediately ready
+/// on the mock's unbounded channel — no timers, no I/O — so yielding to
+/// the (current-thread) runtime a bounded number of times is enough to
+/// let it run to completion deterministically. After settling, `try_recv`
+/// is non-blocking and not subject to CI-scheduling jitter.
+async fn drain(handle: &EphHandle) -> Vec<EphemeralMessage> {
+    // One yield per lock hop in the fan-out task, with headroom.
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+
     let mut out = Vec::new();
     while let Ok(msg) = handle.outbound_rx.try_recv() {
         out.push(msg);
@@ -185,8 +196,8 @@ async fn setup_publishing_server() -> (
 
     // Drain the legitimate initial fan-out so tests can observe only
     // the bounce-back behaviour.
-    drop(drain(&handle_a));
-    drop(drain(&handle_b));
+    drop(drain(&handle_a).await);
+    drop(drain(&handle_b).await);
 
     (handler, event_rx, auth_a, handle_a, handle_b, msg)
 }
@@ -230,7 +241,7 @@ async fn publish_bounce_back_triggers_re_fanout_to_other_subscribers() -> TestRe
     // Peer B (the other subscriber) must NOT receive a second copy.
     // If publish() seeded the cache, the nonce check fires and the
     // bounce is dropped before fan-out.
-    let b_again = count_ephemerals(&drain(&handle_b));
+    let b_again = count_ephemerals(&drain(&handle_b).await);
     assert_eq!(
         b_again, 0,
         "BUG: server re-fanned out its own message to other subscribers when a peer \
@@ -239,7 +250,7 @@ async fn publish_bounce_back_triggers_re_fanout_to_other_subscribers() -> TestRe
     );
 
     // A (the bouncer) must not get a copy back — relay filter excludes it.
-    let a_again = count_ephemerals(&drain(&handle_a));
+    let a_again = count_ephemerals(&drain(&handle_a).await);
     assert_eq!(
         a_again, 0,
         "A (relay) should not get the message back via re-fan-out, but got {a_again}"
@@ -298,7 +309,7 @@ async fn server_dedupes_same_message_arriving_via_two_relays() -> TestResult {
 
     // Downstream gets exactly one fan-out copy.
     assert_eq!(
-        count_ephemerals(&drain(&handle_d)),
+        count_ephemerals(&drain(&handle_d).await),
         1,
         "downstream subscriber should receive exactly one copy across both arrivals"
     );
@@ -383,8 +394,8 @@ async fn triangle_topology_does_not_exponentially_amplify() -> TestResult {
     h1.handle(&s1_view_of_orig, msg.clone()).await?;
 
     // S1 should fan out one copy to each of S2 and S3 — and no more.
-    let s1_to_2 = drain(&h_s1_to_2);
-    let s1_to_3 = drain(&h_s1_to_3);
+    let s1_to_2 = drain(&h_s1_to_2).await;
+    let s1_to_3 = drain(&h_s1_to_3).await;
     assert_eq!(
         count_ephemerals(&s1_to_2),
         1,
@@ -408,8 +419,8 @@ async fn triangle_topology_does_not_exponentially_amplify() -> TestResult {
     let _e3 = tokio::time::timeout(Duration::from_millis(100), rx3.recv()).await??;
 
     // The cross-edges (S2→S3 and S3→S2) each happen exactly once.
-    let s2_to_3 = drain(&h_s2_to_3);
-    let s3_to_2 = drain(&h_s3_to_2);
+    let s2_to_3 = drain(&h_s2_to_3).await;
+    let s3_to_2 = drain(&h_s3_to_2).await;
     assert_eq!(
         count_ephemerals(&s2_to_3),
         1,
@@ -453,7 +464,7 @@ async fn triangle_topology_does_not_exponentially_amplify() -> TestResult {
         ("S3→S2", &h_s3_to_2),
     ] {
         assert_eq!(
-            count_ephemerals(&drain(h)),
+            count_ephemerals(&drain(h).await),
             0,
             "{label}: no further fan-out after cross-edge dedup"
         );
@@ -512,9 +523,9 @@ async fn relay_does_not_refanout_after_seeing_its_own_outbound_come_back() -> Te
     // First arrival: from the originator. Server fans out to subs[T]
     // minus the originator = {sub1, sub2, sub3, loop}.
     handler.handle(&auth_origin, msg.clone()).await?;
-    assert_eq!(count_ephemerals(&drain(&handle_sub1)), 1);
-    assert_eq!(count_ephemerals(&drain(&handle_sub2)), 1);
-    assert_eq!(count_ephemerals(&drain(&handle_sub3)), 1);
+    assert_eq!(count_ephemerals(&drain(&handle_sub1).await), 1);
+    assert_eq!(count_ephemerals(&drain(&handle_sub2).await), 1);
+    assert_eq!(count_ephemerals(&drain(&handle_sub3).await), 1);
 
     // Now the loop peer replays the exact same signed message back.
     handler.handle(&auth_loop, msg.clone()).await?;
@@ -522,17 +533,17 @@ async fn relay_does_not_refanout_after_seeing_its_own_outbound_come_back() -> Te
     // NO subscriber should get a second copy — the nonce cache must
     // catch the replay regardless of which relay it came through.
     assert_eq!(
-        count_ephemerals(&drain(&handle_sub1)),
+        count_ephemerals(&drain(&handle_sub1).await),
         0,
         "sub1 must not get a second copy"
     );
     assert_eq!(
-        count_ephemerals(&drain(&handle_sub2)),
+        count_ephemerals(&drain(&handle_sub2).await),
         0,
         "sub2 must not get a second copy"
     );
     assert_eq!(
-        count_ephemerals(&drain(&handle_sub3)),
+        count_ephemerals(&drain(&handle_sub3).await),
         0,
         "sub3 must not get a second copy"
     );
@@ -594,7 +605,7 @@ async fn cross_edge_duplicate_with_corrupted_signature_is_dropped_silently() -> 
 
     // Drain the legitimate event + fan-out.
     let _first_event = tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await??;
-    let first_fanout = drain(&handle_sub);
+    let first_fanout = drain(&handle_sub).await;
     assert_eq!(
         count_ephemerals(&first_fanout),
         1,
@@ -632,7 +643,7 @@ async fn cross_edge_duplicate_with_corrupted_signature_is_dropped_silently() -> 
 
     // No re-fan-out — the subscriber sees no second copy.
     assert_eq!(
-        count_ephemerals(&drain(&handle_sub)),
+        count_ephemerals(&drain(&handle_sub).await),
         0,
         "duplicate must not trigger fan-out (it was dropped by the cache)"
     );

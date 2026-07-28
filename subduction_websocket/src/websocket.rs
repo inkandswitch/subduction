@@ -6,7 +6,7 @@ use core::{
     future::{Future, IntoFuture},
     marker::PhantomData,
     num::NonZeroU32,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -234,6 +234,17 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> {
     /// keepalive task. Unused (but cheap) when keepalive is disabled.
     pong_received: Arc<AtomicBool>,
 
+    /// Incremented by the sender task after each completed *data*
+    /// (Binary/Text) socket write. Control frames (Ping/Pong/Close) are
+    /// deliberately excluded: if the keepalive's own ping writes moved this
+    /// counter, an idle dead peer would look "alive" to the progress gate
+    /// and never be reaped.
+    ///
+    /// The keepalive loop reads this to distinguish a *wedged* connection
+    /// (full outbound queue, no writes completing) from a *saturated but
+    /// draining* one, and only counts pong misses against the former.
+    data_write_progress: Arc<AtomicU64>,
+
     _phantom: PhantomData<Async>,
 }
 
@@ -329,11 +340,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         // Initial value is irrelevant — the keepalive loop clears the
         // flag before each ping.
         let pong_received = Arc::new(AtomicBool::new(false));
+        let data_write_progress = Arc::new(AtomicU64::new(0));
 
         let ws_sender = Arc::new(Mutex::new(ws_writer));
 
         let sender_task = {
             let ws_sender = ws_sender.clone();
+            let data_write_progress = data_write_progress.clone();
             async move {
                 tracing::debug!(peer = %peer_id, "starting WebSocket sender task");
 
@@ -354,7 +367,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                             item.msg.len(),
                         );
                     }
+                    // Data frames feed the keepalive's progress gate; control
+                    // frames must not (see `data_write_progress` field docs).
+                    let is_data = matches!(item.msg, Message::Binary(_) | Message::Text(_));
                     ws_sender.send(item.msg).await?;
+                    if is_data {
+                        data_write_progress.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
 
                 tracing::debug!("sender task: outbound channel closed, shutting down");
@@ -372,6 +391,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
             inbound_writer,
             inbound_reader,
             pong_received,
+            data_write_progress,
 
             _phantom: PhantomData,
         };
@@ -574,6 +594,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
             this.outbound_tx.clone(),
             this.inbound_writer.clone(),
             this.pong_received.clone(),
+            this.data_write_progress.clone(),
             sleeper,
         );
         let task = KeepAliveTask::new(body.boxed());
@@ -663,14 +684,24 @@ impl ReadErrorKind {
 
 /// Keepalive task body.
 ///
-/// Cycle: `sleep(ping)` → clear flag → send Ping → `sleep(pong)` →
-/// check flag. Threshold consecutive misses trigger disconnect.
+/// Cycle: snapshot write progress → `sleep(ping)` → clear flag → send Ping
+/// (non-blocking) → `sleep(pong)` → check flag *and* progress. Threshold
+/// consecutive misses trigger disconnect.
+///
+/// A cycle counts as alive if either a Pong arrived (end-to-end liveness)
+/// or the sender completed at least one *data* write during the cycle
+/// (`data_write_progress` advanced). The progress gate stops a saturated
+/// but draining connection from being reaped just because its outbound
+/// queue happened to be full at the ping instant; a genuinely wedged
+/// socket makes no write progress, so it still accumulates misses and is
+/// reaped at the threshold.
 async fn keepalive_loop<S, Async>(
     config: KeepAlive,
     peer_id: PeerId,
     outbound_tx: async_channel::Sender<Outbound>,
     inbound_writer: async_channel::Sender<Vec<u8>>,
     pong_received: Arc<AtomicBool>,
+    data_write_progress: Arc<AtomicU64>,
     sleeper: S,
 ) -> KeepAliveOutcome
 where
@@ -681,6 +712,8 @@ where
     let threshold = config.missed_pong_threshold.get();
 
     loop {
+        let progress_snapshot = data_write_progress.load(Ordering::Relaxed);
+
         sleeper.sleep(config.ping_interval).await;
 
         // Clear before sending so a stale Pong from a previous cycle
@@ -689,18 +722,52 @@ where
 
         // Empty payload: we don't verify the Pong reply matches a
         // specific Ping, so a unique payload would just be overhead.
+        //
+        // Non-blocking: a full outbound queue means the sender task is not
+        // draining (e.g. the peer stopped reading and the socket write is
+        // parked). A blocking send here would park *this* task before it
+        // could ever reach the miss check below, so the one connection that
+        // most needs reaping would never be reaped. Dropping the ping lets
+        // the cycle proceed: no pong can arrive for a ping that never left,
+        // so the miss counter advances toward the close threshold.
         let ping = tungstenite::Message::Ping(Vec::new().into());
-        if outbound_tx.send(Outbound::new(ping)).await.is_err() {
-            tracing::debug!(peer = %peer_id, "keepalive: outbound closed; exiting");
-            return KeepAliveOutcome::ConnectionClosed;
+        match outbound_tx.try_send(Outbound::new(ping)) {
+            Ok(()) => {
+                tracing::trace!(peer = %peer_id, "keepalive: sent ping");
+            }
+            Err(async_channel::TrySendError::Closed(_)) => {
+                tracing::debug!(peer = %peer_id, "keepalive: outbound closed; exiting");
+                return KeepAliveOutcome::ConnectionClosed;
+            }
+            Err(async_channel::TrySendError::Full(_)) => {
+                tracing::warn!(
+                    peer = %peer_id,
+                    "keepalive: outbound queue full; ping dropped (counts toward misses)"
+                );
+            }
         }
-        tracing::trace!(peer = %peer_id, "keepalive: sent ping");
 
         sleeper.sleep(config.pong_timeout).await;
 
         if pong_received.load(Ordering::Relaxed) {
             if consecutive_misses > 0 {
                 tracing::debug!(peer = %peer_id, "keepalive: pong recovered after misses");
+            }
+            consecutive_misses = 0;
+            continue;
+        }
+
+        // No pong — but if data writes completed this cycle the transport is
+        // demonstrably moving (e.g. the queue was full at the ping instant on
+        // a link mid-bulk-transfer). Don't count a miss against a connection
+        // that is making progress; a wedged socket completes nothing and
+        // falls through to the miss path.
+        if data_write_progress.load(Ordering::Relaxed) != progress_snapshot {
+            if consecutive_misses > 0 {
+                tracing::debug!(
+                    peer = %peer_id,
+                    "keepalive: write progress observed; resetting misses"
+                );
             }
             consecutive_misses = 0;
             continue;
@@ -752,6 +819,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> Clone for WebSocket<T
             inbound_writer: self.inbound_writer.clone(),
             inbound_reader: self.inbound_reader.clone(),
             pong_received: self.pong_received.clone(),
+            data_write_progress: self.data_write_progress.clone(),
             _phantom: PhantomData,
         }
     }
@@ -900,6 +968,7 @@ mod tests {
             outbound_tx,
             inbound_writer.clone(),
             pong_received,
+            Arc::new(AtomicU64::new(0)),
             TokioSleeper,
         )
         .await;
@@ -968,6 +1037,7 @@ mod tests {
                 outbound_tx.clone(),
                 inbound_writer.clone(),
                 pong_received,
+                Arc::new(AtomicU64::new(0)),
                 TokioSleeper,
             ),
         )
@@ -1025,6 +1095,7 @@ mod tests {
                 outbound_tx.clone(),
                 inbound_writer.clone(),
                 pong_received,
+                Arc::new(AtomicU64::new(0)),
                 TokioSleeper,
             ),
         )
@@ -1073,6 +1144,7 @@ mod tests {
             outbound_tx,
             inbound_writer.clone(),
             pong_received,
+            Arc::new(AtomicU64::new(0)),
             TokioSleeper,
         )
         .await;
@@ -1123,6 +1195,180 @@ mod tests {
         Ok(())
     }
 
+    /// Regression: the keepalive *ping* uses `try_send`. Reverting to
+    /// `send().await` would park the keepalive task forever when the
+    /// outbound channel is full — the exact wedged-socket condition where
+    /// the reaper is needed most. (Observed in production: a peer that
+    /// stopped reading filled the outbound queue; the parked keepalive
+    /// never counted a miss, so the connection was never reaped and held
+    /// dispatch resources for 90+ minutes.)
+    ///
+    /// A full-and-never-drained channel must still produce `Timeout` at
+    /// the threshold, with the inbound writer closed so the connection
+    /// tears down.
+    #[tokio::test(start_paused = true)]
+    async fn keepalive_reaps_connection_when_outbound_full() -> TestResult {
+        // Capacity 1, pre-filled, never drained: simulates a sender task
+        // parked on a peer that stopped reading its socket.
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(1);
+        outbound_tx
+            .send(Outbound::new(tungstenite::Message::Binary(
+                vec![0xEE].into(),
+            )))
+            .await?;
+
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let pong_received = Arc::new(AtomicBool::new(false));
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_millis(40),
+            pong_timeout: Duration::from_millis(20),
+            missed_pong_threshold: nz(2),
+        };
+
+        // Bound the whole run in virtual time: with a blocking ping send
+        // this would never complete (the channel is never drained), and
+        // with paused time the timeout fires deterministically.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            keepalive_loop(
+                config,
+                PeerId::new([42u8; 32]),
+                outbound_tx.clone(),
+                inbound_writer.clone(),
+                pong_received,
+                Arc::new(AtomicU64::new(0)),
+                TokioSleeper,
+            ),
+        )
+        .await
+        .map_err(|_| "keepalive_loop parked on a full outbound channel (ping send blocked)")?;
+
+        let KeepAliveOutcome::Timeout { missed } = outcome else {
+            return Err(format!("expected Timeout outcome, got {outcome:?}").into());
+        };
+        assert_eq!(missed, 2, "should close on exactly the threshold count");
+
+        assert!(
+            inbound_writer.is_closed(),
+            "inbound_writer should be closed so the connection tears down"
+        );
+        assert!(outbound_tx.is_closed(), "outbound should be closed");
+
+        // The wedged payload is still queued — dropped pings/Close never
+        // displaced it (that would reorder the peer's stream).
+        assert_eq!(outbound_rx.len(), 1, "pre-existing message untouched");
+        Ok(())
+    }
+
+    /// A saturated-but-draining connection must NOT be reaped: the outbound
+    /// queue is full at every ping instant (pings are dropped), but the
+    /// sender keeps completing data writes, so the progress gate resets the
+    /// miss counter each cycle.
+    ///
+    /// Reverting the progress gate would reap this connection at
+    /// `threshold × (ping + pong)` — exactly what a bulk cold-sync to a
+    /// slow-but-alive client looks like.
+    #[tokio::test(start_paused = true)]
+    async fn keepalive_does_not_reap_full_but_progressing_connection() -> TestResult {
+        // Capacity 1, pre-filled, never drained: full at every ping instant.
+        let (outbound_tx, _outbound_rx) = async_channel::bounded::<Outbound>(1);
+        outbound_tx
+            .send(Outbound::new(tungstenite::Message::Binary(
+                vec![0xEE].into(),
+            )))
+            .await?;
+
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let pong_received = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(AtomicU64::new(0));
+
+        // Simulate a sender task that keeps completing data writes even
+        // though the queue stays full (producers instantly refill it).
+        let writer = {
+            let progress = progress.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                    progress.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_millis(40),
+            pong_timeout: Duration::from_millis(20),
+            missed_pong_threshold: nz(2),
+        };
+
+        // Without the gate this reaps at 2 × (40+20) = 120ms of virtual
+        // time; give it well past that.
+        let outcome_or_timeout = tokio::time::timeout(
+            Duration::from_millis(500),
+            keepalive_loop(
+                config,
+                PeerId::new([42u8; 32]),
+                outbound_tx.clone(),
+                inbound_writer.clone(),
+                pong_received,
+                progress,
+                TokioSleeper,
+            ),
+        )
+        .await;
+
+        writer.abort();
+        if let Ok(unexpected) = outcome_or_timeout {
+            return Err(format!(
+                "keepalive must not reap a connection making write progress, got {unexpected:?}"
+            )
+            .into());
+        }
+        assert!(
+            !inbound_writer.is_closed(),
+            "progressing connection must not be torn down"
+        );
+        Ok(())
+    }
+
+    /// The progress gate must only see *data* writes: the sender task
+    /// counts Binary/Text frames and excludes control frames. If the
+    /// keepalive's own Ping writes moved the counter, an idle dead peer
+    /// would look alive forever and never be reaped.
+    #[tokio::test]
+    async fn sender_task_counts_only_data_writes() -> TestResult {
+        let ws = create_mock_websocket_stream().await;
+        let (websocket, sender_task): (WebSocket<_, Sendable>, _) =
+            WebSocket::new(ws, PeerId::new([7u8; 32]));
+
+        let progress = websocket.data_write_progress.clone();
+        let tx = websocket.outbound_tx.clone();
+
+        let sender = tokio::spawn(sender_task);
+
+        tx.send(Outbound::new(tungstenite::Message::Ping(Vec::new().into())))
+            .await?;
+        tx.send(Outbound::new(tungstenite::Message::Binary(
+            vec![1, 2, 3].into(),
+        )))
+        .await?;
+        tx.send(Outbound::new(tungstenite::Message::Pong(Vec::new().into())))
+            .await?;
+        tx.send(Outbound::new(tungstenite::Message::Text("hi".into())))
+            .await?;
+
+        // Close the channel so the sender task drains and exits.
+        tx.close();
+        sender.await??;
+
+        assert_eq!(
+            progress.load(Ordering::Relaxed),
+            2,
+            "only the Binary and Text frames may count as progress"
+        );
+        Ok(())
+    }
+
     /// Property: silent peer closes at exactly
     /// `threshold × (ping + pong)` of virtual time.
     #[test]
@@ -1170,6 +1416,7 @@ mod tests {
                         tx,
                         inbound_tx,
                         pong_received,
+                        Arc::new(AtomicU64::new(0)),
                         TokioSleeper,
                     )
                     .await;
