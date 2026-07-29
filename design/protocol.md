@@ -242,7 +242,7 @@ All multi-byte integers are **big-endian** (network byte order):
 | `u16`     | 2 bytes, big-endian                                               |
 | `u32`     | 4 bytes, big-endian                                               |
 | `u64`     | 8 bytes, big-endian                                               |
-| `bijou64` | 1–9 bytes, bijective variable-length ([spec](https://github.com/inkandswitch/bijou/blob/HEAD/specs/bijou64.md)) |
+| `bijou64` | 1–9 bytes, bijective variable-length ([spec](https://github.com/inkandswitch/bijou/blob/main/specs/bijou64.md)) |
 | `[u8; N]` | N bytes, raw                                                      |
 
 ### Array Encoding
