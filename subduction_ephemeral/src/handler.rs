@@ -16,6 +16,7 @@
 //! [`EphemeralMessage`]: crate::message::EphemeralMessage
 
 use alloc::{sync::Arc, vec::Vec};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_channel::Sender;
 use async_lock::Mutex;
@@ -56,6 +57,11 @@ use crate::{
 /// messages for healthy peers, small enough that a wedged peer holds at
 /// most `64 × max_payload_size` (4 MiB at the 64 KiB default) in parked
 /// sends.
+///
+/// Note this cap governs *parked sends* only. Total per-peer buffering
+/// also includes the transport's own outbound queue (e.g. up to 1024
+/// frames on the WebSocket transport), which fills before sends start
+/// parking at all.
 pub const MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER: usize = 64;
 
 /// Handler for ephemeral (non-persisted) messages.
@@ -93,7 +99,15 @@ pub struct EphemeralHandler<
     spawner: Sp,
     /// Unfinished fan-out sends per peer; see
     /// [`MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER`].
-    inflight_sends: Arc<Mutex<Map<PeerId, usize>>>,
+    ///
+    /// The map holds one shared counter per connected peer *generation*:
+    /// [`on_peer_disconnect`](Handler::on_peer_disconnect) removes the
+    /// entry, so a reconnecting peer gets a fresh counter and stragglers
+    /// from the previous generation decrement their own orphaned counter
+    /// harmlessly. Increment/decrement pairing is enforced by
+    /// [`InflightGuard`] (RAII), so counters cannot leak even if a fan-out
+    /// future is cancelled, aborted, or never polled.
+    inflight_sends: Arc<Mutex<Map<PeerId, Arc<AtomicUsize>>>>,
 }
 
 impl<
@@ -278,9 +292,14 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
 
         // Fan out concurrently so one backpressured peer can't head-of-line
         // block delivery to the others. Peers already at their in-flight cap
-        // are dropped (fire-and-forget semantics) instead of parked on, so a
-        // wedged subscriber can stall `publish` for at most
-        // MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER sends.
+        // are dropped (fire-and-forget semantics) instead of parked on.
+        //
+        // Note: the cap bounds how many sends can be *parked* per peer, not
+        // how long this publish may block — `run()` completes only when
+        // every admitted send does, so a wedged subscriber parks this call
+        // until the transport tears the connection down. Callers needing
+        // bounded latency may wrap `publish` in a timeout: cancellation is
+        // leak-free (each send's InflightGuard releases on drop).
         if let Some(fan_out) = self.admit_fan_out(msg, targets).await {
             fan_out.run().await;
         }
@@ -456,7 +475,10 @@ impl<Async: FutureForm, Conn, E, Clk, Sp> Handler<Async, Conn>
             self.nonce_cache.lock().await.remove_peer(peer);
             self.inflight_sends.lock().await.remove(&peer);
 
-            debug!(peer = %peer, "cleaned ephemeral subscriptions and nonce cache on disconnect");
+            debug!(
+                peer = %peer,
+                "cleaned ephemeral subscriptions, nonce cache, and in-flight accounting on disconnect"
+            );
         })
     }
 }
@@ -505,24 +527,25 @@ impl<
         message: EphemeralMessage,
         targets: Vec<Authenticated<Conn, Async>>,
     ) -> Option<EphemeralFanOut<Conn, Async>> {
-        let admitted: Vec<Authenticated<Conn, Async>> = {
+        let admitted: Vec<(Authenticated<Conn, Async>, InflightGuard)> = {
             let mut inflight = self.inflight_sends.lock().await;
             targets
                 .into_iter()
-                .filter(|conn| {
+                .filter_map(|conn| {
                     let peer = conn.peer_id();
-                    let n = inflight.get(&peer).copied().unwrap_or(0);
-                    if n >= MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER {
+                    let counter = inflight
+                        .entry(peer)
+                        .or_insert_with(|| Arc::new(AtomicUsize::new(0)));
+
+                    let admitted = InflightGuard::admit(counter);
+                    if admitted.is_none() {
                         debug!(
                             peer = %peer,
-                            inflight = n,
+                            cap = MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER,
                             "ephemeral send dropped: peer at in-flight cap"
                         );
-                        false
-                    } else {
-                        inflight.insert(peer, n + 1);
-                        true
                     }
+                    admitted.map(|guard| (conn, guard))
                 })
                 .collect()
         };
@@ -534,7 +557,6 @@ impl<
         Some(EphemeralFanOut {
             message,
             targets: admitted,
-            inflight_sends: Arc::clone(&self.inflight_sends),
         })
     }
 
@@ -809,13 +831,14 @@ impl<
 /// originating peer's dispatch permit. `publish` runs it inline (the
 /// application controls its own concurrency there).
 ///
-/// Each target was admitted against the per-peer in-flight cap
-/// ([`MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER`]) with its counter already
-/// incremented; [`run`](Self::run) decrements as each send completes.
+/// Each target carries the [`InflightGuard`] claimed for it during
+/// admission, so its slot in the per-peer budget is released exactly when
+/// its send completes — or when the fan-out future is dropped without
+/// running (cancellation, abort, a spawner that never polls). Counters
+/// cannot leak.
 struct EphemeralFanOut<Conn: Clone + 'static, Async: FutureForm> {
     message: EphemeralMessage,
-    targets: Vec<Authenticated<Conn, Async>>,
-    inflight_sends: Arc<Mutex<Map<PeerId, usize>>>,
+    targets: Vec<(Authenticated<Conn, Async>, InflightGuard)>,
 }
 
 impl<Conn, Async> EphemeralFanOut<Conn, Async>
@@ -827,14 +850,22 @@ where
     ///
     /// Sends run via `FuturesUnordered` so one slow target can't
     /// head-of-line block the others. Failures are logged and dropped
-    /// (fire-and-forget). Per-peer in-flight counters are decremented as
-    /// sends complete, re-admitting the peer for future fan-outs.
+    /// (fire-and-forget). Each target's [`InflightGuard`] is dropped the
+    /// moment its own send completes, re-admitting that peer for future
+    /// fan-outs — a wedged sibling target does not pin it.
     async fn run(self) {
-        let msg = &self.message;
-        let mut sends: FuturesUnordered<_> = self
-            .targets
-            .iter()
-            .map(|conn| async move { (conn.peer_id(), conn.send(msg).await) })
+        let Self { message, targets } = self;
+        let msg = &message;
+
+        let mut sends: FuturesUnordered<_> = targets
+            .into_iter()
+            .map(|(conn, guard)| async move {
+                let result = conn.send(msg).await;
+                // Release this peer's budget slot as soon as *its* send
+                // finishes, independent of the other targets.
+                drop(guard);
+                (conn.peer_id(), result)
+            })
             .collect();
 
         while let Some((peer, result)) = sends.next().await {
@@ -845,14 +876,39 @@ where
                     "ephemeral fan-out send failed"
                 );
             }
-
-            let mut inflight = self.inflight_sends.lock().await;
-            if let Some(n) = inflight.get_mut(&peer) {
-                *n = n.saturating_sub(1);
-                if *n == 0 {
-                    inflight.remove(&peer);
-                }
-            }
         }
+    }
+}
+
+/// RAII claim on one slot of a peer's in-flight fan-out budget.
+///
+/// Claimed via [`admit`](Self::admit) under the cap check; released on
+/// `Drop`. Tying the release to `Drop` (rather than an explicit decrement
+/// after each send) makes the accounting immune to cancelled `publish`
+/// futures, aborted spawns, and spawners that drop tasks without polling
+/// them — none of which can leak a slot and starve a healthy peer.
+///
+/// Holds its own [`Arc`] to the counter, so a guard from a previous
+/// connection generation (the peer disconnected and its map entry was
+/// replaced) decrements the orphaned counter, never the fresh one.
+struct InflightGuard(Arc<AtomicUsize>);
+
+impl InflightGuard {
+    /// Claim a slot against [`MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER`].
+    ///
+    /// Returns `None` when the peer is at its cap.
+    fn admit(counter: &Arc<AtomicUsize>) -> Option<Self> {
+        counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                (n < MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Self(Arc::clone(counter)))
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }

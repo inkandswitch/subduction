@@ -26,8 +26,10 @@ use future_form::{FutureForm, Sendable};
 use nonempty::NonEmpty;
 use sedimentree_core::collections::Map;
 use subduction_core::{
-    authenticated::Authenticated, connection::Connection,
-    connection::test_utils::TokioSpawn, handler::Handler, peer::id::PeerId,
+    authenticated::Authenticated,
+    connection::{Connection, test_utils::TokioSpawn},
+    handler::Handler,
+    peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
@@ -117,7 +119,9 @@ impl Connection<Sendable, EphemeralMessage> for WedgeableConn {
         })
     }
 
-    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<EphemeralMessage, Self::RecvError>> {
+    fn recv(
+        &self,
+    ) -> <Sendable as FutureForm>::Future<'_, Result<EphemeralMessage, Self::RecvError>> {
         Sendable::from_future(async { futures::future::pending().await })
     }
 }
@@ -160,7 +164,10 @@ async fn register(connections: &Connections, conn: WedgeableConn) -> Auth {
 
 fn rand_nonce() -> u64 {
     let mut buf = [0u8; 8];
-    #[allow(clippy::expect_used, reason = "getrandom is infallible on test platforms")]
+    #[allow(
+        clippy::expect_used,
+        reason = "getrandom is infallible on test platforms"
+    )]
     getrandom::getrandom(&mut buf).expect("getrandom failed");
     u64::from_le_bytes(buf)
 }
@@ -255,6 +262,59 @@ async fn wedged_subscriber_does_not_stall_dispatch_and_is_capped() -> TestResult
         wedged_attempts.load(Ordering::SeqCst),
         MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER,
         "parked sends toward a wedged peer must stop at the in-flight cap"
+    );
+
+    Ok(())
+}
+
+/// Cancelling `publish` mid-flight must not leak in-flight budget.
+///
+/// `publish` awaits its fan-out inline, so a caller wrapping it in a
+/// timeout drops the fan-out future while sends toward a wedged peer are
+/// still parked. The RAII `InflightGuard`s must release those slots on
+/// drop: each subsequent publish re-admits the peer, so send *attempts*
+/// keep accruing past the cap. A leaky implementation (increment at
+/// admit, decrement only on send completion) pins attempts at the cap and
+/// silently locks the peer out of ephemera.
+#[tokio::test]
+async fn cancelled_publish_does_not_leak_inflight_budget() -> TestResult {
+    let connections: Connections = Arc::new(Mutex::new(Map::new()));
+    let (handler, _event_rx) = make_handler(connections.clone());
+
+    let topic = Topic::new([0xCC; 32]);
+
+    // One wedged subscriber; publishes fan out to it and park forever.
+    let (wedged_conn, wedged_attempts) = WedgeableConn::wedged(peer(2));
+    let auth_wedged = register(&connections, wedged_conn).await;
+    handler
+        .handle(
+            &auth_wedged,
+            EphemeralMessage::Subscribe {
+                topics: NonEmpty::new(topic),
+            },
+        )
+        .await?;
+
+    let publisher = MemorySigner::generate();
+    let total = MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER + 4;
+    for i in 0..total {
+        let msg = make_signed_ephemeral(&publisher, topic, vec![u8::try_from(i)?]).await;
+        // Each publish parks on the wedged send; cancel it via timeout.
+        // Dropping the fan-out future must release the admitted slot.
+        let cancelled = tokio::time::timeout(Duration::from_millis(20), handler.publish(msg))
+            .await
+            .is_err();
+        assert!(cancelled, "publish should park on the wedged subscriber");
+    }
+    settle().await;
+
+    // Every publish was admitted (slot freed by the previous cancellation),
+    // so the wedged mock saw `total` attempts. A budget leak pins this at
+    // the cap and drops the rest at admission.
+    assert_eq!(
+        wedged_attempts.load(Ordering::SeqCst),
+        total,
+        "cancelled publishes must release their in-flight slots"
     );
 
     Ok(())

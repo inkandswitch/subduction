@@ -713,6 +713,12 @@ pub fn test_signer() -> MemorySigner {
 }
 
 /// A spawner that doesn't actually spawn (for tests that don't need task execution).
+///
+/// The future is dropped without being polled: no side effects run and
+/// nothing is delivered. Drop-based cleanup still executes (e.g.
+/// `EphemeralHandler`'s RAII in-flight guards release, keeping accounting
+/// correct). Tests that assert on delivery or other task side effects
+/// should use [`TokioSpawn`] instead.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TestSpawn;
 

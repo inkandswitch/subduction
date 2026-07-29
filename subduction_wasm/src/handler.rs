@@ -153,7 +153,8 @@ type WasmSyncHandler = SyncHandler<
     JsRemoteHeadsObserver,
 >;
 
-type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock, WasmSpawn>;
+type WasmEphemeralHandler =
+    EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock, WasmSpawn>;
 
 pub(crate) type WasmListenError = ListenError<Local, JsStorage, WasmConn, WireMessage>;
 
