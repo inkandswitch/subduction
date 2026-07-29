@@ -56,7 +56,7 @@ automerge = { git = "https://github.com/automerge/automerge", branch = "fragment
 axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
-bijou64 = { version = "0.2.1", default-features = false }
+bijoux = { version = "0.3.1", default-features = false, features = ["u64"] }
 bincode = "1.3"
 blake3 = { version = "1.8", default-features = false }
 bolero = "0.13.4"

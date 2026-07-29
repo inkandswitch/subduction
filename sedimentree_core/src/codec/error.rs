@@ -142,7 +142,7 @@ pub struct Bijou64Error {
     /// Offset where the bijou64 decoding was attempted.
     pub offset: usize,
     /// The underlying bijou64 error.
-    pub kind: bijou64::DecodeError,
+    pub kind: bijoux::u64::DecodeError,
 }
 
 /// Errors that can occur during decoding.

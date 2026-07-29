@@ -135,12 +135,12 @@ impl EncodeFields for EphemeralPayload {
         encode::u64(self.nonce, buf);
         encode::u64(self.timestamp.as_secs(), buf);
         #[allow(clippy::cast_possible_truncation)]
-        bijou64::encode(self.payload.len() as u64, buf);
+        bijoux::u64::encode(self.payload.len() as u64, buf);
         buf.extend_from_slice(&self.payload);
     }
 
     fn fields_size(&self) -> usize {
-        32 + 8 + 8 + bijou64::encoded_len(self.payload.len() as u64) + self.payload.len()
+        32 + 8 + 8 + bijoux::u64::encoded_len(self.payload.len() as u64) + self.payload.len()
     }
 }
 

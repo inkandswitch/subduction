@@ -124,7 +124,7 @@ impl EncodeFields for LooseCommit {
         #[allow(clippy::cast_possible_truncation)]
         encode::u8(self.parents().len() as u8, buf);
 
-        bijou64::encode(self.blob_meta().size_bytes(), buf);
+        bijoux::u64::encode(self.blob_meta().size_bytes(), buf);
 
         for parent in self.parents() {
             encode::array(parent.as_bytes(), buf);
@@ -133,7 +133,7 @@ impl EncodeFields for LooseCommit {
 
     fn fields_size(&self) -> usize {
         CODEC_FIXED_FIELDS_SIZE
-            + bijou64::encoded_len(self.blob_meta().size_bytes())
+            + bijoux::u64::encoded_len(self.blob_meta().size_bytes())
             + (self.parents().len() * 32)
     }
 }
@@ -167,7 +167,7 @@ impl DecodeFields for LooseCommit {
         let parent_count = decode::u8(buf, offset)? as usize;
         offset += 1;
 
-        let (blob_size, consumed) = bijou64::decode(buf.get(offset..).unwrap_or_default())
+        let (blob_size, consumed) = bijoux::u64::decode(buf.get(offset..).unwrap_or_default())
             .map_err(|kind| Bijou64Error { offset, kind })?;
         offset += consumed;
 
@@ -220,7 +220,7 @@ mod tests {
         encode::array(&[0x10; 32], &mut buf); // head
         encode::array(&[0x20; 32], &mut buf); // blob digest
         encode::u8(2, &mut buf);
-        bijou64::encode(1024, &mut buf);
+        bijoux::u64::encode(1024, &mut buf);
         encode::array(&[0x50; 32], &mut buf);
         encode::array(&[0x30; 32], &mut buf);
 

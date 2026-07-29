@@ -118,7 +118,7 @@ impl EphemeralPayloadHeader {
             need: offset + 1,
             have: buf.len(),
         })?;
-        let (payload_len_u64, consumed) = bijou64::decode(remaining)
+        let (payload_len_u64, consumed) = bijoux::u64::decode(remaining)
             .map_err(|kind| sedimentree_core::codec::error::Bijou64Error { offset, kind })?;
         offset += consumed;
 
@@ -188,7 +188,7 @@ mod tests {
         // (caught by the bounds check); on 32-bit `usize` the cast would
         // silently truncate, so `try_from` must reject it.
         let mut len_prefix = Vec::new();
-        bijou64::encode(u64::MAX, &mut len_prefix);
+        bijoux::u64::encode(u64::MAX, &mut len_prefix);
         let fields = make_fields(&len_prefix, &[]);
 
         let err = EphemeralPayloadHeader::try_decode(&fields).expect_err("must reject");
@@ -203,7 +203,7 @@ mod tests {
         // Declared 1024-byte payload, only 4 bytes present. Must be
         // rejected, no panic (the bounds check uses saturating arithmetic).
         let mut len_prefix = Vec::new();
-        bijou64::encode(1024, &mut len_prefix);
+        bijoux::u64::encode(1024, &mut len_prefix);
         let fields = make_fields(&len_prefix, &[0u8; 4]);
 
         let err = EphemeralPayloadHeader::try_decode(&fields).expect_err("must reject");
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn accepts_well_formed_header() {
         let mut len_prefix = Vec::new();
-        bijou64::encode(5, &mut len_prefix);
+        bijoux::u64::encode(5, &mut len_prefix);
         let fields = make_fields(&len_prefix, b"hello");
 
         let header = EphemeralPayloadHeader::try_decode(&fields).expect("must decode");

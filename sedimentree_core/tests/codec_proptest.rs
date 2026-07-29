@@ -539,7 +539,7 @@ fn loose_commit_with_duplicate_parents_in_buffer_is_rejected() {
             crafted.extend_from_slice(commit.head().as_bytes());
             crafted.extend_from_slice(commit.blob_meta().digest().as_bytes());
             crafted.push(2u8); // parent_count = 2
-            bijou64::encode(commit.blob_meta().size_bytes(), &mut crafted);
+            bijoux::u64::encode(commit.blob_meta().size_bytes(), &mut crafted);
             crafted.extend_from_slice(dup_parent);
             crafted.extend_from_slice(dup_parent); // duplicate
 
