@@ -434,7 +434,7 @@ impl SyncMessage {
                 ..
             } => {
                 32 + commit.as_bytes().len()
-                    + bijou64::encoded_len(blob.as_slice().len() as u64)
+                    + bijoux::u64::encoded_len(blob.as_slice().len() as u64)
                     + blob.as_slice().len()
                     + remote_heads_size(sender_heads)
             }
@@ -445,7 +445,7 @@ impl SyncMessage {
                 ..
             } => {
                 32 + fragment.as_bytes().len()
-                    + bijou64::encoded_len(blob.as_slice().len() as u64)
+                    + bijoux::u64::encoded_len(blob.as_slice().len() as u64)
                     + blob.as_slice().len()
                     + remote_heads_size(sender_heads)
             }
@@ -511,7 +511,7 @@ fn sync_diff_size(diff: &SyncDiff) -> usize {
         .iter()
         .map(|(signed, blob)| {
             signed.as_bytes().len()
-                + bijou64::encoded_len(blob.as_slice().len() as u64)
+                + bijoux::u64::encoded_len(blob.as_slice().len() as u64)
                 + blob.as_slice().len()
         })
         .sum();
@@ -521,7 +521,7 @@ fn sync_diff_size(diff: &SyncDiff) -> usize {
         .iter()
         .map(|(signed, blob)| {
             signed.as_bytes().len()
-                + bijou64::encoded_len(blob.as_slice().len() as u64)
+                + bijoux::u64::encoded_len(blob.as_slice().len() as u64)
                 + blob.as_slice().len()
         })
         .sum();
@@ -555,7 +555,7 @@ fn encode_message(msg: &SyncMessage) -> Vec<u8> {
             buf.extend_from_slice(id.as_bytes());
             encode_remote_heads(&mut buf, sender_heads);
             buf.extend_from_slice(commit.as_bytes());
-            bijou64::encode(blob.as_slice().len() as u64, &mut buf);
+            bijoux::u64::encode(blob.as_slice().len() as u64, &mut buf);
             buf.extend_from_slice(blob.as_slice());
         }
         SyncMessage::Fragment {
@@ -568,7 +568,7 @@ fn encode_message(msg: &SyncMessage) -> Vec<u8> {
             buf.extend_from_slice(id.as_bytes());
             encode_remote_heads(&mut buf, sender_heads);
             buf.extend_from_slice(fragment.as_bytes());
-            bijou64::encode(blob.as_slice().len() as u64, &mut buf);
+            bijoux::u64::encode(blob.as_slice().len() as u64, &mut buf);
             buf.extend_from_slice(blob.as_slice());
         }
         SyncMessage::BatchSyncRequest(req) => {
@@ -773,13 +773,13 @@ fn encode_sync_diff(buf: &mut Vec<u8>, diff: &SyncDiff) {
 
     for (signed, blob) in &diff.missing_commits {
         buf.extend_from_slice(signed.as_bytes());
-        bijou64::encode(blob.as_slice().len() as u64, buf);
+        bijoux::u64::encode(blob.as_slice().len() as u64, buf);
         buf.extend_from_slice(blob.as_slice());
     }
 
     for (signed, blob) in &diff.missing_fragments {
         buf.extend_from_slice(signed.as_bytes());
-        bijou64::encode(blob.as_slice().len() as u64, buf);
+        bijoux::u64::encode(blob.as_slice().len() as u64, buf);
         buf.extend_from_slice(blob.as_slice());
     }
 
@@ -1145,9 +1145,11 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
 
 fn read_bijou64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
     let (val, consumed) =
-        bijou64::decode(buf.get(*offset..).unwrap_or_default()).map_err(|kind| Bijou64Error {
-            offset: *offset,
-            kind,
+        bijoux::u64::decode(buf.get(*offset..).unwrap_or_default()).map_err(|kind| {
+            Bijou64Error {
+                offset: *offset,
+                kind,
+            }
         })?;
     *offset += consumed;
     Ok(val)

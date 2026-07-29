@@ -275,7 +275,7 @@ impl EncodeFields for Fragment {
         #[allow(clippy::cast_possible_truncation)]
         encode::u16(self.checkpoints().len() as u16, buf);
 
-        bijou64::encode(self.summary().blob_meta().size_bytes(), buf);
+        bijoux::u64::encode(self.summary().blob_meta().size_bytes(), buf);
 
         for boundary in self.boundary() {
             encode::array(boundary.as_bytes(), buf);
@@ -288,7 +288,7 @@ impl EncodeFields for Fragment {
 
     fn fields_size(&self) -> usize {
         CODEC_FIXED_FIELDS_SIZE
-            + bijou64::encoded_len(self.summary().blob_meta().size_bytes())
+            + bijoux::u64::encoded_len(self.summary().blob_meta().size_bytes())
             + (self.boundary().len() * 32)
             + (self.checkpoints().len() * CHECKPOINT_BYTES)
     }
@@ -326,7 +326,7 @@ impl DecodeFields for Fragment {
         let checkpoint_count = decode::u16(buf, offset)? as usize;
         offset += 2;
 
-        let (blob_size, consumed) = bijou64::decode(buf.get(offset..).unwrap_or_default())
+        let (blob_size, consumed) = bijoux::u64::decode(buf.get(offset..).unwrap_or_default())
             .map_err(|kind| Bijou64Error { offset, kind })?;
         offset += consumed;
 
@@ -442,7 +442,7 @@ mod tests {
             encode::array(&[0x20; 32], &mut buf); // blob digest
             encode::u8(2, &mut buf); // boundary count
             encode::u16(0, &mut buf); // checkpoint count
-            bijou64::encode(1024, &mut buf); // blob size
+            bijoux::u64::encode(1024, &mut buf); // blob size
             encode::array(&[0x50; 32], &mut buf); // boundary 1 (unsorted - bigger first)
             encode::array(&[0x30; 32], &mut buf); // boundary 2 (smaller second)
 
