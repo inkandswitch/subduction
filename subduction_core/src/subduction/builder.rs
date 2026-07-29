@@ -454,7 +454,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
                 SyncMessage,
                 SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
             >,
-    {
+{
         let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
             let map = BoundedShardedMap::new();
             let map = match self.max_resident_trees {
@@ -646,7 +646,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
                 Hdl::Message,
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
-    {
+{
         let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
             let map = BoundedShardedMap::new();
             let map = match self.max_resident_trees {

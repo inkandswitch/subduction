@@ -1145,9 +1145,11 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
 
 fn read_bijou64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
     let (val, consumed) =
-        bijoux::u64::decode(buf.get(*offset..).unwrap_or_default()).map_err(|kind| Bijou64Error {
-            offset: *offset,
-            kind,
+        bijoux::u64::decode(buf.get(*offset..).unwrap_or_default()).map_err(|kind| {
+            Bijou64Error {
+                offset: *offset,
+                kind,
+            }
         })?;
     *offset += consumed;
     Ok(val)
