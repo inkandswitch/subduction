@@ -99,8 +99,7 @@ pub const KEEPALIVE_CLOSES_TOTAL: &str = "subduction_keepalive_closes_total";
 /// this counter is the honest measure of how often congestion blinds the
 /// end-to-end (pong-based) check. Sustained nonzero rates mean liveness
 /// is riding on the write-progress gate alone for those connections.
-pub const KEEPALIVE_PINGS_UNDELIVERED_TOTAL: &str =
-    "subduction_keepalive_pings_undelivered_total";
+pub const KEEPALIVE_PINGS_UNDELIVERED_TOTAL: &str = "subduction_keepalive_pings_undelivered_total";
 
 // Multiplexer (request/response correlation).
 /// Outstanding correlated requests awaiting a response (across all muxes).
