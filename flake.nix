@@ -14,7 +14,7 @@
     };
 
     wasm-bodge-src = {
-      url = "github:alexjg/wasm-bodge";
+      url = "github:alexjg/wasm-bodge/v0.4.0";
       flake = false;
     };
   };
@@ -98,9 +98,9 @@
 
         wasm-bodge = wasm-bodge-rustPlatform.buildRustPackage {
           pname = "wasm-bodge";
-          version = wasm-bodge-src.shortRev;
+          version = "0.4.0";
           src = wasm-bodge-src;
-          cargoHash = "sha256-tARojdKFjnkCeJIhgpMFEvfxrOTOH8L3cAvE2UQm0jY=";
+          cargoHash = "sha256-KE/AAkrdQ/tmr1X4Fya9CU/oH8e166qJax2kZ3R6jX0=";
           nativeBuildInputs = [ unstable.cargo-auditable ];
           doCheck = false; # tests require npm/puppeteer infrastructure
         };

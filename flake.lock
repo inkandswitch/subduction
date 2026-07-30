@@ -160,15 +160,16 @@
     "wasm-bodge-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1781614223,
-        "narHash": "sha256-KZipWAFr9Dg6JyVNULRr/o33llxjd68Rphh/THKLK4s=",
+        "lastModified": 1785431803,
+        "narHash": "sha256-nvUPGz/AprP0GwT1T5Rz6JM+uYmsXQo/shJAioi7Lkk=",
         "owner": "alexjg",
         "repo": "wasm-bodge",
-        "rev": "2700e4b60ccfd346bdace2b3af78141a1a9511e8",
+        "rev": "01a7b73edc8bddd74ef00ff5cea58ce2a6938945",
         "type": "github"
       },
       "original": {
         "owner": "alexjg",
+        "ref": "v0.4.0",
         "repo": "wasm-bodge",
         "type": "github"
       }
