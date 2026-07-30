@@ -105,7 +105,7 @@
     "./debug/iife": "./dist/iife/debug.js"
   },
   "devDependencies": {
-    "@types/node": "^22.17.2",
-    "typescript": "^5.9.2"
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
   }
 }

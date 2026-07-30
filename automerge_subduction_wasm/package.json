@@ -106,15 +106,15 @@
     "./debug/iife": "./dist/iife/debug.js"
   },
   "devDependencies": {
-    "@playwright/test": "^1.55.0",
-    "@types/node": "^22.17.2",
-    "html-webpack-plugin": "^5.6.4",
-    "ts-loader": "^9.5.2",
-    "typescript": "^5.9.2",
-    "vite": "^7.3.0",
-    "vite-plugin-wasm": "^3.5.0",
-    "webpack": "^5.101.3",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.20.1",
+    "html-webpack-plugin": "^5.6.8",
+    "ts-loader": "^9.6.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vite-plugin-wasm": "^3.6.0",
+    "webpack": "^5.109.2",
     "webpack-cli": "^5.1.4",
-    "webpack-dev-server": "^5.2.2"
+    "webpack-dev-server": "^5.2.6"
   }
 }
