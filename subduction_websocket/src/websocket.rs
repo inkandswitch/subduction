@@ -42,14 +42,19 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 /// endpoint never answers pings — a frame-swallowing middlebox, or a
 /// proxy in front of a dead backend — would evade the reaper indefinitely.
 ///
-/// Only pings that actually reached the outbound queue count: an
-/// undelivered ping says something about *our* congestion, not about the
-/// peer, so it must not accrue evidence against them (see
-/// [`PING_DELIVERY_ATTEMPTS`] for how delivery is ensured under load).
-/// WebSocket pongs are answered by the remote *protocol stack* (RFC 6455
-/// auto-reply), independent of application load — so a busy-but-healthy
-/// peer always resets this counter, and this many consecutive unanswered
-/// pings over TCP means the remote endpoint is genuinely gone.
+/// Only pings that were actually delivered count: an undelivered ping
+/// says something about *our* congestion, not about the peer, so it must
+/// not accrue evidence against them. Delivery is via `try_send` retries
+/// across the pong window, plus sender-task injection when the queue is
+/// full (see [`PING_DELIVERY_ATTEMPTS`]), so a ping lands whenever the
+/// connection drains at all during the window; only a zero-drainage
+/// (wedged) window goes undelivered, and that case is caught by the
+/// progress-gated miss path instead. WebSocket pongs are answered by the
+/// remote protocol stack (RFC 6455 auto-reply — in most implementations
+/// whenever the peer drives its read loop), largely independent of
+/// application load — so a busy-but-healthy peer keeps resetting this
+/// counter, and this many consecutive unanswered pings over TCP means the
+/// remote endpoint has stopped servicing the protocol.
 ///
 /// With [`KeepAlive::balanced`] (40 s cycles), worst-case detection for
 /// this class is `8 × 40 s ≈ 5.3 min`. Note this also effectively caps
@@ -60,16 +65,18 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 /// guards against with `NonZeroU32`).
 pub const MAX_UNANSWERED_PINGS: u8 = 8;
 
-/// Delivery attempts for each cycle's keepalive ping.
+/// Queue-delivery attempts for each cycle's keepalive ping.
 ///
 /// The ping is attempted at the start of the pong window and retried at
 /// each sub-interval boundary until it enqueues; the sub-sleeps sum to
-/// exactly `pong_timeout`, so cycle timing is unchanged. A draining
-/// outbound queue frees a slot between attempts (write progress implies
-/// drainage implies a retry lands), so a saturated-but-healthy connection
-/// still gets pinged — and its pong resets both liveness counters. Only a
-/// zero-drainage queue (a wedged socket) defeats every attempt, and that
-/// case is caught by the progress-gated miss path instead.
+/// exactly `pong_timeout`, so cycle timing is unchanged. Retries alone
+/// are best-effort — parked producers woken FIFO usually win freed slots
+/// — so a failed attempt also raises `ping_requested`, and the *sender
+/// task* injects the ping directly into the sink after its next completed
+/// frame. Between the two paths, delivery is guaranteed whenever the
+/// connection drains at least one frame during the window; only a
+/// zero-drainage queue (a wedged socket) defeats both, and that case is
+/// caught by the progress-gated miss path instead.
 pub const PING_DELIVERY_ATTEMPTS: u32 = 4;
 
 /// An outbound message, plus its enqueue instant under the `metrics` feature so
@@ -293,8 +300,23 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> {
     inbound_writer: async_channel::Sender<Vec<u8>>,
     inbound_reader: async_channel::Receiver<Vec<u8>>,
 
-    /// Set by [`Self::listen`] on incoming Pong; read and cleared by the
-    /// keepalive task. Unused (but cheap) when keepalive is disabled.
+    /// Shared liveness signals linking the listener, the sender task, and
+    /// the keepalive task. Unused (but cheap) when keepalive is disabled.
+    signals: KeepAliveSignals,
+
+    _phantom: PhantomData<Async>,
+}
+
+/// Shared atomics linking the listener, the sender task, and the keepalive
+/// task's liveness evaluation.
+///
+/// All fields use `Relaxed` ordering: each is an independent flag or a
+/// monotonic counter compared only against its own prior value — no
+/// cross-atomic ordering invariants exist.
+#[derive(Clone, Debug)]
+struct KeepAliveSignals {
+    /// Set by the listener on incoming Pong; read and cleared by the
+    /// keepalive task.
     pong_received: Arc<AtomicBool>,
 
     /// Incremented by the sender task after each completed *data*
@@ -308,7 +330,32 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> {
     /// draining* one, and only counts pong misses against the former.
     data_write_progress: Arc<AtomicU64>,
 
-    _phantom: PhantomData<Async>,
+    /// Raised by the keepalive task when its `try_send` found the outbound
+    /// queue full; consumed by the sender task, which then injects a Ping
+    /// directly into the sink after finishing its in-flight frame. This
+    /// gives ping delivery priority over parked producers competing for
+    /// freed queue slots: the party that owns drainage owns delivery, so a
+    /// ping lands whenever at least one frame completes during the window.
+    ping_requested: Arc<AtomicBool>,
+
+    /// Set by the sender task after a successful injected ping write; read
+    /// and cleared by the keepalive task at window end, where it counts as
+    /// a delivered ping.
+    ping_injected: Arc<AtomicBool>,
+}
+
+impl KeepAliveSignals {
+    fn new() -> Self {
+        Self {
+            // Initial values are irrelevant: the keepalive loop clears the
+            // pong and injected flags at each window boundary, and the
+            // progress counter is only compared against its own snapshots.
+            pong_received: Arc::new(AtomicBool::new(false)),
+            data_write_progress: Arc::new(AtomicU64::new(0)),
+            ping_requested: Arc::new(AtomicBool::new(false)),
+            ping_injected: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 #[future_form(
@@ -400,16 +447,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         let (outbound_tx, outbound_rx) =
             async_channel::bounded::<Outbound>(OUTBOUND_CHANNEL_CAPACITY);
         let chan_id = rand::random::<u64>();
-        // Initial value is irrelevant — the keepalive loop clears the
-        // flag before each ping.
-        let pong_received = Arc::new(AtomicBool::new(false));
-        let data_write_progress = Arc::new(AtomicU64::new(0));
+        let signals = KeepAliveSignals::new();
 
         let ws_sender = Arc::new(Mutex::new(ws_writer));
 
         let sender_task = {
             let ws_sender = ws_sender.clone();
-            let data_write_progress = data_write_progress.clone();
+            let signals = signals.clone();
             async move {
                 tracing::debug!(peer = %peer_id, "starting WebSocket sender task");
 
@@ -431,11 +475,29 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                         );
                     }
                     // Data frames feed the keepalive's progress gate; control
-                    // frames must not (see `data_write_progress` field docs).
+                    // frames must not (see `KeepAliveSignals` field docs).
                     let is_data = matches!(item.msg, Message::Binary(_) | Message::Text(_));
                     ws_sender.send(item.msg).await?;
                     if is_data {
-                        data_write_progress.fetch_add(1, Ordering::Relaxed);
+                        signals.data_write_progress.fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    // Keepalive ping injection: the keepalive raises
+                    // `ping_requested` when its try_send found the queue
+                    // full. Injecting here — between frames, directly into
+                    // the sink — bypasses the queue entirely, so parked
+                    // producers can't starve the ping: delivery is
+                    // guaranteed whenever any frame completes during the
+                    // pong window. On a wedged socket this point is never
+                    // reached, and the undelivered ping correctly accrues
+                    // no evidence against the peer.
+                    if signals.ping_requested.swap(false, Ordering::Relaxed) {
+                        let ping = tungstenite::Message::Ping(Vec::new().into());
+                        #[cfg(feature = "metrics")]
+                        subduction_core::metrics::network_frame("websocket", "sent", ping.len());
+                        ws_sender.send(ping).await?;
+                        signals.ping_injected.store(true, Ordering::Relaxed);
+                        tracing::trace!(peer = %peer_id, "keepalive: ping injected by sender task");
                     }
                 }
 
@@ -453,8 +515,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
             ws_sender,
             inbound_writer,
             inbound_reader,
-            pong_received,
-            data_write_progress,
+            signals,
 
             _phantom: PhantomData,
         };
@@ -554,7 +615,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
                     }
                     Ok(tungstenite::Message::Pong(p)) => {
                         tracing::trace!(size = p.len(), peer = %self.peer_id, "received pong");
-                        self.pong_received.store(true, Ordering::Relaxed);
+                        self.signals.pong_received.store(true, Ordering::Relaxed);
                     }
                     Ok(tungstenite::Message::Frame(f)) => {
                         tracing::warn!(peer = %self.peer_id, frame = ?f, "unexpected frame");
@@ -627,9 +688,23 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
     ///
     /// Returns the transport, a sender task, and a keepalive task —
     /// all three should be spawned. The keepalive task closes both
-    /// channels on [`KeepAliveOutcome::Timeout`]; the rest of the
-    /// stack observes the disconnect through the normal channel-closed
-    /// paths.
+    /// channels on [`KeepAliveOutcome::Timeout`] or
+    /// [`KeepAliveOutcome::StaleNoPong`]; the rest of the stack observes
+    /// the disconnect through the normal channel-closed paths.
+    ///
+    /// # Pong asymmetry
+    ///
+    /// Outbound *ping* delivery is guaranteed under drainage (queue
+    /// retries + sender-task injection), but our *pong replies* to the
+    /// peer's pings remain single-shot `try_send`s from the listener — the
+    /// read loop cannot sleep-retry without stalling inbound traffic. If a
+    /// symmetric peer runs this same unanswered-ping ceiling, a sustained
+    /// (> `MAX_UNANSWERED_PINGS` cycles) period of our outbound queue
+    /// being full at every pong-reply instant could cause *them* to reap a
+    /// healthy connection. Currently moot — browsers auto-pong natively
+    /// and cannot send application pings — but relevant for future
+    /// server↔server links; a priority slot for control frames would close
+    /// it.
     ///
     /// `sleeper` provides the in-between waits — typically
     /// [`TokioSleeper`](crate::sleep::TokioSleeper) or
@@ -656,8 +731,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
             peer_id,
             this.outbound_tx.clone(),
             this.inbound_writer.clone(),
-            this.pong_received.clone(),
-            this.data_write_progress.clone(),
+            this.signals.clone(),
             sleeper,
         );
         let task = KeepAliveTask::new(body.boxed());
@@ -747,9 +821,10 @@ impl ReadErrorKind {
 
 /// Keepalive task body.
 ///
-/// Cycle: snapshot write progress → `sleep(ping)` → clear flag → send Ping
-/// (non-blocking) → `sleep(pong)` → check flag *and* progress. Threshold
-/// consecutive misses trigger disconnect.
+/// Cycle: snapshot write progress → `sleep(ping)` → clear flags → deliver
+/// Ping (non-blocking `try_send`, retried across the window; on a full
+/// queue the sender task injects it between frames — see
+/// [`KeepAliveSignals::ping_requested`]) → window elapses → evaluate.
 ///
 /// A cycle counts as alive if either a Pong arrived (end-to-end liveness)
 /// or the sender completed at least one *data* write during the cycle
@@ -758,13 +833,18 @@ impl ReadErrorKind {
 /// queue happened to be full at the ping instant; a genuinely wedged
 /// socket makes no write progress, so it still accumulates misses and is
 /// reaped at the threshold.
+#[allow(
+    clippy::too_many_lines,
+    reason = "a deliberately linear liveness state machine; the extractable \
+              units (window schedule, teardown) already live in PongWindow \
+              and reap()"
+)]
 async fn keepalive_loop<S, Async>(
     config: KeepAlive,
     peer_id: PeerId,
     outbound_tx: async_channel::Sender<Outbound>,
     inbound_writer: async_channel::Sender<Vec<u8>>,
-    pong_received: Arc<AtomicBool>,
-    data_write_progress: Arc<AtomicU64>,
+    signals: KeepAliveSignals,
     sleeper: S,
 ) -> KeepAliveOutcome
 where
@@ -788,32 +868,51 @@ where
     let threshold = config.missed_pong_threshold.get();
 
     loop {
-        let progress_snapshot = data_write_progress.load(Ordering::Relaxed);
+        let progress_snapshot = signals.data_write_progress.load(Ordering::Relaxed);
 
         sleeper.sleep(config.ping_interval).await;
 
-        // Clear before sending so a stale Pong from a previous cycle
-        // can't satisfy this one.
-        pong_received.store(false, Ordering::Relaxed);
+        // Clear before sending so a stale Pong from a previous cycle can't
+        // satisfy this one — but a pong that arrived during the interval is
+        // still evidence the peer's protocol stack answered our *previous*
+        // ping (just late, e.g. a ping delivered on the window's last
+        // attempt leaves less than a full window to reply). Credit it
+        // against the unanswered-ping ceiling so a slow-but-answering peer
+        // isn't misclassified as protocol-dead. The fast-path miss counter
+        // is deliberately not credited: late pongs say nothing about
+        // whether anything moved *this* cycle.
+        if signals.pong_received.swap(false, Ordering::Relaxed) && unanswered_pings > 0 {
+            tracing::debug!(
+                peer = %peer_id,
+                "keepalive: late pong observed; resetting unanswered-ping count"
+            );
+            unanswered_pings = 0;
+        }
+        signals.ping_injected.store(false, Ordering::Relaxed);
 
         // Attempt ping delivery across the pong window: once at the window
         // start, then again at each sub-interval boundary until it lands.
+        // If the queue is full, raise `ping_requested` so the sender task
+        // injects the ping directly into the sink between frames — parked
+        // producers competing for freed slots can't starve it.
         //
         // Non-blocking throughout: a blocking send would park *this* task
         // on the very condition (full outbound queue) it exists to detect.
-        // The retries make delivery reliable on a draining queue — a slot
-        // frees between attempts — so failing every attempt implies zero
-        // drainage, which the miss path below catches via the absent write
-        // progress. Empty ping payload: we don't verify the Pong matches a
-        // specific Ping, so a unique payload would just be overhead.
+        // Failure of every path implies zero drainage for the whole window,
+        // which the miss path below catches via the absent write progress.
+        // Empty ping payload: we don't verify the Pong matches a specific
+        // Ping, so a unique payload would just be overhead.
         let window = PongWindow::plan(config.pong_timeout);
-        let mut ping_sent = false;
+        let mut ping_queued = false;
         for attempt in 0..window.attempts {
-            if !ping_sent {
+            if !ping_queued {
                 let ping = tungstenite::Message::Ping(Vec::new().into());
                 match outbound_tx.try_send(Outbound::new(ping)) {
                     Ok(()) => {
-                        ping_sent = true;
+                        ping_queued = true;
+                        // Cancel any standing injection request from an
+                        // earlier failed attempt; one ping per cycle.
+                        signals.ping_requested.store(false, Ordering::Relaxed);
                         tracing::trace!(peer = %peer_id, attempt, "keepalive: sent ping");
                     }
                     Err(async_channel::TrySendError::Closed(_)) => {
@@ -821,10 +920,11 @@ where
                         return KeepAliveOutcome::ConnectionClosed;
                     }
                     Err(async_channel::TrySendError::Full(_)) => {
+                        signals.ping_requested.store(true, Ordering::Relaxed);
                         tracing::trace!(
                             peer = %peer_id,
                             attempt,
-                            "keepalive: outbound full; will retry ping"
+                            "keepalive: outbound full; requested sender-task injection"
                         );
                     }
                 }
@@ -833,17 +933,24 @@ where
             sleeper.sleep(window.sleep_after(attempt)).await;
         }
 
+        let ping_sent = ping_queued || signals.ping_injected.swap(false, Ordering::Relaxed);
+
         if !ping_sent {
-            // Says something about our congestion, not the peer — must not
-            // count against them. The miss path below judges this cycle by
-            // write progress alone.
+            // Cancel the standing injection request so a stale ping isn't
+            // injected long after this window (the next cycle re-requests).
+            signals.ping_requested.store(false, Ordering::Relaxed);
+            // An undelivered ping says something about our congestion, not
+            // the peer — it must not count against them. The miss path
+            // below judges this cycle by write progress alone.
+            #[cfg(feature = "metrics")]
+            subduction_core::metrics::keepalive_ping_undelivered();
             tracing::debug!(
                 peer = %peer_id,
-                "keepalive: outbound full for the whole window; ping undelivered"
+                "keepalive: zero drainage for the whole window; ping undelivered"
             );
         }
 
-        if pong_received.load(Ordering::Relaxed) {
+        if signals.pong_received.load(Ordering::Relaxed) {
             if consecutive_misses > 0 || unanswered_pings > 0 {
                 tracing::debug!(peer = %peer_id, "keepalive: pong received; counters reset");
             }
@@ -865,7 +972,7 @@ where
                     unanswered = unanswered_pings,
                     "keepalive: consecutive pings unanswered; closing connection"
                 );
-                reap(&outbound_tx, &inbound_writer);
+                reap(&outbound_tx, &inbound_writer, "keepalive timeout (no pong)");
                 return KeepAliveOutcome::StaleNoPong {
                     unanswered: unanswered_pings,
                 };
@@ -877,7 +984,7 @@ where
         // window on a link mid-bulk-transfer). Don't count a fast-path miss
         // against a connection that is making progress; a wedged socket
         // completes nothing and falls through to the miss path.
-        if data_write_progress.load(Ordering::Relaxed) != progress_snapshot {
+        if signals.data_write_progress.load(Ordering::Relaxed) != progress_snapshot {
             if consecutive_misses > 0 {
                 tracing::debug!(
                     peer = %peer_id,
@@ -904,7 +1011,7 @@ where
                 misses = consecutive_misses,
                 "keepalive: threshold reached; closing connection"
             );
-            reap(&outbound_tx, &inbound_writer);
+            reap(&outbound_tx, &inbound_writer, "keepalive timeout");
             return KeepAliveOutcome::Timeout {
                 missed: consecutive_misses,
             };
@@ -938,7 +1045,10 @@ impl PongWindow {
             (PING_DELIVERY_ATTEMPTS, Duration::from_millis(sub_ms))
         };
         // The final sub-sleep absorbs division rounding so the window's
-        // total is exactly `pong_timeout`.
+        // total is exactly `pong_timeout`. The fallback is believed
+        // unreachable (3·⌊x/4⌋ ≤ x) and is deliberately non-panicking: this
+        // code runs inside the keepalive task, whose unconditional survival
+        // is the whole point — a slightly-off window beats a dead reaper.
         let last_sleep = pong_timeout
             .checked_sub(sub_sleep * (attempts - 1))
             .unwrap_or(sub_sleep);
@@ -967,13 +1077,14 @@ impl PongWindow {
 fn reap(
     outbound_tx: &async_channel::Sender<Outbound>,
     inbound_writer: &async_channel::Sender<Vec<u8>>,
+    reason: &'static str,
 ) {
     #[cfg(feature = "metrics")]
     subduction_core::metrics::keepalive_close();
 
     let close_frame = tungstenite::Message::Close(Some(CloseFrame {
         code: CloseCode::Away,
-        reason: "keepalive timeout".into(),
+        reason: reason.into(),
     }));
     drop(outbound_tx.try_send(Outbound::new(close_frame)));
 
@@ -991,8 +1102,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> Clone for WebSocket<T
             ws_sender: self.ws_sender.clone(),
             inbound_writer: self.inbound_writer.clone(),
             inbound_reader: self.inbound_reader.clone(),
-            pong_received: self.pong_received.clone(),
-            data_write_progress: self.data_write_progress.clone(),
+            signals: self.signals.clone(),
             _phantom: PhantomData,
         }
     }
@@ -1120,7 +1230,6 @@ mod tests {
     async fn keepalive_loop_times_out_on_silent_peer() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
 
         let outbound_drain = tokio::spawn(async move {
             let mut msgs = Vec::new();
@@ -1140,8 +1249,7 @@ mod tests {
             PeerId::new([42u8; 32]),
             outbound_tx,
             inbound_writer.clone(),
-            pong_received,
-            Arc::new(AtomicU64::new(0)),
+            KeepAliveSignals::new(),
             TokioSleeper,
         )
         .await;
@@ -1182,10 +1290,10 @@ mod tests {
     async fn keepalive_loop_does_not_time_out_with_responsive_peer() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
+        let signals = KeepAliveSignals::new();
 
         let responsive_peer = {
-            let pong_received = pong_received.clone();
+            let pong_received = signals.pong_received.clone();
             tokio::spawn(async move {
                 while let Ok(item) = outbound_rx.recv().await {
                     if matches!(item.msg, tungstenite::Message::Ping(_)) {
@@ -1209,8 +1317,7 @@ mod tests {
                 PeerId::new([42u8; 32]),
                 outbound_tx.clone(),
                 inbound_writer.clone(),
-                pong_received,
-                Arc::new(AtomicU64::new(0)),
+                signals,
                 TokioSleeper,
             ),
         )
@@ -1233,10 +1340,10 @@ mod tests {
     async fn keepalive_loop_resets_misses_after_recovery() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
+        let signals = KeepAliveSignals::new();
 
         let pattern_runner = {
-            let pong_received = pong_received.clone();
+            let pong_received = signals.pong_received.clone();
             tokio::spawn(async move {
                 let mut seen = 0u32;
                 while let Ok(item) = outbound_rx.recv().await {
@@ -1267,8 +1374,7 @@ mod tests {
                 PeerId::new([42u8; 32]),
                 outbound_tx.clone(),
                 inbound_writer.clone(),
-                pong_received,
-                Arc::new(AtomicU64::new(0)),
+                signals,
                 TokioSleeper,
             ),
         )
@@ -1293,7 +1399,6 @@ mod tests {
     async fn keepalive_loop_exits_when_outbound_closes_externally() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
 
         // Externally close the channel after a short delay — well before
         // the silent-peer Timeout window (1000+500 = 1500ms virtual).
@@ -1316,8 +1421,7 @@ mod tests {
             PeerId::new([42u8; 32]),
             outbound_tx,
             inbound_writer.clone(),
-            pong_received,
-            Arc::new(AtomicU64::new(0)),
+            KeepAliveSignals::new(),
             TokioSleeper,
         )
         .await;
@@ -1391,7 +1495,6 @@ mod tests {
             .await?;
 
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
 
         let config = KeepAlive {
             ping_interval: Duration::from_millis(40),
@@ -1409,8 +1512,7 @@ mod tests {
                 PeerId::new([42u8; 32]),
                 outbound_tx.clone(),
                 inbound_writer.clone(),
-                pong_received,
-                Arc::new(AtomicU64::new(0)),
+                KeepAliveSignals::new(),
                 TokioSleeper,
             ),
         )
@@ -1453,13 +1555,14 @@ mod tests {
             .await?;
 
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
-        let progress = Arc::new(AtomicU64::new(0));
+        let signals = KeepAliveSignals::new();
 
         // Simulate a sender task that keeps completing data writes even
         // though the queue stays full (producers instantly refill it).
+        // Note: no injection happens (there is no real sender task), so
+        // pings are never delivered in this test.
         let writer = {
-            let progress = progress.clone();
+            let progress = signals.data_write_progress.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(15)).await;
@@ -1475,22 +1578,20 @@ mod tests {
         };
 
         // Without the gate this reaps at 2 × (40+20) = 120ms of virtual
-        // time; observe well past that. The MAX_UNANSWERED_PINGS ceiling
-        // never engages here: the queue has zero drainage, so no ping is
-        // ever delivered, and undelivered pings say something about our
-        // congestion — not the peer — so they accrue no evidence. (In
-        // reality progress implies drainage implies a retry would land;
-        // this test pokes the progress counter directly to isolate the
-        // gate.)
+        // time. The MAX_UNANSWERED_PINGS ceiling never engages here: the
+        // queue has zero drainage, so no ping is ever delivered, and
+        // undelivered pings say something about our congestion — not the
+        // peer — so they accrue no evidence. Observe past the point where
+        // a mutant that counts undelivered pings would reap (8 × 60 =
+        // 480ms) to make that claim load-bearing.
         let outcome_or_timeout = tokio::time::timeout(
-            Duration::from_millis(400),
+            Duration::from_millis(650),
             keepalive_loop(
                 config,
                 PeerId::new([42u8; 32]),
                 outbound_tx.clone(),
                 inbound_writer.clone(),
-                pong_received,
-                progress,
+                signals.clone(),
                 TokioSleeper,
             ),
         )
@@ -1520,14 +1621,13 @@ mod tests {
     async fn keepalive_reaps_progressing_peer_that_never_pongs() -> TestResult {
         let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
-        let progress = Arc::new(AtomicU64::new(0));
+        let signals = KeepAliveSignals::new();
 
         // Drain pings (so try_send succeeds) but never pong; keep write
         // progress advancing every cycle.
         let drain = tokio::spawn(async move { while outbound_rx.recv().await.is_ok() {} });
         let writer = {
-            let progress = progress.clone();
+            let progress = signals.data_write_progress.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(15)).await;
@@ -1550,8 +1650,7 @@ mod tests {
                 PeerId::new([42u8; 32]),
                 outbound_tx.clone(),
                 inbound_writer.clone(),
-                pong_received,
-                progress,
+                signals.clone(),
                 TokioSleeper,
             ),
         )
@@ -1583,12 +1682,12 @@ mod tests {
 
     /// A queue that is full at the ping instant but *draining* must not
     /// cost the peer liveness evidence: the in-window retry delivers the
-    /// ping once a slot frees, the (healthy) peer pongs, and both counters
-    /// reset. Without the retry, a busy peer whose inbound queue from us
-    /// hovers at capacity would never be pinged at all and could be
-    /// falsely reaped by the unanswered-ping ceiling.
+    /// ping once a slot frees, the (healthy) peer pongs, and the cycle
+    /// counts as answered. Without the retry, a busy peer whose inbound
+    /// queue from us hovers at capacity would never be pinged at all and
+    /// could be falsely reaped by the unanswered-ping ceiling.
     #[tokio::test(start_paused = true)]
-    async fn ping_retry_delivers_on_draining_queue_and_pong_resets_counters() -> TestResult {
+    async fn ping_retry_delivers_on_draining_queue() -> TestResult {
         // Capacity 1, pre-filled: the first try_send (window start, t=40ms)
         // fails. Config: 40ms interval, 20ms window → retries at t=45/50/55.
         let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(1);
@@ -1599,15 +1698,14 @@ mod tests {
             .await?;
 
         let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
-        let pong_received = Arc::new(AtomicBool::new(false));
-        let progress = Arc::new(AtomicU64::new(0));
+        let signals = KeepAliveSignals::new();
 
         // Scripted peer: at t=47ms drain the Binary (freeing a slot between
         // the t=45 and t=50 retries), then receive the retried ping at t=50
         // and answer it. Records that a Ping was actually observed.
         let saw_ping = Arc::new(AtomicBool::new(false));
         let peer = {
-            let pong_received = pong_received.clone();
+            let pong_received = signals.pong_received.clone();
             let saw_ping = saw_ping.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(47)).await;
@@ -1651,8 +1749,7 @@ mod tests {
                 PeerId::new([42u8; 32]),
                 outbound_tx.clone(),
                 inbound_writer.clone(),
-                pong_received,
-                progress,
+                signals.clone(),
                 TokioSleeper,
             ),
         )
@@ -1675,6 +1772,195 @@ mod tests {
         Ok(())
     }
 
+    /// A pong resets the unanswered-ping counter: a peer that misses some
+    /// pongs but then answers must never accumulate to the ceiling. The
+    /// progress writer suppresses the fast (miss) path so this pins the
+    /// ceiling counter's reset specifically — a non-resetting counter
+    /// would reap at the 8th cumulative unanswered ping (~540ms here).
+    #[tokio::test(start_paused = true)]
+    async fn pong_resets_unanswered_ping_counter() -> TestResult {
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let signals = KeepAliveSignals::new();
+
+        // Peer: ignores the first two pings, answers every ping after.
+        let peer = {
+            let pong_received = signals.pong_received.clone();
+            tokio::spawn(async move {
+                let mut seen = 0u32;
+                while let Ok(item) = outbound_rx.recv().await {
+                    if matches!(item.msg, tungstenite::Message::Ping(_)) {
+                        seen += 1;
+                        if seen > 2 {
+                            pong_received.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+                seen
+            })
+        };
+
+        // Progress advances every cycle so the fast path (threshold 2)
+        // never fires; only the unanswered-ping ceiling is in play.
+        let writer = {
+            let progress = signals.data_write_progress.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                    progress.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_millis(40),
+            pong_timeout: Duration::from_millis(20),
+            missed_pong_threshold: nz(2),
+        };
+
+        // A broken (non-resetting) unanswered counter reaps at the 8th
+        // cumulative unanswered ping: cycles 1-2 unanswered, so cycle 14
+        // (~840ms). Observe past that.
+        let outcome_or_timeout = tokio::time::timeout(
+            Duration::from_millis(1000),
+            keepalive_loop(
+                config,
+                PeerId::new([42u8; 32]),
+                outbound_tx.clone(),
+                inbound_writer.clone(),
+                signals.clone(),
+                TokioSleeper,
+            ),
+        )
+        .await;
+
+        writer.abort();
+        if let Ok(unexpected) = outcome_or_timeout {
+            return Err(format!(
+                "peer that resumed ponging must not be reaped, got {unexpected:?}"
+            )
+            .into());
+        }
+        assert!(!inbound_writer.is_closed());
+
+        outbound_tx.close();
+        let seen = peer.await?;
+        assert!(seen > 8, "expected many ping cycles, saw {seen}");
+        Ok(())
+    }
+
+    /// An injected ping (delivered by the sender task when the queue was
+    /// full) must count as delivered: with no pong and ongoing progress,
+    /// injected-but-unanswered pings accrue toward the ceiling and reap at
+    /// exactly `MAX_UNANSWERED_PINGS` cycles. A mutant that ignores
+    /// `ping_injected` would classify these cycles as undelivered and let
+    /// the peer live forever.
+    #[tokio::test(start_paused = true)]
+    async fn injected_ping_counts_as_delivered() -> TestResult {
+        // Capacity 1, pre-filled, never drained: every try_send fails, so
+        // delivery can only be observed via the injected flag.
+        let (outbound_tx, _outbound_rx) = async_channel::bounded::<Outbound>(1);
+        outbound_tx
+            .send(Outbound::new(tungstenite::Message::Binary(
+                vec![0xEE].into(),
+            )))
+            .await?;
+
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let signals = KeepAliveSignals::new();
+
+        // Simulated sender task: keeps progress moving and "injects" the
+        // requested ping each cycle (sets ping_injected mid-window), but no
+        // pong ever arrives.
+        let simulator = {
+            let signals = signals.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                    signals.data_write_progress.fetch_add(1, Ordering::Relaxed);
+                    if signals.ping_requested.swap(false, Ordering::Relaxed) {
+                        signals.ping_injected.store(true, Ordering::Relaxed);
+                    }
+                }
+            })
+        };
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_millis(40),
+            pong_timeout: Duration::from_millis(20),
+            missed_pong_threshold: nz(2),
+        };
+
+        let start = tokio::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            keepalive_loop(
+                config,
+                PeerId::new([42u8; 32]),
+                outbound_tx.clone(),
+                inbound_writer.clone(),
+                signals.clone(),
+                TokioSleeper,
+            ),
+        )
+        .await
+        .map_err(|_| "injected-but-unanswered pings must reap at the ceiling")?;
+        let elapsed = start.elapsed();
+        simulator.abort();
+
+        let KeepAliveOutcome::StaleNoPong { unanswered } = outcome else {
+            return Err(format!("expected StaleNoPong outcome, got {outcome:?}").into());
+        };
+        assert_eq!(unanswered, MAX_UNANSWERED_PINGS);
+        assert_eq!(
+            elapsed,
+            Duration::from_millis(u64::from(MAX_UNANSWERED_PINGS) * 60),
+            "injected pings must count from the first cycle"
+        );
+        Ok(())
+    }
+
+    /// End-to-end injection through the real sender task: when the
+    /// keepalive raises `ping_requested`, the sender injects a Ping
+    /// directly into the sink after its next completed frame, sets
+    /// `ping_injected`, and consumes the request. Data progress counts
+    /// only the data frames — the injected ping is a control frame.
+    #[tokio::test]
+    async fn sender_task_injects_ping_on_request() -> TestResult {
+        let ws = create_mock_websocket_stream().await;
+        let (websocket, sender_task): (WebSocket<_, Sendable>, _) =
+            WebSocket::new(ws, PeerId::new([7u8; 32]));
+
+        let signals = websocket.signals.clone();
+        let tx = websocket.outbound_tx.clone();
+
+        signals.ping_requested.store(true, Ordering::Relaxed);
+        tx.send(Outbound::new(tungstenite::Message::Binary(
+            vec![1, 2, 3].into(),
+        )))
+        .await?;
+        tx.send(Outbound::new(tungstenite::Message::Binary(vec![4].into())))
+            .await?;
+        tx.close();
+
+        tokio::spawn(sender_task).await??;
+
+        assert!(
+            signals.ping_injected.load(Ordering::Relaxed),
+            "sender must inject the requested ping"
+        );
+        assert!(
+            !signals.ping_requested.load(Ordering::Relaxed),
+            "the injection request must be consumed"
+        );
+        assert_eq!(
+            signals.data_write_progress.load(Ordering::Relaxed),
+            2,
+            "the injected ping is a control frame and must not count as progress"
+        );
+        Ok(())
+    }
+
     /// The progress gate must only see *data* writes: the sender task
     /// counts Binary/Text frames and excludes control frames. If the
     /// keepalive's own Ping writes moved the counter, an idle dead peer
@@ -1685,7 +1971,7 @@ mod tests {
         let (websocket, sender_task): (WebSocket<_, Sendable>, _) =
             WebSocket::new(ws, PeerId::new([7u8; 32]));
 
-        let progress = websocket.data_write_progress.clone();
+        let progress = websocket.signals.data_write_progress.clone();
         let tx = websocket.outbound_tx.clone();
 
         let sender = tokio::spawn(sender_task);
@@ -1743,7 +2029,6 @@ mod tests {
                 rt.block_on(async move {
                     let (tx, rx) = async_channel::bounded::<Outbound>(64);
                     let (inbound_tx, _) = async_channel::bounded::<Vec<u8>>(16);
-                    let pong_received = Arc::new(AtomicBool::new(false));
 
                     let drain = tokio::spawn(async move { while rx.recv().await.is_ok() {} });
 
@@ -1759,8 +2044,7 @@ mod tests {
                         PeerId::new([0u8; 32]),
                         tx,
                         inbound_tx,
-                        pong_received,
-                        Arc::new(AtomicU64::new(0)),
+                        KeepAliveSignals::new(),
                         TokioSleeper,
                     )
                     .await;

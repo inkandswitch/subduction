@@ -92,6 +92,15 @@ pub const KEEPALIVE_PONGS_MISSED_TOTAL: &str = "subduction_keepalive_pongs_misse
 /// peer, either via the pong-miss threshold or via the
 /// progress-but-no-pong hard ceiling.
 pub const KEEPALIVE_CLOSES_TOTAL: &str = "subduction_keepalive_closes_total";
+/// Keepalive cycles in which the ping could not be delivered at all: the
+/// outbound queue was full at every attempt AND the sender task completed
+/// no frame during the pong window (zero drainage — no injection point).
+/// Undelivered pings accrue no liveness evidence against the peer, so
+/// this counter is the honest measure of how often congestion blinds the
+/// end-to-end (pong-based) check. Sustained nonzero rates mean liveness
+/// is riding on the write-progress gate alone for those connections.
+pub const KEEPALIVE_PINGS_UNDELIVERED_TOTAL: &str =
+    "subduction_keepalive_pings_undelivered_total";
 
 // Multiplexer (request/response correlation).
 /// Outstanding correlated requests awaiting a response (across all muxes).

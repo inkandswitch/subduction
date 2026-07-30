@@ -267,6 +267,13 @@ pub fn keepalive_close() {
     metrics::counter!(names::KEEPALIVE_CLOSES_TOTAL).increment(1);
 }
 
+/// Record a keepalive cycle whose ping could not be delivered (queue full
+/// for the whole pong window with zero drainage).
+#[inline]
+pub fn keepalive_ping_undelivered() {
+    metrics::counter!(names::KEEPALIVE_PINGS_UNDELIVERED_TOTAL).increment(1);
+}
+
 /// A correlated request was registered (pending++).
 #[inline]
 pub fn mux_request_registered() {
@@ -634,6 +641,10 @@ pub fn describe_all() {
     metrics::describe_counter!(
         names::KEEPALIVE_CLOSES_TOTAL,
         "Connections closed by keepalive after the pong-miss threshold (the server reaping an unresponsive peer)."
+    );
+    metrics::describe_counter!(
+        names::KEEPALIVE_PINGS_UNDELIVERED_TOTAL,
+        "Keepalive cycles whose ping could not be delivered (outbound queue full with zero drainage for the whole window); liveness rode on the write-progress gate alone."
     );
     metrics::describe_gauge!(
         names::MUX_PENDING,

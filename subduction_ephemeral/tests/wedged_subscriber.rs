@@ -304,9 +304,14 @@ async fn cancelled_publish_does_not_leak_inflight_budget() -> TestResult {
         let cancelled = tokio::time::timeout(Duration::from_millis(20), handler.publish(msg))
             .await
             .is_err();
-        assert!(cancelled, "publish should park on the wedged subscriber");
+        // This is the leak detector: a leaky implementation stops admitting
+        // at the cap, `admit_fan_out` returns None, publish completes
+        // instantly, and this assert fails at iteration cap+1.
+        assert!(
+            cancelled,
+            "publish returned early — admission returned None (leaked in-flight slot?)"
+        );
     }
-    settle().await;
 
     // Every publish was admitted (slot freed by the previous cancellation),
     // so the wedged mock saw `total` attempts. A budget leak pins this at

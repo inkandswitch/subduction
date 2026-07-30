@@ -107,6 +107,14 @@ pub struct EphemeralHandler<
     /// harmlessly. Increment/decrement pairing is enforced by
     /// [`InflightGuard`] (RAII), so counters cannot leak even if a fan-out
     /// future is cancelled, aborted, or never polled.
+    ///
+    /// The generation guarantee holds when the disconnect is observed by
+    /// the core listen loop. FIXME(core): the proactive disconnect APIs
+    /// (`disconnect`, `disconnect_from_peer`, `disconnect_all`) tear the
+    /// peer down without invoking `on_peer_disconnect`, so entries removed
+    /// via those paths linger until the peer reconnects and disconnects
+    /// normally — same pre-existing gap as ephemeral subscriptions and the
+    /// nonce cache. Fix belongs in `subduction_core`'s teardown.
     inflight_sends: Arc<Mutex<Map<PeerId, Arc<AtomicUsize>>>>,
 }
 
@@ -299,7 +307,10 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
         // every admitted send does, so a wedged subscriber parks this call
         // until the transport tears the connection down. Callers needing
         // bounded latency may wrap `publish` in a timeout: cancellation is
-        // leak-free (each send's InflightGuard releases on drop).
+        // leak-free for the accounting (each send's InflightGuard releases
+        // on drop), though it also abandons in-flight sends to healthy
+        // targets — harmless assuming the transport's `send` is
+        // cancel-safe, which the bundled transports are (queue handoff).
         if let Some(fan_out) = self.admit_fan_out(msg, targets).await {
             fan_out.run().await;
         }
