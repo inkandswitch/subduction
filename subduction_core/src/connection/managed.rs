@@ -227,11 +227,16 @@ where
     ///
     /// # Deadline (`timeout`)
     ///
-    /// This is the **low-level** entry point. `timeout` is a *total deadline*,
-    /// **not** a fallback to the configured default:
+    /// This is the **low-level** entry point. `timeout` is a *total deadline*
+    /// covering both the transport send and the response wait, **not** a
+    /// fallback to the configured default:
     ///
-    /// - `Some(d)` — fail with [`CallError::Timeout`] if no response arrives
-    ///   within `d`.
+    /// - `Some(d)` — fail with [`CallError::Timeout`] if the request cannot
+    ///   be sent *and* answered within `d`. A send that parks (bounded
+    ///   transport queue behind a backpressured connection) consumes the
+    ///   budget rather than waiting unboundedly with a live pending entry.
+    ///   The dropped send future enqueues nothing — the bundled transports'
+    ///   sends are cancel-safe channel enqueues.
     /// - `None` — **no deadline**: the bare cancel-safe wait. The caller owns
     ///   the cancellation policy (wrap in an outer `select!`/`timeout`/shutdown
     ///   token; dropping this future removes the pending entry). The call still
@@ -268,31 +273,39 @@ where
             let mut guard = PendingGuard::new(Arc::clone(&self.multiplexer), req_id);
 
             let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
-            Connection::<Sendable, WireMsg>::send(&self.authenticated, &wire_msg)
-                .await
-                .map_err(CallError::Send)?;
+            // The deadline covers the send AND the response wait: a send
+            // parked on a bounded transport queue must consume the caller's
+            // budget instead of holding a live pending entry unboundedly.
+            let send_then_wait = async move {
+                Connection::<Sendable, WireMsg>::send(&self.authenticated, &wire_msg)
+                    .await
+                    .map_err(CallError::Send)?;
+                Ok(rx.await)
+            };
 
-            // `Some(d)` wraps the wait in a deadline; `None` is the bare
-            // (uncapped) cancel-safe wait.
+            // `Some(d)` wraps the roundtrip in a deadline; `None` is the
+            // bare (uncapped) cancel-safe wait.
             let waited = match timeout {
-                Some(deadline) => self.timer.timeout(deadline, rx.boxed()).await,
-                None => Ok(rx.await),
+                Some(deadline) => self.timer.timeout(deadline, send_then_wait.boxed()).await,
+                None => Ok(send_then_wait.await),
             };
 
             match waited {
-                Ok(Ok(resp)) => {
+                Ok(Ok(Ok(resp))) => {
                     // Entry already removed by `resolve_pending`.
                     guard.disarm();
                     tracing::debug!(req = ?req_id, "request completed");
                     Ok(resp)
                 }
-                Ok(Err(_)) => {
+                Ok(Ok(Err(_))) => {
                     // Sender dropped (e.g. `cancel_all_pending` on disconnect)
                     // already removed the entry.
                     guard.disarm();
                     tracing::debug!(req = ?req_id, "request response channel dropped");
                     Err(CallError::ResponseDropped)
                 }
+                // Send failed; the armed guard removes the pending entry.
+                Ok(Err(send_err)) => Err(send_err),
                 Err(TimedOut) => {
                     // Deadline elapsed with the entry still registered; let
                     // the armed guard remove it on drop.
@@ -351,28 +364,35 @@ where
             let mut guard = PendingGuard::new(Arc::clone(&self.multiplexer), req_id);
 
             let wire_msg: WireMsg = SyncMessage::BatchSyncRequest(req).into();
-            Connection::<Local, WireMsg>::send(&self.authenticated, &wire_msg)
-                .await
-                .map_err(CallError::Send)?;
+            // See the `Sendable` variant: the deadline covers send + wait.
+            let send_then_wait = async move {
+                Connection::<Local, WireMsg>::send(&self.authenticated, &wire_msg)
+                    .await
+                    .map_err(CallError::Send)?;
+                Ok(rx.await)
+            };
 
-            // `Some(d)` wraps the wait in a deadline; `None` is the bare
-            // (uncapped) cancel-safe wait.
             let waited = match timeout {
-                Some(deadline) => self.timer.timeout(deadline, rx.boxed_local()).await,
-                None => Ok(rx.await),
+                Some(deadline) => {
+                    self.timer
+                        .timeout(deadline, send_then_wait.boxed_local())
+                        .await
+                }
+                None => Ok(send_then_wait.await),
             };
 
             match waited {
-                Ok(Ok(resp)) => {
+                Ok(Ok(Ok(resp))) => {
                     guard.disarm();
                     tracing::debug!(req = ?req_id, "request completed");
                     Ok(resp)
                 }
-                Ok(Err(_)) => {
+                Ok(Ok(Err(_))) => {
                     guard.disarm();
                     tracing::debug!(req = ?req_id, "request response channel dropped");
                     Err(CallError::ResponseDropped)
                 }
+                Ok(Err(send_err)) => Err(send_err),
                 Err(TimedOut) => {
                     tracing::warn!(req = ?req_id, timeout = ?timeout, "request timed out");
                     Err(CallError::Timeout)

@@ -155,3 +155,64 @@ async fn call_timeout_default_uses_builder_configured_deadline() -> TestResult {
 
     Ok(())
 }
+
+/// The deadline covers the *send phase*, not just the response wait.
+///
+/// Wedging OUR transport parks the request send forever (a bounded
+/// transport queue behind a backpressured connection looks the same). The
+/// call must still resolve at the configured deadline with
+/// [`CallError::Timeout`] — with a send-phase gap it would hang until the
+/// outer test bound and fail. This is the mechanism that froze
+/// `mux_pending` during the 2026-07 incidents: senders parked with live
+/// pending entries and no running timer.
+#[tokio::test(flavor = "current_thread")]
+async fn call_timeout_covers_wedged_send_phase() -> TestResult {
+    let a_signer = make_signer(52);
+    let b_signer = make_signer(53);
+    let a = make_node_with_default(a_signer.clone(), CONFIGURED_DEFAULT);
+    let b = make_node_with_default(b_signer.clone(), CONFIGURED_DEFAULT);
+
+    let (t_a, _t_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    // Wedge OUR side: A's `send_bytes` parks forever, so the request never
+    // leaves and no response can ever arrive. Only a deadline that covers
+    // the send phase can resolve this call.
+    t_a.pause();
+
+    let sed_id = SedimentreeId::new([10u8; 32]);
+    let started = std::time::Instant::now();
+
+    let result = tokio::time::timeout(
+        BOUND,
+        a.sync_with_all_peers(sed_id, true, CallTimeout::Default),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a call whose send parks must consume its deadline; hanging past \
+         {BOUND:?} means the deadline covers only the response wait"
+    );
+    let per_peer = result.expect("did not resolve in time")?;
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= CONFIGURED_DEFAULT,
+        "call resolved in {elapsed:?}, before the configured \
+         {CONFIGURED_DEFAULT:?} deadline could have elapsed"
+    );
+
+    let b_peer = PeerId::from(b_signer.verifying_key());
+    let (success, _stats, conn_errs) = per_peer
+        .get(&b_peer)
+        .expect("peer must be present in the result map");
+    assert!(!success, "wedged send should not have succeeded");
+    assert!(
+        matches!(conn_errs[0].1, CallError::Timeout),
+        "a parked send must resolve as Timeout; got {:?}",
+        conn_errs[0].1
+    );
+
+    Ok(())
+}
