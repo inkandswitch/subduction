@@ -4,11 +4,12 @@
   system,
   cmd,
   wasm-bodge,
-  grafanaPinned,
 }: let
   cargo = "${pkgs.cargo}/bin/cargo";
-  grafana-server = "${grafanaPinned}/bin/grafana-server";
-  grafana-homepath = "${grafanaPinned}/share/grafana";
+  # Grafana 13 replaced the `grafana-server` binary with a `server`
+  # subcommand on the unified `grafana` binary.
+  grafana-bin = "${pkgs.grafana}/bin/grafana";
+  grafana-homepath = "${pkgs.grafana}/share/grafana";
   pnpm = "${pkgs.pnpm}/bin/pnpm";
   playwright = "${pnpm} --dir=./subduction_wasm exec playwright";
   loki = "${pkgs.grafana-loki}/bin/loki";
@@ -506,7 +507,7 @@
 
       LOKI_BIN="${loki}"
       PROM_BIN="${prometheus}"
-      GRAFANA_BIN="${grafana-server}"
+      GRAFANA_BIN="${grafana-bin}"
       GRAFANA_HOME="${grafana-homepath}"
 
       # Pre-flight: fail loudly if a pinned binary is missing (e.g. its Nix
@@ -582,7 +583,7 @@
       PROM_PID=$!
       wait_for_port "Prometheus" 9092 "$PROM_PID"
 
-      "$GRAFANA_BIN" \
+      "$GRAFANA_BIN" server \
         --homepath="$GRAFANA_HOME" \
         --config="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/grafana.ini" \
         cfg:paths.data=/tmp/grafana-data \

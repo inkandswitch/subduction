@@ -567,6 +567,7 @@ where
                 OpenEphemeralPolicy,
                 EphemeralConfig::default(),
                 StdClock,
+                TokioSpawn,
             );
 
             // Drain ephemeral events — the server is a relay, not a consumer.

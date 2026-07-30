@@ -12,8 +12,11 @@ use future_form::Sendable;
 use nonempty::NonEmpty;
 use sedimentree_core::collections::Map;
 use subduction_core::{
-    authenticated::Authenticated, connection::test_utils::ChannelMockConnection, handler::Handler,
-    peer::id::PeerId, timestamp::TimestampSeconds,
+    authenticated::Authenticated,
+    connection::test_utils::{ChannelMockConnection, TokioSpawn},
+    handler::Handler,
+    peer::id::PeerId,
+    timestamp::TimestampSeconds,
 };
 use subduction_crypto::{
     signed::Signed,
@@ -41,7 +44,8 @@ const fn peer(n: u8) -> PeerId {
     PeerId::new([n; 32])
 }
 
-type OpenHandler = Arc<EphemeralHandler<Sendable, EphConn, OpenEphemeralPolicy, FakeClock>>;
+type OpenHandler =
+    Arc<EphemeralHandler<Sendable, EphConn, OpenEphemeralPolicy, FakeClock, TokioSpawn>>;
 
 fn make_open_handler(
     connections: Connections,
@@ -51,6 +55,7 @@ fn make_open_handler(
         OpenEphemeralPolicy,
         EphemeralConfig::default(),
         FakeClock::new(TimestampSeconds::new(1_000)),
+        TokioSpawn,
     );
     (Arc::new(handler), rx)
 }
@@ -68,6 +73,7 @@ fn make_small_payload_handler(
         OpenEphemeralPolicy,
         config,
         FakeClock::new(TimestampSeconds::new(1_000)),
+        TokioSpawn,
     );
     (Arc::new(handler), rx)
 }
@@ -494,6 +500,7 @@ async fn subscribe_rejected_by_policy() -> TestResult {
         deny_policy::DenyAll,
         EphemeralConfig::default(),
         FakeClock::new(TimestampSeconds::new(1_000)),
+        TokioSpawn,
     );
     let handler = Arc::new(handler);
     let (auth, handle) = register_peer(&connections, peer(1)).await;
@@ -534,6 +541,7 @@ async fn publish_rejected_by_policy_no_callback() -> TestResult {
         deny_policy::DenyAll,
         EphemeralConfig::default(),
         FakeClock::new(TimestampSeconds::new(1_000)),
+        TokioSpawn,
     );
     let handler = Arc::new(handler);
     let (auth_a, _handle_a) = register_peer(&connections, peer(1)).await;
@@ -1590,6 +1598,7 @@ async fn callback_channel_full_still_fans_out() -> TestResult {
         OpenEphemeralPolicy,
         config,
         FakeClock::new(TEST_CLOCK_SECS),
+        TokioSpawn,
     );
     let handler = Arc::new(handler);
 
@@ -1722,6 +1731,7 @@ async fn partial_policy_selective_subscribe() -> TestResult {
         selective_policy::AllowPeer1Only,
         EphemeralConfig::default(),
         FakeClock::new(TEST_CLOCK_SECS),
+        TokioSpawn,
     );
     let handler = Arc::new(handler);
 

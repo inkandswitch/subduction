@@ -84,11 +84,21 @@ pub const REQUESTED_DATA_SEND_FAILURES_TOTAL: &str =
 /// outbound queue dwell: dwell above the sync timeout manufactures these.
 pub const LATE_RESPONSES_TOTAL: &str = "subduction_late_responses_total";
 /// Keepalive pongs missed (one per miss, before the close threshold).
+/// Also counts cycles whose ping was dropped because the outbound queue
+/// was full — a wedged connection misses without any ping reaching the
+/// wire. Cycles forgiven by the write-progress gate do not count.
 pub const KEEPALIVE_PONGS_MISSED_TOTAL: &str = "subduction_keepalive_pongs_missed_total";
-/// Connections closed by keepalive (pong-miss threshold reached) — the
-/// server reaping an unresponsive peer.
+/// Connections closed by keepalive — the server reaping an unresponsive
+/// peer, either via the pong-miss threshold or via the
+/// progress-but-no-pong hard ceiling.
 pub const KEEPALIVE_CLOSES_TOTAL: &str = "subduction_keepalive_closes_total";
-
+/// Keepalive cycles whose ping could not be delivered: the outbound queue
+/// was full at every attempt and the sender task completed no frame
+/// during the pong window (zero drainage, so no injection point either).
+/// Undelivered pings accrue no liveness evidence, so a sustained nonzero
+/// rate means the end-to-end (pong) check is blind for those connections
+/// and liveness rests on the write-progress gate alone.
+pub const KEEPALIVE_PINGS_UNDELIVERED_TOTAL: &str = "subduction_keepalive_pings_undelivered_total";
 // Multiplexer (request/response correlation).
 /// Outstanding correlated requests awaiting a response (across all muxes).
 pub const MUX_PENDING: &str = "subduction_mux_pending";

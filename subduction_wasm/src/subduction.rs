@@ -128,7 +128,8 @@ use subduction_keyhive::KeyhiveMessage;
 
 type WasmConn = MessageTransport<JsTransport>;
 
-type WasmEphemeralHandler = EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock>;
+type WasmEphemeralHandler =
+    EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock, WasmSpawn>;
 
 type WasmSubductionCore = Subduction<
     'static,
@@ -243,6 +244,7 @@ impl WasmSubduction {
             eph_policy,
             EphemeralConfig::default(),
             JsClock,
+            WasmSpawn,
         );
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
