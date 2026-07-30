@@ -1793,10 +1793,9 @@ mod tests {
         .await;
 
         if let Ok(unexpected) = outcome_or_timeout {
-            return Err(format!(
-                "alternating-pong peer must not be reaped, got {unexpected:?}"
-            )
-            .into());
+            return Err(
+                format!("alternating-pong peer must not be reaped, got {unexpected:?}").into(),
+            );
         }
         assert!(!inbound_writer.is_closed());
 
