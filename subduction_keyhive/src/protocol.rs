@@ -634,9 +634,8 @@ where
     /// and dispatches to the appropriate handler based on message type.
     /// Updates syncpoints internally.
     ///
-    /// The optional `conn` is used to auto-register unknown peers when a
-    /// `SyncCheck` arrives before any explicit `add_peer` call.
-    ///
+    /// The optional `conn` is used to auto-register unknown peers when an
+    /// authenticated message arrives before any explicit `add_peer` call.
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if signature verification, contact card
@@ -652,6 +651,11 @@ where
 
         if let Some(contact_card) = &verified.contact_card {
             self.ingest_contact_card(contact_card).await?;
+        }
+        if !self.has_peer(&verified.sender_id).await {
+            if let Some(connection) = conn.clone() {
+                self.add_peer(verified.sender_id.clone(), connection).await;
+            }
         }
         self.ensure_cache_current().await?;
         let cached_sender_pair = self.cached_events_for_pair_with_peer(from).await;
@@ -866,21 +870,24 @@ where
             "handling sync response"
         );
 
-        let outbound_request = self
-            .outbound_requests
-            .lock()
-            .await
-            .remove(&request_id)
-            .ok_or_else(|| {
-                ProtocolError::ProtocolInvariant(format!(
-                    "received SyncResponse for untracked request {request_id:?}"
-                ))
-            })?;
-        if outbound_request.peer != sender_id {
-            return Err(ProtocolError::ProtocolInvariant(format!(
-                "request {request_id:?} expected peer {}, got {sender_id}",
-                outbound_request.peer
-            )));
+        let outbound_request = self.outbound_requests.lock().await.remove(&request_id);
+        if let Some(request) = &outbound_request {
+            if request.peer != sender_id {
+                return Err(ProtocolError::ProtocolInvariant(format!(
+                    "request {request_id:?} expected peer {}, got {sender_id}",
+                    request.peer
+                )));
+            }
+        } else {
+            tracing::debug!(
+                from = %sender_id,
+                ?request_id,
+                "ignoring untracked SyncResponse as an unsolicited duplicate",
+            );
+            return Ok(SyncStatus::Done {
+                request_id,
+                changed: false,
+            });
         }
 
         let advanced = if found_events.is_empty() {
@@ -895,7 +902,9 @@ where
                 .get_event_bytes_for_requested(
                     &sender_id,
                     &requested_hashes,
-                    Some(&outbound_request.advertised_events),
+                    outbound_request
+                        .as_ref()
+                        .map(|request| request.advertised_events.as_ref()),
                 )
                 .await?;
 

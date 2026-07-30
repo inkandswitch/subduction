@@ -97,6 +97,7 @@ use async_channel::{Sender, bounded};
 use async_lock::{Mutex, SemaphoreGuardArc};
 use core::{marker::PhantomData, time::Duration};
 use dispatch_completion::{DispatchCompletion, DispatchOutcome};
+
 use error::{
     AddConnectionError, IoError, ListenError, SendRequestedDataError, Unauthorized, WriteError,
 };
@@ -600,33 +601,44 @@ where
         let peer_id = conn.peer_id();
         tracing::info!(peer = %peer_id, "disconnecting connection from peer");
 
-        // Detach the muxes inside the same critical section that removes
-        // the connection, so a concurrent `add_connection` can't have its
-        // fresh mux clobbered. Cancel them afterwards, off the lock.
-        let detached = {
+        // Connections and multiplexers are parallel by construction. Remove
+        // both entries while holding the established connections→multiplexers
+        // lock order, then cancel the detached multiplexer off-lock.
+        let (detached_muxes, was_last) = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return Ok(false),
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return Ok(false);
-                    }
-                },
+            let Some(peer_conns) = connections.remove(&peer_id) else {
+                return Ok(false);
+            };
+            let Some(connection_index) = peer_conns.iter().position(|candidate| candidate == conn)
+            else {
+                connections.insert(peer_id, peer_conns);
+                return Ok(false);
+            };
+            match peer_conns.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    connections.insert(peer_id, remaining);
+                    let multiplexer = self
+                        .multiplexers
+                        .lock()
+                        .await
+                        .get_mut(&peer_id)
+                        .expect("peer multiplexers must accompany connections")
+                        .remove(connection_index);
+                    (alloc::vec![multiplexer], false)
+                }
+                RemoveResult::WasLast(_) => (
+                    self.detach_peer_muxes_locked(&mut connections, &peer_id)
+                        .await,
+                    true,
+                ),
+                RemoveResult::NotFound(_) => unreachable!("connection index was established"),
             }
         };
 
-        if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
+        if was_last {
+            self.teardown_peer(&peer_id, detached_muxes, 1).await;
         } else {
+            Self::cancel_detached_muxes(detached_muxes).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
         }
@@ -752,7 +764,6 @@ where
             // `connections` critical section (outer before inner) so the
             // connection/mux invariant is never observed half-applied.
             let mut connections = self.connections.lock().await;
-
             if connections
                 .get(&peer_id)
                 .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
@@ -814,35 +825,43 @@ where
     ) -> Option<bool> {
         let peer_id = conn.peer_id();
 
-        let detached = {
+        let (detached_muxes, was_last) = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return None,
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return None;
-                    }
-                },
+            let peer_conns = connections.remove(&peer_id)?;
+            let Some(connection_index) = peer_conns.iter().position(|candidate| candidate == conn)
+            else {
+                connections.insert(peer_id, peer_conns);
+                return None;
+            };
+            match peer_conns.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    connections.insert(peer_id, remaining);
+                    let multiplexer = self
+                        .multiplexers
+                        .lock()
+                        .await
+                        .get_mut(&peer_id)
+                        .expect("peer multiplexers must accompany connections")
+                        .remove(connection_index);
+                    (alloc::vec![multiplexer], false)
+                }
+                RemoveResult::WasLast(_) => (
+                    self.detach_peer_muxes_locked(&mut connections, &peer_id)
+                        .await,
+                    true,
+                ),
+                RemoveResult::NotFound(_) => unreachable!("connection index was established"),
             }
         };
 
-        if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-            Some(true)
+        if was_last {
+            self.teardown_peer(&peer_id, detached_muxes, 1).await;
         } else {
+            Self::cancel_detached_muxes(detached_muxes).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
-            Some(false)
         }
+        Some(was_last)
     }
 
     /// Test-only public access to the crate-internal
@@ -2170,19 +2189,31 @@ where
         let mut stats = SyncStats::new();
         let mut had_success = false;
 
-        let peer_conns: Vec<Authenticated<Conn, Async>> = {
-            self.connections
-                .lock()
-                .await
+        let peer_connections: Vec<(Authenticated<Conn, Async>, Arc<Multiplexer>)> = {
+            let connections = self.connections.lock().await;
+            let multiplexers = self.multiplexers.lock().await;
+            let connections: Vec<_> = connections
                 .get(to_ask)
-                .map(|ne| ne.iter().cloned().collect())
-                .unwrap_or_default()
+                .map(|connections| connections.iter().cloned().collect())
+                .unwrap_or_default();
+            let multiplexers = multiplexers
+                .get(to_ask)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            assert_eq!(
+                connections.len(),
+                multiplexers.len(),
+                "connections and multiplexers must remain paired"
+            );
+            connections
+                .into_iter()
+                .zip(multiplexers.iter().cloned())
+                .collect()
         };
 
         let mut conn_errs = Vec::new();
 
-        for conn in peer_conns {
-            tracing::info!(peer = %to_ask, "using connection to peer");
+        for (conn, mux) in peer_connections {
             let seed = FingerprintSeed::random();
             // A nonexistent tree syncs as empty: we advertise nothing and the
             // peer sends us everything it has. The hydrated tree is already
@@ -2196,17 +2227,6 @@ where
                 fragment_fps = resolver.summary().fragment_fingerprints().len(),
                 "sending fingerprint summary"
             );
-
-            // Mux missing means the peer was torn down between the
-            // connection snapshot and here; report it dropped, don't panic.
-            let Some(mux) = ({
-                let muxes = self.multiplexers.lock().await;
-                muxes.get(to_ask).and_then(|v| v.first()).cloned()
-            }) else {
-                tracing::debug!(peer = %to_ask, "multiplexer for peer gone (concurrent teardown); skipping");
-                conn_errs.push((conn.clone(), CallError::ResponseDropped));
-                continue;
-            };
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
             let req_id = managed.next_request_id();
             let mut session = SyncSession::new(
@@ -2261,6 +2281,15 @@ where
                             continue;
                         }
                     };
+                    tracing::debug!(
+                        peer = %to_ask,
+                        tree = ?id,
+                        missing_commits = missing_commits.len(),
+                        missing_fragments = missing_fragments.len(),
+                        requesting_commits = requesting.commit_fingerprints.len(),
+                        requesting_fragments = requesting.fragment_fingerprints.len(),
+                        "received batch sync diff"
+                    );
                     // Ingest in one batched pass: `recv_batch_sync_response` groups
                     // items by author and writes each batch in a single `save_batch`.
                     // `requesting` is handled separately below, so the ingester's
@@ -2960,7 +2989,6 @@ where
                 id
             })
             .collect();
-
         // Honor the request as-is: the remote explicitly listed these
         // FPs in `requesting`, meaning it knows it doesn't have them.
         // The diff layer (`Sedimentree::diff_remote_fingerprints`) has
@@ -2986,6 +3014,16 @@ where
                 id
             })
             .collect();
+        tracing::debug!(
+            peer = %peer_id,
+            tree = ?id,
+            resolved_requested_commits = requested_commit_ids.len(),
+            resolved_requested_fragments = requested_fragment_ids.len(),
+            "resolved requested data IDs"
+        );
+
+        // Honor the request as-is: the remote explicitly listed these
+        // FPs in `requesting`, meaning it knows it doesn't have them.
 
         // Load commits and fragments from storage (compound with blobs), build wire messages
         let (commit_messages, fragment_messages) = {
@@ -3291,7 +3329,11 @@ where
                             if let Some(muxes) = muxes_for_peer {
                                 for mux in &muxes {
                                     if mux.resolve_pending(resp).await {
-                                        tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
+                                        tracing::debug!(
+                                            peer = %peer_id,
+                                            request_id = ?resp.req_id,
+                                            "routed BatchSyncResponse to pending caller"
+                                        );
                                         consumed = true;
                                         break;
                                     }

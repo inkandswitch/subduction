@@ -8,6 +8,7 @@ use alloc::{string::ToString, sync::Arc, vec::Vec};
 use future_form::FutureForm;
 use keyhive_core::{
     archive::Archive,
+    cgka::LocalCgkaSecret,
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
@@ -227,7 +228,42 @@ where
         .map_err(|e| StorageError::Load(e.to_string()))
 }
 
-/// Ingest all stored archives and events into a keyhive instance.
+/// Persist a local-only CGKA private-key delta.
+pub async fn save_local_cgka_secret<S, Async>(
+    storage: &S,
+    secret: &LocalCgkaSecret,
+) -> Result<(StorageHash, bool), StorageError>
+where
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
+{
+    let bytes = bincode_serialize(secret)?;
+    let hash = hash_event_bytes(&bytes);
+    let inserted = storage
+        .save_local_secret(hash, bytes)
+        .await
+        .map_err(|error| StorageError::Save(error.to_string()))?;
+    Ok((hash, inserted))
+}
+
+/// Load all local-only CGKA private-key deltas.
+pub async fn load_local_cgka_secrets<S, Async>(
+    storage: &S,
+) -> Result<Vec<(StorageHash, LocalCgkaSecret)>, StorageError>
+where
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
+{
+    let raw = storage
+        .load_local_secrets()
+        .await
+        .map_err(|error| StorageError::Load(error.to_string()))?;
+    raw.into_iter()
+        .map(|(hash, bytes)| Ok((hash, bincode_deserialize(&bytes)?)))
+        .collect()
+}
+
+/// Ingest all stored archives, local secrets, and events into a keyhive instance.
 ///
 /// This loads all archives and events from storage and ingests them into the
 /// provided keyhive. Archives are ingested first, then events. Returns
@@ -295,6 +331,17 @@ where
         .ingest_unsorted_static_events_with_pending_progress(event_list)
         .await;
 
+    for (_, secret) in load_local_cgka_secrets(storage).await? {
+        keyhive
+            .import_local_cgka_secret(secret)
+            .await
+            .map_err(|error| {
+                StorageError::Load(alloc::format!(
+                    "local CGKA secret ingestion failed: {error:?}"
+                ))
+            })?;
+    }
+
     tracing::debug!(
         pending_count = pending.len(),
         "finished ingesting from storage"
@@ -340,8 +387,12 @@ where
         .load_events()
         .await
         .map_err(|e| StorageError::Load(e.to_string()))?;
+    let raw_local_secrets = storage
+        .load_local_secrets()
+        .await
+        .map_err(|error| StorageError::Load(error.to_string()))?;
 
-    if raw_events.is_empty() && raw_archives.len() <= 1 {
+    if raw_events.is_empty() && raw_local_secrets.is_empty() && raw_archives.len() <= 1 {
         tracing::debug!("nothing to compact");
         return Ok(());
     }
@@ -379,6 +430,18 @@ where
 
     let pending = keyhive.ingest_unsorted_static_events(events).await;
 
+    for (_, bytes) in &raw_local_secrets {
+        let secret: LocalCgkaSecret = bincode_deserialize(bytes)?;
+        keyhive
+            .import_local_cgka_secret(secret)
+            .await
+            .map_err(|error| {
+                StorageError::Load(alloc::format!(
+                    "local CGKA secret ingestion failed: {error:?}"
+                ))
+            })?;
+    }
+
     // Get hashes of pending events
     let pending_hashes: Set<[u8; 32]> = pending
         .iter()
@@ -394,6 +457,7 @@ where
 
     let mut deleted_archive_count = 0;
     let mut deleted_event_count = 0;
+    let mut deleted_local_secret_count = 0;
 
     // Delete old archives
     for (hash, _) in &raw_archives {
@@ -417,10 +481,19 @@ where
         }
     }
 
+    for (hash, _) in &raw_local_secrets {
+        storage
+            .delete_local_secret(*hash)
+            .await
+            .map_err(|error| StorageError::Delete(error.to_string()))?;
+        deleted_local_secret_count += 1;
+    }
+
     tracing::debug!(
         pending_events = pending.len(),
         deleted_archives = deleted_archive_count,
         deleted_events = deleted_event_count,
+        deleted_local_secrets = deleted_local_secret_count,
         "compaction complete"
     );
 

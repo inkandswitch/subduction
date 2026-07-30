@@ -118,6 +118,22 @@ pub trait KeyhiveStorage<Async: FutureForm> {
 
     /// Delete an event from storage.
     fn delete_event(&self, hash: StorageHash) -> Async::Future<'_, Result<(), Self::Error>>;
+
+    /// Persist a local-only private CGKA secret delta. These records must never
+    /// be exposed through peer synchronization.
+    fn save_local_secret(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> Async::Future<'_, Result<bool, Self::Error>>;
+
+    /// Load all local-only private CGKA secret deltas.
+    fn load_local_secrets(
+        &self,
+    ) -> Async::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
+
+    /// Delete a private delta after a successfully persisted archive includes it.
+    fn delete_local_secret(&self, hash: StorageHash) -> Async::Future<'_, Result<(), Self::Error>>;
 }
 
 /// An in-memory storage backend for testing.
@@ -125,6 +141,7 @@ pub trait KeyhiveStorage<Async: FutureForm> {
 pub struct MemoryKeyhiveStorage {
     archives: Arc<Mutex<Map<StorageHash, Vec<u8>>>>,
     events: Arc<Mutex<Map<StorageHash, Vec<u8>>>>,
+    local_secrets: Arc<Mutex<Map<StorageHash, Vec<u8>>>>,
 }
 
 impl MemoryKeyhiveStorage {
@@ -134,6 +151,7 @@ impl MemoryKeyhiveStorage {
         Self {
             archives: Arc::new(Mutex::new(Map::new())),
             events: Arc::new(Mutex::new(Map::new())),
+            local_secrets: Arc::new(Mutex::new(Map::new())),
         }
     }
 }
@@ -198,6 +216,39 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         }
         .boxed_local()
     }
+
+    fn save_local_secret(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> LocalBoxFuture<'_, Result<bool, Self::Error>> {
+        async move { Ok(self.local_secrets.lock().await.insert(hash, data).is_none()) }
+            .boxed_local()
+    }
+
+    fn load_local_secrets(
+        &self,
+    ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+        async move {
+            let secrets = self.local_secrets.lock().await;
+            Ok(secrets
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect())
+        }
+        .boxed_local()
+    }
+
+    fn delete_local_secret(
+        &self,
+        hash: StorageHash,
+    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            self.local_secrets.lock().await.remove(&hash);
+            Ok(())
+        }
+        .boxed_local()
+    }
 }
 
 impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
@@ -254,6 +305,35 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
     fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
         async move {
             self.events.lock().await.remove(&hash);
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn save_local_secret(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> BoxFuture<'_, Result<bool, Self::Error>> {
+        async move { Ok(self.local_secrets.lock().await.insert(hash, data).is_none()) }.boxed()
+    }
+
+    fn load_local_secrets(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+        async move {
+            let secrets = self.local_secrets.lock().await;
+            Ok(secrets
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect())
+        }
+        .boxed()
+    }
+
+    fn delete_local_secret(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            self.local_secrets.lock().await.remove(&hash);
             Ok(())
         }
         .boxed()
