@@ -165,12 +165,24 @@ pub(crate) struct ServerArgs {
     #[arg(long, value_name = "MAX_RESIDENT_TREES")]
     pub(crate) max_resident_trees: Option<usize>,
 
-    /// Enable the WebSocket transport
-    #[arg(long, default_value_t = true)]
+    /// Enable the WebSocket transport (`--websocket=false` to disable)
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
     pub(crate) websocket: bool,
 
-    /// Enable the HTTP long-poll transport
-    #[arg(long, default_value_t = true)]
+    /// Enable the HTTP long-poll transport (`--longpoll=false` to disable)
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
     pub(crate) longpoll: bool,
 
     /// WebSocket peer URLs to connect to on startup

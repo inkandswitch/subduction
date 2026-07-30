@@ -98,6 +98,24 @@ in {
         '';
       };
 
+      websocket = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Enable the WebSocket transport (passes `--websocket=<bool>`).
+        '';
+      };
+
+      longpoll = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Enable the HTTP long-poll transport (passes `--longpoll=<bool>`).
+          Note that unlike the WebSocket transport, long-poll sessions have
+          no keepalive-based reaping; disable it if no clients use it.
+        '';
+      };
+
       logFormat = lib.mkOption {
         type = lib.types.enum ["text" "json"];
         default = "json";
@@ -389,6 +407,8 @@ in {
                 ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
                 ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
                 ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
+                ++ ["--websocket=${lib.boolToString cfg.server.websocket}"]
+                ++ ["--longpoll=${lib.boolToString cfg.server.longpoll}"]
                 ++ ["--log-format" cfg.server.logFormat]
                 ++ ["--auth" cfg.server.auth]
                 ++ lib.optionals (cfg.server.auth == "keyhive") [
