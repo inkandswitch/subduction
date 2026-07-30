@@ -45,9 +45,9 @@ use crate::{
 /// payloads to that peer are dropped.
 ///
 /// Sends to a healthy peer complete as soon as the detached fan-out task is
-/// polled, so the in-flight count stays near zero; only a genuinely
-/// backpressured connection (e.g. a peer that stopped reading its socket)
-/// accumulates toward the cap. Dropping is safe — ephemeral messages are
+/// polled, so the in-flight count stays near zero; only a backpressured
+/// connection (e.g. a peer that stopped reading its socket) accumulates
+/// toward the cap. Dropping is safe — ephemeral messages are
 /// fire-and-forget by design, and a subscriber dozens of messages behind
 /// has no use for stale payloads anyway.
 ///
@@ -58,10 +58,9 @@ use crate::{
 /// most `64 × max_payload_size` (4 MiB at the 64 KiB default) in parked
 /// sends.
 ///
-/// Note this cap governs *parked sends* only. Total per-peer buffering
-/// also includes the transport's own outbound queue (e.g. up to 1024
-/// frames on the WebSocket transport), which fills before sends start
-/// parking at all.
+/// This cap governs *parked sends* only. Total per-peer buffering also
+/// includes the transport's own outbound queue (e.g. up to 1024 frames on
+/// the WebSocket transport), which fills before sends start parking.
 pub const MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER: usize = 64;
 
 /// Handler for ephemeral (non-persisted) messages.
@@ -108,13 +107,11 @@ pub struct EphemeralHandler<
     /// [`InflightGuard`] (RAII), so counters cannot leak even if a fan-out
     /// future is cancelled, aborted, or never polled.
     ///
-    /// The generation guarantee holds when the disconnect is observed by
-    /// the core listen loop. FIXME(core): the proactive disconnect APIs
-    /// (`disconnect`, `disconnect_from_peer`, `disconnect_all`) tear the
-    /// peer down without invoking `on_peer_disconnect`, so entries removed
-    /// via those paths linger until the peer reconnects and disconnects
-    /// normally — same pre-existing gap as ephemeral subscriptions and the
-    /// nonce cache. Fix belongs in `subduction_core`'s teardown.
+    /// FIXME(core): the proactive disconnect APIs (`disconnect`,
+    /// `disconnect_from_peer`, `disconnect_all`) tear the peer down
+    /// without invoking `on_peer_disconnect`, so entries evicted via those
+    /// paths linger — the same pre-existing gap as ephemeral subscriptions
+    /// and the nonce cache. Fix belongs in `subduction_core`'s teardown.
     inflight_sends: Arc<Mutex<Map<PeerId, Arc<AtomicUsize>>>>,
 }
 
@@ -302,15 +299,14 @@ impl<Async: FutureForm, Conn: Clone + 'static, E: EphemeralPolicy<Async>, Clk: C
         // block delivery to the others. Peers already at their in-flight cap
         // are dropped (fire-and-forget semantics) instead of parked on.
         //
-        // Note: the cap bounds how many sends can be *parked* per peer, not
-        // how long this publish may block — `run()` completes only when
-        // every admitted send does, so a wedged subscriber parks this call
-        // until the transport tears the connection down. Callers needing
-        // bounded latency may wrap `publish` in a timeout: cancellation is
-        // leak-free for the accounting (each send's InflightGuard releases
-        // on drop), though it also abandons in-flight sends to healthy
-        // targets — harmless assuming the transport's `send` is
-        // cancel-safe, which the bundled transports are (queue handoff).
+        // The cap bounds how many sends can be *parked* per peer, not how
+        // long this publish may block: `run()` completes only when every
+        // admitted send does, so a wedged subscriber parks this call until
+        // the transport tears the connection down. Callers needing bounded
+        // latency may wrap `publish` in a timeout — cancellation is
+        // leak-free (guards release on drop) and abandons in-flight sends,
+        // which requires the transport's `send` to be cancel-safe (the
+        // bundled transports are).
         if let Some(fan_out) = self.admit_fan_out(msg, targets).await {
             fan_out.run().await;
         }
