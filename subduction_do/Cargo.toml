@@ -1,0 +1,85 @@
+[package]
+name = "subduction_do"
+version = "0.1.0"
+description = "Subduction sync layer as a Cloudflare Durable Object (hibernatable WebSockets + SQLite storage)"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/inkandswitch/subduction"
+publish = false
+
+# `cdylib` is what worker-build compiles to wasm; `rlib` lets `cargo test` build
+# a native test harness for the host-testable modules (storage/compaction/etc.).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Subduction sync layer (path deps into the workspace).
+subduction_core = { path = "../subduction_core", features = ["std"] }
+subduction_crypto = { path = "../subduction_crypto", features = ["std"] }
+sedimentree_core = { path = "../sedimentree_core", features = ["std", "getrandom"] }
+
+# Async plumbing. Versions match the workspace so the `future_form::Local`
+# types unify with the subduction crates.
+future_form = "0.3"
+futures = "0.3"
+async-lock = "3"
+nonempty = "0.12"
+
+blake3 = "1.8"
+thiserror = "2"
+tracing = "0.1"
+
+# atproto (Bluesky) service-auth verification. Compiled on all targets: the pure
+# JWT/claim/signature logic is host-tested, and DID resolution is wasm-only.
+# atproto repo signing keys are p256 (ES256) or k256 (ES256K); ed25519 is a bonus
+# (already in the graph via subduction_crypto) for other DID methods.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+bs58 = "0.5"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+ed25519-dalek = "2"
+
+# ---- wasm32 (Cloudflare Workers isolate) only -------------------------------
+# The Worker SDK, the wasm-bindgen glue its macros expand to, the JS getrandom
+# backend, and the panic hook are only meaningful inside the isolate. Keeping
+# them target-scoped lets the crate compile for the host so `cargo test` can run
+# the storage/compaction logic natively.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Classic Request/Response API — no `http` feature so the DurableObject trait
+# signatures line up.
+worker = "0.8.5"
+# The `#[durable_object]`/`#[event]` macros expand to code that names
+# `wasm_bindgen` directly, so it must be a direct dependency (version pinned to
+# match the one `worker` links).
+wasm-bindgen = "0.2"
+# getrandom must use the JS backend inside the Workers isolate
+# (crypto.getRandomValues); the feature is unified across the whole graph.
+getrandom = { version = "0.2", features = ["js"] }
+console_error_panic_hook = "0.1"
+
+# ---- host (native `cargo test`) only ----------------------------------------
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# An in-memory SQL backend implementing the `Sql` trait, so the storage layer,
+# replay-nonce table, and compaction are exercised without `workerd`.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Enable subduction_core's shared storage conformance suite (`test_utils`) for
+# host tests only, so the DO backend is checked against the same contract as
+# `MemoryStorage`/redb — equivocation ordering, metas-match-full-load, and
+# tree-id registration. Dev-dep features don't leak into the wasm build.
+subduction_core = { path = "../subduction_core", features = ["std", "test_utils"] }
+# Host-only RNG for minting test JWTs (p256/k256/ed25519 keypairs) in atproto
+# verification tests. Not compiled into the wasm build.
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# Panics can't unwind on wasm; abort keeps the binary smaller.
+panic = "abort"
+# NOTE: do NOT set `strip = true`. It drops the `target_features` custom
+# section, which removes the `reference-types` advertisement wasm-bindgen needs
+# for its externref transform, causing "externref table required for catch
+# wrappers". worker-build runs wasm-opt afterwards, which shrinks the binary.

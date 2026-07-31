@@ -1,0 +1,63 @@
+name: Durable Object Worker
+
+# `subduction_do` is deliberately excluded from the root workspace (it is a
+# `wasm32` Cloudflare Worker with its own lockfile and toolchain flags), so the
+# workspace-wide fmt/clippy/test jobs never touch it. This dedicated job keeps
+# it from rotting: host tests + clippy on both the host and `wasm32` targets.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: subduction_do
+
+jobs:
+  durable-object:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        # Reads the repo-root rust-toolchain.toml (channel + clippy/rustfmt).
+        cache: true
+        cache-workspaces: subduction_do
+
+    - name: Install nightly rustfmt
+      run: rustup toolchain install nightly --component rustfmt
+
+    - name: Install wasm32 target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Formatting
+      # Matches the workspace convention of nightly-formatted code; rustfmt
+      # inherits the repo-root rustfmt.toml.
+      run: cargo +nightly fmt -- --check
+
+    - name: Clippy (host)
+      run: cargo clippy --all-targets -- -D warnings
+
+    - name: Test (host)
+      # Exercises the storage/subscription/nonce/compaction logic natively via
+      # the rusqlite-backed `Sql` implementation — no workerd required.
+      run: cargo test
+
+    - name: Clippy (wasm32 target)
+      # The host clippy above never compiles the `#[cfg(target_arch = "wasm32")]`
+      # Worker glue (durable object, transport, spawner). Lint the cdylib for
+      # wasm32 too. No `--all-targets`: the test target pulls in host-only
+      # rusqlite and does not build for wasm32.
+      run: cargo clippy --target wasm32-unknown-unknown -- -D warnings

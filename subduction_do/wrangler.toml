@@ -1,0 +1,56 @@
+name = "subduction"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-04-07"
+
+# Serve the service on its own domain. `subduct.io` must be added as a zone in
+# the same Cloudflare account; wrangler provisions the custom domain (and TLS)
+# on deploy.
+routes = [
+  { pattern = "subduct.io", custom_domain = true },
+  { pattern = "www.subduct.io", custom_domain = true }
+]
+# Keep the *.workers.dev URL live too (adding `routes` disables it by default),
+# so the existing demo link keeps working alongside the custom domain.
+workers_dev = true
+# Don't publish a fresh preview URL for every uploaded version: this is an open
+# sync endpoint, and per-version `*.workers.dev` previews would multiply the
+# unauthenticated surface without adding value for a single-service deploy.
+preview_urls = false
+
+# worker-build compiles the Rust cdylib to wasm and emits the JS shim.
+[build]
+command = "worker-build --release"
+
+# The deployed service is the Worker (src/) plus a static landing page. `public`
+# is assembled from `site/` by `npm run build:site` and served at `/`. The chat
+# under examples/chat is a standalone example and is intentionally NOT deployed
+# here. The Worker handles the routes it recognises (/sync/<doc>); everything
+# else (i.e. `/`) falls through to the landing page asset.
+[assets]
+directory = "public"
+binding = "ASSETS"
+# Let the Worker script run first so it can handle the WebSocket upgrade on /sync.
+run_worker_first = true
+
+# Admission control (atproto service auth). When `REQUIRE_ATPROTO_AUTH` is
+# "true", `/sync/<room>` upgrades must carry a valid atproto service-auth JWT as
+# `?auth=<jwt>` whose `aud` equals `SERVICE_DID`; the Worker verifies it offline
+# (DID resolution + signature) at the edge before waking a Durable Object. Left
+# "false" here so the open demo keeps working; flip it in the dashboard or via
+# `wrangler deploy --var REQUIRE_ATPROTO_AUTH:true` to gate the service.
+[vars]
+REQUIRE_ATPROTO_AUTH = "false"
+SERVICE_DID = "did:web:subduct.io"
+
+[durable_objects]
+bindings = [
+  { name = "SYNC", class_name = "SyncDurableObject" }
+]
+
+# SQLite-backed Durable Object (required for the synchronous SQL storage API).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncDurableObject"]
+
+[observability]
+enabled = true

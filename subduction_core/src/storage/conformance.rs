@@ -257,9 +257,16 @@ pub async fn assert_failed_commit_save_does_not_register_tree_id<Async, Store>(
 /// external (large) blobs — including an equivocating id whose payloads
 /// straddle the inline threshold — to exercise both blob paths.
 ///
+/// Also checks that the single-item loads
+/// ([`load_loose_commit`](Storage::load_loose_commit) /
+/// [`load_fragment`](Storage::load_fragment)) return the same representative
+/// per head as the batch loads, so a `LIMIT 1`-style read can't diverge from
+/// the full/meta ordering under equivocation.
+///
 /// # Panics
 ///
-/// Panics when the metadata-only load disagrees with the full load (or errors).
+/// Panics when the metadata-only or single-item loads disagree with the full
+/// load (or errors).
 pub async fn assert_metas_match_full_load<Async, Store>(storage: &Store, id: SedimentreeId)
 where
     Async: FutureForm,
@@ -314,5 +321,34 @@ where
             meta_fragments, full_fragments,
             "load_fragment_metas must resolve to the same representative per id as load_fragments"
         );
+
+        // Single-item loads must resolve to the same representative per head as
+        // the batch loads. Under equivocation (several payloads sharing a head)
+        // a `LIMIT 1` without a stable order could otherwise return a different
+        // payload than the ordered full/meta loads settled on.
+        for (head, digest) in &full_commits {
+            let loaded = storage
+                .load_loose_commit(id, *head)
+                .await
+                .expect("load_loose_commit failed")
+                .expect("load_loose_commit must return a stored head");
+            assert_eq!(
+                &Digest::hash(loaded.payload()),
+                digest,
+                "load_loose_commit must resolve to the same representative per id as load_loose_commits"
+            );
+        }
+        for (head, digest) in &full_fragments {
+            let loaded = storage
+                .load_fragment(id, *head)
+                .await
+                .expect("load_fragment failed")
+                .expect("load_fragment must return a stored head");
+            assert_eq!(
+                &Digest::hash(loaded.payload()),
+                digest,
+                "load_fragment must resolve to the same representative per id as load_fragments"
+            );
+        }
     }
 }

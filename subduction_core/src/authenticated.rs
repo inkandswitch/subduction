@@ -89,6 +89,37 @@ impl<Conn: Clone, Async: FutureForm> Authenticated<Conn, Async> {
         self.peer_id
     }
 
+    /// Re-attach a connection whose peer identity was verified in a *prior*
+    /// session and persisted out of band.
+    ///
+    /// The normal way to obtain an `Authenticated` is [`handshake::initiate`]
+    /// or [`handshake::respond`], which perform live cryptographic
+    /// verification. This constructor exists for environments where the
+    /// transport outlives the process that verified it — most notably
+    /// **Cloudflare Durable Object hibernation**, where the WebSocket survives
+    /// eviction of the in-memory engine and the peer identity is restored from
+    /// a persisted per-socket attachment rather than re-run through a
+    /// handshake.
+    ///
+    /// # Contract
+    ///
+    /// The caller asserts that `peer_id` was established by a genuine handshake
+    /// earlier and durably associated with `inner`'s underlying transport
+    /// (e.g. via `serializeAttachment`). Passing an unverified `peer_id` here
+    /// forges an identity — do not use this for connections that have not
+    /// completed a handshake.
+    ///
+    /// [`handshake::initiate`]: super::handshake::initiate
+    /// [`handshake::respond`]: super::handshake::respond
+    #[must_use]
+    pub fn from_persisted_peer_id(inner: Conn, peer_id: PeerId) -> Self {
+        Self {
+            inner,
+            peer_id,
+            _marker: PhantomData,
+        }
+    }
+
     /// Transform the inner connection while preserving the authentication proof.
     ///
     /// This is useful when wrapping an authenticated connection in a higher-level
@@ -106,13 +137,13 @@ impl<Conn: Clone, Async: FutureForm> Authenticated<Conn, Async> {
     /// Construct for testing purposes only.
     ///
     /// This bypasses handshake verification and should only be used in tests.
+    /// It is the same unchecked construction as [`from_persisted_peer_id`],
+    /// which is the production-facing entry point with the full safety contract.
+    ///
+    /// [`from_persisted_peer_id`]: Self::from_persisted_peer_id
     #[cfg(any(test, feature = "test_utils"))]
     pub fn new_for_test(inner: Conn, peer_id: PeerId) -> Self {
-        Self {
-            inner,
-            peer_id,
-            _marker: PhantomData,
-        }
+        Self::from_persisted_peer_id(inner, peer_id)
     }
 
     /// Access the inner connection.

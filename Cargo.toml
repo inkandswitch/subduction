@@ -19,6 +19,13 @@ members = [
   "subduction_websocket"
 ]
 
+# `subduction_do` is a Cloudflare Durable Object worker: it only builds for
+# `wasm32-unknown-unknown` via `worker-build`, and pulls the `worker` SDK which
+# does not compile for the native host target. Excluding it keeps the native
+# `cargo build`/`cargo test` of the workspace (and CI) intact. It depends on the
+# workspace crates by path and has its own Cargo.lock.
+exclude = ["subduction_do"]
+
 [workspace.package]
 edition = "2024"
 rust-version = "1.91"

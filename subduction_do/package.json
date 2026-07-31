@@ -1,0 +1,25 @@
+{
+  "name": "subduction-do",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Subduction sync layer running on a Cloudflare Durable Object",
+  "scripts": {
+    "build:site": "bash ./scripts/build-site.sh",
+    "dev": "npm run build:site && wrangler dev",
+    "deploy": "npm run build:site && wrangler deploy",
+    "build:chat": "bash ./scripts/build-chat.sh",
+    "chat": "npm run build:chat && npx --yes serve examples/chat",
+    "build:workspace": "bash ./scripts/build-workspace.sh",
+    "workspace": "npm run build:workspace && npx --yes serve examples/workspace",
+    "mint:jwt": "node ./scripts/mint-service-jwt.mjs"
+  },
+  "devDependencies": {
+    "wasm-pack": "^0.15.0",
+    "wrangler": "^4.110.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "wasm-pack@0.15.0": true,
+    "workerd@1.20260708.1": true
+  }
+}
