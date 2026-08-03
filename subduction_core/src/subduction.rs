@@ -75,8 +75,8 @@ use crate::{
         managed::{CallError, ManagedCall, ManagedConnection},
         manager::{Command, ConnectionManager, QueuedDispatch, RunManager},
         message::{
-            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
+            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestId, RequestedData,
+            SyncDiff, SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
         },
         stats::{SendCount, SyncStats},
     },
@@ -2152,7 +2152,7 @@ where
                 tracing::debug!(tree = ?id, peer = %peer, "propagating subscription upstream to peer");
 
                 let established = match self
-                    .sync_with_peer(&peer, id, true, CallTimeout::Default)
+                    .sync_with_peer(&peer, id, true, CallTimeout::Default, None)
                     .await
                 {
                     Ok((had_success, _, _)) => {
@@ -2220,6 +2220,13 @@ where
         id: SedimentreeId,
         subscribe: bool,
         timeout: CallTimeout,
+        // Optional externally-supplied request ID for this round. When `Some`,
+        // every connection's session for this call carries this ID (instead of
+        // a per-connection `next_request_id()`), so a caller can correlate the
+        // emitted sessions back to the sync round it started. Must be unique
+        // within the (requestor, connection) namespace; `None` preserves the
+        // previous per-connection generation behavior.
+        request_id: Option<RequestId>,
     ) -> Result<
         (
             bool,
@@ -2281,7 +2288,7 @@ where
                 "sending fingerprint summary"
             );
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-            let req_id = managed.next_request_id();
+            let req_id = request_id.clone().unwrap_or_else(|| managed.next_request_id());
             let mut session = SyncSession::new(
                 id,
                 conn.peer_id(),
@@ -4126,7 +4133,7 @@ where
     {
         Async::from_future(async move {
             let result = subduction
-                .sync_with_peer(&peer_id, id, subscribe, timeout)
+                .sync_with_peer(&peer_id, id, subscribe, timeout, None)
                 .await;
             // Always send a result (even an error) so the driver's drain count
             // stays exact and a per-document failure can't wedge the loop. If

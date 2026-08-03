@@ -479,6 +479,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "beekem"
 version = "0.3.0"
+source = "git+https://github.com/dman-os/keyhive?rev=f95c9b934f20fda0ab6b96a2564f908abbb97531#f95c9b934f20fda0ab6b96a2564f908abbb97531"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2899,6 +2900,7 @@ dependencies = [
 [[package]]
 name = "keyhive_core"
 version = "0.5.0"
+source = "git+https://github.com/dman-os/keyhive?rev=f95c9b934f20fda0ab6b96a2564f908abbb97531#f95c9b934f20fda0ab6b96a2564f908abbb97531"
 dependencies = [
  "beekem",
  "bincode",
@@ -2924,6 +2926,7 @@ dependencies = [
 [[package]]
 name = "keyhive_crypto"
 version = "0.2.1"
+source = "git+https://github.com/dman-os/keyhive?rev=f95c9b934f20fda0ab6b96a2564f908abbb97531#f95c9b934f20fda0ab6b96a2564f908abbb97531"
 dependencies = [
  "bincode",
  "blake3",
