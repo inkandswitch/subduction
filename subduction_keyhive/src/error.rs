@@ -87,6 +87,10 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
     #[error("deserialization error: {0}")]
     Deserialization(String),
 
+    /// An authenticated peer violated an exchange invariant.
+    #[error("protocol invariant violated: {0}")]
+    ProtocolInvariant(String),
+
     /// A storage operation failed.
     #[error("storage error")]
     Storage(#[from] StorageError),

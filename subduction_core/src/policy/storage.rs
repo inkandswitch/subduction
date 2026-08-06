@@ -8,7 +8,7 @@ use sedimentree_core::id::SedimentreeId;
 
 use subduction_crypto::verified_author::VerifiedAuthor;
 
-use crate::peer::id::PeerId;
+use crate::{peer::id::PeerId, sync_session::SyncPolicyRejectionKind};
 
 /// A policy for allowing or disallowing storage operations.
 ///
@@ -57,4 +57,13 @@ pub trait StoragePolicy<Async: FutureForm> {
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> Async::Future<'_, Vec<SedimentreeId>>;
+
+    /// Classify a put rejection for sync-session diagnostics.
+    ///
+    /// Implementations may override this to preserve stable error categories;
+    /// the default keeps custom policies source-compatible and reports an
+    /// implementation-specific rejection.
+    fn classify_put_rejection(&self, _error: &Self::PutDisallowed) -> SyncPolicyRejectionKind {
+        SyncPolicyRejectionKind::Other
+    }
 }

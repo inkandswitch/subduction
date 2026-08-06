@@ -34,6 +34,32 @@ use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use super::error::IoError;
 
+#[derive(Debug)]
+pub(crate) struct IngestSummary<Rejection> {
+    pub(crate) commit_ids: Vec<CommitId>,
+    pub(crate) fragment_ids: Vec<CommitId>,
+    pub(crate) rejected_commit_ids: Vec<(CommitId, Rejection)>,
+    pub(crate) rejected_fragment_ids: Vec<(CommitId, Rejection)>,
+}
+
+impl<Rejection> IngestSummary<Rejection> {
+    #[must_use]
+    pub(crate) const fn new() -> Self {
+        Self {
+            commit_ids: Vec::new(),
+            fragment_ids: Vec::new(),
+            rejected_commit_ids: Vec::new(),
+            rejected_fragment_ids: Vec::new(),
+        }
+    }
+}
+
+impl<Rejection> Default for IngestSummary<Rejection> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Process an incoming batch sync response: verify and store all commits
 /// and fragments from the diff.
 ///
@@ -52,7 +78,7 @@ pub(crate) async fn recv_batch_sync_response<
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
-) -> Result<(), IoError<Async, Store, Conn, WireMsg>> {
+) -> Result<IngestSummary<Auth::PutDisallowed>, IoError<Async, Store, Conn, WireMsg>> {
     tracing::info!(
         tree = ?id,
         peer = %from,
@@ -67,6 +93,7 @@ pub(crate) async fn recv_batch_sync_response<
     // so we can call save_batch once per author instead of once per item.
     let mut commits_by_author: Map<PeerId, Vec<VerifiedMeta<LooseCommit>>> = Map::new();
     let mut fragments_by_author: Map<PeerId, Vec<VerifiedMeta<Fragment>>> = Map::new();
+    let mut summary = IngestSummary::default();
 
     for (signed_commit, blob) in diff.missing_commits {
         let verified = match signed_commit.try_verify() {
@@ -87,6 +114,7 @@ pub(crate) async fn recv_batch_sync_response<
             }
         };
 
+        let commit_id = verified_meta.payload().head();
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
@@ -104,6 +132,7 @@ pub(crate) async fn recv_batch_sync_response<
                         error = %e,
                         "policy rejected commit"
                     );
+                    summary.rejected_commit_ids.push((commit_id, e));
                     continue;
                 }
             }
@@ -137,6 +166,7 @@ pub(crate) async fn recv_batch_sync_response<
             }
         };
 
+        let fragment_id = verified_meta.payload().head();
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
@@ -154,6 +184,7 @@ pub(crate) async fn recv_batch_sync_response<
                         error = %e,
                         "policy rejected fragment"
                     );
+                    summary.rejected_fragment_ids.push((fragment_id, e));
                     continue;
                 }
             }
@@ -194,10 +225,40 @@ pub(crate) async fn recv_batch_sync_response<
             .map(|v: &VerifiedMeta<Fragment>| v.payload().clone())
             .collect();
 
+        let (new_commit_ids, new_fragment_ids) = sedimentrees
+            .with_hydrated_ref(
+                id,
+                || load_tree_via_putter::<Async, _>(putter),
+                |tree| {
+                    let commit_ids: Vec<CommitId> = commit_payloads
+                        .iter()
+                        .map(LooseCommit::head)
+                        .filter(|head| !tree.has_loose_commit(*head))
+                        .collect();
+                    let fragment_ids: Vec<CommitId> = fragment_payloads
+                        .iter()
+                        .map(Fragment::head)
+                        .filter(|head| !tree.has_fragment(*head))
+                        .collect();
+                    (commit_ids, fragment_ids)
+                },
+            )
+            .await
+            .map_err(IoError::Storage)?
+            .unwrap_or_else(|| {
+                (
+                    commit_payloads.iter().map(LooseCommit::head).collect(),
+                    fragment_payloads.iter().map(Fragment::head).collect(),
+                )
+            });
+
         putter
             .save_batch(commits, fragments)
             .await
             .map_err(IoError::Storage)?;
+
+        summary.commit_ids.extend(new_commit_ids);
+        summary.fragment_ids.extend(new_fragment_ids);
 
         let local_access = storage.hydration_access();
         for commit in commit_payloads {
@@ -222,7 +283,7 @@ pub(crate) async fn recv_batch_sync_response<
         }
     }
 
-    Ok(())
+    Ok(summary)
 }
 
 /// Insert a verified commit into storage and the in-memory tree.
@@ -277,6 +338,12 @@ pub(crate) async fn insert_commit_locally<
             },
         )
         .await?;
+    tracing::debug!(
+        sedimentree_id = ?id,
+        commit_id = ?head,
+        was_added,
+        "inserted local loose commit into resident sedimentree",
+    );
 
     Ok(was_added)
 }

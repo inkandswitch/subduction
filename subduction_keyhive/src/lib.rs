@@ -71,9 +71,10 @@ pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 #[cfg(feature = "serde")]
 pub use all_agent_events::AllAgentEvents;
 #[cfg(feature = "serde")]
-pub use protocol::KeyhiveProtocol;
+pub use protocol::{KeyhiveProtocol, SyncStatus};
 #[cfg(feature = "serde")]
 pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,
-    save_event, save_event_bytes, save_keyhive_archive,
+    load_local_cgka_secrets, save_event, save_event_bytes, save_keyhive_archive,
+    save_local_cgka_secret,
 };
