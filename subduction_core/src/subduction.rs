@@ -732,13 +732,25 @@ where
             }
         }
 
-        self.manager_channel
-            .send(Command::Add(conn, peer_id))
-            .await
-            .map_err(|_| AddConnectionError::SendToClosedChannel)?;
-
+        // Count the connection as soon as it is tracked, so the gauge mirrors
+        // the `connections` map (including through the rollback below).
         #[cfg(feature = "metrics")]
         crate::metrics::connection_opened();
+
+        if self
+            .manager_channel
+            .send(Command::Add(conn.clone(), peer_id))
+            .await
+            .is_err()
+        {
+            // The manager is gone, so this connection would never get a
+            // reader — and because closure events are emitted by the reader,
+            // nothing would ever remove it from the map. Roll the
+            // registration back (this also emits `connection_closed`,
+            // balancing the increment above).
+            self.remove_connection(&conn).await;
+            return Err(AddConnectionError::SendToClosedChannel);
+        }
 
         Ok(true)
     }
@@ -3160,6 +3172,22 @@ where
                     }
                 }
 
+                // Teardown outranks new work. With `select_biased!` a lower
+                // arm only runs when every arm above it is pending, so under
+                // a disconnect storm a last-place `connection_closed` starves,
+                // its bounded channel fills, and the cleanup tasks feeding it
+                // park. Completions and responses stay first: they release
+                // dispatch permits and resolve waiting callers.
+                closed_result = self.connection_closed.recv().fuse() => {
+                    if let Ok((conn_id, conn)) = closed_result {
+                        let peer_id = conn.peer_id();
+                        tracing::warn!(conn = %conn_id, peer = %peer_id, "connection closed, removing");
+                        if self.remove_connection(&conn).await == Some(true) {
+                            handler.on_peer_disconnect(peer_id).await;
+                        }
+                    }
+                }
+
                 received = self.msg_queue.recv().fuse() => {
                     // The per-peer permit was acquired upstream in the
                     // connection reader and rides the queue here; it's moved
@@ -3224,16 +3252,6 @@ where
                     } else {
                         tracing::info!("SyncMessage queue closed");
                         break;
-                    }
-                }
-
-                closed_result = self.connection_closed.recv().fuse() => {
-                    if let Ok((conn_id, conn)) = closed_result {
-                        let peer_id = conn.peer_id();
-                        tracing::warn!(conn = %conn_id, peer = %peer_id, "connection closed, removing");
-                        if self.remove_connection(&conn).await == Some(true) {
-                            handler.on_peer_disconnect(peer_id).await;
-                        }
                     }
                 }
             }

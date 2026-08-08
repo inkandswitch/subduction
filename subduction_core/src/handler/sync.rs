@@ -583,11 +583,18 @@ impl<
 
         let signed_for_wire = verified.signed().clone();
 
+        // Reject like the signature and policy paths above: a blob that
+        // doesn't match its claimed `BlobMeta` is a defective message, not a
+        // broken transport. Returning `Err` would tear down the connection,
+        // sending a client with corrupt local state into a permanent
+        // reconnect-and-resend loop.
         let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!(peer = %from, error = %e, "blob mismatch");
-                return Err(IoError::BlobMismatch(e));
+                tracing::warn!(peer = %from, tree = ?id, error = %e, "blob mismatch");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("commit_blob");
+                return Ok(None);
             }
         };
 
@@ -724,11 +731,14 @@ impl<
 
         let signed_for_wire = verified.signed().clone();
 
+        // Reject without disconnecting; see `recv_commit`.
         let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!(peer = %from, error = %e, "blob mismatch");
-                return Err(IoError::BlobMismatch(e));
+                tracing::warn!(peer = %from, tree = ?id, error = %e, "blob mismatch");
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("fragment_blob");
+                return Ok(None);
             }
         };
 

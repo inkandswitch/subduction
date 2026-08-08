@@ -500,11 +500,32 @@ where
         // before its `connection_loop`-abort cleanup can run.
         // `stop_and_drain` instead calls `subduction.shutdown()` first
         // so both futures exit via their channel-close paths.
+        //
+        // Both are supervised: a server that outlives either future keeps
+        // completing handshakes it can never service. An exit outside an
+        // orderly shutdown stops the whole server, in the same order as
+        // [`Self::stop`] (`shutdown()` before `cancel()`).
+        let manager_token = server.cancellation_token.clone();
+        let manager_subduction = server.subduction.clone();
         server.tasks.spawn(async move {
             let _ = manager_fut.await;
+            if !manager_token.is_cancelled() {
+                tracing::error!(
+                    "Subduction connection manager exited outside shutdown; stopping server"
+                );
+                manager_subduction.shutdown();
+                manager_token.cancel();
+            }
         });
+        let listener_token = server.cancellation_token.clone();
+        let listener_subduction = server.subduction.clone();
         server.tasks.spawn(async move {
             let _ = listener_fut.await;
+            if !listener_token.is_cancelled() {
+                tracing::error!("Subduction listener exited outside shutdown; stopping server");
+                listener_subduction.shutdown();
+                listener_token.cancel();
+            }
         });
 
         Ok(server)

@@ -312,15 +312,23 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                             )
                             .await;
 
-                            // Normal completion cleanup - remove from tasks list
-                            let mut tasks_guard = tasks.lock().await;
-                            let target_id: TaskId = task_id;
-                            if let Some(pos) = tasks_guard.iter().position(
-                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, Conn)| {
-                                    *id == target_id
-                                },
-                            ) {
-                                tasks_guard.swap_remove(pos);
+                            // Normal completion cleanup - remove from tasks
+                            // list. The guard must drop before the `closed`
+                            // send below: `closed` is bounded and drained only
+                            // by the listen loop, so the send can park, and
+                            // parking while holding `tasks` deadlocks the
+                            // command loop above (every `Command::Add` takes
+                            // `tasks.lock()`).
+                            {
+                                let mut tasks_guard = tasks.lock().await;
+                                let target_id: TaskId = task_id;
+                                if let Some(pos) = tasks_guard.iter().position(
+                                    |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, Conn)| {
+                                        *id == target_id
+                                    },
+                                ) {
+                                    tasks_guard.swap_remove(pos);
+                                }
                             }
                             drop(closed.send((conn_id, conn_clone)).await);
                             tracing::debug!(conn = %conn_id, peer = %peer_id, "connection closed normally");
@@ -356,15 +364,19 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                             )
                             .await;
 
-                            // Normal completion cleanup - remove from tasks list
-                            let mut tasks_guard = tasks.lock().await;
-                            let target_id: TaskId = task_id;
-                            if let Some(pos) = tasks_guard.iter().position(
-                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, Conn)| {
-                                    *id == target_id
-                                },
-                            ) {
-                                tasks_guard.swap_remove(pos);
+                            // Normal completion cleanup - remove from tasks
+                            // list. Guard scoped for the same deadlock reason
+                            // as the `Command::Add` cleanup above.
+                            {
+                                let mut tasks_guard = tasks.lock().await;
+                                let target_id: TaskId = task_id;
+                                if let Some(pos) = tasks_guard.iter().position(
+                                    |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, Conn)| {
+                                        *id == target_id
+                                    },
+                                ) {
+                                    tasks_guard.swap_remove(pos);
+                                }
                             }
                             drop(closed.send((conn_id, conn_clone)).await);
                             tracing::debug!(conn = %conn_id, peer = %peer_id, "connection closed normally");

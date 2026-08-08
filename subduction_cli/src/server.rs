@@ -3,7 +3,10 @@
 use std::{
     net::SocketAddr,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -694,20 +697,49 @@ where
     );
     tracing::info!(peer = %peer_id, "Peer ID");
 
-    // Spawn background tasks
+    // Spawn background tasks.
+    //
+    // The manager and listener are supervised: a node that outlives either
+    // keeps accepting handshakes it can never service. If one exits outside
+    // an orderly shutdown, cancel the root token so the process exits and
+    // the service manager restarts it. `supervised_failure` makes that exit
+    // nonzero, since `Restart=on-failure` ignores clean exits.
+    let supervised_failure = Arc::new(AtomicBool::new(false));
     let actor_cancel = token.clone();
     let listener_cancel = token.clone();
 
+    let manager_supervisor = actor_cancel.clone();
+    let manager_failed = Arc::clone(&supervised_failure);
     tokio::spawn(async move {
         tokio::select! {
-            _ = manager_fut => {},
+            _ = manager_fut => {
+                if !manager_supervisor.is_cancelled() {
+                    tracing::error!(
+                        "connection manager exited unexpectedly; \
+                         shutting down for supervised restart"
+                    );
+                    manager_failed.store(true, Ordering::Release);
+                    manager_supervisor.cancel();
+                }
+            },
             () = actor_cancel.cancelled() => {}
         }
     });
 
+    let listener_supervisor = listener_cancel.clone();
+    let listener_failed = Arc::clone(&supervised_failure);
     tokio::spawn(async move {
         tokio::select! {
-            _ = listener_fut => {},
+            _ = listener_fut => {
+                if !listener_supervisor.is_cancelled() {
+                    tracing::error!(
+                        "dispatch listener exited unexpectedly; \
+                         shutting down for supervised restart"
+                    );
+                    listener_failed.store(true, Ordering::Release);
+                    listener_supervisor.cancel();
+                }
+            },
             () = listener_cancel.cancelled() => {}
         }
     });
@@ -952,6 +984,14 @@ where
     accept_task.abort();
     if let Some(iroh_task) = iroh_accept_task {
         iroh_task.abort();
+    }
+
+    // A supervision-initiated shutdown must exit nonzero so
+    // `Restart=on-failure` restarts the process.
+    if supervised_failure.load(Ordering::Acquire) {
+        return Err(eyre::eyre!(
+            "critical background task (connection manager or listener) exited unexpectedly"
+        ));
     }
 
     Ok(())
