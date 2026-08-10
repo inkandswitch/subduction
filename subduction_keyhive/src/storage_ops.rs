@@ -12,6 +12,7 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
+    principal::active::LocalPrekeySecret,
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
@@ -21,6 +22,28 @@ use crate::{
     error::StorageError,
     storage::{KeyhiveStorage, StorageHash},
 };
+
+const LOCAL_KEY_MATERIAL_MAGIC: &[u8; 8] = b"KHLOCAL1";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+enum LocalKeyMaterial {
+    Cgka(LocalCgkaSecret),
+    Prekey(LocalPrekeySecret),
+}
+
+fn encode_local_key_material(material: &LocalKeyMaterial) -> Result<Vec<u8>, StorageError> {
+    let mut bytes = LOCAL_KEY_MATERIAL_MAGIC.to_vec();
+    bytes.extend(bincode_serialize(material)?);
+    Ok(bytes)
+}
+
+fn decode_local_key_material(bytes: &[u8]) -> Result<LocalKeyMaterial, StorageError> {
+    if let Some(payload) = bytes.strip_prefix(LOCAL_KEY_MATERIAL_MAGIC) {
+        return bincode_deserialize(payload);
+    }
+    // Compatibility with local CGKA deltas written before the tagged format.
+    bincode_deserialize(bytes).map(LocalKeyMaterial::Cgka)
+}
 
 /// Serialize a value to CBOR bytes.
 fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
@@ -237,13 +260,47 @@ where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
-    let bytes = bincode_serialize(secret)?;
+    let bytes = encode_local_key_material(&LocalKeyMaterial::Cgka(*secret))?;
     let hash = hash_event_bytes(&bytes);
     let inserted = storage
         .save_local_secret(hash, bytes)
         .await
         .map_err(|error| StorageError::Save(error.to_string()))?;
     Ok((hash, inserted))
+}
+
+/// Persist a local-only prekey private-key delta.
+pub async fn save_local_prekey_secret<S, Async>(
+    storage: &S,
+    secret: &LocalPrekeySecret,
+) -> Result<(StorageHash, bool), StorageError>
+where
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
+{
+    let bytes = encode_local_key_material(&LocalKeyMaterial::Prekey(*secret))?;
+    let hash = hash_event_bytes(&bytes);
+    let inserted = storage
+        .save_local_secret(hash, bytes)
+        .await
+        .map_err(|error| StorageError::Save(error.to_string()))?;
+    Ok((hash, inserted))
+}
+
+async fn load_local_key_material<S, Async>(
+    storage: &S,
+) -> Result<Vec<(StorageHash, LocalKeyMaterial)>, StorageError>
+where
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
+{
+    let raw = storage
+        .load_local_secrets()
+        .await
+        .map_err(|error| StorageError::Load(error.to_string()))?;
+    raw.into_iter()
+        .map(|(hash, bytes)| Ok((hash, decode_local_key_material(&bytes)?)))
+        .collect()
 }
 
 /// Load all local-only CGKA private-key deltas.
@@ -254,13 +311,32 @@ where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
-    let raw = storage
-        .load_local_secrets()
-        .await
-        .map_err(|error| StorageError::Load(error.to_string()))?;
-    raw.into_iter()
-        .map(|(hash, bytes)| Ok((hash, bincode_deserialize(&bytes)?)))
-        .collect()
+    Ok(load_local_key_material(storage)
+        .await?
+        .into_iter()
+        .filter_map(|(hash, material)| match material {
+            LocalKeyMaterial::Cgka(secret) => Some((hash, secret)),
+            LocalKeyMaterial::Prekey(_) => None,
+        })
+        .collect())
+}
+
+/// Load all local-only prekey private-key deltas.
+pub async fn load_local_prekey_secrets<S, Async>(
+    storage: &S,
+) -> Result<Vec<(StorageHash, LocalPrekeySecret)>, StorageError>
+where
+    S: KeyhiveStorage<Async>,
+    Async: FutureForm,
+{
+    Ok(load_local_key_material(storage)
+        .await?
+        .into_iter()
+        .filter_map(|(hash, material)| match material {
+            LocalKeyMaterial::Cgka(_) => None,
+            LocalKeyMaterial::Prekey(secret) => Some((hash, secret)),
+        })
+        .collect())
 }
 
 /// Ingest all stored archives, local secrets, and events into a keyhive instance.
@@ -331,15 +407,25 @@ where
         .ingest_unsorted_static_events_with_pending_progress(event_list)
         .await;
 
-    for (_, secret) in load_local_cgka_secrets(storage).await? {
-        keyhive
-            .import_local_cgka_secret(secret)
-            .await
-            .map_err(|error| {
-                StorageError::Load(alloc::format!(
-                    "local CGKA secret ingestion failed: {error:?}"
-                ))
-            })?;
+    for (_, material) in load_local_key_material(storage).await? {
+        match material {
+            LocalKeyMaterial::Cgka(secret) => keyhive
+                .import_local_cgka_secret(secret)
+                .await
+                .map_err(|error| {
+                    StorageError::Load(alloc::format!(
+                        "local CGKA secret ingestion failed: {error:?}"
+                    ))
+                })?,
+            LocalKeyMaterial::Prekey(secret) => keyhive
+                .import_local_prekey_secret(secret)
+                .await
+                .map_err(|error| {
+                    StorageError::Load(alloc::format!(
+                        "local prekey secret ingestion failed: {error:?}"
+                    ))
+                })?,
+        }
     }
 
     tracing::debug!(
@@ -431,15 +517,24 @@ where
     let pending = keyhive.ingest_unsorted_static_events(events).await;
 
     for (_, bytes) in &raw_local_secrets {
-        let secret: LocalCgkaSecret = bincode_deserialize(bytes)?;
-        keyhive
-            .import_local_cgka_secret(secret)
-            .await
-            .map_err(|error| {
-                StorageError::Load(alloc::format!(
-                    "local CGKA secret ingestion failed: {error:?}"
-                ))
-            })?;
+        match decode_local_key_material(bytes)? {
+            LocalKeyMaterial::Cgka(secret) => keyhive
+                .import_local_cgka_secret(secret)
+                .await
+                .map_err(|error| {
+                    StorageError::Load(alloc::format!(
+                        "local CGKA secret ingestion failed: {error:?}"
+                    ))
+                })?,
+            LocalKeyMaterial::Prekey(secret) => keyhive
+                .import_local_prekey_secret(secret)
+                .await
+                .map_err(|error| {
+                    StorageError::Load(alloc::format!(
+                        "local prekey secret ingestion failed: {error:?}"
+                    ))
+                })?,
+        }
     }
 
     // Get hashes of pending events

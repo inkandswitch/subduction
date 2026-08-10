@@ -2288,7 +2288,9 @@ where
                 "sending fingerprint summary"
             );
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-            let req_id = request_id.clone().unwrap_or_else(|| managed.next_request_id());
+            let req_id = request_id
+                .clone()
+                .unwrap_or_else(|| managed.next_request_id());
             let mut session = SyncSession::new(
                 id,
                 conn.peer_id(),
