@@ -11,7 +11,11 @@ use crate::{
 
 use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
-use core::{net::SocketAddr, time::Duration};
+use core::{
+    net::SocketAddr,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 use future_form::Sendable;
 use sedimentree_core::depth::DepthMetric;
 use subduction_core::{
@@ -22,7 +26,10 @@ use subduction_core::{
         audience::{Audience, DiscoveryId},
     },
     nonce_cache::NonceCache,
-    peer::id::PeerId,
+    peer::{
+        counter::{PeerCounter, wall_clock_seed},
+        id::PeerId,
+    },
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
     subduction::{Subduction, builder::SubductionBuilder, error::AddConnectionError},
@@ -56,6 +63,14 @@ pub struct TokioWebSocketServer<
     subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     address: SocketAddr,
     cancellation_token: CancellationToken,
+    /// Set by [`Self::stop`] (or by whichever supervisor fires first) before
+    /// any teardown begins. `stop()` runs `shutdown()` then `cancel()` with
+    /// a window between them in which a supervised future can complete and
+    /// observe an uncancelled token; gating supervision on a
+    /// swap-to-`true` of this flag keeps a graceful stop from logging a
+    /// spurious "exited outside shutdown" ERROR (and a genuine failure from
+    /// logging it twice).
+    stopping: Arc<AtomicBool>,
     /// Tracks the accept loop, the per-connection WebSocket
     /// listener/sender, and (in [`Self::setup`]) the [`Subduction`]
     /// listener/manager futures. [`Self::stop_and_drain`] awaits all
@@ -91,6 +106,7 @@ where
             subduction: self.subduction.clone(),
             address: self.address,
             cancellation_token: self.cancellation_token.clone(),
+            stopping: Arc::clone(&self.stopping),
             tasks: self.tasks.clone(),
             max_message_size: self.max_message_size,
             keepalive: self.keepalive,
@@ -389,6 +405,7 @@ where
             address: assigned_address,
             subduction,
             cancellation_token,
+            stopping: Arc::new(AtomicBool::new(false)),
             tasks,
             max_message_size,
             keepalive,
@@ -476,6 +493,10 @@ where
             .spawner(spawner)
             .timer(timeout.clone())
             .nonce_cache(nonce_cache)
+            // Wall-clock seeded so per-peer sequences resume above previous
+            // values across process restarts; receivers keep never-reset
+            // high-water marks.
+            .send_counter(PeerCounter::with_seed(wall_clock_seed))
             .depth_metric(depth_metric);
 
         if let Some(id) = discovery_id {
@@ -504,12 +525,15 @@ where
         // Both are supervised: a server that outlives either future keeps
         // completing handshakes it can never service. An exit outside an
         // orderly shutdown stops the whole server, in the same order as
-        // [`Self::stop`] (`shutdown()` before `cancel()`).
+        // [`Self::stop`] (`shutdown()` before `cancel()`). The swap on
+        // `stopping` elects exactly one reporter; see the field docs for
+        // the race it prevents.
         let manager_token = server.cancellation_token.clone();
         let manager_subduction = server.subduction.clone();
+        let manager_stopping = Arc::clone(&server.stopping);
         server.tasks.spawn(async move {
             let _ = manager_fut.await;
-            if !manager_token.is_cancelled() {
+            if !manager_stopping.swap(true, Ordering::AcqRel) && !manager_token.is_cancelled() {
                 tracing::error!(
                     "Subduction connection manager exited outside shutdown; stopping server"
                 );
@@ -519,9 +543,10 @@ where
         });
         let listener_token = server.cancellation_token.clone();
         let listener_subduction = server.subduction.clone();
+        let listener_stopping = Arc::clone(&server.stopping);
         server.tasks.spawn(async move {
             let _ = listener_fut.await;
-            if !listener_token.is_cancelled() {
+            if !listener_stopping.swap(true, Ordering::AcqRel) && !listener_token.is_cancelled() {
                 tracing::error!("Subduction listener exited outside shutdown; stopping server");
                 listener_subduction.shutdown();
                 listener_token.cancel();
@@ -836,6 +861,9 @@ where
     ///
     /// Idempotent.
     pub fn stop(&mut self) {
+        // Mark the stop as orderly before waking anything, so the
+        // supervision tasks stay quiet; see the `stopping` field docs.
+        self.stopping.store(true, Ordering::Release);
         self.subduction.shutdown();
         self.cancellation_token.cancel();
         self.tasks.close();

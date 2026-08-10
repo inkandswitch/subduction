@@ -54,5 +54,13 @@ async fn failed_manager_handoff_rolls_back_registration() -> TestResult {
          (zombie: nothing will ever emit its closure event)"
     );
 
+    // The rollback must be complete: the multiplexer created alongside the
+    // connection has to go too, not just the map entry.
+    assert_eq!(
+        subduction.mux_count(&peer_id).await,
+        0,
+        "rollback must detach the connection's multiplexer"
+    );
+
     Ok(())
 }

@@ -46,8 +46,9 @@ async fn server_stops_accepting_when_core_pipeline_dies() -> TestResult {
     server.subduction().shutdown();
 
     // The supervisor must react by cancelling the accept loop. Poll until
-    // connections are refused.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // connections are refused. Generous deadline: the pass path exits in
+    // milliseconds, so this only bounds the failure case.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if tokio::net::TcpStream::connect(address).await.is_err() {
             break; // accept loop is gone

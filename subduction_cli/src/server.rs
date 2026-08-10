@@ -21,7 +21,10 @@ use subduction_core::{
         audience::{Audience, DiscoveryId},
     },
     nonce_cache::NonceCache,
-    peer::id::PeerId,
+    peer::{
+        counter::{PeerCounter, wall_clock_seed},
+        id::PeerId,
+    },
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::{Subduction, builder::SubductionBuilder},
     timeout::call::CallTimeout,
@@ -553,6 +556,10 @@ where
         .storage(storage, storage_policy)
         .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout)
+        // Wall-clock seeded so per-peer sequences resume above previous
+        // values across process restarts; receivers keep never-reset
+        // high-water marks.
+        .send_counter(PeerCounter::with_seed(wall_clock_seed))
         .roundtrip_timeout(Duration::from_secs(args.timeout));
 
     let builder = if let Some(max) = args.max_resident_trees {
@@ -629,6 +636,13 @@ where
                         let resident = resident_subduction.resident_sedimentree_count().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
+                        // Re-sample the connection gauge so it heals even if
+                        // an event-driven refresh was missed (e.g. teardown
+                        // interrupted mid-flight).
+                        subduction_core::metrics::set_connections_active(
+                            resident_subduction.total_connection_count().await,
+                        );
+
                         // Rank-shaped gauges carry the skew; the log line
                         // carries the peer ids (see `requestor_tally` docs).
                         if let Some(tally) = &requestor_tally {
@@ -704,6 +718,11 @@ where
     // an orderly shutdown, cancel the root token so the process exits and
     // the service manager restarts it. `supervised_failure` makes that exit
     // nonzero, since `Restart=on-failure` ignores clean exits.
+    //
+    // Ordering is load-bearing in the supervision arms: the flag store must
+    // precede `cancel()`, because the final check in `run_server` is only
+    // reached by waking from `token.cancelled().await` — the token's
+    // internal synchronization is what makes the store visible there.
     let supervised_failure = Arc::new(AtomicBool::new(false));
     let actor_cancel = token.clone();
     let listener_cancel = token.clone();

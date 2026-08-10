@@ -9,6 +9,16 @@
 //! keyhive, etc.) and [`Subduction`] itself, so that every message to a
 //! given peer draws from the same monotonic sequence.
 //!
+//! A peer's counter is never reset while the process lives, not even when
+//! the peer fully disconnects. Receivers keep a per-peer high-water mark
+//! that survives reconnects (see `FilteredHeadsNotifier`), so a sender that
+//! restarted its sequence would have everything below the old mark dropped
+//! as stale. For the same reason, embedders that can read a wall clock
+//! should construct the counter with a seed
+//! ([`PeerCounter::with_seed`] + [`wall_clock_seed`]) so a restarted
+//! *process* also resumes above any value it could plausibly have sent
+//! before. The default seed is zero: in-process monotonicity only.
+//!
 //! [`SyncHandler`]: crate::handler::sync::SyncHandler
 //! [`Subduction`]: crate::subduction::Subduction
 
@@ -26,54 +36,118 @@ use crate::peer::id::PeerId;
 /// increments are lock-free once the per-peer entry exists. The outer
 /// [`Mutex`] is only held briefly to insert new peers.
 ///
+/// Clones share the same counters (and seed); see [`Self::with_seed`] for
+/// seeding.
+///
 /// ```ignore
 /// let counter = PeerCounter::default();
 /// let seq = counter.next(peer_id).await;
 /// ```
-#[derive(Debug, Default, Clone)]
-pub struct PeerCounter(Arc<Mutex<Map<PeerId, Arc<AtomicU64>>>>);
+#[derive(Debug, Clone)]
+pub struct PeerCounter(Arc<Inner>);
+
+#[derive(Debug)]
+struct Inner {
+    counters: Mutex<Map<PeerId, Arc<AtomicU64>>>,
+    seed: fn() -> u64,
+}
 
 impl PeerCounter {
+    /// Create a counter whose fresh per-peer entries start from `seed()`.
+    ///
+    /// The seed is evaluated once per peer, at that peer's first stamp.
+    /// Embedders with a wall clock should pass [`wall_clock_seed`] (or an
+    /// equivalent, e.g. `Date.now()`-based on Wasm) so that a restarted
+    /// process resumes above its previous sequence; receivers keep
+    /// never-reset high-water marks, and a restarted sequence would be
+    /// dropped as stale until it climbed past the old mark.
+    #[must_use]
+    pub fn with_seed(seed: fn() -> u64) -> Self {
+        Self(Arc::new(Inner {
+            counters: Mutex::new(Map::new()),
+            seed,
+        }))
+    }
+
     /// Get the next counter value for a peer, incrementing atomically.
     ///
-    /// The first call for a given peer returns 1. Subsequent calls return
-    /// strictly increasing values. The counter is lock-free after the
-    /// first call (only the map insertion requires the mutex).
+    /// Values are strictly increasing per peer for the life of the process.
+    /// The counter is lock-free after the first call (only the map
+    /// insertion requires the mutex).
     pub async fn next(&self, peer: PeerId) -> u64 {
         let counter = {
-            let mut map = self.0.lock().await;
-            map.entry(peer).or_default().clone()
+            let mut map = self.0.counters.lock().await;
+            map.entry(peer)
+                .or_insert_with(|| Arc::new(AtomicU64::new((self.0.seed)())))
+                .clone()
         };
         counter.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Remove the counter for a peer that has fully disconnected.
-    ///
-    /// Call this from connection cleanup paths when a peer's last
-    /// connection is removed. If the peer reconnects, a fresh counter
-    /// starting at 1 will be created on the next [`next`](Self::next) call.
-    pub async fn clear_peer(&self, peer: &PeerId) {
-        self.0.lock().await.remove(peer);
-    }
-
-    /// Remove all per-peer counters.
-    ///
-    /// Call this when all connections are being torn down (e.g., `disconnect_all`).
-    pub async fn clear_all(&self) {
-        self.0.lock().await.clear();
-    }
-
     /// The current counter value for a peer without incrementing it, or
-    /// `None` if the peer has no counter entry (never stamped, or cleared).
+    /// `None` if the peer has no counter entry (never stamped).
     ///
-    /// Test-only observability for asserting that teardown does not reset
-    /// a still-connected peer's counter.
+    /// Test-only observability for asserting that counters survive
+    /// disconnects.
     #[cfg(any(feature = "test_utils", test))]
     pub async fn peek(&self, peer: &PeerId) -> Option<u64> {
         self.0
+            .counters
             .lock()
             .await
             .get(peer)
             .map(|c| c.load(Ordering::Relaxed))
+    }
+}
+
+impl Default for PeerCounter {
+    fn default() -> Self {
+        Self::with_seed(zero_seed)
+    }
+}
+
+const fn zero_seed() -> u64 {
+    0
+}
+
+/// Wall-clock counter seed: microseconds since the Unix epoch.
+///
+/// Opt-in for embedders (pass to [`PeerCounter::with_seed`]); core never
+/// reads the clock itself. A restarted process resumes above its previous
+/// sequence unless it sustained more than a million messages per second to
+/// a single peer, or the clock stepped backwards between runs. Not
+/// available on Wasm targets, where `SystemTime::now()` panics — Wasm
+/// embedders should supply their own seed (e.g. from `Date.now()`).
+#[cfg(all(feature = "system_time", not(target_family = "wasm")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "system_time", not(target_family = "wasm"))))
+)]
+#[must_use]
+pub fn wall_clock_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fresh per-peer entries start from the injected seed; the first stamp
+    /// is `seed + 1`.
+    #[tokio::test]
+    async fn fresh_counter_starts_from_injected_seed() {
+        fn seed() -> u64 {
+            1_000
+        }
+
+        let counter = PeerCounter::with_seed(seed);
+        assert_eq!(counter.next(PeerId::new([1u8; 32])).await, 1_001);
+        assert_eq!(counter.next(PeerId::new([1u8; 32])).await, 1_002);
+
+        // Each peer seeds independently.
+        assert_eq!(counter.next(PeerId::new([2u8; 32])).await, 1_001);
     }
 }

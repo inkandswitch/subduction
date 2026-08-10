@@ -31,7 +31,12 @@ use testresult::TestResult;
 /// A commit whose blob doesn't match its claimed `BlobMeta` is dropped, the
 /// connection survives, and a subsequent valid commit on the *same*
 /// connection is accepted.
-#[tokio::test]
+///
+/// The `connected_peer_ids` assertion is the discriminating one: on the old
+/// (connection-fatal) behavior the removal was state-only, so the reader
+/// kept running and even the follow-up commit could land — only the map
+/// membership reveals the disconnect.
+#[tokio::test(flavor = "current_thread")]
 async fn blob_mismatch_is_rejected_without_disconnecting() -> TestResult {
     let signer = MemorySigner::from_bytes(&[0xAA; 32]);
     let sedimentree_id = SedimentreeId::new([42u8; 32]);

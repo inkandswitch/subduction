@@ -206,6 +206,30 @@ async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
         "Sedimentree should not be created for mismatched fragment"
     );
 
+    // A blob mismatch is a defective message, not a broken transport: the
+    // connection must survive and keep dispatching.
+    assert!(
+        subduction.connected_peer_ids().await.contains(&peer_id),
+        "blob mismatch must not disconnect the peer"
+    );
+
+    let (valid_fragment, valid_blob) = make_valid_fragment(&sedimentree_id, b"valid data").await;
+    handle
+        .inbound_tx
+        .send(SyncMessage::Fragment {
+            id: sedimentree_id,
+            fragment: valid_fragment,
+            blob: valid_blob,
+            sender_heads: RemoteHeads::default(),
+        })
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert!(
+        subduction.sedimentree_ids().await.contains(&sedimentree_id),
+        "valid fragment after a blob mismatch should be accepted on the same connection"
+    );
+
     actor_task.abort();
     listener_task.abort();
     Ok(())

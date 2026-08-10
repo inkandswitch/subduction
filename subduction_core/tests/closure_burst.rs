@@ -27,14 +27,21 @@ use subduction_core::{
 use testresult::TestResult;
 
 /// Closing far more connections than the `connection_closed` channel can
-/// buffer (32) must not deadlock the manager: a fresh connection added
+/// buffer must not deadlock the manager: a fresh connection added
 /// afterwards still gets a reader that consumes its inbound messages.
 ///
 /// The listener future is deliberately not spawned; it stands in for a
 /// listener too busy (or starved) to drain closure events.
-#[tokio::test]
+///
+/// `current_thread` is load-bearing, not cosmetic: the sleeps below rely on
+/// single-threaded quiescence (a sleep yields until all spawned tasks are
+/// parked) so the burst's cleanup tasks deterministically reach their park
+/// points before the probes run.
+#[tokio::test(flavor = "current_thread")]
 async fn manager_survives_closure_burst_without_listener_drain() -> TestResult {
-    const BURST: usize = 40; // > the closed channel's capacity of 32
+    // Must exceed the closure-channel capacity or the test silently stops
+    // exercising the wedge.
+    const BURST: usize = subduction_core::subduction::CONNECTION_CLOSED_CHANNEL_CAPACITY + 8;
 
     let (subduction, _handler, _listener_fut, actor_fut) =
         SubductionBuilder::<_, _, _, _, _, 256>::new()
@@ -59,7 +66,7 @@ async fn manager_survives_closure_burst_without_listener_drain() -> TestResult {
 
     // Every reader errors out at once. Each exiting connection_loop's
     // cleanup pushes into the bounded `connection_closed` channel; with no
-    // listener draining it, at most 32 fit and the rest park.
+    // listener draining it, the channel fills and the rest park.
     for handle in &handles {
         handle.inbound_tx.close();
     }
@@ -90,8 +97,9 @@ async fn manager_survives_closure_burst_without_listener_drain() -> TestResult {
         .await?;
 
     // Poll rather than sleep: a live manager drains the message almost
-    // immediately; a deadlocked one never does.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // immediately; a deadlocked one never does. Generous deadline: the pass
+    // path exits in milliseconds, so this only bounds the failure case.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if fresh_handle.inbound_tx.is_empty() {
             break;

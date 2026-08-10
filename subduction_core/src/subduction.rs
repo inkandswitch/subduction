@@ -129,6 +129,13 @@ use subduction_crypto::{
     signed::Signed, signer::Signer, verified_author::VerifiedAuthor, verified_meta::VerifiedMeta,
 };
 
+/// Capacity of the `connection_closed` channel: closure notifications from
+/// exiting connection readers, drained by the listen loop.
+///
+/// Public so tests that exercise closure-burst behavior can stay coupled to
+/// the real capacity instead of a copied literal.
+pub const CONNECTION_CLOSED_CHANNEL_CAPACITY: usize = 32;
+
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
 #[allow(clippy::type_complexity)]
@@ -161,17 +168,19 @@ pub struct Subduction<
     /// Active connections, keyed by peer ID.
     ///
     /// Lock ordering: this is the outer lock relative to
-    /// [`multiplexers`](Self::multiplexers) and to the per-peer send
-    /// counter. Code that needs `connections` plus either of those must
-    /// take `connections` first and hold it while touching them; the
-    /// reverse order risks deadlock. Mutating connections + multiplexers
-    /// under one `connections` critical section (in [`add_connection`] and
-    /// the teardown paths) keeps the "connected peer has a multiplexer,
-    /// and vice versa" invariant from being observed half-applied, and
-    /// clearing the send counter under the same lock keeps a concurrent
-    /// reconnect from having its fresh counter reset.
+    /// [`multiplexers`](Self::multiplexers) and to
+    /// [`outgoing_subscriptions`](Self::outgoing_subscriptions). Code that
+    /// needs `connections` plus either of those must take `connections`
+    /// first and hold it while touching them; the reverse order risks
+    /// deadlock. Mutating connections + multiplexers under one
+    /// `connections` critical section (in [`register_connection`] and the
+    /// teardown paths) keeps the "connected peer has a multiplexer, and
+    /// vice versa" invariant from being observed half-applied, and
+    /// clearing stale outgoing claims under the same lock closes the
+    /// window in which a claim from a previous era could suppress a
+    /// concurrent propagation.
     ///
-    /// [`add_connection`]: Self::add_connection
+    /// [`register_connection`]: Self::register_connection
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
 
     /// Per-connection multiplexers for request-response correlation.
@@ -321,7 +330,8 @@ where
         let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(4096);
         let (response_sender, response_receiver) = async_channel::bounded(8192);
-        let (closed_sender, closed_receiver) = async_channel::bounded(32);
+        let (closed_sender, closed_receiver) =
+            async_channel::bounded(CONNECTION_CLOSED_CHANNEL_CAPACITY);
         let stored_spawner = spawner.clone();
         let manager = ConnectionManager::<Async, Authenticated<Conn, Async>, Hdl::Message, Sp>::new(
             spawner,
@@ -471,26 +481,29 @@ where
             "reconnection successful"
         );
 
-        // Send ReAdd command to manager
-        self.manager_channel
-            .send(Command::ReAdd(conn_id, conn.clone(), conn.peer_id()))
-            .await
-            .map_err(|_| ())?;
-
-        // Re-add to connections map
+        // Register (map + mux) before the manager handoff, and roll back if
+        // the handoff fails — same ordering discipline as `add_connection`;
+        // see `register_connection` for why it matters.
         let peer_id = conn.peer_id();
-        let mut connections = self.connections.lock().await;
-        match connections.get_mut(&peer_id) {
-            Some(peer_conns) => {
-                peer_conns.push(conn);
-            }
-            None => {
-                connections.insert(peer_id, NonEmpty::new(conn));
-            }
-        }
+        let inserted = self.register_connection(&conn).await;
 
         #[cfg(feature = "metrics")]
-        crate::metrics::connection_opened();
+        if inserted {
+            crate::metrics::connection_opened();
+        }
+        self.refresh_connection_gauge().await;
+
+        if self
+            .manager_channel
+            .send(Command::ReAdd(conn_id, conn.clone(), peer_id))
+            .await
+            .is_err()
+        {
+            if inserted {
+                self.remove_connection(&conn).await;
+            }
+            return Err(());
+        }
 
         Ok(())
     }
@@ -583,6 +596,7 @@ where
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
         }
+        self.refresh_connection_gauge().await;
 
         conn.disconnect().await.map(|()| true)
     }
@@ -611,12 +625,13 @@ where
 
         Self::cancel_detached_muxes(removed_muxes).await;
         self.subscriptions.lock().await.clear();
-        self.send_counter.clear_all().await;
+        // Send counters survive on purpose; see `teardown_peer`.
 
         #[cfg(feature = "metrics")]
         for _ in &all_conns {
             crate::metrics::connection_closed();
         }
+        self.refresh_connection_gauge().await;
 
         try_join_all(
             all_conns
@@ -661,6 +676,7 @@ where
         if let Some((conns, muxes)) = removed {
             // Removing every connection is by definition removing the last.
             self.teardown_peer(peer_id, muxes, conns.len()).await;
+            self.refresh_connection_gauge().await;
 
             for conn in conns {
                 if let Err(e) = conn.disconnect().await {
@@ -700,42 +716,13 @@ where
             .await
             .map_err(AddConnectionError::ConnectionDisallowed)?;
 
-        {
-            // Insert the connection and create its mux under one
-            // `connections` critical section (outer before inner) so the
-            // connection/mux invariant is never observed half-applied.
-            let mut connections = self.connections.lock().await;
-
-            if connections
-                .get(&peer_id)
-                .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
-            {
-                return Ok(false);
-            }
-
-            match connections.get_mut(&peer_id) {
-                Some(peer_conns) => {
-                    peer_conns.push(conn.clone());
-                }
-                None => {
-                    connections.insert(peer_id, NonEmpty::new(conn.clone()));
-                }
-            }
-
-            let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
-            let mut multiplexers = self.multiplexers.lock().await;
-            match multiplexers.get_mut(&peer_id) {
-                Some(muxes) => muxes.push(mux),
-                None => {
-                    multiplexers.insert(peer_id, alloc::vec![mux]);
-                }
-            }
+        if !self.register_connection(&conn).await {
+            return Ok(false);
         }
 
-        // Count the connection as soon as it is tracked, so the gauge mirrors
-        // the `connections` map (including through the rollback below).
         #[cfg(feature = "metrics")]
         crate::metrics::connection_opened();
+        self.refresh_connection_gauge().await;
 
         if self
             .manager_channel
@@ -746,8 +733,7 @@ where
             // The manager is gone, so this connection would never get a
             // reader — and because closure events are emitted by the reader,
             // nothing would ever remove it from the map. Roll the
-            // registration back (this also emits `connection_closed`,
-            // balancing the increment above).
+            // registration back.
             self.remove_connection(&conn).await;
             return Err(AddConnectionError::SendToClosedChannel);
         }
@@ -755,12 +741,64 @@ where
         Ok(true)
     }
 
+    /// Insert a connection (and a fresh multiplexer for it) into tracking,
+    /// under one `connections` critical section (outer before inner) so
+    /// the connection/mux invariant is never observed half-applied.
+    ///
+    /// Registration must complete *before* the manager handoff: the reader
+    /// the manager spawns emits this connection's closure event, and a
+    /// closure event arriving for a connection not yet in the map is
+    /// consumed as a no-op — the insert then lands afterwards and the
+    /// connection is tracked forever with no reader and no pending closure.
+    /// Callers roll the registration back if the handoff fails.
+    ///
+    /// Returns `false` (without inserting) if this exact connection is
+    /// already tracked.
+    async fn register_connection(&self, conn: &Authenticated<Conn, Async>) -> bool {
+        let peer_id = conn.peer_id();
+        let mut connections = self.connections.lock().await;
+
+        if connections
+            .get(&peer_id)
+            .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == conn))
+        {
+            return false;
+        }
+
+        let newly_present = if let Some(peer_conns) = connections.get_mut(&peer_id) {
+            peer_conns.push(conn.clone());
+            false
+        } else {
+            connections.insert(peer_id, NonEmpty::new(conn.clone()));
+            true
+        };
+
+        // Must happen while `connections` is still held: the peer only
+        // becomes visible to `propagate_subscription` when the guard drops,
+        // so no propagation can be suppressed by a stale claim from a
+        // previous era.
+        if newly_present {
+            self.clear_stale_outgoing_claims(&peer_id).await;
+        }
+
+        let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
+        let mut multiplexers = self.multiplexers.lock().await;
+        match multiplexers.get_mut(&peer_id) {
+            Some(muxes) => muxes.push(mux),
+            None => {
+                multiplexers.insert(peer_id, alloc::vec![mux]);
+            }
+        }
+
+        true
+    }
+
     /// Reconcile tracking for a connection whose transport has **already
     /// failed** — e.g. a send returned `Err`, or the per-connection
     /// receive loop exited and reported the closure via the
     /// `connection_closed` channel. There is no live transport to close,
     /// so this only updates in-memory state (connection map, multiplexers,
-    /// send counter, subscriptions, metrics).
+    /// subscriptions, metrics).
     ///
     /// To proactively shut down a connection you believe is still live,
     /// use [`disconnect`](Self::disconnect), which also closes the
@@ -800,14 +838,16 @@ where
             }
         };
 
-        if let Some(muxes) = detached {
+        let last = if let Some(muxes) = detached {
             self.teardown_peer(&peer_id, muxes, 1).await;
             Some(true)
         } else {
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
             Some(false)
-        }
+        };
+        self.refresh_connection_gauge().await;
+        last
     }
 
     /// Test-only public access to the crate-internal
@@ -855,6 +895,26 @@ where
         }
     }
 
+    /// Invalidate outgoing-subscription claims from a previous connection
+    /// era, on the peer's absent → present transition.
+    ///
+    /// The remote forgot our subscriptions when its side of the old
+    /// connection died, so a surviving claim would make
+    /// `propagate_subscription` skip re-establishing them — leaving this
+    /// node silently unsubscribed upstream. Clearing on *arrival* rather
+    /// than (only) on teardown means a skipped or interrupted teardown
+    /// cannot cause that.
+    ///
+    /// Callers must hold the `connections` guard that inserts the peer:
+    /// the peer only becomes visible to `propagate_subscription` when that
+    /// guard drops, so clearing under it leaves no window in which a stale
+    /// claim can suppress a propagation and then be deleted. The nesting
+    /// edge `connections → outgoing_subscriptions` is acyclic (nothing
+    /// acquires them in the reverse order).
+    async fn clear_stale_outgoing_claims(&self, peer_id: &PeerId) {
+        self.outgoing_subscriptions.lock().await.remove(peer_id);
+    }
+
     /// Finish per-peer teardown after the peer's last connection is gone
     /// and its muxes have been detached via
     /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked).
@@ -872,32 +932,18 @@ where
         Self::cancel_detached_muxes(muxes).await;
         peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
 
-        // Drop the peer's outgoing-subscription claims. The remote forgets
-        // our subscriptions when the connection dies, so a surviving claim
-        // would make `propagate_subscription` skip re-establishing them
-        // after a reconnect — leaving this node silently unsubscribed
-        // upstream. Clearing here also keeps the claim map bounded to
-        // currently-connected peers.
-        //
-        // Unconditional, unlike the send-counter clear below: under a
-        // concurrent reconnect, clearing a fresh claim costs one redundant
-        // (idempotent) re-propagation, while keeping a stale claim
-        // suppresses re-establishment entirely.
+        // Drop the peer's outgoing-subscription claims. This is garbage
+        // collection, not the correctness mechanism: stale claims are
+        // authoritatively invalidated when the peer next becomes present
+        // (see `clear_stale_outgoing_claims`), so a skipped teardown cannot
+        // suppress re-subscription. Clearing here keeps the claim map
+        // bounded to currently-connected peers.
         self.outgoing_subscriptions.lock().await.remove(peer_id);
 
-        // Clear the send counter while holding the `connections` lock and
-        // only if the peer is still gone. The caller removed the peer
-        // under the lock, but released it before calling us, so a
-        // concurrent `add_connection` could have re-added the peer (and
-        // started stamping messages with a fresh counter). `clear_peer`
-        // is contracted for fully-gone peers only; resetting it
-        // mid-session would break the strictly-increasing guarantee.
-        {
-            let connections = self.connections.lock().await;
-            if !connections.contains_key(peer_id) {
-                self.send_counter.clear_peer(peer_id).await;
-            }
-        }
+        // The send counter is deliberately NOT cleared: receivers keep a
+        // per-peer high-water mark that survives reconnects, so restarting
+        // the sequence at 1 would have everything the reconnected peer sends
+        // dropped as stale until it climbed past the old mark.
 
         #[cfg(feature = "metrics")]
         for _ in 0..conn_count {
@@ -2012,12 +2058,16 @@ where
     ///
     /// # Lifecycle
     ///
-    /// Claims live only as long as the target peer's connection: the
-    /// peer's last-connection teardown drops them (the remote forgot our
-    /// subscriptions when the connection died), and a later inbound
-    /// subscribe re-establishes them through this method. There is no
-    /// replay-on-reconnect; re-propagation is driven entirely by
-    /// subsequent subscribes.
+    /// Claims live only as long as the target peer's connection era. The
+    /// authoritative invalidation is on the peer's next absent → present
+    /// transition ([`clear_stale_outgoing_claims`], via
+    /// [`register_connection`]); last-connection teardown also drops them
+    /// as garbage collection. A later inbound subscribe re-establishes
+    /// them through this method. There is no replay-on-reconnect;
+    /// re-propagation is driven entirely by subsequent subscribes.
+    ///
+    /// [`clear_stale_outgoing_claims`]: Self::clear_stale_outgoing_claims
+    /// [`register_connection`]: Self::register_connection
     ///
     /// [`outgoing_subscriptions`]: Self::outgoing_subscriptions
     pub(crate) async fn propagate_subscription(&self, id: SedimentreeId, originator: PeerId) {
@@ -2696,6 +2746,26 @@ where
     /// Get the set of all connected peer IDs.
     pub async fn connected_peer_ids(&self) -> Set<PeerId> {
         self.connections.lock().await.keys().copied().collect()
+    }
+
+    /// The total number of active connections across all peers.
+    pub async fn total_connection_count(&self) -> usize {
+        self.connections
+            .lock()
+            .await
+            .values()
+            .map(NonEmpty::len)
+            .sum()
+    }
+
+    /// Publish the `connections_active` gauge from the map itself.
+    ///
+    /// Called after every connection-map mutation, and safe to call from a
+    /// periodic sampler: each call sets the gauge to observed truth.
+    #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_async))]
+    async fn refresh_connection_gauge(&self) {
+        #[cfg(feature = "metrics")]
+        crate::metrics::set_connections_active(self.total_connection_count().await);
     }
 
     /*******************
@@ -3457,10 +3527,10 @@ impl<
     }
 
     /// Current per-peer send-counter value without incrementing it, or
-    /// `None` if the peer has no counter (never stamped, or cleared).
+    /// `None` if the peer has no counter (never stamped).
     ///
-    /// Test-only observability for asserting that teardown does not reset
-    /// a still-connected peer's monotonic counter.
+    /// Test-only observability for asserting that counters survive
+    /// disconnects.
     pub async fn send_counter_value(&self, peer_id: &PeerId) -> Option<u64> {
         self.send_counter.peek(peer_id).await
     }
@@ -3468,9 +3538,35 @@ impl<
     /// Advance the per-peer send counter once, returning the new value.
     ///
     /// Test-only: lets a test put a peer's counter into a known non-zero
-    /// state so a later reset is observable.
+    /// state so later behavior is observable.
     pub async fn stamp_send_counter(&self, peer_id: PeerId) -> u64 {
         self.send_counter.next(peer_id).await
+    }
+
+    /// Outgoing-subscription claims held for a peer, or `None` if it has
+    /// none.
+    ///
+    /// Test-only observability for asserting claim invalidation on the
+    /// peer's absent → present transition.
+    pub async fn outgoing_claims(&self, peer_id: &PeerId) -> Option<Set<SedimentreeId>> {
+        self.outgoing_subscriptions
+            .lock()
+            .await
+            .get(peer_id)
+            .cloned()
+    }
+
+    /// Insert an outgoing-subscription claim directly.
+    ///
+    /// Test-only: stands in for a claim left behind by an interrupted
+    /// teardown.
+    pub async fn insert_outgoing_claim_for_test(&self, peer_id: PeerId, id: SedimentreeId) {
+        self.outgoing_subscriptions
+            .lock()
+            .await
+            .entry(peer_id)
+            .or_default()
+            .insert(id);
     }
 }
 
