@@ -452,8 +452,13 @@ where
     /// sedimentrees this node has (or is establishing) an upstream
     /// subscription to via that peer.
     ///
-    /// Observability accessor (used by integration tests). Claims drop on
-    /// the peer's last-connection teardown; there is no replay-on-reconnect.
+    /// Observability accessor (used by integration tests). Claims are
+    /// invalidated on the peer's next arrival (absent → present); teardown
+    /// also drops them as garbage collection. There is no
+    /// replay-on-reconnect. See [`propagate_subscription`] for the full
+    /// lifecycle.
+    ///
+    /// [`propagate_subscription`]: Self::propagate_subscription
     pub async fn get_peer_subscriptions(&self, peer_id: PeerId) -> Set<SedimentreeId> {
         self.outgoing_subscriptions
             .lock()
@@ -467,9 +472,26 @@ where
     ///
     /// This re-registers the connection with the manager using the same [`ConnectionId`].
     ///
+    /// # Warning: ordering against the old reader's closure event
+    ///
+    /// If the previous reader's closure event has *not yet been drained* by
+    /// the listen loop when this is called, the connection may still be in
+    /// the tracking map: registration is then deduplicated (when the
+    /// reconnected `conn` compares equal to the tracked one) while the
+    /// `ReAdd` still spawns a fresh reader — and the pending closure event
+    /// subsequently removes the map entry out from under that live reader.
+    /// Conversely, suppressing the `ReAdd` on the dedupe path would leave
+    /// the reconnected transport readerless when the closure drains later.
+    /// Neither ordering is safe to pick blindly; callers must ensure the
+    /// old connection's closure has been processed (or that the
+    /// reconnected `conn` compares unequal to the stale entry) before
+    /// calling. Closing this race properly needs closure events that carry
+    /// reader identity — tracked as an upstream follow-up.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the manager channel is closed.
+    /// Returns an error if the manager channel is closed. On failure, any
+    /// registration performed by this call is rolled back.
     pub async fn on_reconnect_success(
         &self,
         conn_id: ConnectionId,
@@ -907,10 +929,20 @@ where
     ///
     /// Callers must hold the `connections` guard that inserts the peer:
     /// the peer only becomes visible to `propagate_subscription` when that
-    /// guard drops, so clearing under it leaves no window in which a stale
-    /// claim can suppress a propagation and then be deleted. The nesting
-    /// edge `connections → outgoing_subscriptions` is acyclic (nothing
-    /// acquires them in the reverse order).
+    /// guard drops, so a stale claim cannot suppress a propagation *for
+    /// this arrival* and then be deleted. The nesting edge
+    /// `connections → outgoing_subscriptions` is acyclic (nothing acquires
+    /// them in the reverse order).
+    ///
+    /// Two narrower windows remain open (candidates for per-peer era
+    /// tagging):
+    ///
+    /// * A remote that crashes and reconnects before its old connection's
+    ///   closure event is drained never goes absent (present → present),
+    ///   so claims from the dead remote's era survive.
+    /// * An in-flight `propagate_subscription` that succeeds can re-insert
+    ///   its claim after an intervening disconnect + reconnect cleared the
+    ///   era.
     async fn clear_stale_outgoing_claims(&self, peer_id: &PeerId) {
         self.outgoing_subscriptions.lock().await.remove(peer_id);
     }
@@ -2058,13 +2090,14 @@ where
     ///
     /// # Lifecycle
     ///
-    /// Claims live only as long as the target peer's connection era. The
-    /// authoritative invalidation is on the peer's next absent → present
-    /// transition ([`clear_stale_outgoing_claims`], via
-    /// [`register_connection`]); last-connection teardown also drops them
-    /// as garbage collection. A later inbound subscribe re-establishes
-    /// them through this method. There is no replay-on-reconnect;
-    /// re-propagation is driven entirely by subsequent subscribes.
+    /// Claims live only as long as the target peer's connection era.
+    /// Invalidation happens on the peer's next absent → present transition
+    /// ([`clear_stale_outgoing_claims`], via [`register_connection`] —
+    /// which also documents the era races that remain open); last-
+    /// connection teardown also drops them as garbage collection. A later
+    /// inbound subscribe re-establishes them through this method. There is
+    /// no replay-on-reconnect; re-propagation is driven entirely by
+    /// subsequent subscribes.
     ///
     /// [`clear_stale_outgoing_claims`]: Self::clear_stale_outgoing_claims
     /// [`register_connection`]: Self::register_connection
@@ -2762,10 +2795,19 @@ where
     ///
     /// Called after every connection-map mutation, and safe to call from a
     /// periodic sampler: each call sets the gauge to observed truth.
+    ///
+    /// The gauge is set *while holding* the `connections` guard, so
+    /// count-and-publish is one linearizable step: two racing refreshes
+    /// cannot publish out of order and leave the gauge stale until the
+    /// next event (the gauge write itself is sync and cheap).
     #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_async))]
     async fn refresh_connection_gauge(&self) {
         #[cfg(feature = "metrics")]
-        crate::metrics::set_connections_active(self.total_connection_count().await);
+        {
+            let connections = self.connections.lock().await;
+            let count = connections.values().map(NonEmpty::len).sum();
+            crate::metrics::set_connections_active(count);
+        }
     }
 
     /*******************
@@ -3255,6 +3297,16 @@ where
                         if self.remove_connection(&conn).await == Some(true) {
                             handler.on_peer_disconnect(peer_id).await;
                         }
+                    } else {
+                        // Every `closed` sender is transitively owned by a
+                        // holder of the queue senders, so closure here
+                        // implies shutdown is in flight. Breaking (rather
+                        // than ignoring the `Err`) keeps this arm from
+                        // becoming permanently ready above `msg_queue` —
+                        // with `select_biased!` that would starve dispatch
+                        // forever if the ownership invariant ever changed.
+                        tracing::info!("connection-closed channel closed");
+                        break;
                     }
                 }
 

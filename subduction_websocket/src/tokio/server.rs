@@ -533,10 +533,15 @@ where
         let manager_stopping = Arc::clone(&server.stopping);
         server.tasks.spawn(async move {
             let _ = manager_fut.await;
-            if !manager_stopping.swap(true, Ordering::AcqRel) && !manager_token.is_cancelled() {
-                tracing::error!(
-                    "Subduction connection manager exited outside shutdown; stopping server"
-                );
+            if !manager_stopping.swap(true, Ordering::AcqRel) {
+                // Winning the swap makes this task responsible for teardown
+                // even if the token was somehow cancelled by another path —
+                // only the ERROR is gated on that, never the shutdown.
+                if !manager_token.is_cancelled() {
+                    tracing::error!(
+                        "Subduction connection manager exited outside shutdown; stopping server"
+                    );
+                }
                 manager_subduction.shutdown();
                 manager_token.cancel();
             }
@@ -546,8 +551,10 @@ where
         let listener_stopping = Arc::clone(&server.stopping);
         server.tasks.spawn(async move {
             let _ = listener_fut.await;
-            if !listener_stopping.swap(true, Ordering::AcqRel) && !listener_token.is_cancelled() {
-                tracing::error!("Subduction listener exited outside shutdown; stopping server");
+            if !listener_stopping.swap(true, Ordering::AcqRel) {
+                if !listener_token.is_cancelled() {
+                    tracing::error!("Subduction listener exited outside shutdown; stopping server");
+                }
                 listener_subduction.shutdown();
                 listener_token.cancel();
             }

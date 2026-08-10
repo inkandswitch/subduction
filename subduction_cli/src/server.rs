@@ -638,7 +638,11 @@ where
 
                         // Re-sample the connection gauge so it heals even if
                         // an event-driven refresh was missed (e.g. teardown
-                        // interrupted mid-flight).
+                        // interrupted mid-flight). Unlike the event-driven
+                        // refresh, this publishes *outside* the connections
+                        // lock, so it can briefly clobber a newer value —
+                        // stale by at most one refresh interval, healed by
+                        // the next event or tick.
                         subduction_core::metrics::set_connections_active(
                             resident_subduction.total_connection_count().await,
                         );

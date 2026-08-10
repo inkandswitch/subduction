@@ -95,7 +95,7 @@ native-tls = [
 ]
 rustls = [
   "async-tungstenite/tokio-rustls-native-certs",
-  "reqwest/rustls-tls",
+  "reqwest/rustls",
   "subduction_http_longpoll/rustls-tls",
   "subduction_websocket/tokio_client_rustls",
   "subduction_websocket/tokio_server_rustls",

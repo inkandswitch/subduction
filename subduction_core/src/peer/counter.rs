@@ -15,7 +15,7 @@
 //! restarted its sequence would have everything below the old mark dropped
 //! as stale. For the same reason, embedders that can read a wall clock
 //! should construct the counter with a seed
-//! ([`PeerCounter::with_seed`] + [`wall_clock_seed`]) so a restarted
+//! ([`PeerCounter::with_seed`] + `wall_clock_seed`) so a restarted
 //! *process* also resumes above any value it could plausibly have sent
 //! before. The default seed is zero: in-process monotonicity only.
 //!
@@ -35,6 +35,12 @@ use crate::peer::id::PeerId;
 /// Each peer's counter is an [`AtomicU64`] behind an [`Arc`], so counter
 /// increments are lock-free once the per-peer entry exists. The outer
 /// [`Mutex`] is only held briefly to insert new peers.
+///
+/// Entries are never removed (the monotonicity contract outlives any
+/// connection), so the map grows with the number of distinct peers stamped
+/// during the process lifetime — on the order of 100 bytes per peer
+/// including map overhead. A server with extreme peer churn may eventually
+/// want era-based GC; unbounded-but-tiny is the deliberate trade-off here.
 ///
 /// Clones share the same counters (and seed); see [`Self::with_seed`] for
 /// seeding.
@@ -56,7 +62,7 @@ impl PeerCounter {
     /// Create a counter whose fresh per-peer entries start from `seed()`.
     ///
     /// The seed is evaluated once per peer, at that peer's first stamp.
-    /// Embedders with a wall clock should pass [`wall_clock_seed`] (or an
+    /// Embedders with a wall clock should pass `wall_clock_seed` (or an
     /// equivalent, e.g. `Date.now()`-based on Wasm) so that a restarted
     /// process resumes above its previous sequence; receivers keep
     /// never-reset high-water marks, and a restarted sequence would be
@@ -116,19 +122,38 @@ const fn zero_seed() -> u64 {
 /// reads the clock itself. A restarted process resumes above its previous
 /// sequence unless it sustained more than a million messages per second to
 /// a single peer, or the clock stepped backwards between runs. Not
-/// available on Wasm targets, where `SystemTime::now()` panics — Wasm
-/// embedders should supply their own seed (e.g. from `Date.now()`).
-#[cfg(all(feature = "system_time", not(target_family = "wasm")))]
+/// available on `wasm32-unknown-unknown`, where `SystemTime::now()`
+/// panics — Wasm embedders should supply their own seed, scaled to the
+/// same unit (e.g. `Date.now() * 1_000.0`, since `Date.now()` returns
+/// milliseconds): a peer migrating between embedders under one signing
+/// key must not restart below its old high-water mark.
+#[cfg(all(
+    feature = "system_time",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
 #[cfg_attr(
     docsrs,
-    doc(cfg(all(feature = "system_time", not(target_family = "wasm"))))
+    doc(cfg(all(
+        feature = "system_time",
+        not(all(target_family = "wasm", target_os = "unknown"))
+    )))
 )]
 #[must_use]
 pub fn wall_clock_seed() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(since_epoch) => u64::try_from(since_epoch.as_micros()).unwrap_or(u64::MAX),
+        Err(e) => {
+            // Pre-epoch clock (unset RTC, badly skewed VM). Degrading to an
+            // unseeded counter silently reintroduces the restart-staleness
+            // failure this seed exists to prevent — make it loud.
+            tracing::warn!(
+                error = %e,
+                "system clock is before the Unix epoch; send counters are \
+                 unseeded and may be dropped as stale by peers after restart"
+            );
+            0
+        }
+    }
 }
 
 #[cfg(test)]
@@ -146,8 +171,34 @@ mod tests {
         let counter = PeerCounter::with_seed(seed);
         assert_eq!(counter.next(PeerId::new([1u8; 32])).await, 1_001);
         assert_eq!(counter.next(PeerId::new([1u8; 32])).await, 1_002);
-
-        // Each peer seeds independently.
         assert_eq!(counter.next(PeerId::new([2u8; 32])).await, 1_001);
+    }
+
+    /// The seed is evaluated once *per peer*, at that peer's first stamp —
+    /// not once per counter. A constant seed can't distinguish the two, so
+    /// this uses a counting seed: each fresh peer gets a strictly larger
+    /// base, and a repeat stamp does not re-seed.
+    #[tokio::test]
+    async fn seed_is_evaluated_per_peer_at_first_stamp() {
+        use core::sync::atomic::{AtomicU64, Ordering};
+
+        static CALLS: AtomicU64 = AtomicU64::new(0);
+        fn counting_seed() -> u64 {
+            (CALLS.fetch_add(1, Ordering::Relaxed) + 1) * 1_000
+        }
+
+        let counter = PeerCounter::with_seed(counting_seed);
+
+        assert_eq!(counter.next(PeerId::new([1u8; 32])).await, 1_001);
+        assert_eq!(
+            counter.next(PeerId::new([2u8; 32])).await,
+            2_001,
+            "a fresh peer must evaluate the seed anew"
+        );
+        assert_eq!(
+            counter.next(PeerId::new([1u8; 32])).await,
+            1_002,
+            "a repeat stamp must not re-seed"
+        );
     }
 }

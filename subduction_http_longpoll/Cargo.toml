@@ -41,7 +41,7 @@ futures-timer = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["http1", "server-auto", "tokio"] }
 rand = { workspace = true, features = ["std_rng"] }
-reqwest = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls"] }
 sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
 subduction_core = { workspace = true, features = ["test_utils"] }
 subduction_crypto = { workspace = true }
@@ -56,7 +56,9 @@ bolero = []
 metrics = ["std", "subduction_core/metrics"]
 native-tls = ["reqwest", "reqwest/native-tls"]
 reqwest = ["dep:reqwest", "std"]
-rustls-tls = ["reqwest", "reqwest/rustls-tls"]
+# reqwest 0.13 renamed its `rustls-tls` feature to `rustls`; this crate's
+# feature keeps the old name for its own consumers.
+rustls-tls = ["reqwest", "reqwest/rustls"]
 server = ["dep:http-body-util", "dep:hyper", "std"]
 std = [
   "async-channel/std",

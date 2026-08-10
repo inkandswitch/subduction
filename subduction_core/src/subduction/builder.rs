@@ -365,8 +365,6 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     /// keep never-reset high-water marks, and a restarted sequence would
     /// be dropped as stale. Defaults to an unseeded counter (in-process
     /// monotonicity only).
-    ///
-    /// [`wall_clock_seed`]: crate::peer::counter::wall_clock_seed
     #[must_use]
     pub fn send_counter(mut self, counter: PeerCounter) -> Self {
         self.send_counter = Some(counter);

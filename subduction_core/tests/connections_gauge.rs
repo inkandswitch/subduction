@@ -4,8 +4,14 @@
 //!
 //! Uses a thread-local `DebuggingRecorder` and a plain `block_on` executor:
 //! none of the operations under test need a running task (the manager loop
-//! is never spawned; `TestSpawn` discards futures), and the recorder is
-//! only visible on the installing thread.
+//! is never spawned but its command channel buffers, so handoffs succeed;
+//! `TestSpawn` discards futures), and the recorder is only visible on the
+//! installing thread.
+//!
+//! Every gauge assertion below follows a deliberate poison
+//! (`set_connections_active(999)`), so each one demonstrates that the
+//! mutation's refresh *healed* the gauge — not merely that deltas happened
+//! to line up (the old increment/decrement implementation fails these).
 
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -15,6 +21,7 @@ use future_form::Sendable;
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use subduction_core::{
     connection::{
+        id::ConnectionId,
         message::SyncMessage,
         test_utils::{ChannelMockConnection, InstantTimeout, TestSpawn, test_signer},
     },
@@ -42,10 +49,12 @@ fn gauge(snapshotter: &Snapshotter) -> Option<f64> {
         })
 }
 
-/// The gauge mirrors the map through adds and removals, and a poisoned
-/// value is healed by the next mutation's refresh.
+/// The gauge is healed to map truth by the refresh in every
+/// connection-map mutation: `add_connection`, `on_reconnect_success`,
+/// `remove_connection`, `disconnect`, `disconnect_from_peer`, and
+/// `disconnect_all`.
 #[test]
-fn connections_gauge_tracks_map_truth() {
+fn connections_gauge_healed_by_every_mutation() {
     let recorder = DebuggingRecorder::new();
     let snapshotter = recorder.snapshotter();
 
@@ -61,36 +70,68 @@ fn connections_gauge_tracks_map_truth() {
 
             let peer_a = PeerId::new([1u8; 32]);
             let peer_b = PeerId::new([2u8; 32]);
-            let (conn_a, _handle_a) = ChannelMockConnection::new_with_handle(peer_a);
-            let (conn_b, _handle_b) = ChannelMockConnection::new_with_handle(peer_b);
-            let conn_a = conn_a.authenticated();
+            let poison = || subduction_core::metrics::set_connections_active(999);
+            let conn = |peer| {
+                ChannelMockConnection::new_with_handle(peer)
+                    .0
+                    .authenticated()
+            };
 
+            // add_connection
+            let conn_a = conn(peer_a);
+            poison();
             subduction
                 .add_connection(conn_a.clone())
                 .await
                 .expect("add a");
-            assert_eq!(gauge(&snapshotter), Some(1.0), "one connection tracked");
+            assert_eq!(gauge(&snapshotter), Some(1.0), "add_connection heals");
 
+            // on_reconnect_success (the manager channel buffers the ReAdd;
+            // the sentinel ID is unallocatable, so even a future edit that
+            // spawns the manager cannot model an ID collision — the real
+            // allocator counts up from 0)
+            let conn_b = conn(peer_b);
+            poison();
             subduction
-                .add_connection(conn_b.authenticated())
+                .on_reconnect_success(ConnectionId::new(usize::MAX), conn_b.clone())
                 .await
-                .expect("add b");
-            assert_eq!(gauge(&snapshotter), Some(2.0), "two connections tracked");
+                .expect("readd b");
+            assert_eq!(gauge(&snapshotter), Some(2.0), "on_reconnect_success heals");
 
-            subduction.remove_connection_for_test(&conn_a).await;
-            assert_eq!(gauge(&snapshotter), Some(1.0), "removal refreshes");
+            // remove_connection
+            poison();
+            subduction.remove_connection_for_test(&conn_b).await;
+            assert_eq!(gauge(&snapshotter), Some(1.0), "remove_connection heals");
 
-            // Poison the gauge, then verify the next mutation's refresh
-            // heals it to map truth — the actual set-from-truth claim.
-            subduction_core::metrics::set_connections_active(999);
-            assert_eq!(gauge(&snapshotter), Some(999.0), "poisoned");
+            // disconnect
+            poison();
+            subduction.disconnect(&conn_a).await.expect("disconnect a");
+            assert_eq!(gauge(&snapshotter), Some(0.0), "disconnect heals");
 
+            // disconnect_from_peer
+            subduction
+                .add_connection(conn(peer_a))
+                .await
+                .expect("re-add a");
+            poison();
+            subduction
+                .disconnect_from_peer(&peer_a)
+                .await
+                .expect("disconnect_from_peer");
+            assert_eq!(gauge(&snapshotter), Some(0.0), "disconnect_from_peer heals");
+
+            // disconnect_all
+            subduction
+                .add_connection(conn(peer_a))
+                .await
+                .expect("re-add a");
+            subduction
+                .add_connection(conn(peer_b))
+                .await
+                .expect("re-add b");
+            poison();
             subduction.disconnect_all().await.expect("disconnect_all");
-            assert_eq!(
-                gauge(&snapshotter),
-                Some(0.0),
-                "refresh must heal the gauge to observed truth"
-            );
+            assert_eq!(gauge(&snapshotter), Some(0.0), "disconnect_all heals");
         });
     });
 }
