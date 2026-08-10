@@ -790,6 +790,7 @@ impl Sedimentree {
     /// items the requestor is missing, and echoed fingerprints for items
     /// the responder is missing.
     #[must_use]
+    #[expect(clippy::too_many_lines)]
     pub fn diff_remote_fingerprints<'a>(
         &'a self,
         remote: &FingerprintSummary,

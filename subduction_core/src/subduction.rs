@@ -612,6 +612,7 @@ where
     /// # Errors
     ///
     /// * Returns `Conn::DisconnectionError` if disconnect fails or it occurs ungracefully.
+    #[expect(clippy::missing_panics_doc)]
     pub async fn disconnect(
         &self,
         conn: &Authenticated<Conn, Async>,
@@ -2288,9 +2289,7 @@ where
                 "sending fingerprint summary"
             );
             let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-            let req_id = request_id
-                .clone()
-                .unwrap_or_else(|| managed.next_request_id());
+            let req_id = request_id.unwrap_or_else(|| managed.next_request_id());
             let mut session = SyncSession::new(
                 id,
                 conn.peer_id(),

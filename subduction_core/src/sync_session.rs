@@ -64,12 +64,12 @@ pub enum SyncRemoteRejection {
 pub enum SyncSessionKind {
     /// Sync session was initiated by the local node.
     OutboundBatch {
-        /// The request_id for the session.
+        /// The `request_id` for the session.
         request_id: RequestId,
     },
     /// Sync session was initiated by a remote node.
     InboundBatch {
-        /// The request_id for the session.
+        /// The `request_id` for the session.
         request_id: RequestId,
     },
     /// Sync sessions that happen as part of subscriptions.

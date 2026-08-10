@@ -35,6 +35,7 @@ use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use super::error::IoError;
 
 #[derive(Debug)]
+#[expect(clippy::struct_field_names)]
 pub(crate) struct IngestSummary<Rejection> {
     pub(crate) commit_ids: Vec<CommitId>,
     pub(crate) fragment_ids: Vec<CommitId>,
