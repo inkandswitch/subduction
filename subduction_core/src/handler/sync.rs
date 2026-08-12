@@ -603,8 +603,6 @@ impl<
         let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
             Ok(vm) => vm,
             Err(e) => {
-                // `author` distinguishes a relay forwarding someone else's
-                // corrupt pair (author ≠ peer) from a first-party bug.
                 tracing::warn!(
                     peer = %from,
                     author = ?author,
