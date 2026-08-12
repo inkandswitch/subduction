@@ -330,12 +330,13 @@ pub(crate) async fn insert_commit_locally<
     // between the read above and here. On that (rare) miss the loader reloads
     // post-save state — which already contains the commit — so `add_commit`
     // is a harmless no-op and the resident tree is the full, correct history.
-    sedimentrees
+    let frontier_after: Vec<CommitId> = sedimentrees
         .with_entry_hydrated(
             id,
             || load_tree_via_putter::<Async, _>(putter),
             |tree| {
                 tree.add_commit(commit);
+                tree.heads(&sedimentree_core::depth::CountLeadingZeroBytes)
             },
         )
         .await?;
@@ -343,6 +344,7 @@ pub(crate) async fn insert_commit_locally<
         sedimentree_id = ?id,
         commit_id = ?head,
         was_added,
+        frontier = ?frontier_after,
         "inserted local loose commit into resident sedimentree",
     );
 

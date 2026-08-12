@@ -1035,7 +1035,20 @@ impl Sedimentree {
                 continue;
             }
             if fragment.boundary().is_empty() {
-                heads.push(fragment.head());
+                // A root fragment's head is a frontier commit only when no
+                // loose commit descends from it. A loose commit that lists the
+                // fragment head as a parent is the fragment's only possible
+                // loose child, and nothing else can reach through the head in
+                // the loose dag — so a single linear scan decides coverage.
+                // Resurfacing a covered head (the pre-fix behavior) made the
+                // frontier depend on each node's fragment layout
+                let covered_by_loose = self
+                    .commits
+                    .values()
+                    .any(|c| c.parents().contains(&fragment.head()));
+                if !covered_by_loose {
+                    heads.push(fragment.head());
+                }
             } else if fragment
                 .boundary()
                 .iter()
@@ -2029,6 +2042,28 @@ mod tests {
                 let tree = Sedimentree::new(vec![fragment], vec![]);
 
                 assert_eq!(tree.heads(&CountLeadingZeroBytes), vec![expected]);
+            }
+            #[test]
+            fn covered_root_fragment_commit_must_not_resurface_as_head() {
+                // parity-flake shape: a ROOT fragment covers commit A
+                // and a loose commit C's parent A lives inside that fragment.
+                // The frontier must be [C] — A is covered by the fragment, not
+                // an open head. If the fragment head resurfaced as a frontier
+                // commit, nodes with different fragment layouts would report
+                // divergent frontiers.
+                let sid = make_sedimentree_id(0);
+                let blob_meta = make_blob_meta(0);
+                let a = CommitId::new([0x0a; 32]);
+                let c = CommitId::new([0x0c; 32]);
+                let frag = Fragment::new(sid, a, BTreeSet::new(), &[], blob_meta.clone());
+                let loose = LooseCommit::new(sid, c, BTreeSet::from([a]), blob_meta);
+                let tree = Sedimentree::new(vec![frag], vec![loose]);
+                let heads = tree.heads(&CountLeadingZeroBytes);
+                assert_eq!(
+                    heads,
+                    vec![c],
+                    "covered root-fragment commit resurfaced as a head: {heads:?}"
+                );
             }
             #[test]
             fn heads_empty_iff_tree_empty() {

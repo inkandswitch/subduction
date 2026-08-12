@@ -1291,10 +1291,14 @@ where
     ///
     /// # Returns
     ///
-    /// * `Ok(None)` if the commit is not on a fragment boundary.
-    /// * `Ok(Some(FragmentRequested))` if the commit is on a [`Fragment`]
-    ///   boundary — create the requested fragment and call
+    /// * `Ok((None, heads))` if the commit is not on a fragment boundary.
+    /// * `Ok((Some(FragmentRequested), heads))` if the commit is on a
+    ///   [`Fragment`] boundary — create the requested fragment and call
     ///   [`store_fragment`](Self::store_fragment) / [`add_fragment`](Self::add_fragment).
+    ///
+    /// `heads` is the sedimentree frontier observed after the write and
+    /// re-minimize — the caller's own post-persist view, so it never needs
+    /// a separate (racy) frontier read to know what the write produced.
     ///
     /// # Errors
     ///
@@ -1308,7 +1312,7 @@ where
         parents: BTreeSet<CommitId>,
         blob: Blob,
     ) -> Result<
-        Option<FragmentRequested>,
+        (Option<FragmentRequested>, Vec<CommitId>),
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
     > {
         let putter = self.storage.local_putter::<Async>(id);
@@ -1322,12 +1326,34 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
+        let heads_before = self
+            .sedimentrees
+            .get_cloned(&id)
+            .await
+            .map(|mut tree| tree.heads(&self.depth_metric))
+            .unwrap_or_default();
         self.minimize_tree(id).await;
+        let heads_after = self
+            .sedimentrees
+            .get_cloned(&id)
+            .await
+            .map(|mut tree| tree.heads(&self.depth_metric))
+            .unwrap_or_default();
+        tracing::debug!(
+            tree = ?id,
+            commit = ?commit_head,
+            heads_before = ?heads_before,
+            heads_after = ?heads_after,
+            "store_commit: frontier before/after minimize",
+        );
 
         let depth = self.depth_metric.to_depth(commit_head);
-        Ok(depth
-            .is_boundary()
-            .then(|| FragmentRequested::new(commit_head, depth)))
+        Ok((
+            depth
+                .is_boundary()
+                .then(|| FragmentRequested::new(commit_head, depth)),
+            heads_after,
+        ))
     }
 
     /// Add a new (incremental) commit locally and propagate it to all connected peers.
