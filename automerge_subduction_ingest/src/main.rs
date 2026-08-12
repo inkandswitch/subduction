@@ -315,7 +315,7 @@ async fn main() -> Result<()> {
     let signer = load_signer(&args)?;
 
     let (subduction, _handler, listener_fut, manager_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)

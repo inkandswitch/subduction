@@ -33,7 +33,7 @@ fn make_unique_blob(seed: u8) -> Blob {
 #[tokio::test]
 async fn add_single_commit_is_stored() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
@@ -62,7 +62,7 @@ async fn add_single_commit_is_stored() -> TestResult {
 #[tokio::test]
 async fn add_multiple_commits_all_stored() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
@@ -93,7 +93,7 @@ async fn add_multiple_commits_all_stored() -> TestResult {
 #[tokio::test]
 async fn commits_retrievable_after_add() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
@@ -145,7 +145,7 @@ async fn fingerprint_summary_includes_all_commits() -> TestResult {
     use sedimentree_core::crypto::fingerprint::FingerprintSeed;
 
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
@@ -200,7 +200,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
     };
 
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
@@ -287,7 +287,7 @@ async fn full_sync_sends_all_commits() -> TestResult {
     use subduction_core::connection::message::SyncMessage;
 
     let (client, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
