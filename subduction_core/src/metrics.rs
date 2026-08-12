@@ -27,9 +27,8 @@ pub fn connection_closed() {
 
 /// Publish the current number of active connections.
 ///
-/// The gauge is set to an observed truth rather than maintained with
-/// increment/decrement deltas, so a missed event (interrupted teardown,
-/// stalled pipeline) cannot make it drift: the next set heals it.
+/// Set to observed truth rather than maintained with deltas, so a missed
+/// event cannot make it drift: the next set heals it.
 #[inline]
 #[allow(clippy::cast_precision_loss)]
 pub fn set_connections_active(count: usize) {

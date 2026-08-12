@@ -1,17 +1,12 @@
-//! The `connections_active` gauge is set from the connection map itself
-//! rather than maintained with increment/decrement deltas, so a missed
-//! event cannot make it drift: the next refresh heals it.
+//! The `connections_active` gauge is set from the connection map itself,
+//! so a missed event cannot make it drift: the next refresh heals it.
 //!
-//! Uses a thread-local `DebuggingRecorder` and a plain `block_on` executor:
-//! none of the operations under test need a running task (the manager loop
-//! is never spawned but its command channel buffers, so handoffs succeed;
-//! `TestSpawn` discards futures), and the recorder is only visible on the
-//! installing thread.
+//! Runs under plain `block_on` with a thread-local `DebuggingRecorder`:
+//! nothing here needs a running task (the manager's command channel
+//! buffers; `TestSpawn` discards futures).
 //!
-//! Every gauge assertion below follows a deliberate poison
-//! (`set_connections_active(999)`), so each one demonstrates that the
-//! mutation's refresh *healed* the gauge — not merely that deltas happened
-//! to line up (the old increment/decrement implementation fails these).
+//! Each assertion follows a deliberate poison, proving the mutation's
+//! refresh *healed* the gauge rather than deltas happening to line up.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -87,9 +82,8 @@ fn connections_gauge_healed_by_every_mutation() {
             assert_eq!(gauge(&snapshotter), Some(1.0), "add_connection heals");
 
             // on_reconnect_success (the manager channel buffers the ReAdd;
-            // the sentinel ID is unallocatable, so even a future edit that
-            // spawns the manager cannot model an ID collision — the real
-            // allocator counts up from 0)
+            // the sentinel ID is unallocatable, so a future edit spawning
+            // the manager cannot model an ID collision)
             let conn_b = conn(peer_b);
             poison();
             subduction

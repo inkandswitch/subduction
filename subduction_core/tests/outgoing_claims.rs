@@ -1,13 +1,8 @@
 //! Outgoing-subscription claims must not outlive the connection era they
-//! were made in.
-//!
-//! A claim records "we already propagated our subscription to this peer" so
-//! `propagate_subscription` can skip redundant re-sends. The remote forgets
-//! our subscriptions when its side of the connection dies, so a claim that
-//! survives into the peer's next connection era would suppress
-//! re-establishment entirely — silent upstream unsubscription. Claims are
-//! therefore invalidated on the peer's absent → present transition, rather
-//! than relying on teardown (which can be skipped or interrupted).
+//! were made in: a stale claim suppresses re-propagation, silently
+//! unsubscribing this node upstream. Claims are invalidated on the peer's
+//! absent → present transition rather than relying on teardown (which can
+//! be skipped or interrupted).
 
 #![allow(clippy::panic)]
 
@@ -60,10 +55,9 @@ fn make_node() -> TestSubduction {
 }
 
 /// Returns the connection plus its remote transport half. The remote half
-/// must stay alive for the duration of the test: dropping it makes the
-/// spawned reader error out and emit a closure event, which would remove
-/// the peer and turn the next `add_connection` into an absent → present
-/// transition — silently changing what the assertions test.
+/// must stay alive: dropping it makes the reader exit and emit a closure
+/// event, turning the next `add_connection` into an absent → present
+/// transition and silently changing what the assertions test.
 fn make_conn(peer: PeerId) -> (Authenticated<Conn, Sendable>, PausableChannelTransport) {
     let (transport, remote) = PausableChannelTransport::pair();
     (

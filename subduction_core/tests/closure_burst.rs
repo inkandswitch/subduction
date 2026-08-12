@@ -33,14 +33,13 @@ use testresult::TestResult;
 /// The listener future is deliberately not spawned; it stands in for a
 /// listener too busy (or starved) to drain closure events.
 ///
-/// `current_thread` is load-bearing, not cosmetic: the sleeps below rely on
-/// single-threaded quiescence (a sleep yields until all spawned tasks are
-/// parked) so the burst's cleanup tasks deterministically reach their park
-/// points before the probes run.
+/// `current_thread` is load-bearing: the sleeps rely on single-threaded
+/// quiescence so the burst's cleanup tasks deterministically reach their
+/// park points before the probes run.
 #[tokio::test(flavor = "current_thread")]
 async fn manager_survives_closure_burst_without_listener_drain() -> TestResult {
     // Must exceed the closure-channel capacity or the test silently stops
-    // exercising the wedge.
+    // exercising the deadlock.
     const BURST: usize = subduction_core::subduction::CONNECTION_CLOSED_CHANNEL_CAPACITY + 8;
 
     let (subduction, _handler, _listener_fut, actor_fut) =

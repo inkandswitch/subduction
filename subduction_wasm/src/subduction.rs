@@ -99,11 +99,9 @@ pub(crate) const WASM_SHARD_COUNT: usize = 4;
 /// per tree this is on the order of ~90 MiB resident.
 pub(crate) const WASM_DEFAULT_MAX_RESIDENT_TREES: usize = 1_024;
 
-/// Send-counter seed from `Date.now()`, scaled to *microseconds* to match
-/// `subduction_core::peer::counter::wall_clock_seed` — a peer that migrates
-/// between a native and a Wasm embedder under the same signing key must not
-/// restart its sequence three orders of magnitude below its old high-water
-/// mark.
+/// Send-counter seed from `Date.now()`, scaled to microseconds to match
+/// `subduction_core::peer::counter::wall_clock_seed` — a peer migrating
+/// between embedders must not restart below its old high-water mark.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn date_now_micros_seed() -> u64 {
     (js_sys::Date::now() * 1_000.0) as u64
@@ -245,10 +243,8 @@ impl WasmSubduction {
             observer.clone(),
             WasmSpawn,
         )
-        // Wall-clock seeded so per-peer sequences resume above previous
-        // values across page reloads: receivers keep never-reset high-water
-        // marks, and an unseeded reload would have every heads update
-        // dropped as stale until the sequence climbed past the old mark.
+        // Wall-clock seeded so sequences resume above previous values across
+        // page reloads; receivers never reset their high-water marks.
         .with_send_counter(PeerCounter::with_seed(date_now_micros_seed));
 
         let eph_policy = opts

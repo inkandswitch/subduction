@@ -357,14 +357,12 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
         self
     }
 
-    /// Override the shared per-peer send counter.
+    /// Override the shared per-peer send counter. Defaults to an unseeded
+    /// counter (in-process monotonicity only).
     ///
-    /// Embedders with a wall clock should pass a seeded counter —
-    /// `PeerCounter::with_seed(wall_clock_seed)` — so a restarted process
-    /// resumes its per-peer sequences above previous values; receivers
-    /// keep never-reset high-water marks, and a restarted sequence would
-    /// be dropped as stale. Defaults to an unseeded counter (in-process
-    /// monotonicity only).
+    /// Embedders with a wall clock should pass
+    /// `PeerCounter::with_seed(wall_clock_seed)`; see the
+    /// `peer::counter` module docs for why.
     #[must_use]
     pub fn send_counter(mut self, counter: PeerCounter) -> Self {
         self.send_counter = Some(counter);

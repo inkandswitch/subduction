@@ -166,12 +166,9 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
         "Sedimentree should not be created for mismatched commit"
     );
 
-    // A blob mismatch is a defective message, not a broken transport: the
-    // peer must stay connected. This is the discriminating assertion for
-    // the reject-and-continue behavior — the connection-fatal version
-    // removed the peer here (its removal was state-only, so the reader
-    // kept running and even a follow-up commit could still land; only map
-    // membership reveals the disconnect).
+    // The discriminating assertion: connection-fatal removal was
+    // state-only (the reader kept running, so even a follow-up commit
+    // could land) — only map membership reveals the disconnect.
     assert!(
         subduction.connected_peer_ids().await.contains(&peer_id),
         "blob mismatch must not disconnect the peer"

@@ -63,13 +63,11 @@ pub struct TokioWebSocketServer<
     subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     address: SocketAddr,
     cancellation_token: CancellationToken,
-    /// Set by [`Self::stop`] (or by whichever supervisor fires first) before
-    /// any teardown begins. `stop()` runs `shutdown()` then `cancel()` with
-    /// a window between them in which a supervised future can complete and
-    /// observe an uncancelled token; gating supervision on a
-    /// swap-to-`true` of this flag keeps a graceful stop from logging a
-    /// spurious "exited outside shutdown" ERROR (and a genuine failure from
-    /// logging it twice).
+    /// Set by [`Self::stop`] (or the first supervisor to fire) before any
+    /// teardown. `stop()` runs `shutdown()` then `cancel()` with a window
+    /// between them in which a supervised future can observe an uncancelled
+    /// token; gating supervision on a swap of this flag prevents a spurious
+    /// ERROR on graceful stop and a double report on failure.
     stopping: Arc<AtomicBool>,
     /// Tracks the accept loop, the per-connection WebSocket
     /// listener/sender, and (in [`Self::setup`]) the [`Subduction`]
@@ -524,19 +522,17 @@ where
         //
         // Both are supervised: a server that outlives either future keeps
         // completing handshakes it can never service. An exit outside an
-        // orderly shutdown stops the whole server, in the same order as
-        // [`Self::stop`] (`shutdown()` before `cancel()`). The swap on
-        // `stopping` elects exactly one reporter; see the field docs for
-        // the race it prevents.
+        // orderly shutdown stops the whole server, in `stop()`'s order
+        // (`shutdown()` before `cancel()`). The `stopping` swap elects one
+        // reporter; see the field docs.
         let manager_token = server.cancellation_token.clone();
         let manager_subduction = server.subduction.clone();
         let manager_stopping = Arc::clone(&server.stopping);
         server.tasks.spawn(async move {
             let _ = manager_fut.await;
             if !manager_stopping.swap(true, Ordering::AcqRel) {
-                // Winning the swap makes this task responsible for teardown
-                // even if the token was somehow cancelled by another path —
-                // only the ERROR is gated on that, never the shutdown.
+                // Winning the swap owns teardown unconditionally; only the
+                // ERROR is gated on token state.
                 if !manager_token.is_cancelled() {
                     tracing::error!(
                         "Subduction connection manager exited outside shutdown; stopping server"

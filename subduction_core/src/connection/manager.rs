@@ -314,11 +314,9 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
 
                             // Normal completion cleanup - remove from tasks
                             // list. The guard must drop before the `closed`
-                            // send below: `closed` is bounded and drained only
-                            // by the listen loop, so the send can park, and
-                            // parking while holding `tasks` deadlocks the
-                            // command loop above (every `Command::Add` takes
-                            // `tasks.lock()`).
+                            // send: it can park (bounded, listener-drained),
+                            // and parking while holding `tasks` deadlocks
+                            // the command loop above.
                             {
                                 let mut tasks_guard = tasks.lock().await;
                                 let target_id: TaskId = task_id;

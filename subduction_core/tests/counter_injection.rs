@@ -1,10 +1,10 @@
 //! The counter injected via `SubductionBuilder::send_counter` must be the
-//! one that actually stamps messages — and must be shared between the
-//! `SyncHandler` and `Subduction` so both draw from one per-peer sequence.
+//! one that stamps messages, shared between the `SyncHandler` and
+//! `Subduction` so both draw from one per-peer sequence.
 //!
 //! Guards the wiring, not the counter: a builder that silently dropped the
-//! injected counter (falling back to a default) would disable seeding in
-//! production while every counter unit test still passed.
+//! injected counter would disable seeding while every counter unit test
+//! still passed.
 
 #![allow(clippy::panic)]
 
@@ -61,8 +61,8 @@ async fn injected_send_counter_is_used_and_shared() -> TestResult {
     Ok(())
 }
 
-/// `build_composed()` — the path the production CLI ships through — has its
-/// own copy of the counter wiring; guard it independently of `build()`.
+/// `build_composed()` — the path the CLI uses — has its own copy of the
+/// counter wiring; guard it independently of `build()`.
 #[tokio::test]
 async fn injected_send_counter_flows_through_build_composed() -> TestResult {
     let (subduction, _listener_fut, _actor_fut, sync_handler) =

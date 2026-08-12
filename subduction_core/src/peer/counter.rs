@@ -9,15 +9,12 @@
 //! keyhive, etc.) and [`Subduction`] itself, so that every message to a
 //! given peer draws from the same monotonic sequence.
 //!
-//! A peer's counter is never reset while the process lives, not even when
-//! the peer fully disconnects. Receivers keep a per-peer high-water mark
-//! that survives reconnects (see `FilteredHeadsNotifier`), so a sender that
-//! restarted its sequence would have everything below the old mark dropped
-//! as stale. For the same reason, embedders that can read a wall clock
-//! should construct the counter with a seed
-//! ([`PeerCounter::with_seed`] + `wall_clock_seed`) so a restarted
-//! *process* also resumes above any value it could plausibly have sent
-//! before. The default seed is zero: in-process monotonicity only.
+//! A peer's counter is never reset, even on full disconnect: receivers keep
+//! a never-reset high-water mark (see `FilteredHeadsNotifier`), so a
+//! restarted sequence would be dropped as stale. Embedders with a wall
+//! clock should seed the counter ([`PeerCounter::with_seed`] +
+//! `wall_clock_seed`) so a restarted *process* also resumes above previous
+//! values. The default seed is zero: in-process monotonicity only.
 //!
 //! [`SyncHandler`]: crate::handler::sync::SyncHandler
 //! [`Subduction`]: crate::subduction::Subduction
@@ -37,13 +34,11 @@ use crate::peer::id::PeerId;
 /// [`Mutex`] is only held briefly to insert new peers.
 ///
 /// Entries are never removed (the monotonicity contract outlives any
-/// connection), so the map grows with the number of distinct peers stamped
-/// during the process lifetime — on the order of 100 bytes per peer
-/// including map overhead. A server with extreme peer churn may eventually
-/// want era-based GC; unbounded-but-tiny is the deliberate trade-off here.
+/// connection), so the map grows with distinct peers stamped per process
+/// lifetime — ~100 bytes each. Deliberate trade-off; extreme peer churn
+/// may eventually want era-based GC.
 ///
-/// Clones share the same counters (and seed); see [`Self::with_seed`] for
-/// seeding.
+/// Clones share the same counters and seed.
 ///
 /// ```ignore
 /// let counter = PeerCounter::default();
@@ -59,14 +54,12 @@ struct Inner {
 }
 
 impl PeerCounter {
-    /// Create a counter whose fresh per-peer entries start from `seed()`.
+    /// Create a counter whose fresh per-peer entries start from `seed()`,
+    /// evaluated once per peer at its first stamp.
     ///
-    /// The seed is evaluated once per peer, at that peer's first stamp.
-    /// Embedders with a wall clock should pass `wall_clock_seed` (or an
-    /// equivalent, e.g. `Date.now()`-based on Wasm) so that a restarted
-    /// process resumes above its previous sequence; receivers keep
-    /// never-reset high-water marks, and a restarted sequence would be
-    /// dropped as stale until it climbed past the old mark.
+    /// Embedders with a wall clock should pass `wall_clock_seed` (or a
+    /// `Date.now()`-based equivalent on Wasm) so a restarted process
+    /// resumes above its previous sequence; see the module docs.
     #[must_use]
     pub fn with_seed(seed: fn() -> u64) -> Self {
         Self(Arc::new(Inner {
@@ -116,17 +109,14 @@ const fn zero_seed() -> u64 {
     0
 }
 
-/// Wall-clock counter seed: microseconds since the Unix epoch.
+/// Wall-clock counter seed: microseconds since the Unix epoch. Opt-in for
+/// embedders via [`PeerCounter::with_seed`]; core never reads the clock.
 ///
-/// Opt-in for embedders (pass to [`PeerCounter::with_seed`]); core never
-/// reads the clock itself. A restarted process resumes above its previous
-/// sequence unless it sustained more than a million messages per second to
-/// a single peer, or the clock stepped backwards between runs. Not
-/// available on `wasm32-unknown-unknown`, where `SystemTime::now()`
-/// panics — Wasm embedders should supply their own seed, scaled to the
-/// same unit (e.g. `Date.now() * 1_000.0`, since `Date.now()` returns
-/// milliseconds): a peer migrating between embedders under one signing
-/// key must not restart below its old high-water mark.
+/// Restart monotonicity holds unless the process sustained >1M msgs/sec to
+/// one peer or the clock stepped backwards between runs. Not available on
+/// `wasm32-unknown-unknown` (`SystemTime::now()` panics there); Wasm
+/// embedders should seed in the same unit — `Date.now() * 1_000.0` — so a
+/// peer migrating between embedders stays above its old high-water mark.
 #[cfg(all(
     feature = "system_time",
     not(all(target_family = "wasm", target_os = "unknown"))
@@ -143,9 +133,8 @@ pub fn wall_clock_seed() -> u64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(since_epoch) => u64::try_from(since_epoch.as_micros()).unwrap_or(u64::MAX),
         Err(e) => {
-            // Pre-epoch clock (unset RTC, badly skewed VM). Degrading to an
-            // unseeded counter silently reintroduces the restart-staleness
-            // failure this seed exists to prevent — make it loud.
+            // Pre-epoch clock: silently degrading to unseeded would
+            // reintroduce the failure this seed exists to prevent.
             tracing::warn!(
                 error = %e,
                 "system clock is before the Unix epoch; send counters are \

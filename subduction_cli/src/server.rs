@@ -44,7 +44,7 @@ use subduction_websocket::{
 };
 use tokio::{net::TcpListener, task::JoinSet, time};
 use tokio_util::sync::CancellationToken;
-use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
+use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 use subduction_ephemeral::{
     clock::std_clock::StdClock, config::EphemeralConfig, handler::EphemeralHandler,
@@ -636,13 +636,10 @@ where
                         let resident = resident_subduction.resident_sedimentree_count().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
-                        // Re-sample the connection gauge so it heals even if
-                        // an event-driven refresh was missed (e.g. teardown
-                        // interrupted mid-flight). Unlike the event-driven
-                        // refresh, this publishes *outside* the connections
-                        // lock, so it can briefly clobber a newer value —
-                        // stale by at most one refresh interval, healed by
-                        // the next event or tick.
+                        // Re-sample the connection gauge so a missed
+                        // event-driven refresh heals. Publishes outside the
+                        // connections lock, so it can briefly clobber a
+                        // newer value — stale for at most one interval.
                         subduction_core::metrics::set_connections_active(
                             resident_subduction.total_connection_count().await,
                         );
@@ -715,18 +712,15 @@ where
     );
     tracing::info!(peer = %peer_id, "Peer ID");
 
-    // Spawn background tasks.
-    //
     // The manager and listener are supervised: a node that outlives either
-    // keeps accepting handshakes it can never service. If one exits outside
-    // an orderly shutdown, cancel the root token so the process exits and
-    // the service manager restarts it. `supervised_failure` makes that exit
-    // nonzero, since `Restart=on-failure` ignores clean exits.
+    // accepts handshakes it can never service. An exit outside an orderly
+    // shutdown cancels the root token so the process exits and the service
+    // manager restarts it; `supervised_failure` makes that exit nonzero
+    // (`Restart=on-failure` ignores clean exits).
     //
-    // Ordering is load-bearing in the supervision arms: the flag store must
-    // precede `cancel()`, because the final check in `run_server` is only
-    // reached by waking from `token.cancelled().await` — the token's
-    // internal synchronization is what makes the store visible there.
+    // The flag store must precede `cancel()`: the final check is only
+    // reached by waking from `token.cancelled().await`, whose internal
+    // synchronization makes the store visible.
     let supervised_failure = Arc::new(AtomicBool::new(false));
     let actor_cancel = token.clone();
     let listener_cancel = token.clone();
@@ -1174,9 +1168,21 @@ async fn handle_websocket<H: CliWireHandler>(
     ws_config.max_message_size = Some(max_message_size);
     ws_config.max_frame_size = Some(max_frame_size);
 
+    // Behind a reverse proxy `addr` is the proxy's loopback socket;
+    // `X-Forwarded-For` is the only in-band client address. Capturing it
+    // here lets the handshake-complete log pair `peer` with the real source.
+    let mut forwarded_for: Option<String> = None;
     let ws_stream = match async_tungstenite::tokio::accept_hdr_async_with_config(
         tcp,
-        NoCallback,
+        |req: &tungstenite::handshake::server::Request,
+         resp: tungstenite::handshake::server::Response| {
+            forwarded_for = req
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .map(ToOwned::to_owned);
+            Ok(resp)
+        },
         Some(ws_config),
     )
     .await
@@ -1245,6 +1251,7 @@ async fn handle_websocket<H: CliWireHandler>(
             tracing::info!(
                 peer = %auth.peer_id(),
                 addr = %addr,
+                forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
                 "WebSocket handshake complete"
             );
             auth

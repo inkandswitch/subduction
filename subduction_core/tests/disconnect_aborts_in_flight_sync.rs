@@ -427,13 +427,10 @@ async fn reconnect_during_disconnect_from_peer_never_clobbers_mux() -> TestResul
 }
 
 /// The send counter must survive disconnects — including removal of the
-/// peer's *last* connection.
-///
-/// Receivers keep a per-peer high-water mark that is never reset
-/// (`FilteredHeadsNotifier`), so a sender that restarted its sequence
-/// after a reconnect would have everything below the old mark silently
-/// dropped as stale. The counter is therefore monotone for the life of
-/// the process, across any number of disconnect/reconnect cycles.
+/// peer's *last* connection: receivers keep a never-reset high-water mark
+/// (`FilteredHeadsNotifier`), so a restarted sequence would be dropped as
+/// stale. Monotone for the life of the process, across any number of
+/// disconnect/reconnect cycles.
 #[tokio::test(flavor = "current_thread")]
 async fn send_counter_survives_disconnects() -> TestResult {
     let a_signer = make_signer(52);
