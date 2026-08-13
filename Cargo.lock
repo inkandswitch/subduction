@@ -322,6 +322,7 @@ dependencies = [
  "subduction_core",
  "subduction_crypto",
  "subduction_websocket",
+ "testresult",
  "tokio",
  "tracing",
  "tracing-subscriber",
