@@ -669,7 +669,17 @@ impl Sedimentree {
 
         // Prune loose commits whose ranges are covered by kept fragments.
         let dag = commit_dag::CommitDag::from_commits(self.commits.values());
-        let commit_heads = dag.simplify(&minimized_fragments, depth_metric);
+        let mut commit_heads = dag.simplify(&minimized_fragments, depth_metric);
+        // A root fragment has no boundary metadata at all. Retain its loose
+        // head companion so peers can reconstruct the missing parent edge
+        // when fragment-internal loose rows survive.
+        commit_heads.extend(
+            minimized_fragments
+                .iter()
+                .filter(|fragment| fragment.boundary().is_empty())
+                .map(Fragment::head)
+                .filter(|head| self.commits.contains_key(head)),
+        );
 
         KeepSets {
             fragment_heads,
@@ -718,8 +728,12 @@ impl Sedimentree {
         // Include fragment heads and boundaries in the commit fingerprint set.
         // This tells the remote "I know about these CommitIds" so it doesn't
         // re-send them as loose commits — their data is inside our fragments.
+        // Exception: a root fragment's empty boundary does not encode its
+        // head's direct parents, so its loose companion must converge too.
         for fragment in self.fragments.values() {
-            commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
+            if !fragment.boundary().is_empty() {
+                commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
+            }
             for boundary in fragment.boundary() {
                 commit_fingerprints.insert(Fingerprint::new(seed, boundary));
             }
@@ -764,9 +778,13 @@ impl Sedimentree {
 
         // Include fragment heads and boundaries in the commit fingerprint set
         // for coverage (prevents remote from re-sending these as loose commits).
-        // NOT added to commit_fp_to_id — they're not resolvable as standalone items.
+        // Coverage-only entries are not added to commit_fp_to_id because they
+        // are not resolvable as standalone items. Root fragment heads are the
+        // exception: they are advertised only by a real loose companion.
         for fragment in self.fragments.values() {
-            commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
+            if !fragment.boundary().is_empty() {
+                commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
+            }
             for boundary in fragment.boundary() {
                 commit_fingerprints.insert(Fingerprint::new(seed, boundary));
             }
@@ -939,7 +957,14 @@ impl Sedimentree {
                     }
                 }
             }
-            local_only_commits.retain(|(id, _)| !covered.contains(id));
+            // Keep the metadata companion only for a matched root fragment;
+            // non-root fragments already encode a boundary horizon.
+            local_only_commits.retain(|(id, _)| {
+                !covered.contains(id)
+                    || matched_fragment_boundaries
+                        .get(id)
+                        .is_some_and(Set::is_empty)
+            });
         }
 
         let local_only_fragments: Vec<(&CommitId, &Fragment)> = self
@@ -953,8 +978,10 @@ impl Sedimentree {
             .collect();
 
         // Find requestor fingerprints we don't have locally (echo back).
-        // Include fragment head/boundary coverage in local commit fps
-        // so the remote doesn't ask us to send them as standalone items.
+        // Include fragment head/boundary coverage in local commit fps so the
+        // remote doesn't ask us to send them as standalone items. A root
+        // fragment head is excluded because its loose companion carries the
+        // direct-parent metadata absent from the empty fragment boundary.
         let mut local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
             .commits
             .values()
@@ -962,7 +989,9 @@ impl Sedimentree {
             .collect();
 
         for fragment in self.fragments.values() {
-            local_commit_fps.insert(Fingerprint::new(seed, &fragment.head()));
+            if !fragment.boundary().is_empty() {
+                local_commit_fps.insert(Fingerprint::new(seed, &fragment.head()));
+            }
             for boundary in fragment.boundary() {
                 local_commit_fps.insert(Fingerprint::new(seed, boundary));
             }
@@ -1046,7 +1075,10 @@ impl Sedimentree {
                     .commits
                     .values()
                     .any(|c| c.parents().contains(&fragment.head()));
-                if !covered_by_loose {
+                // When the fragment's retained loose companion exists, the
+                // loose DAG contributes this same head (or a descendant of
+                // it); do not emit the fragment identity a second time.
+                if !dag.contains_commit(&fragment.head()) && !covered_by_loose {
                     heads.push(fragment.head());
                 }
             } else if fragment
@@ -2055,7 +2087,7 @@ mod tests {
                 let blob_meta = make_blob_meta(0);
                 let a = CommitId::new([0x0a; 32]);
                 let c = CommitId::new([0x0c; 32]);
-                let frag = Fragment::new(sid, a, BTreeSet::new(), &[], blob_meta.clone());
+                let frag = Fragment::new(sid, a, BTreeSet::new(), &[], blob_meta);
                 let loose = LooseCommit::new(sid, c, BTreeSet::from([a]), blob_meta);
                 let tree = Sedimentree::new(vec![frag], vec![loose]);
                 let heads = tree.heads(&CountLeadingZeroBytes);
@@ -3493,7 +3525,6 @@ mod tests {
                 "local should send exactly the fragment"
             );
 
-            // Local should NOT send covered commits (they were pruned by minimize)
             assert_eq!(
                 diff.local_only_commits.len(),
                 0,

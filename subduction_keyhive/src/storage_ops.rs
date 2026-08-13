@@ -123,6 +123,7 @@ where
 pub async fn save_event<T, S, Async>(
     storage: &S,
     event: &StaticEvent<T>,
+    source: Option<crate::peer_id::KeyhivePeerId>,
 ) -> Result<(StorageHash, bool), StorageError>
 where
     T: ContentRef,
@@ -130,7 +131,7 @@ where
     Async: FutureForm,
 {
     let bytes = bincode_serialize(event)?;
-    save_event_bytes(storage, bytes).await
+    save_event_bytes(storage, bytes, source).await
 }
 
 /// Save raw event bytes to storage.
@@ -143,6 +144,7 @@ where
 pub async fn save_event_bytes<S, Async>(
     storage: &S,
     bytes: Vec<u8>,
+    source: Option<crate::peer_id::KeyhivePeerId>,
 ) -> Result<(StorageHash, bool), StorageError>
 where
     S: KeyhiveStorage<Async>,
@@ -151,14 +153,14 @@ where
     let hash = hash_event_bytes(&bytes);
 
     // Quick type detection
-    let kind = bincode_deserialize::<StaticEvent<Vec<u8>>>(&bytes)
-        .ok()
-        .map(|ev| match &ev {
+    let kind = match bincode_deserialize::<StaticEvent<Vec<u8>>>(&bytes) {
+        Ok(ev) => match &ev {
             StaticEvent::Delegated(_) | StaticEvent::Revoked(_) => "delegation",
             StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => "prekey",
             StaticEvent::CgkaOperation(_) => "cgka",
-        })
-        .unwrap_or("unknown");
+        },
+        Err(_) => "unknown",
+    };
 
     tracing::debug!(
         hash = %hash.to_hex(),
@@ -168,7 +170,7 @@ where
     );
 
     let inserted = storage
-        .save_event(hash, bytes)
+        .save_event_with_source(hash, bytes, source)
         .await
         .map_err(|e| StorageError::Save(e.to_string()))?;
 
@@ -252,6 +254,10 @@ where
 }
 
 /// Persist a local-only CGKA private-key delta.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if serialization or the storage write fails.
 pub async fn save_local_cgka_secret<S, Async>(
     storage: &S,
     secret: &LocalCgkaSecret,
@@ -661,7 +667,7 @@ mod tests {
         );
 
         for event in events.values() {
-            save_event::<_, _, Local>(&storage, event).await.unwrap();
+            save_event::<_, _, Local>(&storage, event, None).await.unwrap();
         }
 
         // Before compaction: 2 archives, N events

@@ -281,6 +281,10 @@ pub type SendableRuntimeProtocol<Listener, Conn, Store> = crate::KeyhiveProtocol
 pub type SendableRuntimeKeyhiveProtocol<Conn, Store> =
     SendableRuntimeProtocol<NoListener, Conn, Store>;
 
+/// Sync-completion observer: invoked with the peer, request id, and whether
+/// the exchange changed local state.
+type SyncDoneObserver = dyn Fn(crate::KeyhivePeerId, RequestId, bool) + Send + Sync;
+
 /// [`Handler`] for multi-threaded runtimes.
 ///
 /// `SubConn` is the subduction connection type (from [`Handler`]). `Conn`
@@ -293,7 +297,7 @@ where
 {
     protocol: Arc<SendableRuntimeProtocol<Listener, Conn, Store>>,
     conn_adapter: ConnAdapter,
-    sync_done_observer: Option<Arc<dyn Fn(crate::KeyhivePeerId, RequestId, bool) + Send + Sync>>,
+    sync_done_observer: Option<Arc<SyncDoneObserver>>,
     _phantom: PhantomData<SubConn>,
 }
 

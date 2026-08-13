@@ -912,7 +912,6 @@ where
             Self::cancel_detached_muxes(detached_muxes).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
-            Some(false)
         };
         self.refresh_connection_gauge().await;
         Some(was_last)

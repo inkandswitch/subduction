@@ -110,6 +110,20 @@ pub trait KeyhiveStorage<Async: FutureForm> {
         data: Vec<u8>,
     ) -> Async::Future<'_, Result<bool, Self::Error>>;
 
+    /// Save an event to storage, recording the peer it was learned from.
+    ///
+    /// The default implementation ignores the source; stores that keep a
+    /// per-event source log override this. `source` is `None` for locally
+    /// created events.
+    fn save_event_with_source(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+        _source: Option<crate::peer_id::KeyhivePeerId>,
+    ) -> Async::Future<'_, Result<bool, Self::Error>> {
+        self.save_event(hash, data)
+    }
+
     /// Load all events from storage.
     ///
     /// Returns a vector of (hash, data) pairs for all stored events.

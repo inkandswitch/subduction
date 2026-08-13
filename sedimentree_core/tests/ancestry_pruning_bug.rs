@@ -262,6 +262,47 @@ fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
     );
 }
 
+/// Regression for a persisted stress failure: one peer retained the loose
+/// metadata for a root fragment's head while another held the same fragment
+/// plus fragment-internal loose rows but not that head. The fragment alone
+/// cannot encode the missing direct-parent edge, so the internal row appeared
+/// as a second frontier head and the old fingerprint summary prevented repair.
+#[test]
+fn root_fragment_syncs_its_loose_head_companion() {
+    let root = loose(b'A', &[]);
+    let internal = loose(b'B', &[b'A']);
+    let head = loose(0, &[b'B']);
+    let frag = fragment(0, &[], &[0], 9);
+
+    let local = Sedimentree::new(
+        vec![frag.clone()],
+        vec![root.clone(), internal.clone(), head.clone()],
+    )
+    .minimize(&sedimentree_core::depth::CountLeadingZeroBytes);
+    let mut remote = Sedimentree::new(vec![frag], vec![root, internal]);
+
+    assert!(
+        local.loose_commits().any(|commit| commit.head() == head.head()),
+        "minimization must retain the fragment-head companion"
+    );
+    let diff = local.diff_remote_fingerprints(&remote.fingerprint_summarize(&seed()));
+    assert_eq!(
+        diff.local_only_commits
+            .iter()
+            .map(|(_, commit)| commit.head())
+            .collect::<Vec<_>>(),
+        vec![head.head()],
+        "a fragment-only peer must receive the missing head metadata"
+    );
+
+    remote.add_commit(head);
+    let mut local_heads = local.heads(&sedimentree_core::depth::CountLeadingZeroBytes);
+    let mut remote_heads = remote.heads(&sedimentree_core::depth::CountLeadingZeroBytes);
+    local_heads.sort_unstable();
+    remote_heads.sort_unstable();
+    assert_eq!(local_heads, remote_heads);
+}
+
 /// **Critical correctness case**: server has loose P → B → H (P is
 /// older, H is newer) AND fragment F(head=H, boundary={B}). Remote
 /// has fragment F + loose B. P is older than the fragment boundary
@@ -298,6 +339,9 @@ fn does_not_prune_commit_past_fragment_boundary() {
 /// (which is the remote's fragment boundary, in
 /// `remote.commit_fingerprints`). Optimization preserved without
 /// requiring the local to hold the fragment metadata.
+///
+/// This is a non-root fragment, so its boundary preserves the covered
+/// range; only empty-boundary root fragments need a loose-head companion.
 #[test]
 fn asymmetric_fragment_optimization_via_matching_local_head() {
     let a = loose(b'A', &[]);
@@ -314,12 +358,7 @@ fn asymmetric_fragment_optimization_via_matching_local_head() {
     let remote_summary = remote.fingerprint_summarize(&seed());
     let diff = local.diff_remote_fingerprints(&remote_summary);
 
-    assert_eq!(
-        diff.local_only_commits.len(),
-        0,
-        "local's loose D matches the remote's fragment head; the walk \
-         covers B and C en route to boundary A — no duplicate sends"
-    );
+    assert_eq!(diff.local_only_commits.len(), 0);
 }
 
 /// True asymmetric case: local has loose A, B, C only (no D, no
