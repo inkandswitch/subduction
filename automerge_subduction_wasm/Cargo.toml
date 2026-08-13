@@ -33,9 +33,13 @@ wasm-bindgen = { workspace = true }
 wasm_refgen = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
-# Pulled in by automerge 0.9 (fragments branch); needs explicit wasm_js opt-in.
-getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = [
+  "wasm_js",
+] }
+# Pulled in by automerge; needs explicit wasm_js opt-in.
+getrandom_04 = { package = "getrandom", version = "0.4", features = [
+  "wasm_js",
+] }
 
 [features]
 default = ["idb", "std", "wasm-tracing"]
@@ -53,7 +57,16 @@ std = [
 wasm-tracing = ["subduction_wasm_bootstrap/wasm-tracing"]
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-multivalue", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-reference-types", "--enable-sign-ext", "--enable-simd"]
+wasm-opt = [
+  "-Oz",
+  "--enable-bulk-memory",
+  "--enable-multivalue",
+  "--enable-mutable-globals",
+  "--enable-nontrapping-float-to-int",
+  "--enable-reference-types",
+  "--enable-sign-ext",
+  "--enable-simd",
+]
 
 [lints]
 workspace = true
