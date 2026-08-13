@@ -3,7 +3,10 @@
 use std::{
     net::SocketAddr,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -18,7 +21,10 @@ use subduction_core::{
         audience::{Audience, DiscoveryId},
     },
     nonce_cache::NonceCache,
-    peer::id::PeerId,
+    peer::{
+        counter::{PeerCounter, wall_clock_seed},
+        id::PeerId,
+    },
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::{Subduction, builder::SubductionBuilder},
     timeout::call::CallTimeout,
@@ -38,7 +44,7 @@ use subduction_websocket::{
 };
 use tokio::{net::TcpListener, task::JoinSet, time};
 use tokio_util::sync::CancellationToken;
-use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
+use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 use subduction_ephemeral::{
     clock::std_clock::StdClock, config::EphemeralConfig, handler::EphemeralHandler,
@@ -550,6 +556,9 @@ where
         .storage(storage, storage_policy)
         .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout)
+        // Seeded so sequences resume above previous values across restarts;
+        // see `peer::counter`.
+        .send_counter(PeerCounter::with_seed(wall_clock_seed))
         .roundtrip_timeout(Duration::from_secs(args.timeout));
 
     let builder = if let Some(max) = args.max_resident_trees {
@@ -626,6 +635,12 @@ where
                         let resident = resident_subduction.resident_sedimentree_count().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
+                        // Heals the connections gauge if an event-driven
+                        // refresh was missed.
+                        subduction_core::metrics::set_connections_active(
+                            resident_subduction.total_connection_count().await,
+                        );
+
                         // Rank-shaped gauges carry the skew; the log line
                         // carries the peer ids (see `requestor_tally` docs).
                         if let Some(tally) = &requestor_tally {
@@ -694,20 +709,51 @@ where
     );
     tracing::info!(peer = %peer_id, "Peer ID");
 
-    // Spawn background tasks
+    // The manager and listener are supervised: a node that outlives either
+    // accepts handshakes it can never service. An exit outside an orderly
+    // shutdown cancels the root token so the process exits and the service
+    // manager restarts it; `supervised_failure` makes that exit nonzero
+    // (`Restart=on-failure` ignores clean exits).
+    //
+    // The flag store must precede `cancel()`: the final check is only
+    // reached by waking from `token.cancelled().await`, whose internal
+    // synchronization makes the store visible.
+    let supervised_failure = Arc::new(AtomicBool::new(false));
     let actor_cancel = token.clone();
     let listener_cancel = token.clone();
 
+    let manager_supervisor = actor_cancel.clone();
+    let manager_failed = Arc::clone(&supervised_failure);
     tokio::spawn(async move {
         tokio::select! {
-            _ = manager_fut => {},
+            _ = manager_fut => {
+                if !manager_supervisor.is_cancelled() {
+                    tracing::error!(
+                        "connection manager exited unexpectedly; \
+                         shutting down for supervised restart"
+                    );
+                    manager_failed.store(true, Ordering::Release);
+                    manager_supervisor.cancel();
+                }
+            },
             () = actor_cancel.cancelled() => {}
         }
     });
 
+    let listener_supervisor = listener_cancel.clone();
+    let listener_failed = Arc::clone(&supervised_failure);
     tokio::spawn(async move {
         tokio::select! {
-            _ = listener_fut => {},
+            _ = listener_fut => {
+                if !listener_supervisor.is_cancelled() {
+                    tracing::error!(
+                        "dispatch listener exited unexpectedly; \
+                         shutting down for supervised restart"
+                    );
+                    listener_failed.store(true, Ordering::Release);
+                    listener_supervisor.cancel();
+                }
+            },
             () = listener_cancel.cancelled() => {}
         }
     });
@@ -954,6 +1000,14 @@ where
         iroh_task.abort();
     }
 
+    // A supervision-initiated shutdown must exit nonzero so
+    // `Restart=on-failure` restarts the process.
+    if supervised_failure.load(Ordering::Acquire) {
+        return Err(eyre::eyre!(
+            "critical background task (connection manager or listener) exited unexpectedly"
+        ));
+    }
+
     Ok(())
 }
 
@@ -1111,9 +1165,20 @@ async fn handle_websocket<H: CliWireHandler>(
     ws_config.max_message_size = Some(max_message_size);
     ws_config.max_frame_size = Some(max_frame_size);
 
+    // Behind a reverse proxy `addr` is the proxy's loopback socket;
+    // `X-Forwarded-For` is the only in-band client address.
+    let mut forwarded_for: Option<String> = None;
     let ws_stream = match async_tungstenite::tokio::accept_hdr_async_with_config(
         tcp,
-        NoCallback,
+        |req: &tungstenite::handshake::server::Request,
+         resp: tungstenite::handshake::server::Response| {
+            forwarded_for = req
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .map(ToOwned::to_owned);
+            Ok(resp)
+        },
         Some(ws_config),
     )
     .await
@@ -1182,6 +1247,7 @@ async fn handle_websocket<H: CliWireHandler>(
             tracing::info!(
                 peer = %auth.peer_id(),
                 addr = %addr,
+                forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
                 "WebSocket handshake complete"
             );
             auth

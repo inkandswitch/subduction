@@ -32,7 +32,7 @@ use subduction_core::{
     handshake::audience::DiscoveryId,
     multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
     nonce_cache::NonceCache,
-    peer::id::PeerId,
+    peer::{counter::PeerCounter, id::PeerId},
     spawn::Spawn,
     storage::powerbox::StoragePowerbox,
     subduction::{Subduction, per_peer_sync::PerPeerSync},
@@ -98,6 +98,14 @@ pub(crate) const WASM_SHARD_COUNT: usize = 4;
 /// so the default resident set is small. At a few tens of KiB of metadata
 /// per tree this is on the order of ~90 MiB resident.
 pub(crate) const WASM_DEFAULT_MAX_RESIDENT_TREES: usize = 1_024;
+
+/// Send-counter seed from `Date.now()`, scaled to microseconds to match
+/// `subduction_core::peer::counter::wall_clock_seed` — a peer migrating
+/// between embedders must not restart below its old high-water mark.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn date_now_micros_seed() -> u64 {
+    (js_sys::Date::now() * 1_000.0) as u64
+}
 
 /// A spawner that uses wasm-bindgen-futures to spawn local tasks.
 #[derive(Debug, Clone, Copy, Default)]
@@ -234,7 +242,10 @@ impl WasmSubduction {
             depth_metric.clone(),
             observer.clone(),
             WasmSpawn,
-        );
+        )
+        // Wall-clock seeded so sequences resume above previous values across
+        // page reloads; receivers never reset their high-water marks.
+        .with_send_counter(PeerCounter::with_seed(date_now_micros_seed));
 
         let eph_policy = opts
             .ephemeral_policy()

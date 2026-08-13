@@ -61,9 +61,10 @@ pub const SYNC_COMMITS_SENT_TOTAL: &str = "subduction_sync_commits_sent_total";
 pub const SYNC_FRAGMENTS_SENT_TOTAL: &str = "subduction_sync_fragments_sent_total";
 /// Per-connection sync call failures, labeled by `reason`.
 pub const SYNC_CALL_FAILURES_TOTAL: &str = "subduction_sync_call_failures_total";
-/// Signature verification failures on received sync items, labeled by
-/// `kind` (`commit`/`fragment`). A sustained rate means a peer keeps
-/// retrying data that can never be accepted.
+/// Verification failures on received sync items, labeled by `kind`:
+/// signature failures (`commit`/`fragment`) and claimed-vs-actual blob
+/// metadata mismatches (`commit_blob`/`fragment_blob`). A sustained rate
+/// means a peer keeps retrying data that can never be accepted.
 pub const SYNC_VERIFY_FAILURES_TOTAL: &str = "subduction_sync_verify_failures_total";
 /// Batch-sync requests in the last refresh window from the rank-N most
 /// active peer (`rank` = `"1"`..`"10"`). Shows request skew — is one peer

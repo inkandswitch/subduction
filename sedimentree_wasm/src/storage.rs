@@ -10,8 +10,8 @@ use future_form::{FutureForm, Local};
 use futures::future::LocalBoxFuture;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
-    blob::Blob,
-    codec::error::DecodeError,
+    blob::{Blob, has_meta::HasBlobMeta},
+    codec::{decode::DecodeFields, encode::EncodeFields, error::DecodeError, schema::Schema},
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::{LooseCommit, id::CommitId},
@@ -19,7 +19,11 @@ use sedimentree_core::{
 use subduction_core::storage::traits::{
     Storage, load_fragment_metas_via_full, load_loose_commit_metas_via_full,
 };
-use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
+use subduction_crypto::{
+    signed::Signed,
+    verified_meta::{BlobMismatch, VerifiedMeta},
+    verified_signature::VerifiedSignature,
+};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -173,6 +177,19 @@ impl core::fmt::Debug for JsStorage {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("JsStorage").finish()
     }
+}
+
+/// Reconstruct a [`VerifiedMeta`] from app-supplied storage, re-hashing the
+/// blob against the signed payload's claimed metadata: "trust on load" is
+/// unenforceable when the JS app owns the store and load callbacks, and an
+/// unverified mismatch would be shipped to (and rejected by) every remote.
+/// Signatures are not re-verified; the cost is one hash over the blob.
+fn verify_blob_on_load<T: HasBlobMeta + Schema + EncodeFields + DecodeFields>(
+    signed: Signed<T>,
+    blob: Blob,
+) -> Result<VerifiedMeta<T>, JsStorageError> {
+    let verified = VerifiedSignature::try_from_trusted(signed)?;
+    Ok(VerifiedMeta::new(verified, blob)?)
 }
 
 impl Storage<Local> for JsStorage {
@@ -349,7 +366,7 @@ impl Storage<Local> for JsStorage {
                     })?;
                 let signed: Signed<LooseCommit> = wasm_commit.signed().into();
                 let blob = Blob::new(wasm_commit.blob().to_vec());
-                result.push(VerifiedMeta::try_from_trusted(signed, blob)?);
+                result.push(verify_blob_on_load(signed, blob)?);
             }
 
             Ok(result)
@@ -394,7 +411,7 @@ impl Storage<Local> for JsStorage {
                 })?;
             let signed: Signed<LooseCommit> = wasm_commit.signed().into();
             let blob = Blob::new(wasm_commit.blob().to_vec());
-            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
+            Ok(Some(verify_blob_on_load(signed, blob)?))
         })
     }
 
@@ -501,7 +518,7 @@ impl Storage<Local> for JsStorage {
             let signed: Signed<Fragment> = wasm_fragment.signed().into();
             let blob = Blob::new(wasm_fragment.blob().to_vec());
 
-            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
+            Ok(Some(verify_blob_on_load(signed, blob)?))
         })
     }
 
@@ -559,7 +576,7 @@ impl Storage<Local> for JsStorage {
                     })?;
                 let signed: Signed<Fragment> = wasm_fragment.signed().into();
                 let blob = Blob::new(wasm_fragment.blob().to_vec());
-                result.push(VerifiedMeta::try_from_trusted(signed, blob)?);
+                result.push(verify_blob_on_load(signed, blob)?);
             }
 
             Ok(result)
@@ -710,6 +727,12 @@ pub enum JsStorageError {
     /// Decoding failed.
     #[error(transparent)]
     Decode(#[from] DecodeError),
+
+    /// Storage returned blob bytes that don't hash to the signed payload's
+    /// claimed metadata: the store is corrupt or the load callback returned
+    /// the wrong bytes (e.g. regenerated instead of original).
+    #[error(transparent)]
+    BlobMismatch(#[from] BlobMismatch),
 
     /// Failed to compute digest from signed payload.
     #[error("Failed to compute digest from signed payload")]

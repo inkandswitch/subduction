@@ -125,6 +125,7 @@ pub struct SubductionBuilder<
     default_roundtrip_timeout: Option<Duration>,
     depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
+    send_counter: Option<PeerCounter>,
     max_resident_trees: Option<usize>,
     sedimentrees: SedimentreesOption<SHARDS>,
 }
@@ -170,6 +171,7 @@ impl<const SHARDS: usize>
             default_roundtrip_timeout: None,
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
+            send_counter: None,
             max_resident_trees: None,
             sedimentrees: SedimentreesOption::default(),
         }
@@ -203,6 +205,7 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
+            send_counter: self.send_counter,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -230,6 +233,7 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
+            send_counter: self.send_counter,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -257,6 +261,7 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
+            send_counter: self.send_counter,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -281,6 +286,7 @@ impl<Sign, Sp, Store, Metric, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
+            send_counter: self.send_counter,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -336,6 +342,7 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: metric,
             nonce_cache: self.nonce_cache,
+            send_counter: self.send_counter,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
@@ -347,6 +354,18 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     #[must_use]
     pub fn nonce_cache(mut self, cache: NonceCache) -> Self {
         self.nonce_cache = Some(cache);
+        self
+    }
+
+    /// Override the shared per-peer send counter. Defaults to an unseeded
+    /// counter (in-process monotonicity only).
+    ///
+    /// Embedders with a wall clock should pass
+    /// `PeerCounter::with_seed(wall_clock_seed)`; see the
+    /// `peer::counter` module docs for why.
+    #[must_use]
+    pub fn send_counter(mut self, counter: PeerCounter) -> Self {
+        self.send_counter = Some(counter);
         self
     }
 
@@ -470,14 +489,18 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
-        let handler = Arc::new(SyncHandler::new(
+        let mut handler = SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
             self.spawner.clone(),
-        ));
+        );
+        if let Some(counter) = self.send_counter {
+            handler = handler.with_send_counter(counter);
+        }
+        let handler = Arc::new(handler);
 
         let send_counter = handler.send_counter().clone();
 
@@ -508,7 +531,8 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     ///
     /// Returns `(subduction, listener_future, manager_future)`.
     ///
-    /// A fresh [`PeerCounter`] is created for `Subduction`. If your custom
+    /// The [`PeerCounter`] passed via [`send_counter`](Self::send_counter)
+    /// (or a fresh default) is used for `Subduction`. If your custom
     /// handler also stamps outgoing messages with counters (e.g., wraps a
     /// [`SyncHandler`]), you must share the same `PeerCounter` between
     /// the handler and `Subduction` — use [`build`] or [`build_composed`]
@@ -581,7 +605,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             connections,
             subscriptions,
             self.storage,
-            PeerCounter::default(),
+            self.send_counter.unwrap_or_default(),
             nonce_cache,
             self.timer,
             self.default_roundtrip_timeout
@@ -662,14 +686,18 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
-        let sync_handler = Arc::new(SyncHandler::new(
+        let mut sync_handler = SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
             self.spawner.clone(),
-        ));
+        );
+        if let Some(counter) = self.send_counter {
+            sync_handler = sync_handler.with_send_counter(counter);
+        }
+        let sync_handler = Arc::new(sync_handler);
 
         let send_counter = sync_handler.send_counter().clone();
         let (handler, extra) = compose(sync_handler);

@@ -426,17 +426,13 @@ async fn reconnect_during_disconnect_from_peer_never_clobbers_mux() -> TestResul
     Ok(())
 }
 
-/// `remove_connection` must clear the send counter only when it removes
-/// the peer's *last* connection. `PeerCounter::clear_peer` is contracted
-/// for a fully-gone peer; clearing it while the peer is still connected
-/// would restart its counter at 1 mid-session and break the
-/// strictly-increasing guarantee `RemoteHeads.counter` relies on.
-///
-/// This exercises the non-last (`Some(false)`) path deterministically: a
-/// peer with two connections keeps its counter when one is removed, and
-/// only loses it once the last connection goes.
+/// The send counter must survive disconnects — including removal of the
+/// peer's *last* connection: receivers keep a never-reset high-water mark
+/// (`FilteredHeadsNotifier`), so a restarted sequence would be dropped as
+/// stale. Monotone for the life of the process, across any number of
+/// disconnect/reconnect cycles.
 #[tokio::test(flavor = "current_thread")]
-async fn remove_non_last_connection_keeps_send_counter() -> TestResult {
+async fn send_counter_survives_disconnects() -> TestResult {
     let a_signer = make_signer(52);
     let b_signer = make_signer(62);
     let a = make_node(a_signer.clone());
@@ -456,8 +452,8 @@ async fn remove_non_last_connection_keeps_send_counter() -> TestResult {
     let stamped = a.stamp_send_counter(b_peer).await;
     assert!(stamped >= 1);
 
-    // Removing a non-last connection returns `Some(false)` and must NOT
-    // clear the counter — the peer is still connected.
+    // Removing a non-last connection returns `Some(false)`; the counter is
+    // untouched.
     assert_eq!(a.remove_connection_for_test(&conn1).await, Some(false));
     assert_eq!(
         a.send_counter_value(&b_peer).await,
@@ -465,12 +461,24 @@ async fn remove_non_last_connection_keeps_send_counter() -> TestResult {
         "removing a non-last connection must not reset the send counter",
     );
 
-    // Removing the last connection returns `Some(true)` and clears it.
+    // Removing the last connection returns `Some(true)` — and the counter
+    // still survives.
     assert_eq!(a.remove_connection_for_test(&conn2).await, Some(true));
     assert_eq!(
         a.send_counter_value(&b_peer).await,
-        None,
-        "send counter must be cleared once the peer's last connection is gone",
+        Some(stamped),
+        "the send counter must survive full teardown: receivers keep a \
+         high-water mark across reconnects, so a restarted sequence would \
+         be dropped as stale",
+    );
+
+    // After a "reconnect", stamping continues the sequence rather than
+    // restarting it.
+    let restamped = a.stamp_send_counter(b_peer).await;
+    assert!(
+        restamped > stamped,
+        "counter must continue monotonically across disconnect/reconnect \
+         (got {restamped} after {stamped})",
     );
 
     Ok(())

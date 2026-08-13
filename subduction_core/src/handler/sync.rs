@@ -221,6 +221,18 @@ impl<
         }
     }
 
+    /// Replace the send counter (builder-style).
+    ///
+    /// Must be called before the handler (or its counter) is cloned:
+    /// clones share the counter map, so a later swap would fork the
+    /// sequence. Used by `SubductionBuilder` to inject a seeded counter;
+    /// see [`PeerCounter::with_seed`].
+    #[must_use]
+    pub fn with_send_counter(mut self, send_counter: PeerCounter) -> Self {
+        self.send_counter = send_counter;
+        self
+    }
+
     /// The shared per-peer tally of inbound `BatchSyncRequest`s, for an
     /// operator loop to drain periodically; see
     /// [`requestor_tally`](crate::metrics::requestor_tally) for why this
@@ -304,10 +316,9 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
     }
 
     fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
-        // No-op: the listen loop invokes this only after `remove_connection`
-        // (-> `teardown_peer`) has already removed the peer's connection,
-        // subscriptions, and send counter. `SyncHandler` holds no other
-        // per-peer state, so there is nothing left to clean up here.
+        // No-op: teardown already removed the peer's connection and
+        // subscriptions, and the send counter deliberately survives (see
+        // `PeerCounter`).
         Async::from_future(async {})
     }
 }
@@ -583,11 +594,23 @@ impl<
 
         let signed_for_wire = verified.signed().clone();
 
+        // Reject like the signature and policy paths above: a mismatched
+        // blob is a defective message, not a broken transport. `Err` would
+        // tear down the connection and put the client in a
+        // reconnect-and-resend loop.
         let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!(peer = %from, error = %e, "blob mismatch");
-                return Err(IoError::BlobMismatch(e));
+                tracing::warn!(
+                    peer = %from,
+                    author = ?author,
+                    tree = ?id,
+                    error = %e,
+                    "blob mismatch"
+                );
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("commit_blob");
+                return Ok(None);
             }
         };
 
@@ -724,11 +747,20 @@ impl<
 
         let signed_for_wire = verified.signed().clone();
 
+        // Reject without disconnecting; see `recv_commit`.
         let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
             Ok(vm) => vm,
             Err(e) => {
-                tracing::warn!(peer = %from, error = %e, "blob mismatch");
-                return Err(IoError::BlobMismatch(e));
+                tracing::warn!(
+                    peer = %from,
+                    author = ?author,
+                    tree = ?id,
+                    error = %e,
+                    "blob mismatch"
+                );
+                #[cfg(feature = "metrics")]
+                crate::metrics::sync_verify_failure("fragment_blob");
+                return Ok(None);
             }
         };
 

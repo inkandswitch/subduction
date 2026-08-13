@@ -16,15 +16,23 @@ pub mod requestor_tally;
 /// Record a new connection being established.
 #[inline]
 pub fn connection_opened() {
-    metrics::gauge!(names::CONNECTIONS_ACTIVE).increment(1);
     metrics::counter!(names::CONNECTIONS_TOTAL).increment(1);
 }
 
 /// Record a connection being closed.
 #[inline]
 pub fn connection_closed() {
-    metrics::gauge!(names::CONNECTIONS_ACTIVE).decrement(1);
     metrics::counter!(names::CONNECTIONS_CLOSED).increment(1);
+}
+
+/// Publish the current number of active connections.
+///
+/// Set to observed truth rather than maintained with deltas, so a missed
+/// event cannot make it drift: the next set heals it.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_connections_active(count: usize) {
+    metrics::gauge!(names::CONNECTIONS_ACTIVE).set(count as f64);
 }
 
 /// Record a completed handshake attempt, labeled by a bounded `outcome`

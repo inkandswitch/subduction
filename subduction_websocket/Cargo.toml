@@ -65,6 +65,10 @@ name = "over_cap_frame_repro"
 required-features = ["tokio_server", "tokio_client"]
 
 [[test]]
+name = "supervision"
+required-features = ["tokio_server", "tokio_client"]
+
+[[test]]
 name = "tokio_tests"
 required-features = ["tokio_server", "tokio_client"]
 

@@ -1,6 +1,6 @@
 [package]
 name = "subduction_core"
-version = "0.16.0"
+version = "0.17.0"
 description = "Subduction: sync protocol for replicating Sedimentrees between peers"
 
 categories = ["web-programming"]
@@ -39,7 +39,7 @@ criterion_pprof = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 metrics-util = { workspace = true }
 rand = { workspace = true, features = ["std_rng"] }
-subduction_core = { path = ".", features = ["bolero", "std", "test_utils"] }
+subduction_core = { path = ".", features = ["bolero", "metrics", "std", "test_utils"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 
@@ -62,6 +62,10 @@ harness = false
 [[bench]]
 name = "listen_dispatch_local"
 harness = false
+
+[[test]]
+name = "connections_gauge"
+required-features = ["metrics"]
 
 [features]
 default = []
