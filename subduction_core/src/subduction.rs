@@ -2716,16 +2716,35 @@ where
     /// between enumeration and hydration) is omitted.
     pub async fn get_all_heads(&self) -> Vec<(SedimentreeId, Vec<CommitId>)> {
         let ids = self.sedimentree_ids().await;
+        self.get_heads(&ids).await
+    }
+
+    /// Get the current heads for a specific set of sedimentrees.
+    ///
+    /// Like [`get_all_heads`](Self::get_all_heads), but restricted to the
+    /// requested `ids` rather than sweeping every known tree. Each requested
+    /// tree is hydrated on demand through the bounded LRU cache, so memory
+    /// stays bounded across the request.
+    ///
+    /// The result preserves the order of `ids`. An inner empty
+    /// `Vec<CommitId>` means the sedimentree exists but has no heads — this is
+    /// also returned for an id whose hydration *fails* transiently (logged),
+    /// so a storage error is not silently reported as "tree does not exist".
+    /// A requested id that does not exist locally is omitted from the result.
+    pub async fn get_heads(
+        &self,
+        ids: &[SedimentreeId],
+    ) -> Vec<(SedimentreeId, Vec<CommitId>)> {
         let mut out = Vec::with_capacity(ids.len());
-        for id in ids {
+        for &id in ids {
             match self.get_or_hydrate(id).await {
                 Ok(Some(tree)) => out.push((id, tree.heads(&self.depth_metric))),
-                // Tree genuinely gone (raced with a delete): omit it.
+                // Tree genuinely gone (or never existed locally): omit it.
                 Ok(None) => {}
-                // Transient hydration failure: keep the id (it was just
-                // enumerated from storage) with empty, advisory heads.
+                // Transient hydration failure: keep the requested id with
+                // empty, advisory heads.
                 Err(e) => {
-                    tracing::warn!(tree = ?id, error = %e, "get_all_heads: hydration failed");
+                    tracing::warn!(tree = ?id, error = %e, "get_heads: hydration failed");
                     out.push((id, Vec::new()));
                 }
             }
@@ -4134,6 +4153,84 @@ mod tests {
             "tree rebuilt from storage must equal the evicted resident tree \
              (storage is the source of truth; eviction must be lossless)"
         );
+
+        Ok(())
+    }
+
+    /// `get_heads` returns heads only for the requested ids, preserves their
+    /// order, and omits ids that do not exist locally — while `get_all_heads`
+    /// (which delegates to it) still returns every known tree.
+    #[tokio::test]
+    async fn get_heads_filters_by_requested_ids() -> TestResult {
+        let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
+            Arc::new(BoundedShardedMap::with_key(0, 0));
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+        let handler = Arc::new(SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            storage.clone(),
+            CountLeadingZeroBytes,
+            TestSpawn,
+        ));
+
+        let (subduction, _listener_fut, _actor_fut) = Subduction::<
+            '_,
+            Sendable,
+            _,
+            FailingSendMockConnection,
+            _,
+            _,
+            _,
+            InstantTimeout,
+            _,
+        >::new(
+            handler,
+            None,
+            test_signer(),
+            sedimentrees.clone(),
+            connections,
+            subscriptions,
+            storage.clone(),
+            PeerCounter::default(),
+            NonceCache::default(),
+            InstantTimeout,
+            Duration::from_secs(30),
+            CountLeadingZeroBytes,
+            TestSpawn,
+        );
+
+        let id_a = SedimentreeId::new([0xAA; 32]);
+        let id_b = SedimentreeId::new([0xBB; 32]);
+        let missing = SedimentreeId::new([0xCD; 32]);
+
+        // Give each tree a single distinct commit so it has heads.
+        let commit_a = CommitId::new([0xC1; 32]);
+        let commit_b = CommitId::new([0xC2; 32]);
+        subduction
+            .store_commit(id_a, commit_a, BTreeSet::new(), Blob::new(vec![0u8; 32]))
+            .await?;
+        subduction
+            .store_commit(id_b, commit_b, BTreeSet::new(), Blob::new(vec![1u8; 32]))
+            .await?;
+
+        // Restricted to id_a: only id_a comes back.
+        let only_a = subduction.get_heads(&[id_a]).await;
+        assert_eq!(only_a, vec![(id_a, vec![commit_a])]);
+
+        // Order is preserved and unknown ids are omitted (not returned empty).
+        let mixed = subduction.get_heads(&[id_b, missing, id_a]).await;
+        assert_eq!(mixed, vec![(id_b, vec![commit_b]), (id_a, vec![commit_a])]);
+
+        // A request for only a missing id yields an empty result.
+        assert!(subduction.get_heads(&[missing]).await.is_empty());
+
+        // `get_all_heads` still surfaces every known tree.
+        let all: BTreeSet<SedimentreeId> =
+            subduction.get_all_heads().await.into_iter().map(|(id, _)| id).collect();
+        assert_eq!(all, BTreeSet::from([id_a, id_b]));
 
         Ok(())
     }

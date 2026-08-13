@@ -77,7 +77,7 @@ use sedimentree_wasm::{
     fragment::WasmFragment,
     loose_commit::WasmLooseCommit,
     sedimentree::WasmSedimentree,
-    sedimentree_id::WasmSedimentreeId,
+    sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
     storage::{JsStorage, JsStorageError},
 };
 
@@ -1524,6 +1524,31 @@ impl WasmSubduction {
     pub async fn get_all_heads(&self) -> Vec<WasmSedimentreeHeads> {
         self.core
             .get_all_heads()
+            .await
+            .into_iter()
+            .map(|(id, heads)| WasmSedimentreeHeads {
+                id: id.into(),
+                heads: heads.into_iter().map(WasmCommitId::from).collect(),
+            })
+            .collect()
+    }
+
+    /// Get the current heads for the given locally known sedimentrees.
+    ///
+    /// Like [`get_all_heads`](Self::get_all_heads) but restricted to `ids`.
+    /// A requested id that is not known locally is omitted from the result.
+    /// An inner empty heads array means the sedimentree exists but has no
+    /// heads yet.
+    #[must_use]
+    #[wasm_bindgen(js_name = getHeads)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
+    pub async fn get_heads(&self, ids: Vec<JsSedimentreeId>) -> Vec<WasmSedimentreeHeads> {
+        let ids: Vec<SedimentreeId> = ids
+            .iter()
+            .map(|id| SedimentreeId::from(WasmSedimentreeId::from(id)))
+            .collect();
+        self.core
+            .get_heads(&ids)
             .await
             .into_iter()
             .map(|(id, heads)| WasmSedimentreeHeads {
