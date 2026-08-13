@@ -104,9 +104,8 @@ async fn stale_claims_cleared_on_peer_arrival() -> TestResult {
     // claim were somehow left behind.
     node.disconnect_from_peer(&peer).await?;
     node.insert_outgoing_claim_for_test(peer, tree).await;
-    // Let the manager process the disconnects (and any straggling closure
-    // events) before starting the next era, so the arrival below is a
-    // clean absent → present transition.
+    // Let disconnect processing settle so the arrival below is a clean
+    // absent → present transition.
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let (conn3, _remote3) = make_conn(peer);

@@ -180,13 +180,10 @@ impl core::fmt::Debug for JsStorage {
 }
 
 /// Reconstruct a [`VerifiedMeta`] from app-supplied storage, re-hashing the
-/// blob against the signed payload's claimed metadata.
-///
-/// The core `Storage` contract is "trust on load", but that premise is
-/// unenforceable when the JS app owns the store and load callbacks. A
-/// mismatch fails loudly here, where the app can repair its store, instead
-/// of shipping data every remote rejects. Signatures are not re-verified
-/// (decode-only), so the cost is one hash over the blob bytes.
+/// blob against the signed payload's claimed metadata: "trust on load" is
+/// unenforceable when the JS app owns the store and load callbacks, and an
+/// unverified mismatch would be shipped to (and rejected by) every remote.
+/// Signatures are not re-verified; the cost is one hash over the blob.
 fn verify_blob_on_load<T: HasBlobMeta + Schema + EncodeFields + DecodeFields>(
     signed: Signed<T>,
     blob: Blob,

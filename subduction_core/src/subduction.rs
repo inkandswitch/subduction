@@ -735,10 +735,8 @@ where
             .await
             .is_err()
         {
-            // The manager is gone, so this connection would never get a
-            // reader — and because closure events are emitted by the reader,
-            // nothing would ever remove it from the map. Roll the
-            // registration back.
+            // Without rollback the connection is tracked forever: closure
+            // events come from the reader it will never get.
             self.remove_connection(&conn).await;
             return Err(AddConnectionError::SendToClosedChannel);
         }
@@ -932,9 +930,8 @@ where
         Self::cancel_detached_muxes(muxes).await;
         peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
 
-        // Garbage collection only: stale claims are invalidated on the
-        // peer's next arrival (`clear_stale_outgoing_claims`); this just
-        // keeps the map bounded to connected peers.
+        // GC only — invalidation happens on next arrival
+        // (`clear_stale_outgoing_claims`); this bounds the map.
         self.outgoing_subscriptions.lock().await.remove(peer_id);
 
         // The send counter is deliberately not cleared: receivers keep a
@@ -3252,10 +3249,8 @@ where
                             handler.on_peer_disconnect(peer_id).await;
                         }
                     } else {
-                        // Closure here implies shutdown (every `closed`
-                        // sender also holds queue senders). Breaking keeps
-                        // this arm from becoming permanently ready above
-                        // `msg_queue`, which would starve dispatch forever.
+                        // Must break: a permanently-ready arm above
+                        // `msg_queue` would starve dispatch forever.
                         tracing::info!("connection-closed channel closed");
                         break;
                     }

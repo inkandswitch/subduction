@@ -556,9 +556,8 @@ where
         .storage(storage, storage_policy)
         .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout)
-        // Wall-clock seeded so per-peer sequences resume above previous
-        // values across process restarts; receivers keep never-reset
-        // high-water marks.
+        // Seeded so sequences resume above previous values across restarts;
+        // see `peer::counter`.
         .send_counter(PeerCounter::with_seed(wall_clock_seed))
         .roundtrip_timeout(Duration::from_secs(args.timeout));
 
@@ -636,10 +635,8 @@ where
                         let resident = resident_subduction.resident_sedimentree_count().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
-                        // Re-sample the connection gauge so a missed
-                        // event-driven refresh heals. Publishes outside the
-                        // connections lock, so it can briefly clobber a
-                        // newer value — stale for at most one interval.
+                        // Heals the connections gauge if an event-driven
+                        // refresh was missed.
                         subduction_core::metrics::set_connections_active(
                             resident_subduction.total_connection_count().await,
                         );
@@ -1169,8 +1166,7 @@ async fn handle_websocket<H: CliWireHandler>(
     ws_config.max_frame_size = Some(max_frame_size);
 
     // Behind a reverse proxy `addr` is the proxy's loopback socket;
-    // `X-Forwarded-For` is the only in-band client address. Capturing it
-    // here lets the handshake-complete log pair `peer` with the real source.
+    // `X-Forwarded-For` is the only in-band client address.
     let mut forwarded_for: Option<String> = None;
     let ws_stream = match async_tungstenite::tokio::accept_hdr_async_with_config(
         tcp,

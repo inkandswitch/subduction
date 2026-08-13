@@ -95,9 +95,8 @@ async fn manager_survives_closure_burst_without_listener_drain() -> TestResult {
         })
         .await?;
 
-    // Poll rather than sleep: a live manager drains the message almost
-    // immediately; a deadlocked one never does. Generous deadline: the pass
-    // path exits in milliseconds, so this only bounds the failure case.
+    // Poll with a generous deadline: the pass path exits in milliseconds,
+    // so the deadline only bounds the failure case.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if fresh_handle.inbound_tx.is_empty() {

@@ -316,11 +316,9 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
     }
 
     fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
-        // No-op: the listen loop invokes this only after `remove_connection`
-        // (-> `teardown_peer`) has already removed the peer's connection and
-        // subscriptions. (The send counter deliberately survives; see
-        // `PeerCounter`.) `SyncHandler` holds no other per-peer state, so
-        // there is nothing left to clean up here.
+        // No-op: teardown already removed the peer's connection and
+        // subscriptions, and the send counter deliberately survives (see
+        // `PeerCounter`).
         Async::from_future(async {})
     }
 }

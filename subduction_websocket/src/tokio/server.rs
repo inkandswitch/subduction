@@ -491,9 +491,8 @@ where
             .spawner(spawner)
             .timer(timeout.clone())
             .nonce_cache(nonce_cache)
-            // Wall-clock seeded so per-peer sequences resume above previous
-            // values across process restarts; receivers keep never-reset
-            // high-water marks.
+            // Seeded so sequences resume above previous values across
+            // restarts; see `peer::counter`.
             .send_counter(PeerCounter::with_seed(wall_clock_seed))
             .depth_metric(depth_metric);
 
