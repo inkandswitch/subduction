@@ -262,45 +262,68 @@ fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
     );
 }
 
-/// Regression for a persisted stress failure: one peer retained the loose
-/// metadata for a root fragment's head while another held the same fragment
-/// plus fragment-internal loose rows but not that head. The fragment alone
-/// cannot encode the missing direct-parent edge, so the internal row appeared
-/// as a second frontier head and the old fingerprint summary prevented repair.
+/// Exact shape of the persisted stress failure: the compact peer has the
+/// complete loose chain A → B → H in durable history before minimization,
+/// while the other peer has A and H but is missing the intermediate B. Both
+/// hold the same root fragment headed at H.
+///
+/// Minimization cannot reconstruct B from the fragment, and retaining H as a
+/// loose "companion" would not help because the incomplete peer already had
+/// H. The only sound fingerprint diff with the current metadata is for A to
+/// spill to the compact peer; both then settle on the same non-logical
+/// frontier {A, H} without recovering B.
 #[test]
-fn root_fragment_syncs_its_loose_head_companion() {
+fn missing_fragment_internal_bridge_converges_by_spilling_residue() {
     let root = loose(b'A', &[]);
-    let internal = loose(b'B', &[b'A']);
+    let bridge = loose(b'B', &[b'A']);
     let head = loose(0, &[b'B']);
     let frag = fragment(0, &[], &[0], 9);
+    let metric = sedimentree_core::depth::CountLeadingZeroBytes;
 
-    let local = Sedimentree::new(
-        vec![frag.clone()],
-        vec![root.clone(), internal.clone(), head.clone()],
-    )
-    .minimize(&sedimentree_core::depth::CountLeadingZeroBytes);
-    let mut remote = Sedimentree::new(vec![frag], vec![root, internal]);
+    let mut compact =
+        Sedimentree::new(vec![frag.clone()], vec![root.clone(), bridge, head.clone()])
+            .minimize(&metric);
+    let mut incomplete = Sedimentree::new(vec![frag], vec![root.clone(), head]).minimize(&metric);
 
-    assert!(
-        local.loose_commits().any(|commit| commit.head() == head.head()),
-        "minimization must retain the fragment-head companion"
-    );
-    let diff = local.diff_remote_fingerprints(&remote.fingerprint_summarize(&seed()));
+    assert_eq!(compact.loose_commits().count(), 0);
+    let incomplete_commits: BTreeSet<_> =
+        incomplete.loose_commits().map(LooseCommit::head).collect();
+    assert_eq!(incomplete_commits, BTreeSet::from([root.head()]));
+
+    let compact_summary = compact.fingerprint_summarize(&seed());
+    let incomplete_summary = incomplete.fingerprint_summarize(&seed());
+    let to_compact: Vec<LooseCommit> = incomplete
+        .diff_remote_fingerprints(&compact_summary)
+        .local_only_commits
+        .into_iter()
+        .map(|(_, commit)| commit.clone())
+        .collect();
+    let to_incomplete: Vec<LooseCommit> = compact
+        .diff_remote_fingerprints(&incomplete_summary)
+        .local_only_commits
+        .into_iter()
+        .map(|(_, commit)| commit.clone())
+        .collect();
+
+    assert_eq!(to_compact.len(), 1);
+    assert_eq!(to_compact[0].head(), root.head());
+    assert!(to_incomplete.is_empty());
+    for commit in to_compact {
+        compact.add_commit(commit);
+    }
+    compact = compact.minimize(&metric);
+    incomplete = incomplete.minimize(&metric);
+
     assert_eq!(
-        diff.local_only_commits
-            .iter()
-            .map(|(_, commit)| commit.head())
-            .collect::<Vec<_>>(),
-        vec![head.head()],
-        "a fragment-only peer must receive the missing head metadata"
+        compact.fingerprint_summarize(&seed()),
+        incomplete.fingerprint_summarize(&seed())
     );
-
-    remote.add_commit(head);
-    let mut local_heads = local.heads(&sedimentree_core::depth::CountLeadingZeroBytes);
-    let mut remote_heads = remote.heads(&sedimentree_core::depth::CountLeadingZeroBytes);
-    local_heads.sort_unstable();
-    remote_heads.sort_unstable();
-    assert_eq!(local_heads, remote_heads);
+    let mut expected_heads = vec![commit_id(0), root.head()];
+    expected_heads.sort_unstable();
+    let mut actual_heads = compact.heads(&metric);
+    actual_heads.sort_unstable();
+    assert_eq!(actual_heads, expected_heads);
+    assert_eq!(incomplete.heads(&metric), compact.heads(&metric));
 }
 
 /// **Critical correctness case**: server has loose P → B → H (P is
@@ -341,7 +364,7 @@ fn does_not_prune_commit_past_fragment_boundary() {
 /// requiring the local to hold the fragment metadata.
 ///
 /// This is a non-root fragment, so its boundary preserves the covered
-/// range; only empty-boundary root fragments need a loose-head companion.
+/// range and permits the optimization without inventing extra retention.
 #[test]
 fn asymmetric_fragment_optimization_via_matching_local_head() {
     let a = loose(b'A', &[]);
