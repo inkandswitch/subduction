@@ -4,7 +4,6 @@ use alloc::{sync::Arc, vec, vec::Vec};
 use core::convert::Infallible;
 
 use async_channel::{Receiver, Sender};
-use async_lock::Mutex;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use keyhive_core::{
@@ -141,23 +140,18 @@ pub type TestProtocol = KeyhiveProtocol<
 /// Create a test protocol with a shared keyhive reference.
 ///
 /// Unlike `make_protocol()` in the protocol tests, this does NOT clone the
-/// keyhive. The returned `Arc<Mutex<SimpleKeyhive>>` is the same one the
-/// protocol uses, so mutations made through the Arc are visible to the
-/// protocol.
+/// keyhive. The returned `Arc<SimpleKeyhive>` is the same one the protocol
+/// uses, so mutations made through the Arc are visible to the protocol.
 pub async fn make_protocol_with_shared_keyhive(
     keyhive: SimpleKeyhive,
-) -> (
-    TestProtocol,
-    Arc<Mutex<SimpleKeyhive>>,
-    MemoryKeyhiveStorage,
-) {
+) -> (TestProtocol, Arc<SimpleKeyhive>, MemoryKeyhiveStorage) {
     let peer_id = keyhive_peer_id(&keyhive);
     let cc = keyhive
         .contact_card()
         .await
         .expect("failed to get contact card");
     let storage = MemoryKeyhiveStorage::new();
-    let shared = Arc::new(Mutex::new(keyhive));
+    let shared = Arc::new(keyhive);
     let protocol = TestProtocol::new(shared.clone(), storage.clone(), peer_id, cc);
     (protocol, shared, storage)
 }
@@ -258,9 +252,9 @@ pub struct TwoPeerHarness {
     /// Bob's protocol handler.
     pub bob_proto: TestProtocol,
     /// Shared reference to Alice's keyhive.
-    pub alice_kh: Arc<Mutex<SimpleKeyhive>>,
+    pub alice_kh: Arc<SimpleKeyhive>,
     /// Shared reference to Bob's keyhive.
-    pub bob_kh: Arc<Mutex<SimpleKeyhive>>,
+    pub bob_kh: Arc<SimpleKeyhive>,
     /// Alice's peer ID.
     pub alice_id: KeyhivePeerId,
     /// Bob's peer ID.

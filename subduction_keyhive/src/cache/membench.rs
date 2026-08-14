@@ -71,7 +71,7 @@ fn serving_membench() {
     use nonempty::nonempty;
 
     use crate::{
-        message::Message,
+        message::{Message, RequestId},
         test_utils::{keyhive_peer_id, make_keyhive, make_protocol_with_shared_keyhive},
     };
 
@@ -177,7 +177,7 @@ fn serving_membench() {
                 }
                 let idx = (it * edits + e) % docs.len();
                 let doc = docs[idx].clone();
-                let _op = shared.lock().await.force_pcs_update(doc).await;
+                let _op = shared.force_pcs_update(doc).await;
             }
             let rebuilt = cache.refresh(&proto).await.expect("refresh");
             let s = dhat::HeapStats::get();
@@ -226,6 +226,10 @@ fn serving_membench() {
                     let found_ops: Vec<Arc<[u8]>> = response.values().map(Dupe::dupe).collect();
                     let msg = Message::SyncResponse {
                         sender_id: local.clone(),
+                        request_id: RequestId {
+                            requestor: local.clone(),
+                            nonce: 0,
+                        },
                         target_id: peer,
                         requested: alloc::vec::Vec::new(),
                         found: found_ops,

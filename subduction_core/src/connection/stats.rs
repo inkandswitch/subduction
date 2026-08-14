@@ -4,7 +4,13 @@
 //! sent/received). They are _not_ wire types — they are never serialized
 //! or sent over the network.
 
-use crate::remote_heads::RemoteHeads;
+use alloc::vec::Vec;
+use sedimentree_core::loose_commit::id::CommitId;
+
+use crate::{
+    remote_heads::RemoteHeads,
+    sync_session::{SyncPolicyRejection, SyncRemoteRejection},
+};
 
 /// Statistics from a sync operation.
 ///
@@ -29,6 +35,12 @@ pub struct SyncStats {
     /// The remote peer's heads for this sedimentree, as reported
     /// in the `BatchSyncResponse`.
     pub remote_heads: RemoteHeads,
+
+    /// The remote peer's explicit rejection, if it refused the sedimentree.
+    pub remote_rejection: Option<SyncRemoteRejection>,
+
+    /// Items rejected by local storage policy while ingesting the response.
+    pub local_policy_rejections: Vec<SyncPolicyRejection>,
 }
 
 impl SyncStats {
@@ -41,6 +53,8 @@ impl SyncStats {
             commits_sent: 0,
             fragments_sent: 0,
             remote_heads: RemoteHeads::default(),
+            remote_rejection: None,
+            local_policy_rejections: Vec::new(),
         }
     }
 
@@ -63,16 +77,23 @@ impl SyncStats {
             && self.fragments_received == 0
             && self.commits_sent == 0
             && self.fragments_sent == 0
+            && self.remote_rejection.is_none()
     }
 }
 
 /// Number of commits and fragments sent in a single
 /// [`send_requested_data`](crate::subduction::Subduction::send_requested_data) call.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SendCount {
     /// Number of commits sent.
     pub commits: usize,
 
     /// Number of fragments sent.
     pub fragments: usize,
+
+    /// Commit ids successfully sent.
+    pub commit_ids: Vec<CommitId>,
+
+    /// Fragment head ids successfully sent.
+    pub fragment_ids: Vec<CommitId>,
 }
