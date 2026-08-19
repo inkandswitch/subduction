@@ -5519,8 +5519,16 @@ dependencies = [
 name = "subduction_protocol"
 version = "0.1.0"
 dependencies = [
+ "arbitrary",
+ "bijoux",
+ "bolero",
+ "ed25519-dalek 2.2.0",
+ "future_form",
+ "futures",
  "sedimentree_core",
+ "serde",
  "subduction_crypto",
+ "subduction_protocol",
  "thiserror 2.0.20",
 ]
 

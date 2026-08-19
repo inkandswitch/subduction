@@ -14,12 +14,39 @@ repository.workspace = true
 
 [features]
 default = []
-std = ["sedimentree_core/std", "subduction_crypto/std"]
+arbitrary = [
+  "dep:arbitrary",
+  "sedimentree_core/arbitrary",
+  "subduction_crypto/arbitrary",
+]
+bolero = [
+  "dep:bolero",
+  "arbitrary",
+  "sedimentree_core/bolero",
+  "subduction_crypto/bolero",
+]
+serde = ["dep:serde", "ed25519-dalek/serde", "subduction_crypto/serde"]
+std = [
+  "ed25519-dalek/std",
+  "sedimentree_core/std",
+  "subduction_crypto/std",
+  "thiserror/std",
+]
 
 [dependencies]
+arbitrary = { workspace = true, optional = true, features = ["derive"] }
+bijoux = { workspace = true }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
+ed25519-dalek = { workspace = true }
 sedimentree_core = { workspace = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+future_form = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+subduction_protocol = { path = ".", features = ["bolero", "std"] }
 
 [lints]
 workspace = true

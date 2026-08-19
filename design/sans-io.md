@@ -71,9 +71,16 @@ storage operations, crypto operations, and application events.
    enums/structs over bytes, ids, and tokens — no generics, no trait
    objects. The vocabulary freezes early and grows additively, because
    platform bindings (uniffi, pyo3) bind this surface directly.
-3. _Expensive work is an effect._ Hashing, signing, verification, and
-   large-payload codec runs are emitted as `Crypto` effects and executed
-   by driver workers. The machine's turn stays cheap by construction.
+3. _Expensive work is an effect._ Signing and signature verification are
+   emitted as `Crypto` effects (including batch verification, so the
+   driver can fan one request's signatures across a worker pool). Cheap
+   metadata hashing stays inline — the effect round-trip would cost more
+   than the work. Blob-sized hashing is fused into storage/ingest
+   effects: blob bytes never enter the machine; the driver hands back
+   verified-meta completions. The machine's turn stays cheap by
+   construction — this recovers, explicitly, the parallelism the legacy
+   core got implicitly from running synchronous verification on the
+   tokio thread pool.
 4. _Wire compatibility is a hard constraint._ Message formats and the
    canonical codec (see `protocol.md`) are copied verbatim from legacy.
    Golden-bytes tests and a live legacy-interop test guard this.

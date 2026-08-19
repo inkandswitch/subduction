@@ -36,10 +36,13 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-// `extern crate alloc;` returns with the first Phase 1 module
-// (`unused_extern_crates` is denied workspace-wide).
+extern crate alloc;
 
-// Phase 1 modules land here:
+pub mod peer_id;
+pub mod remote_heads;
+pub mod wire;
+
+// Remaining Phase 1 modules land here:
 // pub mod event;      — Event / Command vocabulary
 // pub mod effect;     — Effect / storage & crypto op vocabulary
 // pub mod machine;    — the Machine itself
@@ -47,4 +50,3 @@
 // pub mod stats;      — pull-based counters (tier-2 telemetry)
 // pub mod timestamp;  — opaque driver-supplied monotonic time
 // pub mod token;      — generation/sequence completion tokens
-// pub mod wire;       — wire messages + codec (copied verbatim from legacy)
