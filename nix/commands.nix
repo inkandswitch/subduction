@@ -11,7 +11,7 @@
   grafana-bin = "${pkgs.grafana}/bin/grafana";
   grafana-homepath = "${pkgs.grafana}/share/grafana";
   pnpm = "${pkgs.pnpm}/bin/pnpm";
-  playwright = "${pnpm} --dir=./subduction_wasm exec playwright";
+  playwright = "${pnpm} --dir=./legacy/subduction_wasm exec playwright";
   loki = "${pkgs.grafana-loki}/bin/loki";
   prometheus = "${pkgs.prometheus}/bin/prometheus";
   wasm-bodge-bin = "${wasm-bodge}/bin/wasm-bodge";
@@ -26,17 +26,17 @@
 
         echo "===> Building sedimentree_wasm..."
         ${cargo} build --release -p sedimentree_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/sedimentree_wasm"
+        cd "$WORKSPACE_ROOT/legacy/sedimentree_wasm"
         ${pnpm} build
 
         echo "===> Building subduction_wasm..."
         ${cargo} build --release -p subduction_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/subduction_wasm"
+        cd "$WORKSPACE_ROOT/legacy/subduction_wasm"
         ${pnpm} build
 
         echo "===> Building automerge_subduction_wasm..."
         ${cargo} build --release -p automerge_subduction_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/automerge_subduction_wasm"
+        cd "$WORKSPACE_ROOT/legacy/automerge_subduction_wasm"
         ${pnpm} build
 
         echo ""
@@ -53,17 +53,17 @@
 
         echo "===> Building sedimentree_wasm..."
         ${cargo} build -p sedimentree_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/sedimentree_wasm"
+        cd "$WORKSPACE_ROOT/legacy/sedimentree_wasm"
         ${pnpm} build
 
         echo "===> Building subduction_wasm..."
         ${cargo} build -p subduction_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/subduction_wasm"
+        cd "$WORKSPACE_ROOT/legacy/subduction_wasm"
         ${pnpm} build
 
         echo "===> Building automerge_subduction_wasm..."
         ${cargo} build -p automerge_subduction_wasm --target wasm32-unknown-unknown
-        cd "$WORKSPACE_ROOT/automerge_subduction_wasm"
+        cd "$WORKSPACE_ROOT/legacy/automerge_subduction_wasm"
         ${pnpm} build
 
         echo ""
@@ -237,9 +237,9 @@
 
     "bench:heap" = cmd "Run heap allocation profiling" ''
       ${cargo} test --package sedimentree_core --test heap_profile -- --nocapture
-      ${pkgs.jq}/bin/jq '.' sedimentree_core/dhat-heap.json | ${pkgs.moreutils}/bin/sponge sedimentree_core/dhat-heap.json
+      ${pkgs.jq}/bin/jq '.' legacy/sedimentree_core/dhat-heap.json | ${pkgs.moreutils}/bin/sponge legacy/sedimentree_core/dhat-heap.json
       echo ""
-      echo "Heap profile saved to sedimentree_core/dhat-heap.json"
+      echo "Heap profile saved to legacy/sedimentree_core/dhat-heap.json"
     '';
   };
 
@@ -438,7 +438,7 @@
 
       CRATE="$1"
 
-      if [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
+      if [ ! -d "$WORKSPACE_ROOT/legacy/$CRATE" ] && [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
         echo "Error: crate directory not found: $CRATE"
         exit 1
       fi
@@ -475,7 +475,7 @@
       }
 
       rows=""
-      for dir in automerge_subduction_wasm sedimentree_wasm subduction_wasm; do
+      for dir in legacy/automerge_subduction_wasm legacy/sedimentree_wasm legacy/subduction_wasm; do
         wasm_file=$(ls "$WORKSPACE_ROOT/$dir/dist/wasm_bindgen/web/"*_bg.wasm 2>/dev/null | head -1)
         if [ -n "$wasm_file" ] && [ -f "$wasm_file" ]; then
           name=$(basename "$dir")
@@ -538,7 +538,7 @@
       # unclean shutdown can wedge startup. Cheap to recreate (provisioned).
       rm -rf /tmp/grafana-data
       mkdir -p /tmp/grafana-data /tmp/grafana-dashboards /tmp/loki
-      cp "$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
+      cp "$WORKSPACE_ROOT/legacy/subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
 
       LOKI_PID=""
       PROM_PID=""
@@ -572,12 +572,12 @@
         return 1
       }
 
-      "$LOKI_BIN" -config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/loki.yaml" &
+      "$LOKI_BIN" -config.file="$WORKSPACE_ROOT/legacy/subduction_cli/monitoring/loki.yaml" &
       LOKI_PID=$!
       wait_for_port "Loki" 3100 "$LOKI_PID"
 
       "$PROM_BIN" \
-        --config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/prometheus.yml" \
+        --config.file="$WORKSPACE_ROOT/legacy/subduction_cli/monitoring/prometheus.yml" \
         --web.listen-address=":9092" \
         --storage.tsdb.path="/tmp/prometheus-data" &
       PROM_PID=$!
@@ -585,9 +585,9 @@
 
       "$GRAFANA_BIN" server \
         --homepath="$GRAFANA_HOME" \
-        --config="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/grafana.ini" \
+        --config="$WORKSPACE_ROOT/legacy/subduction_cli/monitoring/grafana/grafana.ini" \
         cfg:paths.data=/tmp/grafana-data \
-        cfg:paths.provisioning="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning" &
+        cfg:paths.provisioning="$WORKSPACE_ROOT/legacy/subduction_cli/monitoring/grafana/provisioning" &
       GRAF_PID=$!
       wait_for_port "Grafana" 3939 "$GRAF_PID"
 
@@ -634,7 +634,7 @@
 
       CRATE="$1"
 
-      if [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
+      if [ ! -d "$WORKSPACE_ROOT/legacy/$CRATE" ] && [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
         echo "Error: crate directory not found: $CRATE"
         exit 1
       fi

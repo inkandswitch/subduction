@@ -130,7 +130,7 @@ jobs:
           # skipped below.
           mapfile -t affected < <(
             git diff --name-only "${{ steps.diff.outputs.base_sha }}...HEAD" \
-              | awk -F/ 'NF > 1 && $1 !~ /^\./ {print $1}' \
+              | awk -F/ 'NF > 1 && $1 !~ /^\./ {if ($1 == "legacy" && NF > 2) print $2; else print $1}' \
               | sort -u
           )
 

@@ -43,6 +43,12 @@ jobs:
     - name: Check no_std compatibility (subduction_core)
       run: cargo check --package subduction_core --no-default-features
 
+    - name: Check no_std compatibility (subduction_protocol)
+      run: cargo check --package subduction_protocol --no-default-features
+
+    - name: Check wasm32 target (subduction_protocol)
+      run: cargo check --package subduction_protocol --target wasm32-unknown-unknown --no-default-features
+
     - name: Check wasm32 target (subduction_wasm)
       run: cargo check --package subduction_wasm --target wasm32-unknown-unknown
 

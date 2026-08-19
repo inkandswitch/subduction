@@ -1,0 +1,27 @@
+[package]
+name = "subduction_runtime"
+version = "0.1.0"
+description = "Generic async driver for the Subduction sans-io state machine: tagless-final traits over FutureForm, actor funnel, effect executors"
+
+categories = ["asynchronous", "network-programming"]
+keywords = ["sans-io", "subduction", "sync"]
+readme = "./README.md"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+metrics = ["dep:metrics"]
+
+[dependencies]
+future_form = { workspace = true }
+futures = { workspace = true }
+metrics = { workspace = true, optional = true }
+subduction_protocol = { workspace = true }
+tracing = { workspace = true, features = ["attributes"] }
+
+[lints]
+workspace = true

@@ -26,7 +26,7 @@ exclude_globs = [
     "**/build.rs",
 
     # Workspace-tool, not a library.
-    "automerge_subduction_ingest/**",
+    "legacy/automerge_subduction_ingest/**",
 
     # Wasm shim crates: their surface is overwhelmingly thin `#[wasm_bindgen]`
     # delegations to inner crates (or, for `_bootstrap`, thin wrappers around
@@ -35,15 +35,15 @@ exclude_globs = [
     # are no-ops upstream, so replacing the bodies with `()` is a semantically
     # equivalent mutation that no host test can ever kill. Coverage comes
     # from the underlying crates, from `wasm-pack test`, and from Playwright.
-    "subduction_wasm/**",
-    "sedimentree_wasm/**",
-    "automerge_subduction_wasm/**",
-    "subduction_wasm_bootstrap/**",
+    "legacy/subduction_wasm/**",
+    "legacy/sedimentree_wasm/**",
+    "legacy/automerge_subduction_wasm/**",
+    "legacy/subduction_wasm_bootstrap/**",
 
     # CLI entry points and runtime glue — too much wiring, too little
     # logic. We get value from in-tree integration tests instead.
-    "subduction_cli/src/main.rs",
-    "subduction_cli/src/server.rs",
+    "legacy/subduction_cli/src/main.rs",
+    "legacy/subduction_cli/src/server.rs",
 ]
 
 # Skip specific mutation patterns that are almost always either trivially
@@ -71,7 +71,7 @@ exclude_re = [
     # The arithmetic in the `need:` field is defense-in-depth that no
     # input can exercise, so the `+ -> -` / `+ -> *` mutants there
     # cannot be killed by any test.
-    "subduction_crypto/src/signed.rs:255:.*Signed<T>::try_decode",
+    "legacy/subduction_crypto/src/signed.rs:255:.*Signed<T>::try_decode",
 
     # subduction_keyhive/src/runtime.rs::run_local_keyhive is !Send runtime
     # orchestration: it generates a keyhive, spawns the actor + cache-refresh
@@ -79,7 +79,7 @@ exclude_re = [
     # subduction_cli server.rs above, it is wiring with no return value or
     # branch logic to assert; replacing the body with () cannot be killed
     # without a full threaded integration harness.
-    "subduction_keyhive/src/runtime\.rs:.*run_local_keyhive",
+    "legacy/subduction_keyhive/src/runtime\.rs:.*run_local_keyhive",
 ]
 
 # Be a little patient with builds. The workspace is large, and the

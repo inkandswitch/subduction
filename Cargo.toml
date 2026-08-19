@@ -1,22 +1,24 @@
 [workspace]
 resolver = "3"
 members = [
-  "automerge_subduction_ingest",
-  "automerge_subduction_wasm",
-  "sedimentree_core",
-  "sedimentree_fs_storage",
-  "sedimentree_wasm",
-  "subduction_cli",
-  "subduction_core",
-  "subduction_crypto",
-  "subduction_ephemeral",
-  "subduction_http_longpoll",
-  "subduction_iroh",
-  "subduction_keyhive",
-  "subduction_redb_storage",
-  "subduction_wasm",
-  "subduction_wasm_bootstrap",
-  "subduction_websocket",
+  "legacy/automerge_subduction_ingest",
+  "legacy/automerge_subduction_wasm",
+  "legacy/sedimentree_core",
+  "legacy/sedimentree_fs_storage",
+  "legacy/sedimentree_wasm",
+  "legacy/subduction_cli",
+  "legacy/subduction_core",
+  "legacy/subduction_crypto",
+  "legacy/subduction_ephemeral",
+  "legacy/subduction_http_longpoll",
+  "legacy/subduction_iroh",
+  "legacy/subduction_keyhive",
+  "legacy/subduction_redb_storage",
+  "legacy/subduction_wasm",
+  "legacy/subduction_wasm_bootstrap",
+  "legacy/subduction_websocket",
+  "subduction_protocol",
+  "subduction_runtime",
 ]
 
 [workspace.package]
@@ -31,24 +33,26 @@ authors = [
 
 [workspace.dependencies]
 # Internal crates
-automerge_subduction_wasm = { version = "0.16.0", path = "automerge_subduction_wasm", default-features = false }
-sedimentree_core = { version = "0.13.0", path = "sedimentree_core", default-features = false }
-sedimentree_fs_storage = { version = "0.11.0", path = "sedimentree_fs_storage" }
-sedimentree_wasm = { version = "0.16.0", path = "sedimentree_wasm" }
+automerge_subduction_wasm = { version = "0.16.0", path = "legacy/automerge_subduction_wasm", default-features = false }
+sedimentree_core = { version = "0.13.0", path = "legacy/sedimentree_core", default-features = false }
+sedimentree_fs_storage = { version = "0.11.0", path = "legacy/sedimentree_fs_storage" }
+sedimentree_wasm = { version = "0.16.0", path = "legacy/sedimentree_wasm" }
 # 0.17.0: breaking — `PeerCounter::{clear_peer, clear_all}` removed (counters
 # are never reset; see `peer::counter` docs), and `metrics::connection_opened/
 # closed` no longer maintain the `connections_active` gauge (use
 # `set_connections_active`).
-subduction_core = { version = "0.17.0", path = "subduction_core", default-features = false }
-subduction_crypto = { version = "0.8.0", path = "subduction_crypto", default-features = false }
-subduction_ephemeral = { version = "0.7.0", path = "subduction_ephemeral", default-features = false }
-subduction_http_longpoll = { version = "0.10.0", path = "subduction_http_longpoll", default-features = false }
-subduction_iroh = { version = "0.9.0", path = "subduction_iroh" }
-subduction_keyhive = { version = "0.7.0", path = "subduction_keyhive" }
-subduction_redb_storage = { version = "0.1.0", path = "subduction_redb_storage" }
-subduction_wasm = { version = "0.20.0", path = "subduction_wasm" }
-subduction_wasm_bootstrap = { version = "0.2.0", path = "subduction_wasm_bootstrap" }
-subduction_websocket = { version = "0.11.0", path = "subduction_websocket", default-features = false }
+subduction_core = { version = "0.17.0", path = "legacy/subduction_core", default-features = false }
+subduction_crypto = { version = "0.8.0", path = "legacy/subduction_crypto", default-features = false }
+subduction_ephemeral = { version = "0.7.0", path = "legacy/subduction_ephemeral", default-features = false }
+subduction_http_longpoll = { version = "0.10.0", path = "legacy/subduction_http_longpoll", default-features = false }
+subduction_iroh = { version = "0.9.0", path = "legacy/subduction_iroh" }
+subduction_keyhive = { version = "0.7.0", path = "legacy/subduction_keyhive" }
+subduction_protocol = { version = "0.1.0", path = "subduction_protocol", default-features = false }
+subduction_redb_storage = { version = "0.1.0", path = "legacy/subduction_redb_storage" }
+subduction_runtime = { version = "0.1.0", path = "subduction_runtime", default-features = false }
+subduction_wasm = { version = "0.20.0", path = "legacy/subduction_wasm" }
+subduction_wasm_bootstrap = { version = "0.2.0", path = "legacy/subduction_wasm_bootstrap" }
+subduction_websocket = { version = "0.11.0", path = "legacy/subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"

@@ -33,7 +33,7 @@
       homeManagerModules.default = import ./nix/home-manager-module.nix {inherit self;};
 
       # Grafana dashboard for monitoring Subduction metrics
-      grafanaDashboardsPath = ./subduction_cli/monitoring/grafana/provisioning/dashboards;
+      grafanaDashboardsPath = ./legacy/subduction_cli/monitoring/grafana/provisioning/dashboards;
     }
     // flake-utils.lib.eachDefaultSystem (
       system: let
@@ -178,7 +178,7 @@
         packages = {
           subduction_cli = pkgs.rustPlatform.buildRustPackage {
             pname = "subduction_cli";
-            version = (builtins.fromTOML (builtins.readFile ./subduction_cli/Cargo.toml)).package.version;
+            version = (builtins.fromTOML (builtins.readFile ./legacy/subduction_cli/Cargo.toml)).package.version;
             meta = {
               description = "CLI for running a Subduction sync server";
               longDescription = ''

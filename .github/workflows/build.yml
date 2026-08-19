@@ -25,7 +25,7 @@ jobs:
       - name: Extract version from subduction_cli/Cargo.toml
         id: extract
         run: |
-          version=$(grep '^version' subduction_cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          version=$(grep '^version' legacy/subduction_cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build-cli:
@@ -124,7 +124,7 @@ jobs:
       - name: Install pnpm dependencies
         run: |
           nix develop --command bash -c "
-            cd ./subduction_wasm && pnpm i
+            cd ./legacy/subduction_wasm && pnpm i
             cd ../automerge_subduction_wasm && pnpm i
           "
 
@@ -136,11 +136,11 @@ jobs:
         with:
           name: subduction-wasm-${{ env.VERSION }}
           path: |
-            subduction_wasm/pkg/
-            subduction_wasm/pkg-node/
-            subduction_wasm/pkg-slim/
-            subduction_wasm/package.json
-            subduction_wasm/README.md
+            legacy/subduction_wasm/pkg/
+            legacy/subduction_wasm/pkg-node/
+            legacy/subduction_wasm/pkg-slim/
+            legacy/subduction_wasm/package.json
+            legacy/subduction_wasm/README.md
           retention-days: 90
 
       - name: Upload automerge_subduction_wasm artifact
@@ -148,11 +148,11 @@ jobs:
         with:
           name: automerge-subduction-wasm-${{ env.VERSION }}
           path: |
-            automerge_subduction_wasm/pkg/
-            automerge_subduction_wasm/pkg-node/
-            automerge_subduction_wasm/pkg-slim/
-            automerge_subduction_wasm/package.json
-            automerge_subduction_wasm/README.md
+            legacy/automerge_subduction_wasm/pkg/
+            legacy/automerge_subduction_wasm/pkg-node/
+            legacy/automerge_subduction_wasm/pkg-slim/
+            legacy/automerge_subduction_wasm/package.json
+            legacy/automerge_subduction_wasm/README.md
           retention-days: 90
 
   release:

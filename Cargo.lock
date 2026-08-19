@@ -5516,6 +5516,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "subduction_protocol"
+version = "0.1.0"
+dependencies = [
+ "sedimentree_core",
+ "subduction_crypto",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "subduction_redb_storage"
 version = "0.1.0"
 dependencies = [
@@ -5533,6 +5542,17 @@ dependencies = [
  "testresult",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "subduction_runtime"
+version = "0.1.0"
+dependencies = [
+ "future_form",
+ "futures",
+ "metrics",
+ "subduction_protocol",
  "tracing",
 ]
 

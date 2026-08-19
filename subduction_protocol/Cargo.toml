@@ -1,0 +1,25 @@
+[package]
+name = "subduction_protocol"
+version = "0.1.0"
+description = "Sans-io protocol state machine for Subduction: pure decisions, no futures, no locks, no clock, no IO"
+
+categories = ["network-programming", "no-std"]
+keywords = ["sans-io", "subduction", "sync"]
+readme = "./README.md"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+std = ["sedimentree_core/std", "subduction_crypto/std"]
+
+[dependencies]
+sedimentree_core = { workspace = true }
+subduction_crypto = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

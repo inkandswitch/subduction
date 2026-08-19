@@ -65,7 +65,7 @@ jobs:
         RUST_BACKTRACE: 1
 
     - name: Run Property Tests on subduction_core
-      working-directory: subduction_core
+      working-directory: legacy/subduction_core
       run: |
         BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --tests
       env:
