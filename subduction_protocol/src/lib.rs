@@ -38,15 +38,17 @@
 
 extern crate alloc;
 
+pub mod effect;
+pub mod event;
+pub mod id;
+pub mod outcome;
 pub mod peer_id;
 pub mod remote_heads;
+pub mod timestamp;
+pub mod token;
 pub mod wire;
 
 // Remaining Phase 1 modules land here:
-// pub mod event;      — Event / Command vocabulary
-// pub mod effect;     — Effect / storage & crypto op vocabulary
+// pub mod handshake;  — challenge/response sub-machine (math copied from legacy)
 // pub mod machine;    — the Machine itself
-// pub mod outcome;    — structured transition outcomes (tier-3 telemetry)
 // pub mod stats;      — pull-based counters (tier-2 telemetry)
-// pub mod timestamp;  — opaque driver-supplied monotonic time
-// pub mod token;      — generation/sequence completion tokens

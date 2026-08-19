@@ -140,7 +140,7 @@ tests drive the machine with event sequences and assert on outcomes.
 ## Testing Strategy
 
 - _Pure protocol tests_ (L1): two machines wired back-to-back by shuttling
-  `Effect::SendFrame` bytes — handshake completion, sync convergence from
+  `Effect::SendMessage` bytes — handshake completion, sync convergence from
   arbitrary divergent states, all without an async runtime.
 - _Property/fuzz_ (bolero): arbitrary event sequences never panic; stale
   completions are always no-ops; handshakes survive adversarial
