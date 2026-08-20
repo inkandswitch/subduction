@@ -42,6 +42,24 @@ pub struct NewCommit {
     pub blob: Blob,
 }
 
+/// A new, locally-authored fragment as raw parts. The driver seals it
+/// with the machine's identity key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct NewFragment {
+    /// The fragment's head commit.
+    pub head: CommitId,
+
+    /// Boundary commit ids.
+    pub boundary: BTreeSet<CommitId>,
+
+    /// Checkpoint commit ids.
+    pub checkpoints: Vec<CommitId>,
+
+    /// The fragment's payload bytes.
+    pub blob: Blob,
+}
+
 /// An application request to the machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -68,6 +86,25 @@ pub enum Command {
         tree: SedimentreeId,
         /// The commits, as raw parts.
         commits: Vec<NewCommit>,
+    },
+
+    /// Author new fragments locally — the fragment-side twin of
+    /// [`AddCommits`](Command::AddCommits).
+    AddFragments {
+        /// The tree to append to (created if absent).
+        tree: SedimentreeId,
+        /// The fragments, as raw parts.
+        fragments: Vec<NewFragment>,
+    },
+
+    /// Stop receiving pushes for these trees from the peer on `conn`
+    /// (sends a `RemoveSubscriptions` message; the peer prunes us from
+    /// its subscriber sets).
+    Unsubscribe {
+        /// The connection to unsubscribe on (must be authenticated).
+        conn: ConnId,
+        /// The trees to unsubscribe from.
+        trees: Vec<SedimentreeId>,
     },
 
     /// Remove a sedimentree locally: resident state immediately, storage

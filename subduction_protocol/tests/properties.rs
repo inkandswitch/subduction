@@ -252,6 +252,7 @@ impl Side {
             AppEvent::ConnectionClosed { .. }
             | AppEvent::ExtensionMessage { .. }
             | AppEvent::CommitsStored { .. }
+            | AppEvent::FragmentsStored { .. }
             | AppEvent::TreeRemoved { .. }
             | AppEvent::StorageError { .. }
             | AppEvent::SyncFinished { .. }

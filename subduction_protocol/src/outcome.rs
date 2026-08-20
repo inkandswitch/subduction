@@ -96,6 +96,18 @@ pub enum Fault {
     /// [`Rejection`](crate::handshake::rejection::Rejection) was sent.
     ChallengeRejected(RejectionReason),
 
+    /// Simultaneous open: the peer replayed our own challenge bytes back
+    /// at us (reflection attack).
+    ReflectedChallenge,
+
+    /// Simultaneous open: the crossed challenge was signed by our own key
+    /// (reflection attack or self-connection).
+    ReflectionAttack,
+
+    /// Simultaneous open: the challenge signer and the response signer
+    /// are different peers (MITM splice or protocol violation).
+    SimultaneousOpenPeerMismatch,
+
     /// An outbound connection was opened without an
     /// [`Audience`](crate::handshake::audience::Audience) — the machine
     /// cannot know who to challenge (driver bug).

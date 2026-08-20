@@ -70,7 +70,10 @@ fn execute_ingest_local(
             futures::executor::block_on(Signed::seal::<Sendable, _>(signer, commit)).into_signed()
         })
         .collect();
-    StorageResult::LocallyIngested { commits: sealed }
+    StorageResult::LocallyIngested {
+        commits: sealed,
+        fragments: vec![],
+    }
 }
 
 #[test]
@@ -125,6 +128,7 @@ fn add_commits_updates_resident_only_after_durability() -> TestResult {
     let StorageOp::IngestLocal {
         tree: op_tree,
         commits,
+        ..
     } = op
     else {
         return Err("expected IngestLocal".into());

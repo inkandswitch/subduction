@@ -94,6 +94,7 @@ impl TestPeer {
             AppEvent::ConnectionClosed { .. }
             | AppEvent::ExtensionMessage { .. }
             | AppEvent::CommitsStored { .. }
+            | AppEvent::FragmentsStored { .. }
             | AppEvent::TreeRemoved { .. }
             | AppEvent::StorageError { .. }
             | AppEvent::SyncFinished { .. }
@@ -588,4 +589,105 @@ fn extension_messages_never_surface_pre_handshake() {
         }
     ));
     assert!(bob.app.is_empty());
+}
+
+#[test]
+fn simultaneous_open_authenticates_both_sides() {
+    // Both sides dial each other on the same logical connection.
+    let mut alice = TestPeer::new(16, None);
+    let mut bob = TestPeer::new(17, None);
+    let t = now(0);
+
+    let alice_id = alice.peer_id();
+    let bob_id = bob.peer_id();
+
+    let _outcome = alice.feed(
+        t,
+        Event::Connected {
+            conn: A_CONN,
+            direction: Direction::Outbound,
+            audience: Some(Audience::known(bob_id)),
+        },
+    );
+    let _outcome = bob.feed(
+        t,
+        Event::Connected {
+            conn: B_CONN,
+            direction: Direction::Outbound,
+            audience: Some(Audience::known(alice_id)),
+        },
+    );
+
+    // Challenges cross on the wire; pump resolves the whole dance.
+    pump(&mut alice, &mut bob, t);
+
+    assert_eq!(alice.authenticated_with(), Some(bob_id), "alice side");
+    assert_eq!(bob.authenticated_with(), Some(alice_id), "bob side");
+    assert!(alice.faults.is_empty(), "alice faults: {:?}", alice.faults);
+    assert!(bob.faults.is_empty(), "bob faults: {:?}", bob.faults);
+    assert_eq!(alice.machine.poll_timeout(), None);
+    assert_eq!(bob.machine.poll_timeout(), None);
+}
+
+#[test]
+fn simultaneous_open_discovery_audience_works() {
+    // Both sides dialed the same discovery endpoint (the legacy fallback
+    // rule: a crossed challenge may carry OUR dialed discovery audience).
+    let discovery = Audience::discover(b"rendezvous.example");
+    let mut alice = TestPeer::new(18, Some(discovery));
+    let mut bob = TestPeer::new(19, Some(discovery));
+    let t = now(0);
+
+    let _outcome = alice.feed(
+        t,
+        Event::Connected {
+            conn: A_CONN,
+            direction: Direction::Outbound,
+            audience: Some(discovery),
+        },
+    );
+    let _outcome = bob.feed(
+        t,
+        Event::Connected {
+            conn: B_CONN,
+            direction: Direction::Outbound,
+            audience: Some(discovery),
+        },
+    );
+    pump(&mut alice, &mut bob, t);
+
+    assert_eq!(alice.authenticated_with(), Some(bob.peer_id()));
+    assert_eq!(bob.authenticated_with(), Some(alice.peer_id()));
+}
+
+#[test]
+fn reflected_challenge_is_detected() {
+    let mut alice = TestPeer::new(20, None);
+    let bob_id = PeerId::new([0xBB; 32]);
+    let t = now(0);
+
+    let _outcome = alice.feed(
+        t,
+        Event::Connected {
+            conn: A_CONN,
+            direction: Direction::Outbound,
+            audience: Some(Audience::known(bob_id)),
+        },
+    );
+    // Reflect alice's own challenge bytes straight back at her.
+    let (_conn, own_challenge) = alice.sent.remove(0);
+    let outcome = alice.feed(
+        t,
+        Event::MessageReceived {
+            conn: A_CONN,
+            bytes: own_challenge,
+        },
+    );
+    assert!(matches!(
+        outcome,
+        Outcome::ConnectionFault {
+            conn: A_CONN,
+            fault: Fault::ReflectedChallenge,
+        }
+    ));
 }

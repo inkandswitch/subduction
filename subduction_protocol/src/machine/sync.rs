@@ -89,6 +89,11 @@ pub(super) enum ConnPending {
         commits: Vec<(Signed<LooseCommit>, Blob)>,
         /// The signed fragments with blobs, in op order.
         fragments: Vec<(Signed<Fragment>, Blob)>,
+        /// Whether to ack with a `HeadsUpdate` after ingesting — true for
+        /// individual commit/fragment messages (the 1.5-RTT second half /
+        /// subscription pushes; legacy's `FanOut.ack_msg`), false for
+        /// batch-response ingests (the requester does not ack).
+        ack: bool,
     },
 }
 
@@ -211,7 +216,7 @@ impl Machine {
                 sender_heads,
             } => {
                 self.notify_heads(id, peer, sender_heads);
-                self.ingest_remote_items(conn, peer, id, vec![(commit, blob)], vec![])
+                self.ingest_remote_items(conn, peer, id, vec![(commit, blob)], vec![], true)
             }
             SyncMessage::Fragment {
                 id,
@@ -220,7 +225,7 @@ impl Machine {
                 sender_heads,
             } => {
                 self.notify_heads(id, peer, sender_heads);
-                self.ingest_remote_items(conn, peer, id, vec![], vec![(fragment, blob)])
+                self.ingest_remote_items(conn, peer, id, vec![], vec![(fragment, blob)], true)
             }
             SyncMessage::HeadsUpdate { id, heads } => {
                 self.notify_heads(id, peer, heads);
@@ -356,6 +361,7 @@ impl Machine {
             tree,
             diff.missing_commits,
             diff.missing_fragments,
+            false, // batch-response ingests are not acked (legacy parity)
         );
 
         // Send back what the responder asked for (bidirectional half).
@@ -439,7 +445,8 @@ impl Machine {
                 tree,
                 commits,
                 fragments,
-            } => self.on_remote_ingest_done(conn, tree, &commits, &fragments, result),
+                ack,
+            } => self.on_remote_ingest_done(conn, tree, &commits, &fragments, ack, result),
         }
     }
 
@@ -561,6 +568,7 @@ impl Machine {
         tree: SedimentreeId,
         commits: &[(Signed<LooseCommit>, Blob)],
         fragments: &[(Signed<Fragment>, Blob)],
+        ack: bool,
         result: StorageResult,
     ) -> Outcome {
         let Some(peer) = self.conns.get(&conn).and_then(|e| e.peer) else {
@@ -575,33 +583,61 @@ impl Machine {
                 };
 
                 // Merge accepted metadata into the resident tree; collect
-                // accepted commit pairs for the subscriber forward.
-                let mut accepted: Vec<(Signed<LooseCommit>, Blob)> = Vec::new();
+                // pairs for the subscriber forward — but ONLY items that
+                // were new to us. Forwarding already-known items echoes
+                // between mutually-subscribed peers forever (the legacy
+                // thrash-loop bug class, #281): every hop re-forwards, and
+                // the cycle never damps. Freshness is the damping factor.
+                let mut fresh_items: Vec<(Signed<LooseCommit>, Blob)> = Vec::new();
+                let mut fresh_fragments: Vec<(Signed<Fragment>, Blob)> = Vec::new();
                 {
                     let entry = self.trees.entry(tree).or_default();
                     for (index, (signed, blob)) in commits.iter().enumerate() {
                         if is_rejected(crate::storage::ItemKind::Commit, index) {
                             continue;
                         }
-                        if let Ok((commit, _)) = try_decode_payload::<LooseCommit>(signed) {
-                            let _fresh = entry.add_commit(commit);
-                            accepted.push((signed.clone(), blob.clone()));
+                        if let Ok((commit, _)) = try_decode_payload::<LooseCommit>(signed)
+                            && entry.add_commit(commit)
+                        {
+                            fresh_items.push((signed.clone(), blob.clone()));
                         }
                     }
-                    for (index, (signed, _blob)) in fragments.iter().enumerate() {
+                    for (index, (signed, blob)) in fragments.iter().enumerate() {
                         if is_rejected(crate::storage::ItemKind::Fragment, index) {
                             continue;
                         }
-                        if let Ok((fragment, _)) = try_decode_payload::<Fragment>(signed) {
-                            let _fresh = entry.add_fragment(fragment);
+                        if let Ok((fragment, _)) = try_decode_payload::<Fragment>(signed)
+                            && entry.add_fragment(fragment)
+                        {
+                            fresh_fragments.push((signed.clone(), blob.clone()));
                         }
                     }
                 }
                 self.effects
                     .push_back(Effect::App(AppEvent::TreeUpdated { tree, peer }));
 
+                // Ack the sender with our updated heads (1.5-RTT second
+                // half; legacy sends this after every individual-message
+                // ingest).
+                if ack {
+                    let heads: Vec<CommitId> = self
+                        .trees
+                        .get_mut(&tree)
+                        .map(|t| t.heads(&CountLeadingZeroBytes))
+                        .unwrap_or_default();
+                    let sender_heads = self.next_sender_heads(peer, heads);
+                    let msg = SyncMessage::HeadsUpdate {
+                        id: tree,
+                        heads: sender_heads,
+                    };
+                    self.effects.push_back(Effect::SendMessage {
+                        conn,
+                        bytes: msg.encode(),
+                    });
+                }
+
                 // Forward to other subscribers (never the source).
-                self.broadcast_commits(tree, &accepted, Some(conn));
+                self.broadcast_items(tree, &fresh_items, &fresh_fragments, Some(conn));
                 Outcome::Progressed
             }
             StorageResult::Unauthorized | StorageResult::UnknownTree => Outcome::Progressed,
@@ -628,6 +664,7 @@ impl Machine {
         tree: SedimentreeId,
         commits: Vec<(Signed<LooseCommit>, Blob)>,
         fragments: Vec<(Signed<Fragment>, Blob)>,
+        ack: bool,
     ) -> Outcome {
         if commits.is_empty() && fragments.is_empty() {
             return Outcome::Progressed;
@@ -643,6 +680,7 @@ impl Machine {
                 tree,
                 commits: commits.clone(),
                 fragments: fragments.clone(),
+                ack,
             },
         );
         self.effects.push_back(Effect::Storage {
@@ -747,15 +785,16 @@ impl Machine {
         Outcome::Ignored(IgnoreReason::UnknownTicket)
     }
 
-    /// Push commit items to every subscribed, authenticated connection
-    /// (except `exclude`, the source), with fresh sender-heads.
-    pub(super) fn broadcast_commits(
+    /// Push items to every subscribed, authenticated connection (except
+    /// `exclude`, the source), with fresh sender-heads.
+    pub(super) fn broadcast_items(
         &mut self,
         tree: SedimentreeId,
         items: &[(Signed<LooseCommit>, Blob)],
+        fragment_items: &[(Signed<Fragment>, Blob)],
         exclude: Option<ConnId>,
     ) {
-        if items.is_empty() {
+        if items.is_empty() && fragment_items.is_empty() {
             return;
         }
         let Some(subscribers) = self.subscriptions.get(&tree) else {
@@ -788,6 +827,21 @@ impl Machine {
                 let msg = SyncMessage::LooseCommit {
                     id: tree,
                     commit: signed.clone(),
+                    blob: blob.clone(),
+                    sender_heads,
+                };
+                self.effects.push_back(Effect::SendMessage {
+                    conn: subscriber,
+                    bytes: msg.encode(),
+                });
+                self.stats.subscription_pushes =
+                    self.stats.subscription_pushes.saturating_add(1);
+            }
+            for (signed, blob) in fragment_items {
+                let sender_heads = self.next_sender_heads(peer, heads.clone());
+                let msg = SyncMessage::Fragment {
+                    id: tree,
+                    fragment: signed.clone(),
                     blob: blob.clone(),
                     sender_heads,
                 };

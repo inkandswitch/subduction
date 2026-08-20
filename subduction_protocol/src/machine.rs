@@ -40,6 +40,7 @@
 //! Simultaneous open (both sides dial each other on one connection) is not
 //! yet ported from legacy — tracked for the iroh transport phase.
 
+mod sim_open;
 mod sync;
 
 use alloc::{collections::VecDeque, vec::Vec};
@@ -50,6 +51,7 @@ use sedimentree_core::{
     codec::{encode::EncodeFields, schema::Schema},
     collections::{Map, Set},
     depth::CountLeadingZeroBytes,
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::minimized::MinimizedSedimentree,
@@ -291,11 +293,6 @@ impl Machine {
                     };
                 };
 
-                let pinned = match audience {
-                    Audience::Known(peer) => Some(peer),
-                    Audience::Discover(_) => None,
-                };
-
                 let challenge = Challenge::new(audience, now.wall, self.next_nonce());
                 let preimage = signed_preimage(&self.config.local_peer, &challenge);
 
@@ -313,7 +310,6 @@ impl Machine {
                     ticket,
                     challenge,
                     preimage: preimage.clone(),
-                    pinned,
                 };
                 self.conns.insert(conn, entry);
 
@@ -347,7 +343,11 @@ impl Machine {
             | HandshakeState::AwaitingResponse { .. }
             | HandshakeState::AwaitingResponseVerify { .. }
             | HandshakeState::AwaitingChallengeVerify { .. }
-            | HandshakeState::AwaitingResponseSign { .. } => {
+            | HandshakeState::AwaitingResponseSign { .. }
+            | HandshakeState::SimOpenChallengeVerify { .. }
+            | HandshakeState::SimOpenLoserSign { .. }
+            | HandshakeState::SimOpenAwaitTheirResponse { .. }
+            | HandshakeState::SimOpenResponseVerify { .. } => {
                 self.stats.handshakes_failed = self.stats.handshakes_failed.saturating_add(1);
             }
             HandshakeState::Authenticated | HandshakeState::Closing => {}
@@ -442,18 +442,25 @@ impl Machine {
                     HandshakeMessage::Rejection(rejection) => {
                         self.fault(conn, Fault::HandshakeRejected(rejection.reason))
                     }
-                    // Simultaneous open: not yet ported (see module docs).
-                    HandshakeMessage::SignedChallenge(_) => {
-                        self.fault(conn, Fault::UnexpectedMessage)
+                    // Simultaneous open: both sides dialed.
+                    HandshakeMessage::SignedChallenge(signed) => {
+                        self.on_sim_open_challenge(now, conn, bytes, &signed)
                     }
                 }
+            }
+
+            HandshakeState::SimOpenAwaitTheirResponse { .. } => {
+                self.on_sim_open_message(conn, bytes)
             }
 
             // No message is legal while we hold the turn's crypto pending.
             HandshakeState::AwaitingChallengeSign { .. }
             | HandshakeState::AwaitingResponseVerify { .. }
             | HandshakeState::AwaitingChallengeVerify { .. }
-            | HandshakeState::AwaitingResponseSign { .. } => {
+            | HandshakeState::AwaitingResponseSign { .. }
+            | HandshakeState::SimOpenChallengeVerify { .. }
+            | HandshakeState::SimOpenLoserSign { .. }
+            | HandshakeState::SimOpenResponseVerify { .. } => {
                 self.fault(conn, Fault::UnexpectedMessage)
             }
         }
@@ -503,9 +510,10 @@ impl Machine {
         let Some(entry) = self.conns.get_mut(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
-        let HandshakeState::AwaitingResponse { challenge, pinned } = &entry.state else {
+        let HandshakeState::AwaitingResponse { challenge, .. } = &entry.state else {
             return self.fault(conn, Fault::UnexpectedMessage);
         };
+        let pinned = pinned_peer(challenge);
 
         let Ok((response, _consumed)) = try_decode_payload::<Response>(signed) else {
             self.stats.malformed_messages = self.stats.malformed_messages.saturating_add(1);
@@ -517,7 +525,6 @@ impl Machine {
         }
 
         let responder = PeerId::from(signed.issuer());
-        let pinned = *pinned;
         let item = verify_item(signed);
 
         let ticket = entry.issue_ticket(conn);
@@ -551,13 +558,27 @@ impl Machine {
             }
 
             Command::AddCommits { tree, commits } => {
-                let ticket = self.issue_local_ticket();
-                let blobs = commits.iter().map(|new| new.blob.clone()).collect();
-                self.local_pending
-                    .insert(ticket.seq, LocalPending::Ingest { tree, blobs });
-                self.effects.push_back(Effect::Storage {
-                    ticket,
-                    op: StorageOp::IngestLocal { tree, commits },
+                self.ingest_local(tree, commits, Vec::new())
+            }
+
+            Command::AddFragments { tree, fragments } => {
+                self.ingest_local(tree, Vec::new(), fragments)
+            }
+
+            Command::Unsubscribe { conn, trees } => {
+                let authenticated = self
+                    .conns
+                    .get(&conn)
+                    .is_some_and(|entry| matches!(entry.state, HandshakeState::Authenticated));
+                if !authenticated {
+                    return Outcome::Ignored(IgnoreReason::NotAuthenticated(conn));
+                }
+                let msg = wire::SyncMessage::RemoveSubscriptions(wire::RemoveSubscriptions {
+                    ids: trees,
+                });
+                self.effects.push_back(Effect::SendMessage {
+                    conn,
+                    bytes: msg.encode(),
                 });
                 Outcome::Progressed
             }
@@ -636,29 +657,50 @@ impl Machine {
 
         match (pending, result) {
             (
-                LocalPending::Ingest { tree, blobs },
-                StorageResult::LocallyIngested { commits },
+                LocalPending::Ingest {
+                    tree,
+                    commit_blobs,
+                    fragment_blobs,
+                },
+                StorageResult::LocallyIngested { commits, fragments },
             ) => {
                 // The tree may have been removed while the write was in
                 // flight — the durable data goes with it, so drop quietly.
                 if !self.trees.contains_key(&tree) && self.local_delete_pending(tree) {
                     return Outcome::Ignored(IgnoreReason::StaleTicket);
                 }
-                let entry = self.trees.entry(tree).or_default();
-                let mut heads = Vec::with_capacity(commits.len());
-                for signed in &commits {
-                    if let Ok((commit, _consumed)) = try_decode_payload::<LooseCommit>(signed) {
-                        heads.push(commit.head());
-                        let _fresh = entry.add_commit(commit);
+                {
+                    let entry = self.trees.entry(tree).or_default();
+                    if !commits.is_empty() {
+                        let mut heads = Vec::with_capacity(commits.len());
+                        for signed in &commits {
+                            if let Ok((commit, _)) = try_decode_payload::<LooseCommit>(signed) {
+                                heads.push(commit.head());
+                                let _fresh = entry.add_commit(commit);
+                            }
+                        }
+                        self.effects
+                            .push_back(Effect::App(AppEvent::CommitsStored { tree, heads }));
+                    }
+                    if !fragments.is_empty() {
+                        let mut heads = Vec::with_capacity(fragments.len());
+                        for signed in &fragments {
+                            if let Ok((fragment, _)) = try_decode_payload::<Fragment>(signed) {
+                                heads.push(fragment.head());
+                                let _fresh = entry.add_fragment(fragment);
+                            }
+                        }
+                        self.effects
+                            .push_back(Effect::App(AppEvent::FragmentsStored { tree, heads }));
                     }
                 }
-                self.effects
-                    .push_back(Effect::App(AppEvent::CommitsStored { tree, heads }));
 
                 // Push to subscribers (all of them: the author is us).
-                let items: Vec<(Signed<LooseCommit>, Blob)> =
-                    commits.into_iter().zip(blobs).collect();
-                self.broadcast_commits(tree, &items, None);
+                let commit_items: Vec<(Signed<LooseCommit>, Blob)> =
+                    commits.into_iter().zip(commit_blobs).collect();
+                let fragment_items: Vec<(Signed<Fragment>, Blob)> =
+                    fragments.into_iter().zip(fragment_blobs).collect();
+                self.broadcast_items(tree, &commit_items, &fragment_items, None);
                 Outcome::Progressed
             }
 
@@ -699,6 +741,35 @@ impl Machine {
         }
     }
 
+    /// Queue a fused local seal+persist for commits and/or fragments.
+    fn ingest_local(
+        &mut self,
+        tree: SedimentreeId,
+        commits: Vec<crate::command::NewCommit>,
+        fragments: Vec<crate::command::NewFragment>,
+    ) -> Outcome {
+        let ticket = self.issue_local_ticket();
+        let commit_blobs = commits.iter().map(|new| new.blob.clone()).collect();
+        let fragment_blobs = fragments.iter().map(|new| new.blob.clone()).collect();
+        self.local_pending.insert(
+            ticket.seq,
+            LocalPending::Ingest {
+                tree,
+                commit_blobs,
+                fragment_blobs,
+            },
+        );
+        self.effects.push_back(Effect::Storage {
+            ticket,
+            op: StorageOp::IngestLocal {
+                tree,
+                commits,
+                fragments,
+            },
+        });
+        Outcome::Progressed
+    }
+
     /// Whether a delete for `tree` is still in flight.
     fn local_delete_pending(&self, tree: SedimentreeId) -> bool {
         self.local_pending
@@ -732,12 +803,12 @@ impl Machine {
 
     fn on_crypto_done(&mut self, now: Now, ticket: CryptoTicket, result: CryptoResult) -> Outcome {
         let Entity::Connection(conn) = ticket.entity else {
-            // No Local-scoped operations exist yet (Phase 2).
+            // No Local-scoped crypto operations exist yet.
             self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
             return Outcome::Ignored(IgnoreReason::UnknownTicket);
         };
 
-        let Some(entry) = self.conns.get_mut(&conn) else {
+        let Some(entry) = self.conns.get(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
 
@@ -746,6 +817,36 @@ impl Machine {
             return Outcome::Ignored(IgnoreReason::StaleTicket);
         }
 
+        match &entry.state {
+            HandshakeState::SimOpenChallengeVerify { .. }
+            | HandshakeState::SimOpenLoserSign { .. }
+            | HandshakeState::SimOpenAwaitTheirResponse { .. }
+            | HandshakeState::SimOpenResponseVerify { .. } => {
+                self.sim_open_crypto_done(now, conn, ticket, result)
+            }
+            HandshakeState::AwaitingChallenge
+            | HandshakeState::AwaitingChallengeSign { .. }
+            | HandshakeState::AwaitingResponse { .. }
+            | HandshakeState::AwaitingResponseVerify { .. }
+            | HandshakeState::AwaitingChallengeVerify { .. }
+            | HandshakeState::AwaitingResponseSign { .. }
+            | HandshakeState::Authenticated
+            | HandshakeState::Closing => self.handshake_crypto_done(now, conn, ticket, result),
+        }
+    }
+
+    /// Crypto completions for the plain (non-sim-open) handshake states.
+    /// The caller has already validated connection and generation.
+    fn handshake_crypto_done(
+        &mut self,
+        now: Now,
+        conn: ConnId,
+        ticket: CryptoTicket,
+        result: CryptoResult,
+    ) -> Outcome {
+        let Some(entry) = self.conns.get_mut(&conn) else {
+            return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
+        };
         match (&entry.state, result) {
             // ── initiator: challenge signed ────────────────────────
             (
@@ -753,14 +854,16 @@ impl Machine {
                     ticket: expected,
                     challenge,
                     preimage,
-                    pinned,
                 },
                 CryptoResult::Signed { signature },
             ) if *expected == ticket => {
                 let mut bytes = preimage.clone();
                 bytes.extend_from_slice(&signature);
-                let (challenge, pinned) = (*challenge, *pinned);
-                entry.state = HandshakeState::AwaitingResponse { challenge, pinned };
+                let challenge = *challenge;
+                entry.state = HandshakeState::AwaitingResponse {
+                    challenge,
+                    signed_bytes: bytes.clone(),
+                };
                 self.effects.push_back(Effect::SendMessage { conn, bytes });
                 Outcome::Progressed
             }
@@ -831,6 +934,10 @@ impl Machine {
                 | HandshakeState::AwaitingResponseVerify { .. }
                 | HandshakeState::AwaitingChallengeVerify { .. }
                 | HandshakeState::AwaitingResponseSign { .. }
+                | HandshakeState::SimOpenChallengeVerify { .. }
+                | HandshakeState::SimOpenLoserSign { .. }
+                | HandshakeState::SimOpenAwaitTheirResponse { .. }
+                | HandshakeState::SimOpenResponseVerify { .. }
                 | HandshakeState::Authenticated
                 | HandshakeState::Closing,
                 CryptoResult::Signed { .. }
@@ -1040,7 +1147,9 @@ enum LocalPending {
         /// The commits' blobs, in op order, held for the post-durability
         /// subscriber broadcast (transit-only: dropped when the op
         /// resolves).
-        blobs: Vec<Blob>,
+        commit_blobs: Vec<Blob>,
+        /// The fragments' blobs, in op order (same lifecycle).
+        fragment_blobs: Vec<Blob>,
     },
 
     /// A [`DeleteTree`](StorageOp::DeleteTree) awaiting completion.
@@ -1058,18 +1167,55 @@ enum HandshakeState {
     /// Inbound: waiting for the initiator's challenge.
     AwaitingChallenge,
 
-    /// Outbound: our challenge is at the driver being signed.
+    /// Outbound: our challenge is at the driver being signed. The pin
+    /// (for `Audience::Known`) is derived from `challenge.audience`.
     AwaitingChallengeSign {
         ticket: CryptoTicket,
         challenge: Challenge,
         preimage: Vec<u8>,
-        pinned: Option<PeerId>,
     },
 
-    /// Outbound: challenge sent; waiting for the responder.
+    /// Outbound: challenge sent; waiting for the responder (or, in a
+    /// simultaneous open, their crossed challenge). `signed_bytes` is our
+    /// challenge as sent — the reflection check and tie-break need it.
     AwaitingResponse {
         challenge: Challenge,
-        pinned: Option<PeerId>,
+        signed_bytes: Vec<u8>,
+    },
+
+    /// Simultaneous open: their crossed challenge is being verified.
+    SimOpenChallengeVerify {
+        ticket: CryptoTicket,
+        our_challenge: Challenge,
+        their_challenge: Challenge,
+        their_peer: PeerId,
+        we_win: bool,
+    },
+
+    /// Simultaneous open, loser: our response to their challenge is being
+    /// signed (loser sends first, then awaits their response to ours).
+    SimOpenLoserSign {
+        ticket: CryptoTicket,
+        preimage: Vec<u8>,
+        our_challenge: Challenge,
+        expected: PeerId,
+    },
+
+    /// Simultaneous open: waiting for their response to our challenge.
+    /// `owed` is their challenge if we still owe them a response
+    /// (winner path: receive-verify theirs first, then sign ours).
+    SimOpenAwaitTheirResponse {
+        our_challenge: Challenge,
+        owed: Option<Challenge>,
+        expected: PeerId,
+    },
+
+    /// Simultaneous open: their response signature is being verified.
+    SimOpenResponseVerify {
+        ticket: CryptoTicket,
+        owed: Option<Challenge>,
+        expected: PeerId,
+        responder: PeerId,
     },
 
     /// Outbound: the response signature is at the driver being verified.
@@ -1101,6 +1247,15 @@ enum HandshakeState {
 }
 
 // ── free helpers ────────────────────────────────────────────────────
+
+/// The identity pin implied by a challenge's audience: dialing a
+/// [`Audience::Known`] peer pins the authenticated identity to it.
+const fn pinned_peer(challenge: &Challenge) -> Option<PeerId> {
+    match challenge.audience {
+        Audience::Known(peer) => Some(peer),
+        Audience::Discover(_) => None,
+    }
+}
 
 /// Build the byte preimage that [`Signed::seal`] signs:
 /// `schema + discriminant? + issuer + fields`. Appending an ed25519

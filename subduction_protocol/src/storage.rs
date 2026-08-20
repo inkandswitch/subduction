@@ -114,6 +114,8 @@ pub enum StorageOp {
         tree: SedimentreeId,
         /// New commits as raw parts.
         commits: Vec<crate::command::NewCommit>,
+        /// New fragments as raw parts.
+        fragments: Vec<crate::command::NewFragment>,
     },
 }
 
@@ -177,6 +179,8 @@ pub enum StorageResult {
     LocallyIngested {
         /// The signed commits (blobs stayed in storage).
         commits: Vec<Signed<LooseCommit>>,
+        /// The signed fragments (blobs stayed in storage).
+        fragments: Vec<Signed<Fragment>>,
     },
 
     /// The whole op was denied by policy (requestor-level).

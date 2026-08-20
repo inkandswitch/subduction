@@ -193,6 +193,16 @@ pub enum AppEvent {
         heads: Vec<CommitId>,
     },
 
+    /// Locally-authored fragments are sealed and durable
+    /// ([`Command::AddFragments`](crate::command::Command::AddFragments)
+    /// completed).
+    FragmentsStored {
+        /// The tree appended to.
+        tree: SedimentreeId,
+        /// The stored fragments' head identities.
+        heads: Vec<CommitId>,
+    },
+
     /// A tree was removed from storage
     /// ([`Command::RemoveTree`](crate::command::Command::RemoveTree)
     /// completed).

@@ -152,25 +152,25 @@ not host them (that would reintroduce generics at the FFI boundary);
 instead, L2 provides a combinator that wires them up once:
 
 ```text
-          ┌─ Composite (L2) ────────────────────────────────┐
- events ─▶│ root Machine (handshake, sync, auth, routing)        │▶─ effects
-          │   │ ExtensionMessage / PeerAuthenticated /            │
-          │   │ ConnectionClosed            ▲ sends (auth-gated)  │
-          │   ▼                             │                     │
+          ┌─ Composite (L2) ─────────────────────────────────────┐
+ events ─▶│ root Machine (handshake, sync, auth, routing)        │─▶ effects
+          │   │ ExtensionMessage / PeerAuthenticated /           │
+          │   │ ConnectionClosed            ▲ sends (auth-gated) │
+          │   ▼                             │                    │
           │ extension machines, keyed by schema prefix           │
-          └──────────────────────────────────────────────────┘
+          └──────────────────────────────────────────────────────┘
 ```
 
 An extension machine must accept this lifecycle vocabulary (whether via the
 Rust `ProtocolMachine` trait in L2, or natively on platforms that bind L1
 directly):
 
-| Input | Meaning |
-|-------|---------|
-| `PeerUp { conn, peer }` | An authenticated connection is available |
-| `PeerDown { conn, peer }` | It is gone; drop all state for it |
-| `MessageReceived { conn, bytes }` | A complete message bearing the extension's schema prefix |
-| `Wake` | Deadlines may be due (extension exposes its own `poll_timeout`) |
+| Input                             | Meaning                                                         |
+|-----------------------------------|-----------------------------------------------------------------|
+| `PeerUp { conn, peer }`           | An authenticated connection is available                        |
+| `PeerDown { conn, peer }`         | It is gone; drop all state for it                               |
+| `MessageReceived { conn, bytes }` | A complete message bearing the extension's schema prefix        |
+| `Wake`                            | Deadlines may be due (extension exposes its own `poll_timeout`) |
 
 and may emit sends `(conn, bytes)` — delivered only on authenticated
 connections — plus its own application events. Extensions never see
@@ -181,14 +181,41 @@ pre-handshake traffic and never manage connection lifecycle themselves.
 Three tiers; the `metrics` facade never appears in L1, and legacy metric
 names are preserved so existing dashboards keep working:
 
-| Tier | What | Mechanism |
-|------|------|-----------|
-| 1 — Boundary | bytes/messages in/out, effect latencies, connection gauges | Derived in L2 by the driver executing effects |
-| 2 — Internal counters | dedup hits, nonce evictions, sessions in flight | `Machine::stats()` pull snapshots (plain `u64`s) |
-| 3 — Decision events | sync skipped, suppression fired, rejections | Structured `Outcome` return values, pattern-matched by the driver into `metrics`/`tracing` |
+| Tier                  | What                                                       | Mechanism                                                                                  |
+|-----------------------|------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| 1 — Boundary          | bytes/messages in/out, effect latencies, connection gauges | Derived in L2 by the driver executing effects                                              |
+| 2 — Internal counters | dedup hits, nonce evictions, sessions in flight            | `Machine::stats()` pull snapshots (plain `u64`s)                                           |
+| 3 — Decision events   | sync skipped, suppression fired, rejections                | Structured `Outcome` return values, pattern-matched by the driver into `metrics`/`tracing` |
 
 Tier-3 outcomes double as the primary test-assertion surface: property
 tests drive the machine with event sequences and assert on outcomes.
+
+### Legacy metric-name mapping
+
+Every legacy `subduction_*` metric keeps its name at the driver; this
+table records which tier now feeds it (audited against
+`legacy/subduction_core/src/metrics/names.rs`):
+
+| Legacy metric                                          | Tier | Fed by                                                                               |
+|--------------------------------------------------------|------|--------------------------------------------------------------------------------------|
+| `connections_active/total/closed`                      | 2    | `stats().connections_opened/closed` (+ driver gauge)                                 |
+| `handshake_total{outcome}`                             | 2+3  | `stats().handshakes_completed/failed/timeouts`; outcome labels from `Fault` variants |
+| `handshake_duration_seconds`                           | 1    | driver times `Connected` → `PeerAuthenticated`                                       |
+| `network_frame_bytes`, `messages_total`                | 1    | driver counts `SendMessage`/`MessageReceived`                                        |
+| `dispatch_*` (inflight, throttled, permit wait, dwell) | 1    | driver queue/executor properties — the machine has no queues                         |
+| `batch_sync_requests/responses_total`                  | 2    | `stats().sync_requests_sent/received`, `sync_responses_received`                     |
+| `sync_duration_seconds`                                | 1+3  | driver times `SyncTree` → `SyncFinished{status}`                                     |
+| `sync_commits/fragments_received/sent_total`           | 1    | driver inspects `Ingest`/`SendMessage` effects                                       |
+| `sync_call_failures_total`                             | 3    | `SyncFinished{status != Completed}`                                                  |
+| `sync_verify_failures_total`                           | 1    | driver counts `Ingested.rejected` items it produced                                  |
+| `top_requestor_*`, `requestor_window_*`                | 1    | driver-side tally (legacy `requestor_tally` moves to the driver)                     |
+| `late_responses_total`                                 | 2    | `stats().stale_completions` + `Ignored(UnknownRequest)` outcomes                     |
+| `keepalive_*`                                          | 1    | transport-level; never entered the machine                                           |
+| `mux_pending/requests/cancelled`                       | 2    | `pending_sync_requests()`, `stats().sync_requests_sent`, timeout `SyncFinished`s     |
+| `outbound_queue_*`                                     | 1    | driver send-queue properties                                                         |
+| `subscribed_sedimentrees`                              | 2    | resident subscription map size (expose in `stats()` when needed)                     |
+| `subscription_pushes_total`                            | 2    | `stats().subscription_pushes`                                                        |
+| `storage_*` (latency, sizes)                           | 1    | driver times `Storage` effects                                                       |
 
 ## Testing Strategy
 
