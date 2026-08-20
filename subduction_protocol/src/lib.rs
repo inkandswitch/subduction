@@ -40,15 +40,17 @@ extern crate alloc;
 
 pub mod effect;
 pub mod event;
+pub mod handshake;
 pub mod id;
+pub mod nonce_cache;
 pub mod outcome;
 pub mod peer_id;
 pub mod remote_heads;
 pub mod timestamp;
 pub mod token;
+pub mod wall_clock;
 pub mod wire;
 
 // Remaining Phase 1 modules land here:
-// pub mod handshake;  — challenge/response sub-machine (math copied from legacy)
-// pub mod machine;    — the Machine itself
+// pub mod machine;    — the Machine + handshake sub-machine
 // pub mod stats;      — pull-based counters (tier-2 telemetry)

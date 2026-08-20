@@ -1,0 +1,60 @@
+//! Wall-clock timestamps (Unix seconds), used for handshake freshness.
+//!
+//! Distinct from [`crate::timestamp::Timestamp`] (monotonic driver time):
+//! wall-clock seconds cross the wire in challenges/responses and feed
+//! drift correction. Copied from `legacy/subduction_core/src/timestamp.rs`
+//! minus the `system_time` constructor — the driver supplies wall time.
+
+use core::time::Duration;
+
+/// A timestamp represented as non-leap seconds since the Unix epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct TimestampSeconds(u64);
+
+impl TimestampSeconds {
+    /// Create a new timestamp from seconds since Unix epoch.
+    #[must_use]
+    pub const fn new(secs: u64) -> Self {
+        Self(secs)
+    }
+
+    /// Get the raw seconds value.
+    #[must_use]
+    pub const fn as_secs(&self) -> u64 {
+        self.0
+    }
+
+    /// Compute the absolute difference between two timestamps.
+    #[must_use]
+    pub const fn abs_diff(&self, other: Self) -> Duration {
+        Duration::from_secs(self.0.abs_diff(other.0))
+    }
+
+    /// Compute the signed difference (self - other) in seconds.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_lossless)]
+    #[must_use]
+    pub const fn signed_diff(&self, other: Self) -> i64 {
+        (self.0 as i128 - other.0 as i128) as i64
+    }
+
+    /// Add a signed offset to this timestamp.
+    #[allow(clippy::cast_sign_loss)]
+    #[must_use]
+    pub const fn add_signed(&self, offset_secs: i64) -> Self {
+        if offset_secs >= 0 {
+            Self(self.0.saturating_add(offset_secs as u64))
+        } else {
+            Self(self.0.saturating_sub(offset_secs.unsigned_abs()))
+        }
+    }
+
+    /// Subtract a duration, saturating at zero.
+    #[must_use]
+    pub const fn saturating_sub(&self, duration: Duration) -> Self {
+        Self(self.0.saturating_sub(duration.as_secs()))
+    }
+}
