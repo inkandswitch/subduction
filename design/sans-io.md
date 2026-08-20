@@ -123,6 +123,59 @@ Platform capabilities are traits over `FutureForm` (`Sendable` for tokio,
 bounded event channel is the single backpressure point, replacing the
 legacy semaphores and spawn guards.
 
+## Extension Protocols (Multiplexing)
+
+Other protocols (ephemeral messages, keyhive, application-defined) share
+authenticated connections with the sync protocol, distinguished by their
+4-byte schema prefix — as in the legacy composed-envelope design, but as a
+routing rule instead of a type parameter:
+
+```text
+MessageReceived { conn, bytes }
+    ├─ pre-auth:  only SUH\0 (handshake) is legal; anything else faults
+    └─ post-auth: match bytes[0..4]
+         SUM\0     → sync sub-machine
+         SUH\0     → fault (no re-handshake)
+         otherwise → AppEvent::ExtensionMessage { conn, peer, bytes }
+```
+
+Unknown schema ≠ malformed: that is the extensibility guarantee. Extension
+traffic is authentication-gated by construction because it routes through
+the machine, and the byte-level surface means extension protocols can be
+implemented natively on any platform — including as their own sans-io
+machines fed by the same driver.
+
+### Composition (the sub-protocol contract)
+
+Extension protocols are themselves sans-io machines. The root machine does
+not host them (that would reintroduce generics at the FFI boundary);
+instead, L2 provides a combinator that wires them up once:
+
+```text
+          ┌─ Composite (L2) ────────────────────────────────┐
+ events ─▶│ root Machine (handshake, sync, auth, routing)        │▶─ effects
+          │   │ ExtensionMessage / PeerAuthenticated /            │
+          │   │ ConnectionClosed            ▲ sends (auth-gated)  │
+          │   ▼                             │                     │
+          │ extension machines, keyed by schema prefix           │
+          └──────────────────────────────────────────────────┘
+```
+
+An extension machine must accept this lifecycle vocabulary (whether via the
+Rust `ProtocolMachine` trait in L2, or natively on platforms that bind L1
+directly):
+
+| Input | Meaning |
+|-------|---------|
+| `PeerUp { conn, peer }` | An authenticated connection is available |
+| `PeerDown { conn, peer }` | It is gone; drop all state for it |
+| `MessageReceived { conn, bytes }` | A complete message bearing the extension's schema prefix |
+| `Wake` | Deadlines may be due (extension exposes its own `poll_timeout`) |
+
+and may emit sends `(conn, bytes)` — delivered only on authenticated
+connections — plus its own application events. Extensions never see
+pre-handshake traffic and never manage connection lifecycle themselves.
+
 ## Telemetry
 
 Three tiers; the `metrics` facade never appears in L1, and legacy metric

@@ -6,7 +6,7 @@
 
 use alloc::vec::Vec;
 
-use crate::{effect::CryptoResult, id::ConnId, peer_id::PeerId, token::CryptoToken};
+use crate::{effect::CryptoResult, handshake::audience::Audience, id::ConnId, token::CryptoToken};
 
 /// Who initiated a connection. Determines the handshake role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,10 +32,13 @@ pub enum Event {
         conn: ConnId,
         /// Who initiated it.
         direction: Direction,
-        /// The expected peer identity, when dialing a known peer. The
-        /// handshake fails the connection if the authenticated identity
-        /// does not match.
-        expected_peer: Option<PeerId>,
+        /// Who we believe we are dialing. Required for
+        /// [`Outbound`](Direction::Outbound) connections:
+        /// [`Audience::Known`] additionally pins the authenticated identity
+        /// (mismatch is a [`Fault::PeerMismatch`]). Ignored for inbound.
+        ///
+        /// [`Fault::PeerMismatch`]: crate::outcome::Fault::PeerMismatch
+        audience: Option<Audience>,
     },
 
     /// A transport connection is gone (peer close, transport error, or a

@@ -145,4 +145,21 @@ pub enum AppEvent {
         /// The peer identity, if the handshake had completed.
         peer: Option<PeerId>,
     },
+
+    /// A message for an extension protocol (not Subduction's own) arrived
+    /// on an authenticated connection (ADR-010).
+    ///
+    /// Extension protocols (ephemeral, keyhive, application-defined)
+    /// multiplex over the same connection, distinguished by their 4-byte
+    /// schema prefix. The machine only gates them on authentication and
+    /// passes the bytes through untouched — routing beyond that is the
+    /// application's job.
+    ExtensionMessage {
+        /// The receiving connection.
+        conn: ConnId,
+        /// The authenticated peer.
+        peer: PeerId,
+        /// The complete extension message, schema prefix included.
+        bytes: Vec<u8>,
+    },
 }

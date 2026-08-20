@@ -42,15 +42,13 @@ pub mod effect;
 pub mod event;
 pub mod handshake;
 pub mod id;
+pub mod machine;
 pub mod nonce_cache;
 pub mod outcome;
 pub mod peer_id;
 pub mod remote_heads;
+pub mod stats;
 pub mod timestamp;
 pub mod token;
 pub mod wall_clock;
 pub mod wire;
-
-// Remaining Phase 1 modules land here:
-// pub mod machine;    — the Machine + handshake sub-machine
-// pub mod stats;      — pull-based counters (tier-2 telemetry)

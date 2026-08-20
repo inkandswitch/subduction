@@ -5,7 +5,7 @@
 //! `metrics`/`tracing`, and tests assert on them directly. They grow
 //! additively as sub-machines land; they must stay plain data.
 
-use crate::id::ConnId;
+use crate::{handshake::rejection::RejectionReason, id::ConnId};
 
 /// The result of feeding one event to the machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,18 @@ pub enum IgnoreReason {
 
     /// An event referenced a connection the machine does not know.
     UnknownConnection(ConnId),
+
+    /// [`Connected`](crate::event::Event::Connected) arrived for a
+    /// [`ConnId`] that already exists (driver bug — ids must be fresh).
+    DuplicateConnection(ConnId),
+
+    /// An event arrived for a connection that is already being torn down
+    /// (a disconnect effect is in flight).
+    ConnectionClosing(ConnId),
+
+    /// The message is valid but its handling is not yet implemented in
+    /// this phase of the rewrite (post-handshake sync messages — Phase 2).
+    NotYetImplemented,
 }
 
 /// Protocol violations that condemn a connection.
@@ -58,9 +70,24 @@ pub enum Fault {
     /// A signature check failed during the handshake.
     HandshakeVerificationFailed,
 
-    /// The authenticated peer did not match the expected identity.
+    /// The authenticated peer did not match the pinned
+    /// [`Audience::Known`](crate::handshake::audience::Audience::Known)
+    /// identity. (Stricter than legacy, which never re-checked the
+    /// responder against the dialed audience.)
     PeerMismatch,
 
     /// A handshake deadline expired.
     HandshakeTimeout,
+
+    /// The peer rejected our handshake (we are the initiator).
+    HandshakeRejected(RejectionReason),
+
+    /// We rejected the peer's handshake (we are the responder); a
+    /// [`Rejection`](crate::handshake::rejection::Rejection) was sent.
+    ChallengeRejected(RejectionReason),
+
+    /// An outbound connection was opened without an
+    /// [`Audience`](crate::handshake::audience::Audience) — the machine
+    /// cannot know who to challenge (driver bug).
+    MissingAudience,
 }
