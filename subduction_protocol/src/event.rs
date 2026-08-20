@@ -7,6 +7,7 @@
 use alloc::vec::Vec;
 
 use crate::{
+    command::Command,
     effect::CryptoResult,
     handshake::audience::Audience,
     id::ConnId,
@@ -88,6 +89,9 @@ pub enum Event {
         /// The operation's result.
         result: StorageResult,
     },
+
+    /// A local application request (see [`Command`]).
+    Command(Command),
 
     /// The driver's timer fired (or it simply wants deadlines processed).
     /// Carries no payload: the machine re-derives due work from `now`

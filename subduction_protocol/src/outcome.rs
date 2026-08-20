@@ -55,6 +55,16 @@ pub enum IgnoreReason {
     /// The message is valid but its handling is not yet implemented in
     /// this phase of the rewrite (post-handshake sync messages — Phase 2).
     NotYetImplemented,
+
+    /// A sync response arrived that matches no in-flight request
+    /// (already answered, timed out, or never ours). Unsolicited but
+    /// harmless — dropped without touching state.
+    UnknownRequest,
+
+    /// A command targeted a connection that has not completed the
+    /// handshake (e.g. an extension send — extension traffic is gated on
+    /// authentication, ADR-010).
+    NotAuthenticated(ConnId),
 }
 
 /// Protocol violations that condemn a connection.

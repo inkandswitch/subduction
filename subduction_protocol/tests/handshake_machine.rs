@@ -91,7 +91,14 @@ impl TestPeer {
     fn authenticated_with(&self) -> Option<PeerId> {
         self.app.iter().find_map(|event| match event {
             AppEvent::PeerAuthenticated { peer, .. } => Some(*peer),
-            AppEvent::ConnectionClosed { .. } | AppEvent::ExtensionMessage { .. } => None,
+            AppEvent::ConnectionClosed { .. }
+            | AppEvent::ExtensionMessage { .. }
+            | AppEvent::CommitsStored { .. }
+            | AppEvent::TreeRemoved { .. }
+            | AppEvent::StorageError { .. }
+            | AppEvent::SyncFinished { .. }
+            | AppEvent::TreeUpdated { .. }
+            | AppEvent::RemoteHeadsUpdated { .. } => None,
         })
     }
 }

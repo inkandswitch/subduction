@@ -34,4 +34,16 @@ pub struct Stats {
 
     /// Received messages that failed to decode.
     pub malformed_messages: u64,
+
+    /// Batch sync requests we sent.
+    pub sync_requests_sent: u64,
+
+    /// Batch sync requests we answered (or rejected).
+    pub sync_requests_received: u64,
+
+    /// Batch sync responses matched to an in-flight request.
+    pub sync_responses_received: u64,
+
+    /// Stale remote-heads reports dropped by the per-peer counter.
+    pub stale_heads_dropped: u64,
 }

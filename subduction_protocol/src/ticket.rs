@@ -33,10 +33,10 @@ pub enum Entity {
     /// the connection's generation moves on.
     Connection(ConnId),
 
-    /// An operation of the machine itself, not tied to any connection
-    /// (e.g. signing a locally created commit): stale only across machine
+    /// A local operation not tied to any connection (e.g. sealing and
+    /// persisting a locally authored commit): stale only across machine
     /// restarts, which drivers must not span.
-    Machine,
+    Local,
 }
 
 /// A completion ticket for a driver-performed crypto operation.

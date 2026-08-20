@@ -40,16 +40,23 @@
 //! Simultaneous open (both sides dial each other on one connection) is not
 //! yet ported from legacy — tracked for the iroh transport phase.
 
+mod sync;
+
 use alloc::{collections::VecDeque, vec::Vec};
 use core::time::Duration;
 
 use sedimentree_core::{
     codec::{encode::EncodeFields, schema::Schema},
     collections::Map,
+    depth::CountLeadingZeroBytes,
+    id::SedimentreeId,
+    loose_commit::{LooseCommit, id::CommitId},
+    sedimentree::minimized::MinimizedSedimentree,
 };
 use subduction_crypto::{nonce::Nonce, signed::Signed};
 
 use crate::{
+    command::Command,
     effect::{AppEvent, CryptoOp, CryptoResult, Effect, SignatureCheck, VerifyItem},
     event::{Direction, Event},
     handshake::{
@@ -64,7 +71,7 @@ use crate::{
     outcome::{Fault, IgnoreReason, Outcome},
     peer_id::PeerId,
     stats::Stats,
-    storage::StorageResult,
+    storage::{Provenance, StorageFailure, StorageOp, StorageResult},
     timestamp::Timestamp,
     ticket::{CryptoTicket, Entity, StorageTicket},
     wall_clock::TimestampSeconds,
@@ -108,6 +115,9 @@ pub struct Config {
     /// How long a handshake may take before the connection is condemned.
     pub handshake_timeout: Duration,
 
+    /// How long a batch sync request may await its response.
+    pub sync_timeout: Duration,
+
     /// Seed for the nonce generator. Must be unpredictable (CSPRNG) and
     /// unique per machine instance.
     pub entropy: [u8; 32],
@@ -117,6 +127,9 @@ impl Config {
     /// Default handshake deadline.
     pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+    /// Default batch sync deadline (legacy `DEFAULT_ROUNDTRIP_TIMEOUT`).
+    pub const DEFAULT_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+
     /// Create a config with defaults for everything but identity/entropy.
     #[must_use]
     pub const fn new(local_peer: PeerId, entropy: [u8; 32]) -> Self {
@@ -125,6 +138,7 @@ impl Config {
             discovery: None,
             max_drift: MAX_PLAUSIBLE_DRIFT,
             handshake_timeout: Self::DEFAULT_HANDSHAKE_TIMEOUT,
+            sync_timeout: Self::DEFAULT_SYNC_TIMEOUT,
             entropy,
         }
     }
@@ -135,6 +149,21 @@ impl Config {
 pub struct Machine {
     config: Config,
     conns: Map<ConnId, ConnEntry>,
+    /// Resident sedimentree metadata (hydrated by the driver; blobs stay
+    /// in storage — ADR-012 memory model). Minimization is lazy, using
+    /// [`CountLeadingZeroBytes`] (the legacy default; pluggable metrics
+    /// can return if a platform ever needs one).
+    trees: Map<SedimentreeId, MinimizedSedimentree>,
+    /// Pending [`Entity::Local`] storage ops, keyed by ticket seq.
+    local_pending: Map<Seq, LocalPending>,
+    /// Per-peer monotonic counters for heads we have *received* (staleness
+    /// filter) and *sent* (so receivers can filter ours).
+    heads_recv: Map<PeerId, u64>,
+    heads_sent: Map<PeerId, u64>,
+    /// Monotonic nonce for outbound `RequestId`s.
+    request_nonce: u64,
+    local_generation: Generation,
+    local_next_seq: Seq,
     effects: VecDeque<Effect>,
     nonce_cache: NonceCache,
     nonce_counter: u64,
@@ -148,6 +177,13 @@ impl Machine {
         Self {
             config,
             conns: Map::new(),
+            trees: Map::new(),
+            local_pending: Map::new(),
+            heads_recv: Map::new(),
+            heads_sent: Map::new(),
+            request_nonce: 0,
+            local_generation: Generation::FIRST,
+            local_next_seq: Seq::FIRST,
             effects: VecDeque::new(),
             nonce_cache: NonceCache::default(),
             nonce_counter: 0,
@@ -173,6 +209,7 @@ impl Machine {
             Event::MessageReceived { conn, bytes } => self.on_message(now, conn, &bytes),
             Event::CryptoDone { ticket, result } => self.on_crypto_done(now, ticket, result),
             Event::StorageDone { ticket, result } => self.on_storage_done(now, ticket, result),
+            Event::Command(command) => self.on_command(now, command),
             Event::Wake => {
                 if fired {
                     Outcome::Progressed
@@ -191,7 +228,12 @@ impl Machine {
     /// The earliest deadline the driver must wake the machine at, if any.
     #[must_use]
     pub fn poll_timeout(&self) -> Option<Timestamp> {
-        self.conns.values().filter_map(|c| c.deadline).min()
+        let handshakes = self.conns.values().filter_map(|c| c.deadline);
+        let requests = self
+            .conns
+            .values()
+            .flat_map(|c| c.requests.values().map(|r| r.deadline));
+        handshakes.chain(requests).min()
     }
 
     /// Tier-2 telemetry snapshot.
@@ -224,6 +266,8 @@ impl Machine {
                         generation: Generation::FIRST,
                         next_seq: Seq::FIRST,
                         deadline,
+                        pending: Map::new(),
+                        requests: Map::new(),
                         peer: None,
                         state: HandshakeState::AwaitingChallenge,
                     },
@@ -254,6 +298,8 @@ impl Machine {
                     generation: Generation::FIRST,
                     next_seq: Seq::FIRST,
                     deadline,
+                    pending: Map::new(),
+                    requests: Map::new(),
                     peer: None,
                     state: HandshakeState::AwaitingChallenge, // placeholder
                 };
@@ -324,9 +370,16 @@ impl Machine {
                     return self.fault(conn, Fault::MalformedMessage);
                 };
                 match schema {
-                    // Sync protocol: Phase 2.
                     s if s == wire::MESSAGE_SCHEMA => {
-                        Outcome::Ignored(IgnoreReason::NotYetImplemented)
+                        let Some(peer) = entry.peer else {
+                            return self.fault(conn, Fault::UnexpectedMessage);
+                        };
+                        let Ok(msg) = wire::SyncMessage::try_decode(bytes) else {
+                            self.stats.malformed_messages =
+                                self.stats.malformed_messages.saturating_add(1);
+                            return self.fault(conn, Fault::MalformedMessage);
+                        };
+                        self.on_sync_message(now, conn, peer, msg)
                     }
                     // Re-handshake on an authenticated connection is a
                     // protocol violation (matches legacy: composed wire
@@ -469,31 +522,192 @@ impl Machine {
         Outcome::Progressed
     }
 
-    /// No storage operations are issued yet — sync sessions (Phase 2)
-    /// will pend on these. Until then every completion is either stale
-    /// (generation moved on) or unknown.
+    fn on_command(&mut self, now: Now, command: Command) -> Outcome {
+        match command {
+            Command::HydrateTree {
+                tree,
+                commits,
+                fragments,
+            } => {
+                let entry = self.trees.entry(tree).or_default();
+                for commit in commits {
+                    let _fresh = entry.add_commit(commit);
+                }
+                for fragment in fragments {
+                    let _fresh = entry.add_fragment(fragment);
+                }
+                Outcome::Progressed
+            }
+
+            Command::AddCommits { tree, commits } => {
+                let ticket = self.issue_local_ticket();
+                self.local_pending
+                    .insert(ticket.seq, LocalPending::Ingest { tree });
+                self.effects.push_back(Effect::Storage {
+                    ticket,
+                    op: StorageOp::IngestLocal { tree, commits },
+                });
+                Outcome::Progressed
+            }
+
+            Command::RemoveTree { tree } => {
+                let _resident = self.trees.remove(&tree);
+                let ticket = self.issue_local_ticket();
+                self.local_pending
+                    .insert(ticket.seq, LocalPending::Delete { tree });
+                self.effects.push_back(Effect::Storage {
+                    ticket,
+                    op: StorageOp::DeleteTree {
+                        tree,
+                        provenance: Provenance::Local,
+                    },
+                });
+                Outcome::Progressed
+            }
+
+            Command::SyncTree {
+                conn,
+                tree,
+                subscribe,
+            } => self.start_sync(now, conn, tree, subscribe),
+
+            Command::SendExtension { conn, bytes } => {
+                let authenticated = self
+                    .conns
+                    .get(&conn)
+                    .is_some_and(|entry| matches!(entry.state, HandshakeState::Authenticated));
+                if authenticated {
+                    self.effects.push_back(Effect::SendMessage { conn, bytes });
+                    Outcome::Progressed
+                } else {
+                    Outcome::Ignored(IgnoreReason::NotAuthenticated(conn))
+                }
+            }
+        }
+    }
+
     fn on_storage_done(
         &mut self,
         _now: Now,
         ticket: StorageTicket,
-        _result: StorageResult,
+        result: StorageResult,
     ) -> Outcome {
-        let Entity::Connection(conn) = ticket.entity else {
+        match ticket.entity {
+            Entity::Local => self.on_local_storage_done(ticket, result),
+            Entity::Connection(conn) => {
+                let Some(entry) = self.conns.get_mut(&conn) else {
+                    return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
+                };
+                if ticket.generation != entry.generation {
+                    self.stats.stale_completions =
+                        self.stats.stale_completions.saturating_add(1);
+                    return Outcome::Ignored(IgnoreReason::StaleTicket);
+                }
+                let Some(pending) = entry.pending.remove(&ticket.seq) else {
+                    self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
+                    return Outcome::Ignored(IgnoreReason::UnknownTicket);
+                };
+                self.on_sync_storage_done(conn, pending, result)
+            }
+        }
+    }
+
+    fn on_local_storage_done(&mut self, ticket: StorageTicket, result: StorageResult) -> Outcome {
+        if ticket.generation != self.local_generation {
+            self.stats.stale_completions = self.stats.stale_completions.saturating_add(1);
+            return Outcome::Ignored(IgnoreReason::StaleTicket);
+        }
+        let Some(pending) = self.local_pending.remove(&ticket.seq) else {
             self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
             return Outcome::Ignored(IgnoreReason::UnknownTicket);
         };
 
-        let Some(entry) = self.conns.get(&conn) else {
-            return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
-        };
+        match (pending, result) {
+            (LocalPending::Ingest { tree }, StorageResult::LocallyIngested { commits }) => {
+                // The tree may have been removed while the write was in
+                // flight — the durable data goes with it, so drop quietly.
+                if !self.trees.contains_key(&tree) && self.local_delete_pending(tree) {
+                    return Outcome::Ignored(IgnoreReason::StaleTicket);
+                }
+                let entry = self.trees.entry(tree).or_default();
+                let mut heads = Vec::with_capacity(commits.len());
+                for signed in &commits {
+                    if let Ok((commit, _consumed)) = try_decode_payload::<LooseCommit>(signed) {
+                        heads.push(commit.head());
+                        let _fresh = entry.add_commit(commit);
+                    }
+                }
+                self.effects
+                    .push_back(Effect::App(AppEvent::CommitsStored { tree, heads }));
+                Outcome::Progressed
+            }
 
-        if ticket.generation != entry.generation {
-            self.stats.stale_completions = self.stats.stale_completions.saturating_add(1);
-            return Outcome::Ignored(IgnoreReason::StaleTicket);
+            (LocalPending::Delete { tree }, StorageResult::TreeDeleted) => {
+                self.effects
+                    .push_back(Effect::App(AppEvent::TreeRemoved { tree }));
+                Outcome::Progressed
+            }
+
+            (
+                LocalPending::Ingest { tree } | LocalPending::Delete { tree },
+                StorageResult::Failed(failure),
+            ) => {
+                self.effects
+                    .push_back(Effect::App(AppEvent::StorageError { tree, failure }));
+                Outcome::Progressed
+            }
+
+            // Result shape mismatched the pending op — driver bug; the
+            // pending entry is already consumed, so this is terminal for
+            // the op but harmless to the machine.
+            (
+                LocalPending::Ingest { tree } | LocalPending::Delete { tree },
+                StorageResult::Ingested { .. }
+                | StorageResult::Fetched { .. }
+                | StorageResult::TreeDeleted
+                | StorageResult::LocallyIngested { .. }
+                | StorageResult::Unauthorized
+                | StorageResult::UnknownTree,
+            ) => {
+                self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
+                self.effects.push_back(Effect::App(AppEvent::StorageError {
+                    tree,
+                    failure: StorageFailure::Permanent,
+                }));
+                Outcome::Ignored(IgnoreReason::UnknownTicket)
+            }
         }
+    }
 
-        self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
-        Outcome::Ignored(IgnoreReason::UnknownTicket)
+    /// Whether a delete for `tree` is still in flight.
+    fn local_delete_pending(&self, tree: SedimentreeId) -> bool {
+        self.local_pending
+            .values()
+            .any(|pending| matches!(pending, LocalPending::Delete { tree: t } if *t == tree))
+    }
+
+    const fn issue_local_ticket(&mut self) -> StorageTicket {
+        let ticket = StorageTicket {
+            entity: Entity::Local,
+            generation: self.local_generation,
+            seq: self.local_next_seq,
+        };
+        self.local_next_seq = self.local_next_seq.next();
+        ticket
+    }
+
+    /// Read access for the application/tests: the resident trees.
+    pub fn tree_ids(&self) -> impl Iterator<Item = SedimentreeId> {
+        self.trees.keys().copied()
+    }
+
+    /// Read access for the application/tests: a resident tree's current
+    /// heads (`None` if the tree is not resident). `&mut` because
+    /// minimization is lazy.
+    pub fn tree_heads(&mut self, tree: SedimentreeId) -> Option<Vec<CommitId>> {
+        self.trees
+            .get_mut(&tree)
+            .map(|entry| entry.heads(&CountLeadingZeroBytes))
     }
 
     fn on_crypto_done(&mut self, now: Now, ticket: CryptoTicket, result: CryptoResult) -> Outcome {
@@ -728,7 +942,9 @@ impl Machine {
             self.stats.handshake_timeouts = self.stats.handshake_timeouts.saturating_add(1);
             let _outcome = self.fault(*conn, Fault::HandshakeTimeout);
         }
-        !due.is_empty()
+
+        let expired = self.expire_sync_requests(now);
+        !due.is_empty() || expired
     }
 
     /// Deterministic PRF nonce stream: `blake3_keyed(entropy, counter)`.
@@ -758,6 +974,13 @@ struct ConnEntry {
     /// Handshake deadline, if one is armed.
     deadline: Option<Timestamp>,
 
+    /// Post-handshake driver ops in flight (concurrent, unlike the
+    /// exclusive handshake states), keyed by ticket seq.
+    pending: Map<Seq, sync::ConnPending>,
+
+    /// In-flight batch sync requests we initiated, keyed by request nonce.
+    requests: Map<u64, sync::OutboundRequest>,
+
     /// The authenticated peer, once known.
     peer: Option<PeerId>,
 
@@ -775,6 +998,32 @@ impl ConnEntry {
         self.next_seq = self.next_seq.next();
         ticket
     }
+
+    const fn issue_storage_ticket(&mut self, conn: ConnId) -> StorageTicket {
+        let ticket = StorageTicket {
+            entity: Entity::Connection(conn),
+            generation: self.generation,
+            seq: self.next_seq,
+        };
+        self.next_seq = self.next_seq.next();
+        ticket
+    }
+}
+
+/// A pending [`Entity::Local`] storage operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalPending {
+    /// An [`IngestLocal`](StorageOp::IngestLocal) awaiting durability.
+    Ingest {
+        /// The tree being appended to.
+        tree: SedimentreeId,
+    },
+
+    /// A [`DeleteTree`](StorageOp::DeleteTree) awaiting completion.
+    Delete {
+        /// The tree being removed.
+        tree: SedimentreeId,
+    },
 }
 
 /// The handshake sub-machine. `Awaiting{…}Sign`/`…Verify` states hold the

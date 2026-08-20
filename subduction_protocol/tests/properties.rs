@@ -249,7 +249,14 @@ impl Side {
     fn authenticated_peers(&self) -> impl Iterator<Item = PeerId> {
         self.app.iter().filter_map(|event| match event {
             AppEvent::PeerAuthenticated { peer, .. } => Some(*peer),
-            AppEvent::ConnectionClosed { .. } | AppEvent::ExtensionMessage { .. } => None,
+            AppEvent::ConnectionClosed { .. }
+            | AppEvent::ExtensionMessage { .. }
+            | AppEvent::CommitsStored { .. }
+            | AppEvent::TreeRemoved { .. }
+            | AppEvent::StorageError { .. }
+            | AppEvent::SyncFinished { .. }
+            | AppEvent::TreeUpdated { .. }
+            | AppEvent::RemoteHeadsUpdated { .. } => None,
         })
     }
 }

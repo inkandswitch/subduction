@@ -11,10 +11,12 @@
 
 use alloc::vec::Vec;
 
+use sedimentree_core::{id::SedimentreeId, loose_commit::id::CommitId};
+
 use crate::{
     id::ConnId,
     peer_id::PeerId,
-    storage::StorageOp,
+    storage::{StorageFailure, StorageOp},
     ticket::{CryptoTicket, StorageTicket},
 };
 
@@ -135,6 +137,25 @@ pub enum CryptoResult {
     BatchVerified(Vec<SignatureCheck>),
 }
 
+/// How a batch sync request concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+pub enum SyncStatus {
+    /// The response was processed (ingest durability is reported
+    /// separately via `TreeUpdated`).
+    Completed,
+
+    /// The peer does not have the tree.
+    NotFound,
+
+    /// The peer says we may not read the tree.
+    Unauthorized,
+
+    /// No response arrived within the sync deadline.
+    TimedOut,
+}
+
 /// An application-facing event surfaced by the machine.
 ///
 /// Drivers translate these into callbacks, streams, or platform-native
@@ -160,6 +181,63 @@ pub enum AppEvent {
         conn: ConnId,
         /// The peer identity, if the handshake had completed.
         peer: Option<PeerId>,
+    },
+
+    /// Locally-authored commits are sealed and durable
+    /// ([`Command::AddCommits`](crate::command::Command::AddCommits)
+    /// completed).
+    CommitsStored {
+        /// The tree appended to.
+        tree: SedimentreeId,
+        /// The stored commits' identities.
+        heads: Vec<CommitId>,
+    },
+
+    /// A tree was removed from storage
+    /// ([`Command::RemoveTree`](crate::command::Command::RemoveTree)
+    /// completed).
+    TreeRemoved {
+        /// The removed tree.
+        tree: SedimentreeId,
+    },
+
+    /// A local storage operation failed; the application owns retry
+    /// policy.
+    StorageError {
+        /// The tree the operation targeted.
+        tree: SedimentreeId,
+        /// Coarse failure class.
+        failure: StorageFailure,
+    },
+
+    /// A batch sync request we initiated has concluded.
+    SyncFinished {
+        /// The connection it ran on.
+        conn: ConnId,
+        /// The tree that was synced.
+        tree: SedimentreeId,
+        /// How it went.
+        status: SyncStatus,
+    },
+
+    /// Remote data was verified, persisted, and merged into the resident
+    /// tree.
+    TreeUpdated {
+        /// The updated tree.
+        tree: SedimentreeId,
+        /// The peer the data came from.
+        peer: PeerId,
+    },
+
+    /// A peer reported new heads for a tree (stale reports are filtered
+    /// by the per-peer monotonic counter).
+    RemoteHeadsUpdated {
+        /// The tree the heads are for.
+        tree: SedimentreeId,
+        /// The reporting peer.
+        peer: PeerId,
+        /// The reported heads.
+        heads: crate::remote_heads::RemoteHeads,
     },
 
     /// A message for an extension protocol (not Subduction's own) arrived

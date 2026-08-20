@@ -38,6 +38,7 @@
 
 extern crate alloc;
 
+pub mod command;
 pub mod effect;
 pub mod event;
 pub mod handshake;

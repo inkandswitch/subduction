@@ -101,6 +101,20 @@ pub enum StorageOp {
         /// Who is asking (policy input).
         provenance: Provenance,
     },
+
+    /// Seal and persist locally-authored commits in one round trip: for
+    /// each item the driver hashes the blob, builds the [`LooseCommit`],
+    /// signs it with the machine's identity key (which the driver holds),
+    /// and persists commit + blob. Answers with
+    /// [`StorageResult::LocallyIngested`] carrying the sealed commits so
+    /// the machine can update its resident tree — resident state never
+    /// gets ahead of durability.
+    IngestLocal {
+        /// The tree to append to.
+        tree: SedimentreeId,
+        /// New commits as raw parts.
+        commits: Vec<crate::command::NewCommit>,
+    },
 }
 
 /// Why one item within an [`Ingest`](StorageOp::Ingest) was rejected.
@@ -157,6 +171,13 @@ pub enum StorageResult {
 
     /// A [`DeleteTree`](StorageOp::DeleteTree) finished.
     TreeDeleted,
+
+    /// An [`IngestLocal`](StorageOp::IngestLocal) finished: the sealed,
+    /// durably-persisted commits, in request order.
+    LocallyIngested {
+        /// The signed commits (blobs stayed in storage).
+        commits: Vec<Signed<LooseCommit>>,
+    },
 
     /// The whole op was denied by policy (requestor-level).
     Unauthorized,
