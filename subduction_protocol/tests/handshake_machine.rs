@@ -64,8 +64,10 @@ impl TestPeer {
             match effect {
                 Effect::SendMessage { conn, bytes } => self.sent.push((conn, bytes)),
                 Effect::Disconnect { conn } => self.disconnects.push(conn),
+                // No storage ops are issued during the handshake phase.
+                Effect::Storage { .. } => {}
                 Effect::App(app) => self.app.push(app),
-                Effect::Crypto { token, op } => {
+                Effect::Crypto { ticket, op } => {
                     let result = match op {
                         CryptoOp::Sign { payload } => CryptoResult::Signed {
                             signature: self.signing_key.sign(&payload).to_bytes(),
@@ -77,7 +79,7 @@ impl TestPeer {
                     };
                     let outcome = self
                         .machine
-                        .handle(now, Event::CryptoDone { token, result });
+                        .handle(now, Event::CryptoDone { ticket, result });
                     if let Outcome::ConnectionFault { conn, fault } = outcome {
                         self.faults.push((conn, fault));
                     }
@@ -291,7 +293,7 @@ fn stale_completion_after_disconnect_is_ignored() -> TestResult {
     );
     assert_eq!(outcome, Outcome::Progressed);
 
-    let Some(Effect::Crypto { token, op }) = alice.machine.poll_effect() else {
+    let Some(Effect::Crypto { ticket, op }) = alice.machine.poll_effect() else {
         return Err("expected a pending crypto effect".into());
     };
 
@@ -318,7 +320,7 @@ fn stale_completion_after_disconnect_is_ignored() -> TestResult {
     let outcome = alice.machine.handle(
         t,
         Event::CryptoDone {
-            token,
+            ticket,
             result: CryptoResult::Signed { signature },
         },
     );

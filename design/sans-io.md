@@ -68,7 +68,7 @@ storage operations, crypto operations, and application events.
    `Timestamp` is an opaque monotonic value supplied by the driver with
    every `handle` call.
 2. _FFI-stable boundary._ `Event`, `Effect`, and `Outcome` are plain
-   enums/structs over bytes, ids, and tokens — no generics, no trait
+   enums/structs over bytes, ids, and tickets — no generics, no trait
    objects. The vocabulary freezes early and grows additively, because
    platform bindings (uniffi, pyo3) bind this surface directly.
 3. _Expensive work is an effect._ Signing and signature verification are
@@ -90,7 +90,7 @@ storage operations, crypto operations, and application events.
 Driver-performed work completes asynchronously, so completions can arrive
 interleaved with anything. Instead of mutual exclusion:
 
-- Completion tokens carry `(entity id, generation, sequence)`. Entities
+- Completion tickets carry `(entity, generation, sequence)`. Entities
   (connections, sync sessions) bump their generation on teardown; the
   machine drops completions with stale generations. A completion can never
   act on state it was not issued against.
@@ -98,7 +98,7 @@ interleaved with anything. Instead of mutual exclusion:
   variant of the owning sub-machine. Events arriving in that state are
   queued or answered from the state — interleavings are handled by
   construction, not by exclusion.
-- Tokens are phantom-typed where practical, so a completion for one
+- Tickets are phantom-typed where practical, so a completion for one
   connection cannot be applied to another at compile time.
 
 Serial driver-side resources (e.g. a hardware-backed signer) are

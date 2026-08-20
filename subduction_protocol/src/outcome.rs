@@ -36,10 +36,10 @@ pub enum IgnoreReason {
     /// A completion arrived for an entity generation that has moved on
     /// (the entity was torn down or restarted). Expected under teardown
     /// races; safe to drop by construction.
-    StaleToken,
+    StaleTicket,
 
-    /// A completion token was never issued or was already consumed.
-    UnknownToken,
+    /// A completion ticket was never issued or was already consumed.
+    UnknownTicket,
 
     /// An event referenced a connection the machine does not know.
     UnknownConnection(ConnId),

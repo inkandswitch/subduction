@@ -27,7 +27,7 @@ pub struct Stats {
     pub stale_completions: u64,
 
     /// Completions dropped because no pending operation matched.
-    pub unknown_tokens: u64,
+    pub unknown_tickets: u64,
 
     /// Wire messages received (well-formed or not).
     pub messages_received: u64,

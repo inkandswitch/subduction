@@ -64,8 +64,9 @@ use crate::{
     outcome::{Fault, IgnoreReason, Outcome},
     peer_id::PeerId,
     stats::Stats,
+    storage::StorageResult,
     timestamp::Timestamp,
-    token::{CryptoToken, Scope},
+    ticket::{CryptoTicket, Entity, StorageTicket},
     wall_clock::TimestampSeconds,
     wire,
 };
@@ -170,7 +171,8 @@ impl Machine {
             } => self.on_connected(now, conn, direction, audience),
             Event::Disconnected { conn } => self.on_disconnected(conn),
             Event::MessageReceived { conn, bytes } => self.on_message(now, conn, &bytes),
-            Event::CryptoDone { token, result } => self.on_crypto_done(now, token, result),
+            Event::CryptoDone { ticket, result } => self.on_crypto_done(now, ticket, result),
+            Event::StorageDone { ticket, result } => self.on_storage_done(now, ticket, result),
             Event::Wake => {
                 if fired {
                     Outcome::Progressed
@@ -255,9 +257,9 @@ impl Machine {
                     peer: None,
                     state: HandshakeState::AwaitingChallenge, // placeholder
                 };
-                let token = entry.issue_token(conn);
+                let ticket = entry.issue_ticket(conn);
                 entry.state = HandshakeState::AwaitingChallengeSign {
-                    token,
+                    ticket,
                     challenge,
                     preimage: preimage.clone(),
                     pinned,
@@ -265,7 +267,7 @@ impl Machine {
                 self.conns.insert(conn, entry);
 
                 self.effects.push_back(Effect::Crypto {
-                    token,
+                    ticket,
                     op: CryptoOp::Sign { payload: preimage },
                 });
                 Outcome::Progressed
@@ -418,14 +420,14 @@ impl Machine {
         let Some(entry) = self.conns.get_mut(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
-        let token = entry.issue_token(conn);
+        let ticket = entry.issue_ticket(conn);
         entry.state = HandshakeState::AwaitingChallengeVerify {
-            token,
+            ticket,
             challenge,
             initiator,
         };
         self.effects.push_back(Effect::Crypto {
-            token,
+            ticket,
             op: CryptoOp::Verify(item),
         });
         Outcome::Progressed
@@ -454,46 +456,73 @@ impl Machine {
         let pinned = *pinned;
         let item = verify_item(signed);
 
-        let token = entry.issue_token(conn);
+        let ticket = entry.issue_ticket(conn);
         entry.state = HandshakeState::AwaitingResponseVerify {
-            token,
+            ticket,
             responder,
             pinned,
         };
         self.effects.push_back(Effect::Crypto {
-            token,
+            ticket,
             op: CryptoOp::Verify(item),
         });
         Outcome::Progressed
     }
 
-    fn on_crypto_done(&mut self, now: Now, token: CryptoToken, result: CryptoResult) -> Outcome {
-        let Scope::Connection(conn) = token.scope else {
+    /// No storage operations are issued yet — sync sessions (Phase 2)
+    /// will pend on these. Until then every completion is either stale
+    /// (generation moved on) or unknown.
+    fn on_storage_done(
+        &mut self,
+        _now: Now,
+        ticket: StorageTicket,
+        _result: StorageResult,
+    ) -> Outcome {
+        let Entity::Connection(conn) = ticket.entity else {
+            self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
+            return Outcome::Ignored(IgnoreReason::UnknownTicket);
+        };
+
+        let Some(entry) = self.conns.get(&conn) else {
+            return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
+        };
+
+        if ticket.generation != entry.generation {
+            self.stats.stale_completions = self.stats.stale_completions.saturating_add(1);
+            return Outcome::Ignored(IgnoreReason::StaleTicket);
+        }
+
+        self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
+        Outcome::Ignored(IgnoreReason::UnknownTicket)
+    }
+
+    fn on_crypto_done(&mut self, now: Now, ticket: CryptoTicket, result: CryptoResult) -> Outcome {
+        let Entity::Connection(conn) = ticket.entity else {
             // No Local-scoped operations exist yet (Phase 2).
-            self.stats.unknown_tokens = self.stats.unknown_tokens.saturating_add(1);
-            return Outcome::Ignored(IgnoreReason::UnknownToken);
+            self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
+            return Outcome::Ignored(IgnoreReason::UnknownTicket);
         };
 
         let Some(entry) = self.conns.get_mut(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
 
-        if token.generation != entry.generation {
+        if ticket.generation != entry.generation {
             self.stats.stale_completions = self.stats.stale_completions.saturating_add(1);
-            return Outcome::Ignored(IgnoreReason::StaleToken);
+            return Outcome::Ignored(IgnoreReason::StaleTicket);
         }
 
         match (&entry.state, result) {
             // ── initiator: challenge signed ────────────────────────
             (
                 HandshakeState::AwaitingChallengeSign {
-                    token: expected,
+                    ticket: expected,
                     challenge,
                     preimage,
                     pinned,
                 },
                 CryptoResult::Signed { signature },
-            ) if *expected == token => {
+            ) if *expected == ticket => {
                 let mut bytes = preimage.clone();
                 bytes.extend_from_slice(&signature);
                 let (challenge, pinned) = (*challenge, *pinned);
@@ -505,12 +534,12 @@ impl Machine {
             // ── initiator: response verified ───────────────────────
             (
                 HandshakeState::AwaitingResponseVerify {
-                    token: expected,
+                    ticket: expected,
                     responder,
                     pinned,
                 },
                 CryptoResult::Verified(check),
-            ) if *expected == token => match check {
+            ) if *expected == ticket => match check {
                 SignatureCheck::Invalid => self.fault(conn, Fault::HandshakeVerificationFailed),
                 SignatureCheck::Valid => {
                     if let Some(pinned) = pinned
@@ -526,12 +555,12 @@ impl Machine {
             // ── responder: challenge verified ──────────────────────
             (
                 HandshakeState::AwaitingChallengeVerify {
-                    token: expected,
+                    ticket: expected,
                     challenge,
                     initiator,
                 },
                 CryptoResult::Verified(check),
-            ) if *expected == token => {
+            ) if *expected == ticket => {
                 let (challenge, initiator) = (*challenge, *initiator);
                 match check {
                     SignatureCheck::Invalid => {
@@ -546,12 +575,12 @@ impl Machine {
             // ── responder: response signed ─────────────────────────
             (
                 HandshakeState::AwaitingResponseSign {
-                    token: expected,
+                    ticket: expected,
                     preimage,
                     initiator,
                 },
                 CryptoResult::Signed { signature },
-            ) if *expected == token => {
+            ) if *expected == ticket => {
                 let mut bytes = preimage.clone();
                 bytes.extend_from_slice(&signature);
                 let peer = *initiator;
@@ -560,7 +589,7 @@ impl Machine {
             }
 
             // Right generation, but no pending operation matches this
-            // token/result shape — a duplicate, or a driver bug.
+            // ticket/result shape — a duplicate, or a driver bug.
             (
                 HandshakeState::AwaitingChallenge
                 | HandshakeState::AwaitingChallengeSign { .. }
@@ -574,8 +603,8 @@ impl Machine {
                 | CryptoResult::Verified(_)
                 | CryptoResult::BatchVerified(_),
             ) => {
-                self.stats.unknown_tokens = self.stats.unknown_tokens.saturating_add(1);
-                Outcome::Ignored(IgnoreReason::UnknownToken)
+                self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
+                Outcome::Ignored(IgnoreReason::UnknownTicket)
             }
         }
     }
@@ -605,14 +634,14 @@ impl Machine {
         let Some(entry) = self.conns.get_mut(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
-        let token = entry.issue_token(conn);
+        let ticket = entry.issue_ticket(conn);
         entry.state = HandshakeState::AwaitingResponseSign {
-            token,
+            ticket,
             preimage: preimage.clone(),
             initiator,
         };
         self.effects.push_back(Effect::Crypto {
-            token,
+            ticket,
             op: CryptoOp::Sign { payload: preimage },
         });
         Outcome::Progressed
@@ -737,19 +766,19 @@ struct ConnEntry {
 }
 
 impl ConnEntry {
-    const fn issue_token(&mut self, conn: ConnId) -> CryptoToken {
-        let token = CryptoToken {
-            scope: Scope::Connection(conn),
+    const fn issue_ticket(&mut self, conn: ConnId) -> CryptoTicket {
+        let ticket = CryptoTicket {
+            entity: Entity::Connection(conn),
             generation: self.generation,
             seq: self.next_seq,
         };
         self.next_seq = self.next_seq.next();
-        token
+        ticket
     }
 }
 
 /// The handshake sub-machine. `Awaiting{…}Sign`/`…Verify` states hold the
-/// expected [`CryptoToken`] — the witness that pairs the eventual
+/// expected [`CryptoTicket`] — the witness that pairs the eventual
 /// completion with exactly this state (ADR-007).
 #[derive(Debug)]
 enum HandshakeState {
@@ -758,7 +787,7 @@ enum HandshakeState {
 
     /// Outbound: our challenge is at the driver being signed.
     AwaitingChallengeSign {
-        token: CryptoToken,
+        ticket: CryptoTicket,
         challenge: Challenge,
         preimage: Vec<u8>,
         pinned: Option<PeerId>,
@@ -772,21 +801,21 @@ enum HandshakeState {
 
     /// Outbound: the response signature is at the driver being verified.
     AwaitingResponseVerify {
-        token: CryptoToken,
+        ticket: CryptoTicket,
         responder: PeerId,
         pinned: Option<PeerId>,
     },
 
     /// Inbound: the challenge signature is at the driver being verified.
     AwaitingChallengeVerify {
-        token: CryptoToken,
+        ticket: CryptoTicket,
         challenge: Challenge,
         initiator: PeerId,
     },
 
     /// Inbound: our response is at the driver being signed.
     AwaitingResponseSign {
-        token: CryptoToken,
+        ticket: CryptoTicket,
         preimage: Vec<u8>,
         initiator: PeerId,
     },

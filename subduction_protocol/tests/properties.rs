@@ -4,7 +4,7 @@
 //! `handshake_machine.rs`:
 //!
 //! 1. **Total robustness** — arbitrary event sequences never panic.
-//! 2. **Token safety** — only the exact issued witness lands; any
+//! 2. **Ticket safety** — only the exact issued witness lands; any
 //!    mutation is ignored without touching state.
 //! 3. **Authentication integrity** — under adversarial delivery
 //!    (reorder, duplicate, garbage injection), a machine that pinned
@@ -20,7 +20,7 @@ use subduction_protocol::{
     outcome::{IgnoreReason, Outcome},
     peer_id::PeerId,
     timestamp::Timestamp,
-    token::CryptoToken,
+    ticket::CryptoTicket,
     wall_clock::TimestampSeconds,
 };
 
@@ -51,9 +51,11 @@ fn run_effects(
         };
         match effect {
             Effect::SendMessage { bytes, .. } => sent.push(bytes),
-            Effect::Disconnect { .. } => {}
+            // Disconnects need no action here; storage ops are not
+            // issued during the handshake phase.
+            Effect::Disconnect { .. } | Effect::Storage { .. } => {}
             Effect::App(event) => app.push(event),
-            Effect::Crypto { token, op } => {
+            Effect::Crypto { ticket, op } => {
                 let result = match op {
                     CryptoOp::Sign { payload } => CryptoResult::Signed {
                         signature: signing_key.sign(&payload).to_bytes(),
@@ -63,7 +65,7 @@ fn run_effects(
                         CryptoResult::BatchVerified(items.iter().map(check_item).collect())
                     }
                 };
-                let _outcome = machine.handle(now, Event::CryptoDone { token, result });
+                let _outcome = machine.handle(now, Event::CryptoDone { ticket, result });
             }
         }
     }
@@ -104,20 +106,20 @@ fn prop_arbitrary_event_sequences_never_panic() {
         });
 }
 
-/// Property 2: given a real in-flight operation, the *exact* token is
-/// the only one that lands. Any arbitrary different token is ignored
+/// Property 2: given a real in-flight operation, the *exact* ticket is
+/// the only one that lands. Any arbitrary different ticket is ignored
 /// and leaves no observable state change.
 // Panicking is bolero's counterexample-reporting channel inside `for_each`
 // closures — `?` cannot escape them, so `TestResult` is not an option here.
 #[allow(clippy::panic)]
 #[test]
-fn prop_only_the_exact_token_lands() {
+fn prop_only_the_exact_ticket_lands() {
     let signing_key = SigningKey::from_bytes(&[42u8; 32]);
     let local_peer = PeerId::from(signing_key.verifying_key());
     let bob = PeerId::new([0xBB; 32]);
 
     bolero::check!()
-        .with_arbitrary::<(CryptoToken, [u8; 64])>()
+        .with_arbitrary::<(CryptoTicket, [u8; 64])>()
         .for_each(|(mutated, signature)| {
             let mut machine = Machine::new(Config::new(local_peer, [7u8; 32]));
             let conn = ConnId::new(1);
@@ -131,18 +133,18 @@ fn prop_only_the_exact_token_lands() {
                     audience: Some(Audience::known(bob)),
                 },
             );
-            let Some(Effect::Crypto { token, .. }) = machine.poll_effect() else {
+            let Some(Effect::Crypto { ticket, .. }) = machine.poll_effect() else {
                 panic!("outbound connect must issue a sign effect");
             };
 
-            if *mutated == token {
+            if *mutated == ticket {
                 return; // arbitrary collision with the real witness — skip
             }
 
             let outcome = machine.handle(
                 now,
                 Event::CryptoDone {
-                    token: *mutated,
+                    ticket: *mutated,
                     result: CryptoResult::Signed {
                         signature: *signature,
                     },
@@ -152,12 +154,12 @@ fn prop_only_the_exact_token_lands() {
                 matches!(
                     outcome,
                     Outcome::Ignored(
-                        IgnoreReason::StaleToken
-                            | IgnoreReason::UnknownToken
+                        IgnoreReason::StaleTicket
+                            | IgnoreReason::UnknownTicket
                             | IgnoreReason::UnknownConnection(_)
                     )
                 ),
-                "mutated token must be ignored, got {outcome:?}"
+                "mutated ticket must be ignored, got {outcome:?}"
             );
             assert_eq!(
                 machine.poll_effect(),

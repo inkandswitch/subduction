@@ -6,7 +6,13 @@
 
 use alloc::vec::Vec;
 
-use crate::{effect::CryptoResult, handshake::audience::Audience, id::ConnId, token::CryptoToken};
+use crate::{
+    effect::CryptoResult,
+    handshake::audience::Audience,
+    id::ConnId,
+    storage::StorageResult,
+    ticket::{CryptoTicket, StorageTicket},
+};
 
 /// Who initiated a connection. Determines the handshake role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -63,14 +69,24 @@ pub enum Event {
         bytes: Vec<u8>,
     },
 
-    /// A crypto operation finished; `token` is echoed from the issuing
-    /// [`Effect::Crypto`](crate::effect::Effect::Crypto). Stale tokens are
-    /// dropped (see [`token`](crate::token)).
+    /// A crypto operation finished; `ticket` is echoed from the issuing
+    /// [`Effect::Crypto`](crate::effect::Effect::Crypto). Stale tickets are
+    /// dropped (see [`ticket`](crate::ticket)).
     CryptoDone {
         /// The witness from the issuing effect.
-        token: CryptoToken,
+        ticket: CryptoTicket,
         /// The operation's result.
         result: CryptoResult,
+    },
+
+    /// A storage operation finished; `ticket` is echoed from the issuing
+    /// [`Effect::Storage`](crate::effect::Effect::Storage). Stale tickets
+    /// are dropped (see [`ticket`](crate::ticket)).
+    StorageDone {
+        /// The witness from the issuing effect.
+        ticket: StorageTicket,
+        /// The operation's result.
+        result: StorageResult,
     },
 
     /// The driver's timer fired (or it simply wants deadlines processed).

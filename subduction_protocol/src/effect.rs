@@ -1,7 +1,7 @@
 //! Effects: everything the machine asks the driver to do.
 //!
 //! Effects are drained via `poll_effect` after feeding events. They are
-//! plain data (bytes, ids, tokens) so the boundary crosses FFI unchanged.
+//! plain data (bytes, ids, tickets) so the boundary crosses FFI unchanged.
 //!
 //! Timers are deliberately *not* effects: the machine keeps its own
 //! deadline map and exposes only the next deadline via `poll_timeout`
@@ -11,7 +11,12 @@
 
 use alloc::vec::Vec;
 
-use crate::{id::ConnId, peer_id::PeerId, token::CryptoToken};
+use crate::{
+    id::ConnId,
+    peer_id::PeerId,
+    storage::StorageOp,
+    ticket::{CryptoTicket, StorageTicket},
+};
 
 /// An instruction from the machine to the driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,12 +44,23 @@ pub enum Effect {
 
     /// Perform a crypto operation on a worker and answer with
     /// [`Event::CryptoDone`](crate::event::Event::CryptoDone) carrying the
-    /// same token.
+    /// same ticket.
     Crypto {
         /// Witness pairing the completion with current machine state.
-        token: CryptoToken,
+        ticket: CryptoTicket,
         /// The operation to perform.
         op: CryptoOp,
+    },
+
+    /// Perform a storage operation (authorization + verification +
+    /// persistence fused, powerbox-style — see [`crate::storage`]) and
+    /// answer with [`Event::StorageDone`](crate::event::Event::StorageDone)
+    /// carrying the same ticket.
+    Storage {
+        /// Witness pairing the completion with current machine state.
+        ticket: StorageTicket,
+        /// The operation to perform.
+        op: StorageOp,
     },
 
     /// Surface an application-facing event (subscriptions, auth, data).
