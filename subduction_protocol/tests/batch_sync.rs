@@ -74,7 +74,7 @@ struct TestPeer {
     signing_key: SigningKey,
     signer: MemorySigner,
     store: Store,
-    outbox: Vec<Vec<u8>>,
+    outbox: Vec<(ConnId, Vec<u8>)>,
     app: Vec<AppEvent>,
 }
 
@@ -108,7 +108,7 @@ impl TestPeer {
                 return;
             };
             match effect {
-                Effect::SendMessage { bytes, .. } => self.outbox.push(bytes),
+                Effect::SendMessage { conn, bytes } => self.outbox.push((conn, bytes)),
                 Effect::Disconnect { .. } => {}
                 Effect::App(event) => self.app.push(event),
                 Effect::Crypto { ticket, op } => {
@@ -257,10 +257,10 @@ fn pump(alice: &mut TestPeer, bob: &mut TestPeer) {
         if a_out.is_empty() && b_out.is_empty() {
             return;
         }
-        for bytes in a_out {
+        for (_conn, bytes) in a_out {
             bob.feed(Event::MessageReceived { conn: CONN, bytes });
         }
-        for bytes in b_out {
+        for (_conn, bytes) in b_out {
             alice.feed(Event::MessageReceived { conn: CONN, bytes });
         }
     }
@@ -432,4 +432,121 @@ fn sync_request_times_out_without_response() {
         e,
         AppEvent::SyncFinished { tree: t, status: SyncStatus::TimedOut, .. } if *t == tree
     )));
+}
+
+/// Pump between one hub (on two connections) and two spokes.
+fn pump3(hub: &mut TestPeer, spoke_b: &mut TestPeer, spoke_c: &mut TestPeer) {
+    let (conn_b, conn_c) = (ConnId::new(1), ConnId::new(2));
+    for _ in 0..64 {
+        let hub_out: Vec<_> = hub.outbox.drain(..).collect();
+        let b_out: Vec<_> = spoke_b.outbox.drain(..).collect();
+        let c_out: Vec<_> = spoke_c.outbox.drain(..).collect();
+        if hub_out.is_empty() && b_out.is_empty() && c_out.is_empty() {
+            return;
+        }
+        for (conn, bytes) in hub_out {
+            if conn == conn_b {
+                spoke_b.feed(Event::MessageReceived { conn: CONN, bytes });
+            } else {
+                spoke_c.feed(Event::MessageReceived { conn: CONN, bytes });
+            }
+        }
+        for (_conn, bytes) in b_out {
+            hub.feed(Event::MessageReceived {
+                conn: conn_b,
+                bytes,
+            });
+        }
+        for (_conn, bytes) in c_out {
+            hub.feed(Event::MessageReceived {
+                conn: conn_c,
+                bytes,
+            });
+        }
+    }
+    assert!(
+        hub.outbox.is_empty() && spoke_b.outbox.is_empty() && spoke_c.outbox.is_empty(),
+        "three-way pump did not quiesce"
+    );
+}
+
+#[test]
+fn subscriber_receives_pushes_for_local_commits() {
+    let tree = SedimentreeId::new([11u8; 32]);
+    let mut alice = TestPeer::new(9);
+    let mut bob = TestPeer::new(10);
+    handshake(&mut alice, &mut bob);
+
+    alice.add_commit(tree, 0xA1);
+
+    // Bob syncs WITH subscription.
+    bob.feed(Event::Command(Command::SyncTree {
+        conn: CONN,
+        tree,
+        subscribe: true,
+    }));
+    pump(&mut alice, &mut bob);
+    assert_eq!(bob.stored_commit_ids(tree), vec![CommitId::new([0xA1; 32])]);
+
+    // Alice authors a NEW commit after the sync: it must be pushed.
+    alice.add_commit(tree, 0xA2);
+    pump(&mut alice, &mut bob);
+
+    let mut expected = vec![CommitId::new([0xA1; 32]), CommitId::new([0xA2; 32])];
+    expected.sort();
+    assert_eq!(bob.stored_commit_ids(tree), expected, "push arrived");
+    assert!(alice.machine.stats().subscription_pushes >= 1);
+}
+
+#[test]
+fn remote_ingest_is_forwarded_to_other_subscribers() {
+    let tree = SedimentreeId::new([12u8; 32]);
+    let (conn_b, conn_c) = (ConnId::new(1), ConnId::new(2));
+    let mut hub = TestPeer::new(11); // Alice, connected to both
+    let mut bob = TestPeer::new(12);
+    let mut carol = TestPeer::new(13);
+
+    // Handshake hub↔bob on conn 1 and hub↔carol on conn 2 (hub inbound).
+    for (spoke, conn) in [(&mut bob, conn_b), (&mut carol, conn_c)] {
+        spoke.feed(Event::Connected {
+            conn: CONN,
+            direction: Direction::Outbound,
+            audience: Some(Audience::known(hub.peer_id())),
+        });
+        hub.feed(Event::Connected {
+            conn,
+            direction: Direction::Inbound,
+            audience: None,
+        });
+    }
+    pump3(&mut hub, &mut bob, &mut carol);
+
+    // The hub holds the tree (mutual subscription only forms on an Ok
+    // response — legacy semantics; a NotFound sync does not subscribe).
+    hub.add_commit(tree, 0xA1);
+
+    // Both spokes subscribe to the tree.
+    bob.feed(Event::Command(Command::SyncTree {
+        conn: CONN,
+        tree,
+        subscribe: true,
+    }));
+    carol.feed(Event::Command(Command::SyncTree {
+        conn: CONN,
+        tree,
+        subscribe: true,
+    }));
+    pump3(&mut hub, &mut bob, &mut carol);
+
+    // Carol authors a commit and pushes it to the hub (she subscribed, so
+    // the hub is in her subscriber set via the mutual subscription).
+    carol.add_commit(tree, 0xC1);
+    pump3(&mut hub, &mut bob, &mut carol);
+
+    // The hub ingested it and forwarded to Bob — but never back to Carol.
+    let mut expected = vec![CommitId::new([0xA1; 32]), CommitId::new([0xC1; 32])];
+    expected.sort();
+    assert_eq!(hub.stored_commit_ids(tree), expected, "hub ingested");
+    assert_eq!(bob.stored_commit_ids(tree), expected, "bob got the forward");
+    assert_eq!(carol.stored_commit_ids(tree), expected, "carol has her own");
 }

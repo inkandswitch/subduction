@@ -46,8 +46,9 @@ use alloc::{collections::VecDeque, vec::Vec};
 use core::time::Duration;
 
 use sedimentree_core::{
+    blob::Blob,
     codec::{encode::EncodeFields, schema::Schema},
-    collections::Map,
+    collections::{Map, Set},
     depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
@@ -156,6 +157,9 @@ pub struct Machine {
     trees: Map<SedimentreeId, MinimizedSedimentree>,
     /// Pending [`Entity::Local`] storage ops, keyed by ticket seq.
     local_pending: Map<Seq, LocalPending>,
+    /// Which connections want pushes for which trees (both directions of
+    /// legacy's subscriptions map; entries die with their connection).
+    subscriptions: Map<SedimentreeId, Set<ConnId>>,
     /// Per-peer monotonic counters for heads we have *received* (staleness
     /// filter) and *sent* (so receivers can filter ours).
     heads_recv: Map<PeerId, u64>,
@@ -179,6 +183,7 @@ impl Machine {
             conns: Map::new(),
             trees: Map::new(),
             local_pending: Map::new(),
+            subscriptions: Map::new(),
             heads_recv: Map::new(),
             heads_sent: Map::new(),
             request_nonce: 0,
@@ -327,6 +332,12 @@ impl Machine {
         };
 
         self.stats.connections_closed = self.stats.connections_closed.saturating_add(1);
+
+        // Subscriptions die with their connection.
+        self.subscriptions.retain(|_tree, conns| {
+            conns.remove(&conn);
+            !conns.is_empty()
+        });
 
         // A handshake that never completed and wasn't already condemned
         // (Closing counts at fault time) is a failure.
@@ -541,8 +552,9 @@ impl Machine {
 
             Command::AddCommits { tree, commits } => {
                 let ticket = self.issue_local_ticket();
+                let blobs = commits.iter().map(|new| new.blob.clone()).collect();
                 self.local_pending
-                    .insert(ticket.seq, LocalPending::Ingest { tree });
+                    .insert(ticket.seq, LocalPending::Ingest { tree, blobs });
                 self.effects.push_back(Effect::Storage {
                     ticket,
                     op: StorageOp::IngestLocal { tree, commits },
@@ -623,7 +635,10 @@ impl Machine {
         };
 
         match (pending, result) {
-            (LocalPending::Ingest { tree }, StorageResult::LocallyIngested { commits }) => {
+            (
+                LocalPending::Ingest { tree, blobs },
+                StorageResult::LocallyIngested { commits },
+            ) => {
                 // The tree may have been removed while the write was in
                 // flight — the durable data goes with it, so drop quietly.
                 if !self.trees.contains_key(&tree) && self.local_delete_pending(tree) {
@@ -639,6 +654,11 @@ impl Machine {
                 }
                 self.effects
                     .push_back(Effect::App(AppEvent::CommitsStored { tree, heads }));
+
+                // Push to subscribers (all of them: the author is us).
+                let items: Vec<(Signed<LooseCommit>, Blob)> =
+                    commits.into_iter().zip(blobs).collect();
+                self.broadcast_commits(tree, &items, None);
                 Outcome::Progressed
             }
 
@@ -649,7 +669,7 @@ impl Machine {
             }
 
             (
-                LocalPending::Ingest { tree } | LocalPending::Delete { tree },
+                LocalPending::Ingest { tree, .. } | LocalPending::Delete { tree },
                 StorageResult::Failed(failure),
             ) => {
                 self.effects
@@ -661,7 +681,7 @@ impl Machine {
             // pending entry is already consumed, so this is terminal for
             // the op but harmless to the machine.
             (
-                LocalPending::Ingest { tree } | LocalPending::Delete { tree },
+                LocalPending::Ingest { tree, .. } | LocalPending::Delete { tree },
                 StorageResult::Ingested { .. }
                 | StorageResult::Fetched { .. }
                 | StorageResult::TreeDeleted
@@ -1011,12 +1031,16 @@ impl ConnEntry {
 }
 
 /// A pending [`Entity::Local`] storage operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalPending {
     /// An [`IngestLocal`](StorageOp::IngestLocal) awaiting durability.
     Ingest {
         /// The tree being appended to.
         tree: SedimentreeId,
+        /// The commits' blobs, in op order, held for the post-durability
+        /// subscriber broadcast (transit-only: dropped when the op
+        /// resolves).
+        blobs: Vec<Blob>,
     },
 
     /// A [`DeleteTree`](StorageOp::DeleteTree) awaiting completion.

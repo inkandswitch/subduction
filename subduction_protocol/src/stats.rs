@@ -46,4 +46,7 @@ pub struct Stats {
 
     /// Stale remote-heads reports dropped by the per-peer counter.
     pub stale_heads_dropped: u64,
+
+    /// Commit pushes sent to subscribers.
+    pub subscription_pushes: u64,
 }

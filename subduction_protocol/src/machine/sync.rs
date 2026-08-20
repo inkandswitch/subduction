@@ -79,15 +79,16 @@ pub(super) enum ConnPending {
         tree: SedimentreeId,
     },
 
-    /// Awaiting `Ingest` durability for received items; the decoded
-    /// metadata is applied to the resident tree on completion.
+    /// Awaiting `Ingest` durability for received items. The items are
+    /// held (transit-only) so the completion can both merge metadata into
+    /// the resident tree and forward to other subscribers.
     IngestRemote {
         /// The tree being appended to.
         tree: SedimentreeId,
-        /// Decoded commit metadata, in op order.
-        commits: Vec<LooseCommit>,
-        /// Decoded fragment metadata, in op order.
-        fragments: Vec<Fragment>,
+        /// The signed commits with blobs, in op order.
+        commits: Vec<(Signed<LooseCommit>, Blob)>,
+        /// The signed fragments with blobs, in op order.
+        fragments: Vec<(Signed<Fragment>, Blob)>,
     },
 }
 
@@ -225,11 +226,19 @@ impl Machine {
                 self.notify_heads(id, peer, heads);
                 Outcome::Progressed
             }
-            // Subscriptions land in the next chunk; both are valid no-ops
-            // for now.
-            SyncMessage::RemoveSubscriptions(_) | SyncMessage::DataRequestRejected(_) => {
+            SyncMessage::RemoveSubscriptions(unsub) => {
+                for tree in &unsub.ids {
+                    if let Some(conns) = self.subscriptions.get_mut(tree) {
+                        let _removed = conns.remove(&conn);
+                        if conns.is_empty() {
+                            let _entry = self.subscriptions.remove(tree);
+                        }
+                    }
+                }
                 Outcome::Progressed
             }
+            // Informational: the peer could not fulfil our data request.
+            SyncMessage::DataRequestRejected(_) => Outcome::Progressed,
         }
     }
 
@@ -244,8 +253,9 @@ impl Machine {
         self.stats.sync_requests_received = self.stats.sync_requests_received.saturating_add(1);
         let tree = request.id;
 
-        // NOTE: `request.subscribe` is recorded with subscriptions (next
-        // chunk).
+        if request.subscribe {
+            let _new = self.subscriptions.entry(tree).or_default().insert(conn);
+        }
 
         let Some(resident) = self.trees.get_mut(&tree) else {
             let heads = self.next_sender_heads(peer, vec![]);
@@ -332,6 +342,12 @@ impl Machine {
             }
             SyncResult::Ok(diff) => diff,
         };
+
+        // Mutual subscription: we subscribed to them, so their pushes for
+        // this tree should flow back to us and ours to them (as legacy).
+        if request.subscribe {
+            let _new = self.subscriptions.entry(tree).or_default().insert(conn);
+        }
 
         // Ingest what we were missing.
         let _ingest_outcome = self.ingest_remote_items(
@@ -543,8 +559,8 @@ impl Machine {
         &mut self,
         conn: ConnId,
         tree: SedimentreeId,
-        commits: &[LooseCommit],
-        fragments: &[Fragment],
+        commits: &[(Signed<LooseCommit>, Blob)],
+        fragments: &[(Signed<Fragment>, Blob)],
         result: StorageResult,
     ) -> Outcome {
         let Some(peer) = self.conns.get(&conn).and_then(|e| e.peer) else {
@@ -552,25 +568,40 @@ impl Machine {
         };
         match result {
             StorageResult::Ingested { rejected, .. } => {
-                let entry = self.trees.entry(tree).or_default();
-                for (index, commit) in commits.iter().enumerate() {
-                    let rejected = rejected.iter().any(|(kind, i, _)| {
-                        matches!(kind, crate::storage::ItemKind::Commit) && *i as usize == index
-                    });
-                    if !rejected {
-                        let _fresh = entry.add_commit(commit.clone());
+                let is_rejected = |kind: crate::storage::ItemKind, index: usize| {
+                    rejected
+                        .iter()
+                        .any(|(k, i, _)| *k == kind && *i as usize == index)
+                };
+
+                // Merge accepted metadata into the resident tree; collect
+                // accepted commit pairs for the subscriber forward.
+                let mut accepted: Vec<(Signed<LooseCommit>, Blob)> = Vec::new();
+                {
+                    let entry = self.trees.entry(tree).or_default();
+                    for (index, (signed, blob)) in commits.iter().enumerate() {
+                        if is_rejected(crate::storage::ItemKind::Commit, index) {
+                            continue;
+                        }
+                        if let Ok((commit, _)) = try_decode_payload::<LooseCommit>(signed) {
+                            let _fresh = entry.add_commit(commit);
+                            accepted.push((signed.clone(), blob.clone()));
+                        }
                     }
-                }
-                for (index, fragment) in fragments.iter().enumerate() {
-                    let rejected = rejected.iter().any(|(kind, i, _)| {
-                        matches!(kind, crate::storage::ItemKind::Fragment) && *i as usize == index
-                    });
-                    if !rejected {
-                        let _fresh = entry.add_fragment(fragment.clone());
+                    for (index, (signed, _blob)) in fragments.iter().enumerate() {
+                        if is_rejected(crate::storage::ItemKind::Fragment, index) {
+                            continue;
+                        }
+                        if let Ok((fragment, _)) = try_decode_payload::<Fragment>(signed) {
+                            let _fresh = entry.add_fragment(fragment);
+                        }
                     }
                 }
                 self.effects
                     .push_back(Effect::App(AppEvent::TreeUpdated { tree, peer }));
+
+                // Forward to other subscribers (never the source).
+                self.broadcast_commits(tree, &accepted, Some(conn));
                 Outcome::Progressed
             }
             StorageResult::Unauthorized | StorageResult::UnknownTree => Outcome::Progressed,
@@ -602,18 +633,6 @@ impl Machine {
             return Outcome::Progressed;
         }
 
-        // Metadata for the post-durability resident merge. Items whose
-        // fields don't decode are dropped here; the driver would also
-        // reject them.
-        let commit_meta: Vec<LooseCommit> = commits
-            .iter()
-            .filter_map(|(signed, _)| try_decode_payload(signed).ok().map(|(c, _)| c))
-            .collect();
-        let fragment_meta: Vec<Fragment> = fragments
-            .iter()
-            .filter_map(|(signed, _)| try_decode_payload(signed).ok().map(|(f, _)| f))
-            .collect();
-
         let Some(entry) = self.conns.get_mut(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
@@ -622,8 +641,8 @@ impl Machine {
             ticket.seq,
             ConnPending::IngestRemote {
                 tree,
-                commits: commit_meta,
-                fragments: fragment_meta,
+                commits: commits.clone(),
+                fragments: fragments.clone(),
             },
         );
         self.effects.push_back(Effect::Storage {
@@ -726,6 +745,60 @@ impl Machine {
             failure: StorageFailure::Permanent,
         }));
         Outcome::Ignored(IgnoreReason::UnknownTicket)
+    }
+
+    /// Push commit items to every subscribed, authenticated connection
+    /// (except `exclude`, the source), with fresh sender-heads.
+    pub(super) fn broadcast_commits(
+        &mut self,
+        tree: SedimentreeId,
+        items: &[(Signed<LooseCommit>, Blob)],
+        exclude: Option<ConnId>,
+    ) {
+        if items.is_empty() {
+            return;
+        }
+        let Some(subscribers) = self.subscriptions.get(&tree) else {
+            return;
+        };
+        let targets: Vec<(ConnId, PeerId)> = subscribers
+            .iter()
+            .filter(|subscriber| Some(**subscriber) != exclude)
+            .filter_map(|subscriber| {
+                self.conns.get(subscriber).and_then(|entry| {
+                    matches!(entry.state, super::HandshakeState::Authenticated)
+                        .then_some(entry.peer.map(|p| (*subscriber, p)))
+                        .flatten()
+                })
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+
+        let heads: Vec<CommitId> = self
+            .trees
+            .get_mut(&tree)
+            .map(|t| t.heads(&CountLeadingZeroBytes))
+            .unwrap_or_default();
+
+        for (subscriber, peer) in targets {
+            for (signed, blob) in items {
+                let sender_heads = self.next_sender_heads(peer, heads.clone());
+                let msg = SyncMessage::LooseCommit {
+                    id: tree,
+                    commit: signed.clone(),
+                    blob: blob.clone(),
+                    sender_heads,
+                };
+                self.effects.push_back(Effect::SendMessage {
+                    conn: subscriber,
+                    bytes: msg.encode(),
+                });
+                self.stats.subscription_pushes =
+                    self.stats.subscription_pushes.saturating_add(1);
+            }
+        }
     }
 
     /// Test/introspection: number of in-flight sync requests.
