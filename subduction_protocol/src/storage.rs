@@ -6,26 +6,28 @@
 //! durable writes and blob reads. Blob bytes only ever *transit* the
 //! machine (wire message ↔ effect); they are never resident state.
 //!
-//! # The powerbox pattern (fused authorization)
+//! # Fused authorization
 //!
-//! Legacy gated storage behind async `StoragePolicy` checks and wrapped
-//! access in capability objects (`StoragePowerbox` → `Fetcher`/`Putter`).
-//! Policies can do IO (e.g. keyhive lookups), so they cannot be pure
-//! machine verdicts. Instead, every op carries its [`Provenance`] and the
-//! driver enforces policy + signature verification + blob-digest checks +
-//! persistence as **one unit**, answering with a single result:
+//! Storage policies may perform IO (e.g. keyhive lookups), so they cannot
+//! be pure machine verdicts. Every op therefore carries its
+//! [`Provenance`], and the driver enforces policy and persistence as one
+//! unit, answering with a single result. Signature and blob-digest
+//! verification is not a driver duty for remote data: it happens inline
+//! in the connection machine before items reach the core, leaving the
+//! driver responsible for custody and durability only:
 //!
 //! ```text
-//! machine ─ PersistItems { provenance, items… } ──▶ driver:
+//! machine ─ PersistItems { provenance, verified items… } ──▶ driver:
 //!                                               1. authorize (policy)
-//!                                               2. verify signatures
-//!                                               3. check blob digests
-//!                                               4. persist atomically-ish
+//!                                               2. persist atomically-ish
 //! machine ◀─ StorageDone { Persisted / Unauthorized / Failed } ──┘
 //! ```
 //!
-//! One round-trip per ingest (ADR-006a), and [`StorageResult::Unauthorized`]
-//! maps directly onto the wire's `SyncResult::Unauthorized`.
+//! The exception is [`IngestLocal`](StorageOp::IngestLocal): for
+//! locally-authored writes the driver does hash blobs and sign commits
+//! (it holds the identity key), fused with the persist in one round trip.
+//! [`StorageResult::Unauthorized`] maps directly onto the wire's
+//! `SyncResult::Unauthorized`.
 //!
 //! # FFI note
 //!
@@ -38,7 +40,7 @@ use alloc::vec::Vec;
 use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::signed::Signed;
 
@@ -72,10 +74,8 @@ pub enum StorageOp {
     },
 
     /// Persist already-verified items whose blobs live in the driver's
-    /// buffer table (Design D: verification happened inside the
-    /// connection machine — the driver's duty here is authorize +
-    /// persist ONLY; ADR-015 shrinks the driver's security surface to
-    /// custody and durability).
+    /// buffer table. Verification happened inside the connection
+    /// machine; the driver's duty here is authorize + persist only.
     PersistItems {
         /// The tree being written to.
         tree: SedimentreeId,
@@ -89,8 +89,8 @@ pub enum StorageOp {
 
     /// Authorize and load specific items, returning blobs as refs into
     /// the driver's buffer table (the storage executor retains what it
-    /// reads and mints refs — the ref-world twin of
-    /// [`FetchItemRefs`](StorageOp::FetchItemRefs)).
+    /// reads and mints refs, so fetched blobs fan out by reference like
+    /// any other frame data).
     FetchItemRefs {
         /// The sedimentree being read.
         tree: SedimentreeId,
@@ -117,34 +117,6 @@ pub enum StorageOp {
         /// New fragments as raw parts.
         fragments: Vec<crate::command::NewFragment>,
     },
-}
-
-/// Why one item within an ingest was rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-pub enum IngestRejection {
-    /// The signature did not verify against the claimed issuer.
-    BadSignature,
-
-    /// The blob bytes did not match the signed metadata's digest/size.
-    BlobMismatch,
-
-    /// The item's author is not allowed to write to this tree (per-author
-    /// policy, distinct from the whole-op requestor check).
-    AuthorDenied,
-}
-
-/// Which kind of item a rejection refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-pub enum ItemKind {
-    /// A loose commit.
-    Commit,
-
-    /// A fragment.
-    Fragment,
 }
 
 /// The result of a [`StorageOp`], echoed back via

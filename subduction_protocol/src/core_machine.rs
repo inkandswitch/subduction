@@ -1,4 +1,4 @@
-//! The core machine (ADR-015): resident trees, sync sessions,
+//! The core machine: resident trees, sync sessions,
 //! subscriptions, fan-out, and nonce arbitration — everything shared
 //! across connections, fed exclusively by sealed edges.
 //!
@@ -10,7 +10,7 @@
 //! exactly-once, current-generation via [`EdgeSequencer`]), arbitrate
 //! nonces, and make protocol decisions.
 //!
-//! # Leases (ADR-015 condition 2, narrowed)
+//! # Leases
 //!
 //! The core arms a lease per edge covering the **handshake window only**
 //! (`Opened` → `Authenticated`): a connection machine that dies mid-
@@ -33,7 +33,7 @@ use sedimentree_core::{
     depth::CountLeadingZeroBytes,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::minimized::MinimizedSedimentree,
 };
 use subduction_crypto::signed::Signed;
@@ -73,7 +73,7 @@ pub struct CoreConfig {
     pub entropy: [u8; 32],
 
     /// Maximum unacked subscription pushes per connection before the
-    /// subscriber is deemed lagging and paused (ADR-017).
+    /// subscriber is deemed lagging and paused.
     pub max_outstanding_pushes: u32,
 }
 
@@ -106,7 +106,7 @@ pub enum CoreEffect {
     /// A sealed control answer for a connection machine.
     ToConn(Sealed<CoreToConn>),
 
-    /// A storage operation (authorize + persist / fetch; ADR-015).
+    /// A storage operation (authorize + persist / fetch).
     Storage {
         /// Completion witness.
         ticket: StorageTicket,
@@ -121,7 +121,7 @@ pub enum CoreEffect {
     },
 
     /// A blob ref has left core state; the driver may decrement its
-    /// retention (ADR-015 condition 5).
+    /// retention.
     ReleaseBlob(crate::blob_ref::BlobRef),
 
     /// An application-facing event.
@@ -279,7 +279,10 @@ impl CoreMachine {
                 nonce,
                 timestamp,
             } => {
-                let granted = self.nonce_arbiter.try_claim(peer, nonce, timestamp).is_ok();
+                let granted = self
+                    .nonce_arbiter
+                    .try_claim(edge, peer, nonce, timestamp)
+                    .is_ok();
                 let verdict = CoreToConn::NonceVerdict { granted };
                 self.send_to_conn(edge.conn, verdict);
                 Outcome::Progressed
@@ -488,8 +491,7 @@ impl CoreMachine {
                     return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
                 };
                 if ticket.generation != entry.edge.generation {
-                    self.stats.stale_completions =
-                        self.stats.stale_completions.saturating_add(1);
+                    self.stats.stale_completions = self.stats.stale_completions.saturating_add(1);
                     return Outcome::Ignored(IgnoreReason::StaleTicket);
                 }
                 let Some(pending) = entry.pending.remove(&ticket.seq) else {
@@ -532,8 +534,7 @@ impl CoreMachine {
                         heads.push(head);
                         let _fresh = entry.add_commit(verified.payload().clone());
                         if let Some(blob) = commit_blobs.get(&head) {
-                            push_commits
-                                .push((signed, Part::Bytes(blob.as_slice().to_vec())));
+                            push_commits.push((signed, Part::Bytes(blob.as_slice().to_vec())));
                         }
                     }
                 }
@@ -545,8 +546,7 @@ impl CoreMachine {
                         fragment_heads.push(head);
                         let _fresh = entry.add_fragment(verified.payload().clone());
                         if let Some(blob) = fragment_blobs.get(&head) {
-                            push_fragments
-                                .push((signed, Part::Bytes(blob.as_slice().to_vec())));
+                            push_fragments.push((signed, Part::Bytes(blob.as_slice().to_vec())));
                         }
                     }
                 }
@@ -637,7 +637,7 @@ struct EdgeEntry {
     /// Sequence for storage tickets on this edge.
     next_ticket: Seq,
     /// Subscription pushes sent minus `HeadsUpdate` acks received —
-    /// the lagging-subscriber gauge (ADR-017). Conn-scoped, like the
+    /// the lagging-subscriber gauge. Conn-scoped, like the
     /// per-peer heads counters (documented cross-tree exception).
     outstanding_pushes: u32,
 }
@@ -682,6 +682,7 @@ enum LocalPending {
 mod tests {
     use super::*;
     use crate::{event::Direction, wall_clock::TimestampSeconds};
+    use ed25519_dalek::SigningKey;
     use sedimentree_core::loose_commit::LooseCommit;
     use subduction_crypto::{nonce::Nonce, signed::Signed};
 
@@ -757,6 +758,68 @@ mod tests {
         };
         let (_e, _s, msg) = sealed.open();
         assert_eq!(msg, CoreToConn::NonceVerdict { granted: false });
+        Ok(())
+    }
+
+    /// A supervisor-restarted connection machine
+    /// (same conn, bumped generation) re-claims its own nonce and must be
+    /// granted — the retry is idempotent, not a replay.
+    #[test]
+    fn nonce_reclaim_after_conn_restart_is_granted() -> testresult::TestResult {
+        let mut core = core();
+        let peer = PeerId::new([0xAA; 32]);
+        let nonce = Nonce::from_u128(7);
+        let ts = TimestampSeconds::new(1_700_000_000);
+
+        let claim = |e, s| {
+            CoreEvent::FromConn(Sealed::mint(
+                e,
+                s,
+                ConnToCore::ClaimNonce {
+                    peer,
+                    nonce,
+                    timestamp: ts,
+                },
+            ))
+        };
+
+        // First incarnation claims.
+        let (e1, s1) = open_edge(&mut core, 1);
+        let _outcome = core.handle(now_at(1), claim(e1, s1));
+        let Some(CoreEffect::ToConn(sealed)) = core.poll_effect() else {
+            return Err("expected a verdict".into());
+        };
+        assert_eq!(
+            sealed.open().2,
+            CoreToConn::NonceVerdict { granted: true }
+        );
+
+        // Supervisor restart: fresh incarnation of the SAME conn re-opens
+        // (bumped generation) and retries the claim.
+        let e1v2 = edge(1, Generation::FIRST.next());
+        let outcome = core.handle(
+            now_at(2),
+            CoreEvent::FromConn(Sealed::mint(
+                e1v2,
+                Seq::FIRST,
+                ConnToCore::Opened {
+                    direction: Direction::Inbound,
+                },
+            )),
+        );
+        assert_eq!(outcome, Outcome::Progressed);
+        let _outcome = core.handle(now_at(3), claim(e1v2, Seq::FIRST.next()));
+
+        // Skip the stale incarnation's ConnectionClosed app event; the
+        // retried claim's verdict must be a grant.
+        let mut verdict = None;
+        while let Some(effect) = core.poll_effect() {
+            if let CoreEffect::ToConn(sealed) = effect {
+                verdict = Some(sealed.open().2);
+                break;
+            }
+        }
+        assert_eq!(verdict, Some(CoreToConn::NonceVerdict { granted: true }));
         Ok(())
     }
 
@@ -895,7 +958,7 @@ mod tests {
         };
 
         // Driver completes: seal + persist (reuse a real signer).
-        let signer = subduction_crypto::signer::memory::MemorySigner::from_bytes(&[42u8; 32]);
+        let signing_key = SigningKey::from_bytes(&[42u8; 32]);
         let sealed: Vec<_> = commits
             .iter()
             .map(|new| {
@@ -905,10 +968,7 @@ mod tests {
                     new.parents.clone(),
                     sedimentree_core::blob::BlobMeta::new(&new.blob),
                 );
-                futures::executor::block_on(Signed::seal::<future_form::Sendable, _>(
-                    &signer, commit,
-                ))
-                .into_signed()
+                Signed::seal_sync(&signing_key, commit).into_signed()
             })
             .collect();
         let outcome = core.handle(
@@ -939,7 +999,7 @@ mod tests {
         commits: &[crate::command::NewCommit],
     ) -> StorageResult {
         use sedimentree_core::blob::BlobMeta;
-        let signer = subduction_crypto::signer::memory::MemorySigner::from_bytes(&[42u8; 32]);
+        let signing_key = SigningKey::from_bytes(&[42u8; 32]);
         let sealed: Vec<_> = commits
             .iter()
             .map(|new| {
@@ -949,10 +1009,7 @@ mod tests {
                     new.parents.clone(),
                     BlobMeta::new(&new.blob),
                 );
-                futures::executor::block_on(Signed::seal::<future_form::Sendable, _>(
-                    &signer, commit,
-                ))
-                .into_signed()
+                Signed::seal_sync(&signing_key, commit).into_signed()
             })
             .collect();
         StorageResult::LocallyIngested {

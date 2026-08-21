@@ -1,5 +1,5 @@
 //! The inter-machine edge: the sealed, sequenced channel between a
-//! [`ConnMachine`] and the [`CoreMachine`] (ADR-015 conditions 1–2).
+//! [`ConnMachine`] and the [`CoreMachine`].
 //!
 //! # Ocap discipline
 //!

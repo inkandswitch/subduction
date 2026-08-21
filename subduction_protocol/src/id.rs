@@ -41,7 +41,7 @@ impl core::fmt::Display for ConnId {
 /// Bumped whenever the entity is torn down or restarted. Completions carry
 /// the generation they were issued under; a completion whose generation is
 /// not current is *stale* and is dropped — this is how the machine stays
-/// safe under interleaved completions without locks (ADR-006/007).
+/// safe under interleaved completions without locks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]

@@ -34,7 +34,7 @@ use sedimentree_core::{
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -499,7 +499,7 @@ fn sync_diff_size(diff: &SyncDiff) -> usize {
     counts_size + commits_size + fragments_size + requested_fps_size
 }
 
-// ── scatter-gather encoding (blob-plane egress, ADR-015 cond. 5) ────
+// ── scatter-gather encoding (blob-plane egress) ────
 //
 // These builders produce [`Part`] sequences byte-identical to
 // `encode()` of the equivalent message, with each blob spliced as a
@@ -519,7 +519,13 @@ pub fn loose_commit_parts(
     sender_heads: &RemoteHeads,
     blob: Part,
 ) -> Vec<Part> {
-    item_message_parts(tags::LOOSE_COMMIT, id, commit.as_bytes(), sender_heads, blob)
+    item_message_parts(
+        tags::LOOSE_COMMIT,
+        id,
+        commit.as_bytes(),
+        sender_heads,
+        blob,
+    )
 }
 
 /// Scatter-gather encoding of [`SyncMessage::Fragment`]. See
@@ -1309,16 +1315,16 @@ mod tests {
 
     mod message_request_id {
         use super::*;
-        use future_form::Sendable;
-        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+        use ed25519_dalek::SigningKey;
+        use subduction_crypto::signed::Signed;
 
-        fn test_signer() -> MemorySigner {
-            MemorySigner::from_bytes(&[42u8; 32])
+        fn test_signing_key() -> SigningKey {
+            SigningKey::from_bytes(&[42u8; 32])
         }
 
         #[test]
         fn test_loose_commit_has_no_request_id() {
-            let signer = test_signer();
+            let signing_key = test_signing_key();
             let id = SedimentreeId::new([1u8; 32]);
             let blob = Blob::new(Vec::new());
             let commit = LooseCommit::new(
@@ -1327,9 +1333,7 @@ mod tests {
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let signed_commit =
-                futures::executor::block_on(Signed::seal::<Sendable, _>(&signer, commit))
-                    .into_signed();
+            let signed_commit = Signed::seal_sync(&signing_key, commit).into_signed();
             let msg = SyncMessage::LooseCommit {
                 id,
                 commit: signed_commit,
@@ -1341,7 +1345,7 @@ mod tests {
 
         #[test]
         fn test_fragment_has_no_request_id() {
-            let signer = test_signer();
+            let signing_key = test_signing_key();
             let id = SedimentreeId::new([1u8; 32]);
             let blob = Blob::new(Vec::new());
             let fragment = Fragment::new(
@@ -1351,9 +1355,7 @@ mod tests {
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let signed_fragment =
-                futures::executor::block_on(Signed::seal::<Sendable, _>(&signer, fragment))
-                    .into_signed();
+            let signed_fragment = Signed::seal_sync(&signing_key, fragment).into_signed();
             let msg = SyncMessage::Fragment {
                 id,
                 fragment: signed_fragment,

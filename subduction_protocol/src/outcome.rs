@@ -1,7 +1,7 @@
 //! Structured transition outcomes — the machine's return channel.
 //!
 //! Every `handle(now, event)` call returns an [`Outcome`]. Outcomes are
-//! tier-3 telemetry (ADR-003): drivers pattern-match them into
+//! tier-3 telemetry: drivers pattern-match them into
 //! `metrics`/`tracing`, and tests assert on them directly. They grow
 //! additively as sub-machines land; they must stay plain data.
 
@@ -63,7 +63,7 @@ pub enum IgnoreReason {
 
     /// A command targeted a connection that has not completed the
     /// handshake (e.g. an extension send — extension traffic is gated on
-    /// authentication, ADR-010).
+    /// authentication).
     NotAuthenticated(ConnId),
 
     /// An inter-machine edge message failed the sequencing discipline

@@ -1,5 +1,5 @@
 //! The node: connection machines + the core machine + the router,
-//! composed into one pure artifact (ADR-015 condition 1).
+//! composed into one pure artifact.
 //!
 //! This is the shape platforms bind: sealed inter-machine traffic is
 //! routed *inside* [`Node::handle`] and never crosses to driver code —
@@ -58,7 +58,7 @@ pub struct NodeConfig {
     pub entropy: [u8; 32],
 
     /// Maximum unacked subscription pushes per connection before that
-    /// subscriber is paused (ADR-017).
+    /// subscriber is paused.
     pub max_outstanding_pushes: u32,
 }
 
@@ -248,7 +248,9 @@ impl Node {
                 outcome
             }
             NodeEvent::StorageDone { ticket, result } => {
-                let outcome = self.core.handle(now, CoreEvent::StorageDone { ticket, result });
+                let outcome = self
+                    .core
+                    .handle(now, CoreEvent::StorageDone { ticket, result });
                 self.pump_core(now);
                 outcome
             }
@@ -340,7 +342,9 @@ impl Node {
         let conns: Vec<ConnId> = self.conns.keys().copied().collect();
         for conn in conns {
             if let Some(machine) = self.conns.get_mut(&conn)
-                && machine.poll_timeout().is_some_and(|t| t.is_due(now.monotonic))
+                && machine
+                    .poll_timeout()
+                    .is_some_and(|t| t.is_due(now.monotonic))
             {
                 let outcome = machine.handle(now, ConnEvent::Wake);
                 progressed |= !matches!(outcome, Outcome::Idle);
@@ -359,9 +363,25 @@ impl Node {
 
     /// Drain one connection machine, routing sealed traffic to the core
     /// (and pumping the core in turn) until quiescent.
+    ///
+    /// Termination: every hop strictly consumes one queued effect, and a
+    /// machine only queues effects while handling an event — there is no
+    /// self-feeding source. A conn↔core ping-pong therefore shrinks the
+    /// combined queue unless the protocol itself generates unbounded
+    /// traffic from one input, which would be a machine bug — caught by
+    /// the debug tripwire below rather than silently truncated.
     fn pump(&mut self, now: Now, conn: ConnId) {
-        // Bounded: each hop strictly consumes queued work.
-        for _ in 0..1024 {
+        #[cfg(debug_assertions)]
+        let mut hops: u64 = 0;
+        loop {
+            #[cfg(debug_assertions)]
+            {
+                hops += 1;
+                debug_assert!(
+                    hops < 65_536,
+                    "pump livelock: conn machine generates unbounded effects"
+                );
+            }
             let Some(machine) = self.conns.get_mut(&conn) else {
                 return;
             };
@@ -402,8 +422,21 @@ impl Node {
 
     /// Drain the core, routing sealed answers back to connection
     /// machines (and pumping them in turn) until quiescent.
+    ///
+    /// Termination: see [`pump`](Self::pump) — same argument, same
+    /// debug tripwire.
     fn pump_core(&mut self, now: Now) {
-        for _ in 0..4096 {
+        #[cfg(debug_assertions)]
+        let mut hops: u64 = 0;
+        loop {
+            #[cfg(debug_assertions)]
+            {
+                hops += 1;
+                debug_assert!(
+                    hops < 65_536,
+                    "pump livelock: core machine generates unbounded effects"
+                );
+            }
             let Some(effect) = self.core.poll_effect() else {
                 return;
             };

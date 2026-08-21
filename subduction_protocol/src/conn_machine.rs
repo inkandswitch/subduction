@@ -1,4 +1,4 @@
-//! The per-connection machine (ADR-015): handshake typestate, inline
+//! The per-connection machine: handshake typestate, inline
 //! verification, and extension gating for exactly one connection
 //! incarnation.
 //!
@@ -29,7 +29,7 @@
 //! first), reusing this module's sign states.
 //!
 //! Post-authentication this machine is a verify-and-forward gate:
-//! extension-schema messages surface directly (auth-gated, ADR-010);
+//! extension-schema messages surface directly (auth-gated);
 //! sync-schema messages will be decoded, verified, and forwarded as
 //! [`SyncForward`] — that half lands with the
 //! next Phase 2.5 commit.
@@ -121,7 +121,7 @@ pub enum ConnEffect {
     /// Close this connection.
     Disconnect,
 
-    /// Sign with the machine's identity key (external custody; ADR-014).
+    /// Sign with the machine's identity key (external custody).
     Sign {
         /// Completion witness.
         ticket: CryptoTicket,
@@ -150,7 +150,7 @@ pub enum ConnAppEvent {
         peer: PeerId,
     },
 
-    /// An extension-protocol message arrived (auth-gated; ADR-010).
+    /// An extension-protocol message arrived (auth-gated).
     ExtensionMessage {
         /// The authenticated peer.
         peer: PeerId,
@@ -173,6 +173,11 @@ pub enum ConnEvent {
     },
 
     /// A signing completion (ticket echoed from [`ConnEffect::Sign`]).
+    ///
+    /// _Trust boundary:_ the signature bytes are appended to the wire
+    /// message **unverified** — the driver's signer is the local trust
+    /// root (it holds the signing key). A corrupt signature costs only
+    /// liveness: the remote peer rejects the handshake message.
     SignDone {
         /// The witness.
         ticket: CryptoTicket,
@@ -285,7 +290,9 @@ impl ConnMachine {
 
     /// Feed one event; drain [`poll_effect`](Self::poll_effect) after.
     pub fn handle(&mut self, now: Now, event: ConnEvent) -> Outcome {
-        if self.deadline.is_some_and(|deadline| deadline.is_due(now.monotonic))
+        if self
+            .deadline
+            .is_some_and(|deadline| deadline.is_due(now.monotonic))
             && !matches!(self.state, State::Authenticated | State::Failed)
         {
             let _outcome = self.fault(Fault::HandshakeTimeout);
@@ -365,9 +372,7 @@ impl ConnMachine {
                     return self.fault(Fault::MalformedMessage);
                 };
                 match msg {
-                    HandshakeMessage::SignedResponse(signed) => {
-                        self.on_outbound_response(&signed)
-                    }
+                    HandshakeMessage::SignedResponse(signed) => self.on_outbound_response(&signed),
                     HandshakeMessage::Rejection(rejection) => {
                         self.fault(Fault::HandshakeRejected(rejection.reason))
                     }
@@ -386,7 +391,7 @@ impl ConnMachine {
         }
     }
 
-    /// Post-auth routing by schema (ADR-010): sync messages are decoded,
+    /// Post-auth routing by schema: sync messages are decoded,
     /// verified inline, and forwarded to the core with blobs by
     /// reference into the retained frame.
     fn on_authenticated_message(&mut self, frame: FrameId, bytes: &[u8]) -> Outcome {
@@ -410,7 +415,7 @@ impl ConnMachine {
         }
     }
 
-    /// Responder: challenge arrived. Verify inline (ADR-014), validate,
+    /// Responder: challenge arrived. Verify inline, validate,
     /// then claim the nonce at the core (the one core round trip).
     fn on_inbound_challenge(&mut self, now: Now, signed: &Signed<Challenge>) -> Outcome {
         let Ok(verified) = signed.try_verify() else {
@@ -849,7 +854,7 @@ impl ConnMachine {
         Outcome::Progressed
     }
 
-    /// Inline item verification (ADR-014/015): signature, tree binding,
+    /// Inline item verification: signature, tree binding,
     /// and blob digest — the forgery gate, in machine code.
     fn verify_commit(
         &mut self,
@@ -1033,7 +1038,7 @@ enum State {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
-    use ed25519_dalek::Signer as _;
+    use ed25519_dalek::{Signer as _, SigningKey};
 
     const fn now() -> Now {
         Now {
@@ -1046,7 +1051,7 @@ mod tests {
     /// grants nonces (tracking claims for replay checks).
     struct Peer {
         machine: ConnMachine,
-        key: ed25519_dalek::SigningKey,
+        key: SigningKey,
         /// Wire messages awaiting delivery to the other side.
         outbox: Vec<Vec<u8>>,
         /// App events observed.
@@ -1064,7 +1069,7 @@ mod tests {
 
     impl Peer {
         fn new(seed: u8, direction: Direction, audience: Option<Audience>) -> Self {
-            let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+            let key = SigningKey::from_bytes(&[seed; 32]);
             let config = ConnConfig::new(PeerId::from(key.verifying_key()), [seed ^ 0xFF; 32]);
             let machine = ConnMachine::new(
                 config,
@@ -1119,8 +1124,9 @@ mod tests {
                     ConnEffect::ReleaseFrame(frame) => self.released.push(frame),
                     ConnEffect::Sign { ticket, payload } => {
                         let signature = self.key.sign(&payload).to_bytes();
-                        let _outcome =
-                            self.machine.handle(now(), ConnEvent::SignDone { ticket, signature });
+                        let _outcome = self
+                            .machine
+                            .handle(now(), ConnEvent::SignDone { ticket, signature });
                     }
                     ConnEffect::ToCore(sealed) => {
                         let (_edge, _seq, msg) = sealed.open();
@@ -1198,9 +1204,7 @@ mod tests {
         else {
             return Err("expected challenge".into());
         };
-        let verified = signed
-            .try_verify()
-            .map_err(|_| "challenge must verify")?;
+        let verified = signed.try_verify().map_err(|_| "challenge must verify")?;
         bob.claims
             .push((PeerId::from(verified.issuer()), verified.payload().nonce));
 
@@ -1232,8 +1236,8 @@ mod tests {
 
     #[test]
     fn simultaneous_open_completes() {
-        let alice_key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
-        let bob_key = ed25519_dalek::SigningKey::from_bytes(&[6u8; 32]);
+        let alice_key = SigningKey::from_bytes(&[5u8; 32]);
+        let bob_key = SigningKey::from_bytes(&[6u8; 32]);
         let alice_id = PeerId::from(alice_key.verifying_key());
         let bob_id = PeerId::from(bob_key.verifying_key());
 
@@ -1279,7 +1283,8 @@ mod tests {
 
     #[test]
     fn handshake_deadline_fires() {
-        let bob_id = PeerId::from(ed25519_dalek::SigningKey::from_bytes(&[12u8; 32]).verifying_key());
+        let bob_id =
+            PeerId::from(SigningKey::from_bytes(&[12u8; 32]).verifying_key());
         let mut alice = Peer::new(11, Direction::Outbound, Some(Audience::known(bob_id)));
         assert!(alice.machine.poll_timeout().is_some());
 
@@ -1316,7 +1321,7 @@ mod tests {
         corrupt_blob: bool,
     ) -> alloc::vec::Vec<u8> {
         use sedimentree_core::loose_commit::id::CommitId;
-        let signer = subduction_crypto::signer::memory::MemorySigner::from_bytes(&[signer_seed; 32]);
+        let signing_key = SigningKey::from_bytes(&[signer_seed; 32]);
         let blob = Blob::new(alloc::vec![head; 16]);
         let commit = LooseCommit::new(
             tree,
@@ -1324,9 +1329,7 @@ mod tests {
             alloc::collections::BTreeSet::new(),
             BlobMeta::new(&blob),
         );
-        let sealed =
-            futures::executor::block_on(Signed::seal::<future_form::Sendable, _>(&signer, commit))
-                .into_signed();
+        let sealed = Signed::seal_sync(&signing_key, commit).into_signed();
         let wire_blob = if corrupt_blob {
             Blob::new(alloc::vec![head ^ 1; 16])
         } else {
@@ -1356,7 +1359,10 @@ mod tests {
             bytes: bytes.clone(),
         });
         assert_eq!(outcome, Outcome::Progressed);
-        assert!(bob.released.is_empty(), "refs escaped: frame stays retained");
+        assert!(
+            bob.released.is_empty(),
+            "refs escaped: frame stays retained"
+        );
 
         let Some(ConnToCore::Inbound(forward)) = bob.to_core.pop() else {
             return Err("expected a forward".into());
@@ -1431,7 +1437,7 @@ mod tests {
     #[test]
     fn stale_generation_verdict_is_ignored() {
         let mut bob = Peer::new(14, Direction::Inbound, None);
-        let alice_key = ed25519_dalek::SigningKey::from_bytes(&[13u8; 32]);
+        let alice_key = SigningKey::from_bytes(&[13u8; 32]);
         let _alice_id = PeerId::from(alice_key.verifying_key());
 
         // Hand-mint a verdict from a WRONG generation: must be dropped.

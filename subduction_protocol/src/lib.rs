@@ -3,7 +3,7 @@
 //! The sans-io core of Subduction: pure state machines that make every
 //! protocol decision and perform no IO.
 //!
-//! ## Design (ADR-015, "Design D")
+//! ## Design
 //!
 //! A [`Node`](node::Node) composes one [`ConnMachine`] per transport
 //! connection (handshake + inline forgery rejection), one [`CoreMachine`]
@@ -63,7 +63,7 @@ pub mod peer_id;
 pub mod remote_heads;
 pub mod stats;
 pub mod storage;
-pub mod timestamp;
 pub mod ticket;
+pub mod timestamp;
 pub mod wall_clock;
 pub mod wire;

@@ -335,11 +335,33 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
         self.bytes
     }
 
+    /// Build the canonical byte preimage that sealing signs:
+    /// `schema + discriminant? + issuer + fields`.
+    ///
+    /// The returned buffer has capacity for the trailing signature, so
+    /// sealing can append it without reallocating.
+    #[must_use]
+    pub fn sign_preimage(issuer: &VerifyingKey, payload: &T) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(payload.signed_size());
+
+        bytes.extend_from_slice(&T::SCHEMA);
+        if let Some(disc) = T::DISCRIMINANT {
+            bytes.push(disc);
+        }
+        bytes.extend_from_slice(issuer.as_bytes());
+        payload.encode_fields(&mut bytes);
+
+        bytes
+    }
+
     /// Seal a payload with the given signer's cryptographic signature.
     ///
     /// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
     /// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
     /// for wire transmission.
+    ///
+    /// For an in-memory [`ed25519_dalek::SigningKey`], prefer the synchronous
+    /// [`seal_sync`](Self::seal_sync) — it needs no executor.
     ///
     /// # Arguments
     ///
@@ -350,32 +372,43 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
         payload: T,
     ) -> VerifiedSignature<T> {
         let issuer = signer.verifying_key();
-
-        // Pre-allocate
-        let total_size = payload.signed_size();
-        let mut bytes = Vec::with_capacity(total_size);
-
-        // Write schema
-        bytes.extend_from_slice(&T::SCHEMA);
-
-        // Write discriminant (if present)
-        if let Some(disc) = T::DISCRIMINANT {
-            bytes.push(disc);
-        }
-
-        // Write issuer
-        bytes.extend_from_slice(issuer.as_bytes());
-
-        // Write fields
-        payload.encode_fields(&mut bytes);
+        let mut bytes = Self::sign_preimage(&issuer, &payload);
 
         // Sign the payload (everything so far)
         let signature = signer.sign(&bytes).await;
-
-        // Append signature
         bytes.extend_from_slice(&signature.to_bytes());
 
-        debug_assert_eq!(bytes.len(), total_size);
+        debug_assert_eq!(bytes.len(), payload.signed_size());
+
+        let result = Self {
+            issuer,
+            signature,
+            bytes,
+            _marker: PhantomData,
+        };
+
+        // We just signed it, so we know it's valid — no need to verify
+        VerifiedSignature::from_parts(result, payload)
+    }
+
+    /// Seal a payload synchronously with an in-memory signing key.
+    ///
+    /// The sans-io counterpart of [`seal`](Self::seal): no future, no
+    /// executor, byte-identical output (Ed25519 signing is deterministic).
+    /// Use this wherever the signing key is local (tests, harnesses, pure
+    /// drivers); use `seal` when signing is genuinely asynchronous
+    /// (hardware or remote signers).
+    #[must_use]
+    pub fn seal_sync(signing_key: &ed25519_dalek::SigningKey, payload: T) -> VerifiedSignature<T> {
+        use ed25519_dalek::Signer as _;
+
+        let issuer = signing_key.verifying_key();
+        let mut bytes = Self::sign_preimage(&issuer, &payload);
+
+        let signature = signing_key.sign(&bytes);
+        bytes.extend_from_slice(&signature.to_bytes());
+
+        debug_assert_eq!(bytes.len(), payload.signed_size());
 
         let result = Self {
             issuer,
@@ -390,8 +423,9 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
 
     /// Create a signed payload from raw components.
     ///
-    /// This is a low-level constructor for testing and deserialization.
-    /// Most callers should use [`seal`](Self::seal) instead.
+    /// This is a low-level constructor for testing and deserialization; the
+    /// signature is trusted as-is, not verified. Most callers should use
+    /// [`seal`](Self::seal) or [`seal_sync`](Self::seal_sync) instead.
     ///
     /// # Arguments
     ///
@@ -400,12 +434,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     /// * `payload` - The payload
     #[must_use]
     pub fn from_parts(issuer: VerifyingKey, signature: Signature, payload: &T) -> Self {
-        let total_size = payload.signed_size();
-        let mut bytes = Vec::with_capacity(total_size);
-
-        bytes.extend_from_slice(&T::SCHEMA);
-        bytes.extend_from_slice(issuer.as_bytes());
-        payload.encode_fields(&mut bytes);
+        let mut bytes = Self::sign_preimage(&issuer, payload);
         bytes.extend_from_slice(&signature.to_bytes());
 
         Self {
@@ -470,21 +499,7 @@ impl<'a, T: Schema + EncodeFields + DecodeFields + arbitrary::Arbitrary<'a>>
         let signing_key = SigningKey::from_bytes(&key_bytes);
         let issuer = signing_key.verifying_key();
 
-        // Encode the payload
-        let fields_size = payload.fields_size();
-        let disc_size = usize::from(T::DISCRIMINANT.is_some());
-        let total_size =
-            SCHEMA_SIZE + disc_size + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
-        let mut bytes = Vec::with_capacity(total_size);
-
-        bytes.extend_from_slice(&T::SCHEMA);
-        if let Some(disc) = T::DISCRIMINANT {
-            bytes.push(disc);
-        }
-        bytes.extend_from_slice(issuer.as_bytes());
-        payload.encode_fields(&mut bytes);
-
-        // Sign the payload
+        let mut bytes = Self::sign_preimage(&issuer, &payload);
         let signature = signing_key.sign(&bytes);
         bytes.extend_from_slice(&signature.to_bytes());
 
@@ -1057,6 +1072,83 @@ mod regression {
             b.partial_cmp(&a),
             "partial_cmp must respect antisymmetry for distinct values"
         );
+    }
+
+    // ── seal_sync / from_parts layout parity ────────────────────────
+
+    /// `seal_sync` must produce bytes identical to the canonical layout
+    /// (and therefore to async `seal`, which shares `sign_preimage`).
+    #[test]
+    fn seal_sync_matches_canonical_layout() {
+        let key_bytes = [9u8; 32];
+        let canonical = seal_payload(key_bytes, 0xF00D);
+
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        let sealed = Signed::seal_sync(&signing_key, Payload { value: 0xF00D }).into_signed();
+
+        assert_eq!(
+            sealed.as_bytes(),
+            canonical.as_slice(),
+            "seal_sync must be byte-identical to the canonical encoding"
+        );
+        sealed.try_verify().expect("seal_sync output must verify");
+    }
+
+    /// `from_parts` must write the discriminant byte for discriminated
+    /// types (regression: it used to omit it, producing malformed wire
+    /// bytes for `Challenge`/`Response`-style payloads).
+    #[test]
+    fn from_parts_writes_discriminant() {
+        /// Discriminated payload with a correct `MIN_SIGNED_SIZE`.
+        #[derive(Debug, Clone, Copy)]
+        struct Tagged {
+            value: u64,
+        }
+
+        impl Schema for Tagged {
+            const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+            const TYPE_BYTE: u8 = b'D';
+            const VERSION: u8 = 0;
+            const DISCRIMINANT: Option<u8> = Some(0x42);
+        }
+
+        impl EncodeFields for Tagged {
+            fn encode_fields(&self, buf: &mut Vec<u8>) {
+                encode::u64(self.value, buf);
+            }
+            fn fields_size(&self) -> usize {
+                8
+            }
+        }
+
+        impl DecodeFields for Tagged {
+            const MIN_SIGNED_SIZE: usize =
+                SCHEMA_SIZE + 1 + VERIFYING_KEY_SIZE + 8 + SIGNATURE_SIZE;
+
+            fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+                let value = decode::u64(buf, 0)?;
+                Ok((Self { value }, 8))
+            }
+        }
+
+        let signing_key = SigningKey::from_bytes(&[3u8; 32]);
+        let payload = Tagged { value: 7 };
+
+        // Canonical bytes via seal_sync (shared preimage path).
+        let sealed = Signed::seal_sync(&signing_key, payload).into_signed();
+        assert_eq!(sealed.as_bytes()[SCHEMA_SIZE], 0x42, "discriminant byte");
+
+        // from_parts must reproduce the same wire bytes.
+        let rebuilt =
+            Signed::from_parts(signing_key.verifying_key(), *sealed.signature(), &payload);
+        assert_eq!(
+            rebuilt.as_bytes(),
+            sealed.as_bytes(),
+            "from_parts must produce canonical wire bytes incl. discriminant"
+        );
+        rebuilt
+            .try_verify()
+            .expect("from_parts output must verify for a genuine signature");
     }
 
     // ── Free-standing MIN_SIGNED_SIZE constant ───────────────────────

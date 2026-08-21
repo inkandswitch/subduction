@@ -1,5 +1,4 @@
-//! Sync sessions over sealed edges — the old single machine's
-//! `machine/sync.rs`, re-homed onto Design D.
+//! Sync sessions over sealed edges.
 //!
 //! Everything here operates on already-verified data (the connection
 //! machines are the forgery gate); the core's jobs are the *joins*:
@@ -157,11 +156,12 @@ impl CoreMachine {
             if let Some(entry) = self.edges.get_mut(conn) {
                 let _request = entry.requests.remove(nonce);
             }
-            self.effects.push_back(CoreEffect::App(AppEvent::SyncFinished {
-                conn: *conn,
-                tree: *tree,
-                status: SyncStatus::TimedOut,
-            }));
+            self.effects
+                .push_back(CoreEffect::App(AppEvent::SyncFinished {
+                    conn: *conn,
+                    tree: *tree,
+                    status: SyncStatus::TimedOut,
+                }));
         }
         !expired.is_empty()
     }
@@ -214,7 +214,7 @@ impl CoreMachine {
             }
             SyncForward::HeadsUpdate { tree, heads } => {
                 // Each individual push is acked by one HeadsUpdate
-                // (1.5-RTT): drain the lagging gauge (ADR-017).
+                // (1.5-RTT): drain the lagging gauge.
                 if let Some(entry) = self.edges.get_mut(&conn) {
                     entry.outstanding_pushes = entry.outstanding_pushes.saturating_sub(1);
                 }
@@ -250,7 +250,7 @@ impl CoreMachine {
         }
         // A fresh full-diff request supersedes any unacked pushes: the
         // response carries everything they lack, so the lagging gauge
-        // resets (ADR-017 recovery point). Re-breach is bounded per
+        // resets (the recovery point). Re-breach is bounded per
         // cycle, and each cycle costs the peer a full sync request.
         if let Some(entry) = self.edges.get_mut(&conn) {
             entry.outstanding_pushes = 0;
@@ -258,7 +258,13 @@ impl CoreMachine {
 
         let Some(resident) = self.trees.get_mut(&tree) else {
             let heads = self.next_sender_heads(peer, vec![]);
-            self.respond_plain(conn, request.req_id, tree, wire::SyncResult::NotFound, heads);
+            self.respond_plain(
+                conn,
+                request.req_id,
+                tree,
+                wire::SyncResult::NotFound,
+                heads,
+            );
             return Outcome::Progressed;
         };
 
@@ -343,8 +349,7 @@ impl CoreMachine {
         let Some(request) = entry.requests.remove(&req_id.nonce) else {
             return Outcome::Ignored(IgnoreReason::UnknownRequest);
         };
-        self.stats.sync_responses_received =
-            self.stats.sync_responses_received.saturating_add(1);
+        self.stats.sync_responses_received = self.stats.sync_responses_received.saturating_add(1);
 
         self.notify_heads(tree, conn, responder_heads);
 
@@ -458,8 +463,7 @@ impl CoreMachine {
                 return;
             };
             let minimal = resident.minimized(&CountLeadingZeroBytes);
-            let commit_ids: Vec<CommitId> =
-                minimal.commit_entries().map(|(id, _)| *id).collect();
+            let commit_ids: Vec<CommitId> = minimal.commit_entries().map(|(id, _)| *id).collect();
             let fragment_heads: Vec<CommitId> =
                 minimal.fragment_entries().map(|(id, _)| *id).collect();
             (commit_ids, fragment_heads)
@@ -500,9 +504,7 @@ impl CoreMachine {
                 requesting,
                 heads,
             } => self.on_response_fetch_done(conn, req_id, tree, &requesting, heads, result),
-            CorePending::ReturnRequested { tree } => {
-                self.on_return_fetch_done(conn, tree, result)
-            }
+            CorePending::ReturnRequested { tree } => self.on_return_fetch_done(conn, tree, result),
             CorePending::Persist {
                 tree,
                 commits,
@@ -587,8 +589,7 @@ impl CoreMachine {
                 }
                 for (signed, blob) in &fragments {
                     let sender_heads = self.next_sender_heads(peer, heads.clone());
-                    let parts =
-                        wire::fragment_parts(tree, signed, &sender_heads, Part::Ref(*blob));
+                    let parts = wire::fragment_parts(tree, signed, &sender_heads, Part::Ref(*blob));
                     self.effects.push_back(CoreEffect::Send { conn, parts });
                 }
                 self.release_refs(commits.iter().map(|(_, r)| *r));
@@ -596,9 +597,8 @@ impl CoreMachine {
                 Outcome::Progressed
             }
             StorageResult::Unauthorized => {
-                let msg = wire::SyncMessage::DataRequestRejected(wire::DataRequestRejected {
-                    id: tree,
-                });
+                let msg =
+                    wire::SyncMessage::DataRequestRejected(wire::DataRequestRejected { id: tree });
                 self.effects.push_back(CoreEffect::Send {
                     conn,
                     parts: vec![Part::Bytes(msg.encode())],
@@ -692,10 +692,11 @@ impl CoreMachine {
             StorageResult::Failed(failure) => {
                 self.release_refs(commits.iter().map(|item| item.blob));
                 self.release_refs(fragments.iter().map(|item| item.blob));
-                self.effects.push_back(CoreEffect::App(AppEvent::StorageError {
-                    tree,
-                    failure: *failure,
-                }));
+                self.effects
+                    .push_back(CoreEffect::App(AppEvent::StorageError {
+                        tree,
+                        failure: *failure,
+                    }));
                 Outcome::Progressed
             }
             StorageResult::FetchedRefs { .. }
@@ -801,8 +802,7 @@ impl CoreMachine {
                     conn: subscriber,
                     parts,
                 });
-                self.stats.subscription_pushes =
-                    self.stats.subscription_pushes.saturating_add(1);
+                self.stats.subscription_pushes = self.stats.subscription_pushes.saturating_add(1);
             }
             for (signed, blob) in fragments {
                 if !self.try_push_credit(subscriber, tree, peer, &heads) {
@@ -814,14 +814,13 @@ impl CoreMachine {
                     conn: subscriber,
                     parts,
                 });
-                self.stats.subscription_pushes =
-                    self.stats.subscription_pushes.saturating_add(1);
+                self.stats.subscription_pushes = self.stats.subscription_pushes.saturating_add(1);
             }
         }
     }
 
     /// Spend one push credit for `subscriber`, or pause its subscription
-    /// to `tree` (ADR-017: pause + resync, never unbounded queues).
+    /// to `tree` (pause + resync, never unbounded queues).
     ///
     /// A paused subscriber gets a `HeadsUpdate` nudge: if it is alive,
     /// it sees heads it does not hold and re-syncs (which re-subscribes
@@ -845,11 +844,19 @@ impl CoreMachine {
         }
 
         // Pause: drop the subscription; their next sync re-forms it.
+        // The nudge fires only when this call actually removes the
+        // subscription, so a breach mid-broadcast (commits loop) is not
+        // re-announced by the fragments loop — one nudge per breach
+        //.
+        let mut removed = false;
         if let Some(conns) = self.subscriptions.get_mut(&tree) {
-            let _removed = conns.remove(&subscriber);
+            removed = conns.remove(&subscriber);
             if conns.is_empty() {
                 let _entry = self.subscriptions.remove(&tree);
             }
+        }
+        if !removed {
+            return false;
         }
         self.stats.subscribers_paused = self.stats.subscribers_paused.saturating_add(1);
         let sender_heads = self.next_sender_heads(peer, heads.to_vec());
@@ -861,10 +868,11 @@ impl CoreMachine {
             conn: subscriber,
             parts: vec![Part::Bytes(msg.encode())],
         });
-        self.effects.push_back(CoreEffect::App(AppEvent::SubscriberLagging {
-            conn: subscriber,
-            tree,
-        }));
+        self.effects
+            .push_back(CoreEffect::App(AppEvent::SubscriberLagging {
+                conn: subscriber,
+                tree,
+            }));
         false
     }
 
@@ -889,11 +897,12 @@ impl CoreMachine {
     }
 
     fn finish_sync(&mut self, conn: ConnId, tree: SedimentreeId, status: SyncStatus) {
-        self.effects.push_back(CoreEffect::App(AppEvent::SyncFinished {
-            conn,
-            tree,
-            status,
-        }));
+        self.effects
+            .push_back(CoreEffect::App(AppEvent::SyncFinished {
+                conn,
+                tree,
+                status,
+            }));
     }
 
     /// Per-peer received-heads staleness filter (legacy parity).
@@ -911,7 +920,11 @@ impl CoreMachine {
         }
         *last = heads.counter;
         self.effects
-            .push_back(CoreEffect::App(AppEvent::RemoteHeadsUpdated { tree, peer, heads }));
+            .push_back(CoreEffect::App(AppEvent::RemoteHeadsUpdated {
+                tree,
+                peer,
+                heads,
+            }));
     }
 
     /// Bump the per-peer sent-heads counter and wrap `heads`.
@@ -972,10 +985,11 @@ impl CoreMachine {
     /// The driver answered a pending op with the wrong result shape.
     fn driver_result_mismatch(&mut self, tree: SedimentreeId) -> Outcome {
         self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
-        self.effects.push_back(CoreEffect::App(AppEvent::StorageError {
-            tree,
-            failure: StorageFailure::Permanent,
-        }));
+        self.effects
+            .push_back(CoreEffect::App(AppEvent::StorageError {
+                tree,
+                failure: StorageFailure::Permanent,
+            }));
         Outcome::Ignored(IgnoreReason::UnknownTicket)
     }
 
@@ -1000,8 +1014,12 @@ mod tests {
         wall_clock::TimestampSeconds,
     };
     use alloc::collections::BTreeSet;
-    use sedimentree_core::blob::{Blob, BlobMeta};
-    use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+    use ed25519_dalek::SigningKey;
+    use sedimentree_core::{
+        blob::{Blob, BlobMeta},
+        collections::Set,
+    };
+    use subduction_crypto::signed::Signed;
     use testresult::TestResult;
 
     const fn now_at(ms: u64) -> Now {
@@ -1026,7 +1044,8 @@ mod tests {
             },
             ConnToCore::Authenticated { peer },
         ] {
-            let _outcome = core.handle(now_at(0), CoreEvent::FromConn(Sealed::mint(edge, seq, msg)));
+            let _outcome =
+                core.handle(now_at(0), CoreEvent::FromConn(Sealed::mint(edge, seq, msg)));
             seq = seq.next();
         }
         (core, edge, seq, peer)
@@ -1034,7 +1053,7 @@ mod tests {
 
     /// A verified commit (sealed with a real signer) plus its blob bytes.
     fn verified_commit(tree: SedimentreeId, head: u8) -> (VerifiedCommit, Vec<u8>) {
-        let signer = MemorySigner::from_bytes(&[head; 32]);
+        let signing_key = SigningKey::from_bytes(&[head; 32]);
         let blob = Blob::new(alloc::vec![head; 16]);
         let commit = LooseCommit::new(
             tree,
@@ -1042,10 +1061,7 @@ mod tests {
             BTreeSet::new(),
             BlobMeta::new(&blob),
         );
-        let sealed = futures::executor::block_on(Signed::seal::<future_form::Sendable, _>(
-            &signer, commit,
-        ))
-        .into_signed();
+        let sealed = Signed::seal_sync(&signing_key, commit).into_signed();
         let item = VerifiedCommit {
             commit: sealed,
             blob: BlobRef {
@@ -1084,10 +1100,17 @@ mod tests {
                 peer: PeerId::new([0xB2; 32]),
             },
         ] {
-            let _o = core.handle(now_at(0), CoreEvent::FromConn(Sealed::mint(edge2, seq2, msg)));
+            let _o = core.handle(
+                now_at(0),
+                CoreEvent::FromConn(Sealed::mint(edge2, seq2, msg)),
+            );
             seq2 = seq2.next();
         }
-        let _new = core.subscriptions.entry(tree).or_default().insert(edge2.conn);
+        let _new = core
+            .subscriptions
+            .entry(tree)
+            .or_default()
+            .insert(edge2.conn);
 
         // A verified commit push arrives on edge 1.
         let (item, _blob) = verified_commit(tree, 0xA1);
@@ -1139,9 +1162,11 @@ mod tests {
         );
         // TreeUpdated + HeadsUpdate ack to the source + forward to the
         // subscriber + the ref released.
-        assert!(effects
-            .iter()
-            .any(|e| matches!(e, CoreEffect::App(AppEvent::TreeUpdated { .. }))));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, CoreEffect::App(AppEvent::TreeUpdated { .. })))
+        );
         let sends: Vec<&ConnId> = effects
             .iter()
             .filter_map(|e| match e {
@@ -1238,7 +1263,9 @@ mod tests {
         });
         assert!(has_ref_send, "response uses scatter-gather blob refs");
         assert!(
-            effects.iter().any(|e| matches!(e, CoreEffect::ReleaseBlob(_))),
+            effects
+                .iter()
+                .any(|e| matches!(e, CoreEffect::ReleaseBlob(_))),
             "fetched refs released after send enqueued"
         );
         Ok(())
@@ -1275,5 +1302,55 @@ mod tests {
                 ..
             })
         )));
+    }
+
+    /// A credit breach mid-broadcast fires exactly one nudge —
+    /// the fragments loop must not re-announce the pause the commits
+    /// loop already reported.
+    #[test]
+    fn breach_mid_broadcast_nudges_exactly_once() {
+        let (mut core, edge, _seq, _peer) = core_with_peer(0xAB);
+        let tree = SedimentreeId::new([9u8; 32]);
+
+        // Subscribe conn 1 with its credit already exhausted.
+        let mut subscribers = Set::new();
+        let _inserted = subscribers.insert(edge.conn);
+        let _prev = core.subscriptions.insert(tree, subscribers);
+        if let Some(entry) = core.edges.get_mut(&edge.conn) {
+            entry.outstanding_pushes = core.config.max_outstanding_pushes;
+        }
+
+        // One commit AND one fragment in a single broadcast.
+        let (commit_item, commit_blob) = verified_commit(tree, 0xC1);
+        let signing_key = SigningKey::from_bytes(&[0xF1; 32]);
+        let frag_blob = Blob::new(alloc::vec![0xF1; 24]);
+        let fragment = Fragment::new(
+            tree,
+            CommitId::new([0xF1; 32]),
+            BTreeSet::new(),
+            &[],
+            BlobMeta::new(&frag_blob),
+        );
+        let signed_fragment = Signed::seal_sync(&signing_key, fragment).into_signed();
+
+        core.broadcast_items(
+            tree,
+            &[(&commit_item.commit, Part::Bytes(commit_blob))],
+            &[(&signed_fragment, Part::Bytes(frag_blob.as_slice().to_vec()))],
+            None,
+        );
+
+        let effects = drain(&mut core);
+        let nudges = effects
+            .iter()
+            .filter(|e| matches!(e, CoreEffect::Send { .. }))
+            .count();
+        let lagging_events = effects
+            .iter()
+            .filter(|e| matches!(e, CoreEffect::App(AppEvent::SubscriberLagging { .. })))
+            .count();
+        assert_eq!(nudges, 1, "exactly one HeadsUpdate nudge per breach");
+        assert_eq!(lagging_events, 1, "exactly one SubscriberLagging per breach");
+        assert_eq!(core.stats.subscribers_paused, 1);
     }
 }

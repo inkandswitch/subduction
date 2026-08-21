@@ -11,7 +11,7 @@
 //! [`IngestLocal`](crate::storage::StorageOp::IngestLocal) storage op. The
 //! driver — which holds the signing key — hashes each blob, builds and
 //! signs the [`LooseCommit`]s, and persists, all in a single round trip
-//! (ADR-006a/012). The machine updates its resident tree only from the
+//!. The machine updates its resident tree only from the
 //! completion, so resident state never gets ahead of durability.
 //!
 //! [`LooseCommit`]: sedimentree_core::loose_commit::LooseCommit
@@ -22,7 +22,7 @@ use sedimentree_core::{
     blob::Blob,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 
 use crate::id::ConnId;
@@ -131,7 +131,7 @@ pub enum Command {
     },
 
     /// Send an extension-protocol message on an authenticated connection
-    /// (the outbound half of ADR-010). Ignored (with a reason) if the
+    ///. Ignored (with a reason) if the
     /// connection is not authenticated.
     SendExtension {
         /// The connection to send on.

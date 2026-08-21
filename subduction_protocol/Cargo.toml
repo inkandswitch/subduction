@@ -47,8 +47,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 arbitrary = { workspace = true, features = ["derive"] }
 bolero = { workspace = true, features = ["arbitrary"] }
-future_form = { workspace = true }
-futures = { workspace = true, features = ["executor"] }
 subduction_protocol = { path = ".", features = ["bolero", "std"] }
 subduction_testkit = { path = "../subduction_testkit" }
 testresult = { workspace = true }

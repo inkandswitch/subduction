@@ -11,8 +11,6 @@ repository.workspace = true
 
 [dependencies]
 ed25519-dalek = { workspace = true, features = ["std"] }
-future_form = { workspace = true }
-futures = { workspace = true, features = ["executor"] }
 sedimentree_core = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true, features = ["std"] }
 subduction_protocol = { path = "../subduction_protocol", features = ["std"] }

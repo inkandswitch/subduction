@@ -34,7 +34,7 @@
 //! - The async `initiate`/`respond` drivers — inverted into the machine's
 //!   per-connection handshake sub-machine.
 //! - Inline signing (`Signed::seal`) — emitted as `Sign` effects
-//!   (ADR-006a/ADR-014); verification (`try_verify`) and the pure checks
+//!   ; verification (`try_verify`) and the pure checks
 //!   (`Challenge::validate`, `Response::validate`) run inline.
 
 pub mod audience;
@@ -156,7 +156,7 @@ pub(crate) const HANDSHAKE_SCHEMA: [u8; 4] = Challenge::SCHEMA;
 
 /// Variant tag bytes within the `SUH\0` handshake protocol.
 mod handshake_tags {
-    use super::{response::Response, Challenge};
+    use super::{Challenge, response::Response};
 
     pub(super) const CHALLENGE: u8 = Challenge::TAG;
     pub(super) const RESPONSE: u8 = Response::TAG;
@@ -202,7 +202,7 @@ impl HandshakeMessage {
     /// For signed variants, the entire byte slice is the `Signed<T>` — the
     /// discriminant at byte 4 is validated by [`Signed::try_decode`].
     /// **Decoding does not verify signatures** — the machine emits a
-    /// dedicated effect for that (ADR-014: verification is computation).
+    /// dedicated effect for that: verification is computation.
     ///
     /// # Errors
     ///
@@ -298,6 +298,13 @@ pub(crate) const fn pinned_peer(challenge: &Challenge) -> Option<crate::peer_id:
 /// Build the byte preimage that [`Signed::seal`] signs:
 /// `schema + discriminant? + issuer + fields`. Appending an ed25519
 /// signature over these bytes yields valid `Signed<T>` wire bytes.
+///
+/// This duplicates [`Signed::sign_preimage`]'s canonical layout because
+/// the issuer here is a [`PeerId`](crate::peer_id::PeerId) (infallible
+/// bytes), not a parsed `VerifyingKey` — converting would be fallible in
+/// runtime sign-effect code. Any layout change is a wire break: the two
+/// builders are pinned byte-identical by the `preimage_parity_with_crypto`
+/// test below.
 pub(crate) fn signed_preimage<T: Schema + sedimentree_core::codec::encode::EncodeFields>(
     issuer: &crate::peer_id::PeerId,
     payload: &T,
@@ -315,17 +322,45 @@ pub(crate) fn signed_preimage<T: Schema + sedimentree_core::codec::encode::Encod
 #[cfg(test)]
 mod tests {
     use super::{audience::Audience, response::Response, *};
-    use future_form::Sendable;
-    use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
+    use ed25519_dalek::SigningKey;
+    use subduction_crypto::nonce::Nonce;
     use testresult::TestResult;
 
-    fn seal<T>(signer: &MemorySigner, payload: T) -> Signed<T>
+    fn seal<T>(signing_key: &SigningKey, payload: T) -> Signed<T>
     where
         T: Schema
             + sedimentree_core::codec::encode::EncodeFields
             + sedimentree_core::codec::decode::DecodeFields,
     {
-        futures::executor::block_on(Signed::seal::<Sendable, _>(signer, payload)).into_signed()
+        Signed::seal_sync(signing_key, payload).into_signed()
+    }
+
+    /// `handshake::signed_preimage` must stay byte-identical to the
+    /// canonical `Signed::sign_preimage` — drift here is a wire/security
+    /// bug (the driver signs these exact bytes).
+    #[test]
+    fn preimage_parity_with_crypto() {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let verifying_key = signing_key.verifying_key();
+        let peer = crate::peer_id::PeerId::from(verifying_key);
+
+        let challenge = Challenge::new(
+            Audience::discover(b"parity"),
+            TimestampSeconds::new(1234),
+            Nonce::from_u128(99),
+        );
+        assert_eq!(
+            signed_preimage(&peer, &challenge),
+            Signed::sign_preimage(&verifying_key, &challenge),
+            "challenge preimages must match"
+        );
+
+        let response = Response::for_challenge(&challenge, TimestampSeconds::new(1235));
+        assert_eq!(
+            signed_preimage(&peer, &response),
+            Signed::sign_preimage(&verifying_key, &response),
+            "response preimages must match"
+        );
     }
 
     mod codec {
@@ -333,13 +368,13 @@ mod tests {
 
         #[test]
         fn challenge_roundtrips() -> TestResult {
-            let signer = MemorySigner::from_bytes(&[1u8; 32]);
+            let signing_key = SigningKey::from_bytes(&[1u8; 32]);
             let challenge = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::from_u128(42),
             );
-            let sealed = seal(&signer, challenge);
+            let sealed = seal(&signing_key, challenge);
             let encoded = HandshakeMessage::SignedChallenge(sealed.clone()).encode();
             let decoded = HandshakeMessage::try_decode(&encoded)?;
             let HandshakeMessage::SignedChallenge(got) = decoded else {
@@ -351,14 +386,14 @@ mod tests {
 
         #[test]
         fn response_roundtrips() -> TestResult {
-            let signer = MemorySigner::from_bytes(&[2u8; 32]);
+            let signing_key = SigningKey::from_bytes(&[2u8; 32]);
             let challenge = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::from_u128(42),
             );
             let response = Response::for_challenge(&challenge, TimestampSeconds::new(1001));
-            let sealed = seal(&signer, response);
+            let sealed = seal(&signing_key, response);
             let encoded = HandshakeMessage::SignedResponse(sealed.clone()).encode();
             let decoded = HandshakeMessage::try_decode(&encoded)?;
             let HandshakeMessage::SignedResponse(got) = decoded else {

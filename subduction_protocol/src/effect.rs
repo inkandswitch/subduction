@@ -119,7 +119,7 @@ pub enum AppEvent {
     },
 
     /// A subscriber fell behind (too many unacked pushes) and its
-    /// subscription was paused (ADR-017). It was nudged with a
+    /// subscription was paused. It was nudged with a
     /// `HeadsUpdate`; if alive, it re-syncs and re-subscribes.
     SubscriberLagging {
         /// The lagging connection.
@@ -140,7 +140,7 @@ pub enum AppEvent {
     },
 
     /// A message for an extension protocol (not Subduction's own) arrived
-    /// on an authenticated connection (ADR-010).
+    /// on an authenticated connection.
     ///
     /// Extension protocols (ephemeral, keyhive, application-defined)
     /// multiplex over the same connection, distinguished by their 4-byte

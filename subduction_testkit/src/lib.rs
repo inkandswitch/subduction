@@ -27,14 +27,13 @@ pub mod sim;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
-use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+use subduction_crypto::signed::Signed;
 use subduction_protocol::{
     blob_ref::{BlobRef, FrameId, Part},
     command::{Command, NewCommit, NewFragment},
@@ -58,11 +57,7 @@ pub type TestError = Box<dyn std::error::Error>;
 /// # Errors
 /// Returns `msg` as the error when `cond` is false.
 pub fn ensure(cond: bool, msg: &str) -> Result<(), TestError> {
-    if cond {
-        Ok(())
-    } else {
-        Err(msg.into())
-    }
+    if cond { Ok(()) } else { Err(msg.into()) }
 }
 
 type CommitStore = BTreeMap<SedimentreeId, BTreeMap<CommitId, (Signed<LooseCommit>, Vec<u8>)>>;
@@ -95,7 +90,6 @@ pub struct TestDriver {
     /// Deferred storage ops awaiting a scheduled completion.
     pub pending_storage: Vec<(subduction_protocol::ticket::StorageTicket, StorageOp)>,
     signing_key: SigningKey,
-    signer: MemorySigner,
     frames: BTreeMap<u64, FrameSlot>,
     next_frame: u64,
     store: CommitStore,
@@ -122,7 +116,6 @@ impl TestDriver {
     #[must_use]
     pub fn custom(seed: u8, tweak: impl FnOnce(&mut NodeConfig)) -> Self {
         let signing_key = SigningKey::from_bytes(&[seed; 32]);
-        let signer = MemorySigner::from_bytes(&[seed; 32]);
         let local_peer = PeerId::from(signing_key.verifying_key());
         let mut config = NodeConfig::new(local_peer, [seed ^ 0x55; 32]);
         tweak(&mut config);
@@ -135,7 +128,6 @@ impl TestDriver {
             defer_storage: false,
             pending_storage: Vec::new(),
             signing_key,
-            signer,
             frames: BTreeMap::new(),
             next_frame: 1,
             store: BTreeMap::new(),
@@ -341,9 +333,7 @@ impl TestDriver {
                 new.parents.clone(),
                 BlobMeta::new(&new.blob),
             );
-            let signed =
-                futures::executor::block_on(Signed::seal::<Sendable, _>(&self.signer, commit))
-                    .into_signed();
+            let signed = Signed::seal_sync(&self.signing_key, commit).into_signed();
             let _previous = self
                 .store
                 .entry(tree)
@@ -360,9 +350,7 @@ impl TestDriver {
                 &new.checkpoints,
                 BlobMeta::new(&new.blob),
             );
-            let signed =
-                futures::executor::block_on(Signed::seal::<Sendable, _>(&self.signer, fragment))
-                    .into_signed();
+            let signed = Signed::seal_sync(&self.signing_key, fragment).into_signed();
             let _previous = self
                 .fragment_store
                 .entry(tree)

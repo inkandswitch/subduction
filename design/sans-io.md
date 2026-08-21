@@ -37,15 +37,20 @@ effects and feed results back in.
       · later: uniffi (Swift/Kotlin), pyo3 (Python) binding L1 directly
 ```
 
-## L1: The Machine
+## L1: The Node
+
+L1 is not one monolithic machine: it is per-connection machines plus one
+core machine, joined by sealed ocap edges and composed — with the router
+— into the `Node`, the FFI-bindable facade drivers actually hold:
 
 ```rust
-impl Machine {
-    /// Feed one event; returns a structured outcome.
-    fn handle(&mut self, now: Timestamp, event: Event) -> Outcome;
+impl Node {
+    /// Feed one event; internal conn↔core traffic is routed to
+    /// quiescence within this turn. Returns a structured outcome.
+    fn handle(&mut self, now: Now, event: NodeEvent) -> Outcome;
 
-    /// Drain effects produced by handle() calls.
-    fn poll_effect(&mut self) -> Option<Effect>;
+    /// Drain leaf effects produced by handle() calls.
+    fn poll_effect(&mut self) -> Option<NodeEffect>;
 
     /// Next deadline the driver must wake us at.
     fn poll_timeout(&self) -> Option<Timestamp>;
@@ -55,32 +60,43 @@ impl Machine {
 }
 ```
 
-Inputs (`Event`): frames from the wire, connection up/down, timer expiry,
-completions of driver-performed work (storage, crypto), and local commands
-(add commit, sync with peer, subscribe, …).
+Inside the node, `ConnMachine`s own handshake + wire codec + inline item
+verification (the forgery gate), and the `CoreMachine` owns trees,
+sessions, subscriptions, fan-out credits, and nonce arbitration. They
+exchange `Sealed<M>` messages over edges keyed `(ConnId, Generation)`
+with exactly-once sequencing; drivers can hold and route sealed values
+but never create or open one.
 
-Outputs (`Effect`): frames to send, disconnects, timers to set or cancel,
-storage operations, crypto operations, and application events.
+Inputs (`NodeEvent`): frames from the wire, connection up/down, timer
+expiry, completions of driver-performed work (storage, signing), and
+local commands (add commit, sync with peer, subscribe, …).
+
+Outputs (`NodeEffect`, leaf-only): parts to send (scatter-gather),
+disconnects, storage operations, signing requests, frame/blob releases,
+and application events.
 
 ### Rules
 
 1. _No IO, no clock, no locks, no allocation beyond protocol needs._
-   `Timestamp` is an opaque monotonic value supplied by the driver with
-   every `handle` call.
-2. _FFI-stable boundary._ `Event`, `Effect`, and `Outcome` are plain
-   enums/structs over bytes, ids, and tickets — no generics, no trait
-   objects. The vocabulary freezes early and grows additively, because
-   platform bindings (uniffi, pyo3) bind this surface directly.
+   `Now { monotonic, wall }` is supplied by the driver with every
+   `handle` call; the node clamps monotonic time to a high-water mark so
+   a regressed driver clock can never fire deadlines early.
+2. _FFI-stable boundary._ `NodeEvent`, `NodeEffect`, and `Outcome` are
+   plain enums/structs over bytes, ids, and tickets — no generics, no
+   trait objects. The vocabulary freezes early and grows additively,
+   because platform bindings (uniffi, pyo3) bind this surface directly.
 3. _Effects are for interactions with the world; pure computation runs
    inline._ Signing is the only crypto effect: signing keys deserve
    external custody (HSM, secure enclave, WebCrypto non-extractable
    keys, remote signers), which is genuinely asynchronous IO. Signature
    *verification* is pure computation — no key custody, no side effects
-   — and runs inline in the machine (it only ever applies to handshake
-   messages; ~100µs per connection setup). Hot-path bulk verification
-   and blob-sized hashing are fused into storage/ingest effects: blob
-   bytes never enter the machine, the driver verifies as part of
-   persisting, and one request's items can fan across a worker pool.
+   — and runs inline: handshake messages in the handshake
+   states, and **every** signed sync item in the connection machine
+   before it can become a `VerifiedItem` — this inline check is the
+   forgery gate, and it is why the driver's storage duty shrinks to
+   authorize + persist only. Blob digests are recomputed over
+   ingress bytes at the same gate; blob bytes never enter core state,
+   transiting as `BlobRef`s into driver-retained frames.
 4. _Wire compatibility is a hard constraint._ Message formats and the
    canonical codec (see `protocol.md`) are copied verbatim from legacy.
    Golden-bytes tests and a live legacy-interop test guard this.
@@ -185,7 +201,7 @@ instead, L2 provides a combinator that wires them up once:
 
 ```text
           ┌─ Composite (L2) ─────────────────────────────────────┐
- events ─▶│ root Machine (handshake, sync, auth, routing)        │─▶ effects
+ events ─▶│ root Node (handshake, sync, auth, routing)           │─▶ effects
           │   │ ExtensionMessage / PeerAuthenticated /           │
           │   │ ConnectionClosed            ▲ sends (auth-gated) │
           │   ▼                             │                    │
@@ -216,7 +232,7 @@ names are preserved so existing dashboards keep working:
 | Tier                  | What                                                       | Mechanism                                                                                  |
 |-----------------------|------------------------------------------------------------|--------------------------------------------------------------------------------------------|
 | 1 — Boundary          | bytes/messages in/out, effect latencies, connection gauges | Derived in L2 by the driver executing effects                                              |
-| 2 — Internal counters | dedup hits, nonce evictions, sessions in flight            | `Machine::stats()` pull snapshots (plain `u64`s)                                           |
+| 2 — Internal counters | dedup hits, nonce evictions, sessions in flight            | `Node::stats()`    pull snapshots (plain `u64`s)                                           |
 | 3 — Decision events   | sync skipped, suppression fired, rejections                | Structured `Outcome` return values, pattern-matched by the driver into `metrics`/`tracing` |
 
 Tier-3 outcomes double as the primary test-assertion surface: property
@@ -233,13 +249,13 @@ table records which tier now feeds it (audited against
 | `connections_active/total/closed`                      | 2    | `stats().connections_opened/closed` (+ driver gauge)                                 |
 | `handshake_total{outcome}`                             | 2+3  | `stats().handshakes_completed/failed/timeouts`; outcome labels from `Fault` variants |
 | `handshake_duration_seconds`                           | 1    | driver times `Connected` → `PeerAuthenticated`                                       |
-| `network_frame_bytes`, `messages_total`                | 1    | driver counts `SendMessage`/`MessageReceived`                                        |
+| `network_frame_bytes`, `messages_total`                | 1    | driver counts `Send`/`MessageReceived`                                               |
 | `dispatch_*` (inflight, throttled, permit wait, dwell) | 1    | driver queue/executor properties — the machine has no queues                         |
 | `batch_sync_requests/responses_total`                  | 2    | `stats().sync_requests_sent/received`, `sync_responses_received`                     |
 | `sync_duration_seconds`                                | 1+3  | driver times `SyncTree` → `SyncFinished{status}`                                     |
-| `sync_commits/fragments_received/sent_total`           | 1    | driver inspects `Ingest`/`SendMessage` effects                                       |
+| `sync_commits/fragments_received/sent_total`           | 1    | driver inspects `Send`/`PersistItems` effects                                        |
 | `sync_call_failures_total`                             | 3    | `SyncFinished{status != Completed}`                                                  |
-| `sync_verify_failures_total`                           | 1    | driver counts `Ingested.rejected` items it produced                                  |
+| `sync_verify_failures_total`                           | 3    | verification faults on `MessageReceived` outcomes (inline forgery gate)                   |
 | `top_requestor_*`, `requestor_window_*`                | 1    | driver-side tally (legacy `requestor_tally` moves to the driver)                     |
 | `late_responses_total`                                 | 2    | `stats().stale_completions` + `Ignored(UnknownRequest)` outcomes                     |
 | `keepalive_*`                                          | 1    | transport-level; never entered the machine                                           |
@@ -252,7 +268,7 @@ table records which tier now feeds it (audited against
 ## Testing Strategy
 
 - _Pure protocol tests_ (L1): two machines wired back-to-back by shuttling
-  `Effect::SendMessage` bytes — handshake completion, sync convergence from
+  `NodeEffect::Send` parts — handshake completion, sync convergence from
   arbitrary divergent states, all without an async runtime.
 - _Property/fuzz_ (bolero): arbitrary event sequences never panic; stale
   completions are always no-ops; handshakes survive adversarial

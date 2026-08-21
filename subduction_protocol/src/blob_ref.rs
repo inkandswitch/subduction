@@ -1,5 +1,5 @@
 //! The blob data plane: machines route *references* to bulk bytes; the
-//! driver warehouses the bytes themselves (ADR-015 condition 5).
+//! driver warehouses the bytes themselves.
 //!
 //! A [`BlobRef`] points into a driver-retained ingress frame. Machines
 //! never hold blob bytes in state — they decide (store / forward / send)

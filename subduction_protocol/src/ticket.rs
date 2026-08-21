@@ -16,7 +16,7 @@
 //!
 //! This replaces mutual exclusion: state that is mid-operation is an
 //! explicit `Awaiting*` variant holding the expected ticket, so interleaved
-//! or stale completions are rejectable by construction (ADR-006/007).
+//! or stale completions are rejectable by construction.
 //! Tickets are plain data so they cross FFI unchanged; the compile-time
 //! phantom-witness layer lives on the machine-internal pending entries,
 //! not on the wire-crossing ticket itself.
@@ -29,7 +29,7 @@ use crate::id::{ConnId, Generation, Seq};
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Entity {
-    /// Entityd to one connection (e.g. handshake verification): stale when
+    /// Scoped to one connection (e.g. handshake verification): stale when
     /// the connection's generation moves on.
     Connection(ConnId),
 

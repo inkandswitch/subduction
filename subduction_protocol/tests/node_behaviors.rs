@@ -9,7 +9,7 @@ use subduction_protocol::{
     effect::{AppEvent, SyncStatus},
     node::NodeEvent,
 };
-use subduction_testkit::{ensure, Net, TestError};
+use subduction_testkit::{Net, TestError, ensure};
 use testresult::TestResult;
 
 fn sync_tree(
@@ -267,7 +267,7 @@ fn sync_request_times_out_without_response() -> TestResult {
     Ok(())
 }
 
-// ── extension protocol (ADR-010) ────────────────────────────────────
+// ── extension protocol────────────────────────────────────
 
 #[test]
 fn extension_messages_round_trip_post_handshake() -> TestResult {
@@ -361,7 +361,7 @@ fn simultaneous_open_authenticates_both_sides() -> TestResult {
 // ── adversarial delivery ────────────────────────────────────────────
 
 /// Forgery gate: a push whose bytes were tampered anywhere must never
-/// reach storage. This is machine code on every platform (ADR-015), so
+/// reach storage. This is machine code on every platform, so
 /// it must hold at the node boundary with zero driver cooperation.
 #[test]
 fn tampered_push_never_persists() -> TestResult {
@@ -510,7 +510,7 @@ fn dialing_the_wrong_peer_never_authenticates() -> TestResult {
     Ok(())
 }
 
-// ── lagging subscribers (ADR-017: pause + resync) ───────────────────
+// ── lagging subscribers (pause + resync) ───────────────────
 
 /// A subscriber whose acks stop coming gets paused after the credit
 /// limit, with a `SubscriberLagging` event and a `HeadsUpdate` nudge —

@@ -1,4 +1,4 @@
-//! Tier-2 telemetry: pull-based internal counters (ADR-003).
+//! Tier-2 telemetry: pull-based internal counters.
 //!
 //! Plain `u64` fields, snapshotted on demand via
 //! `stats()` on the machines — no allocation, no
