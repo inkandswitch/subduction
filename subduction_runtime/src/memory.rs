@@ -40,6 +40,14 @@ impl MemoryTransport {
         let (b_tx, b_rx) = async_channel::unbounded();
         (Self { tx: a_tx, rx: b_rx }, Self { tx: b_tx, rx: a_rx })
     }
+
+    /// One end over externally-owned channels — for wiring a node to a
+    /// foreign stack (e.g. interop tests against another implementation
+    /// sharing the same byte duct).
+    #[must_use]
+    pub const fn from_channels(tx: Sender<Vec<u8>>, rx: Receiver<Vec<u8>>) -> Self {
+        Self { tx, rx }
+    }
 }
 
 #[future_form(Sendable, Local)]

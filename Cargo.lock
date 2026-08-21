@@ -5564,10 +5564,12 @@ dependencies = [
  "futures",
  "metrics",
  "sedimentree_core",
+ "subduction_core",
  "subduction_crypto",
  "subduction_protocol",
  "testresult",
  "thiserror 2.0.20",
+ "tokio",
  "tracing",
 ]
 

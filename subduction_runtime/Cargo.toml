@@ -30,7 +30,9 @@ tracing = { workspace = true, features = ["attributes"] }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["executor", "thread-pool"] }
+subduction_core = { workspace = true, features = ["test_utils"] }
 testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true
