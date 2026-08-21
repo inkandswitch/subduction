@@ -723,6 +723,8 @@ impl Machine {
                 | StorageResult::Fetched { .. }
                 | StorageResult::TreeDeleted
                 | StorageResult::LocallyIngested { .. }
+                | StorageResult::Persisted { .. }
+                | StorageResult::FetchedRefs { .. }
                 | StorageResult::Unauthorized
                 | StorageResult::UnknownTree,
             ) => {

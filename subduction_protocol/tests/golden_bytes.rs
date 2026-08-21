@@ -17,7 +17,6 @@ use sedimentree_core::{
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
-use testresult::TestResult;
 use subduction_protocol::{
     peer_id::PeerId,
     remote_heads::RemoteHeads,
@@ -26,6 +25,7 @@ use subduction_protocol::{
         RequestedData, SyncDiff, SyncMessage, SyncResult,
     },
 };
+use testresult::TestResult;
 
 fn from_hex(parts: &[&str]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let joined: String = parts.concat();
@@ -311,4 +311,174 @@ fn heads_update_matches_legacy() -> TestResult {
         heads: f.heads,
     };
     assert_golden(&msg, GOLDEN_HEADS_UPDATE)
+}
+
+/// The indexed decoder's spans must slice out exactly each blob's bytes,
+/// in documented order (commits before fragments for batch responses).
+#[test]
+fn indexed_decode_spans_locate_blobs() -> TestResult {
+    let f = fixture();
+
+    // Single-blob message.
+    let msg = SyncMessage::LooseCommit {
+        id: f.id,
+        commit: f.signed_commit.clone(),
+        blob: f.blob.clone(),
+        sender_heads: f.heads.clone(),
+    };
+    let bytes = msg.encode();
+    let (_decoded, spans) = SyncMessage::try_decode_indexed(&bytes)?;
+    let [(off, len)] = spans[..] else {
+        return Err("expected exactly one span".into());
+    };
+    assert_eq!(
+        bytes.get(off as usize..(off + len) as usize),
+        Some(f.blob.as_slice()),
+        "span slices the exact blob bytes"
+    );
+
+    // Multi-blob response: commit blob first, then fragment blob.
+    let commit_blob = f.blob.clone();
+    let fragment_blob = Blob::new(vec![9u8; 24]);
+    let fragment = {
+        let meta = BlobMeta::new(&fragment_blob);
+        let frag = Fragment::new(
+            f.id,
+            CommitId::new([0x33; 32]),
+            std::collections::BTreeSet::new(),
+            &[],
+            meta,
+        );
+        let signer = MemorySigner::from_bytes(&[42u8; 32]);
+        futures::executor::block_on(Signed::seal::<Sendable, _>(&signer, frag)).into_signed()
+    };
+    let msg = SyncMessage::BatchSyncResponse(BatchSyncResponse {
+        req_id: f.req_id,
+        id: f.id,
+        result: SyncResult::Ok(SyncDiff {
+            missing_commits: vec![(f.signed_commit, commit_blob.clone())],
+            missing_fragments: vec![(fragment, fragment_blob.clone())],
+            requesting: RequestedData::default(),
+        }),
+        responder_heads: f.heads,
+    });
+    let bytes = msg.encode();
+    let (_decoded, spans) = SyncMessage::try_decode_indexed(&bytes)?;
+    let [(c_off, c_len), (g_off, g_len)] = spans[..] else {
+        return Err("expected exactly two spans".into());
+    };
+    assert_eq!(
+        bytes.get(c_off as usize..(c_off + c_len) as usize),
+        Some(commit_blob.as_slice()),
+        "first span = commit blob"
+    );
+    assert_eq!(
+        bytes.get(g_off as usize..(g_off + g_len) as usize),
+        Some(fragment_blob.as_slice()),
+        "second span = fragment blob"
+    );
+    Ok(())
+}
+
+/// Resolve scatter-gather parts against a fake blob table and compare
+/// with plain `encode()` — the assembled bytes must be identical.
+fn assemble(parts: &[subduction_protocol::blob_ref::Part], table: &[(u32, &[u8])]) -> Vec<u8> {
+    use subduction_protocol::blob_ref::Part;
+    let mut out = Vec::new();
+    for part in parts {
+        match part {
+            Part::Bytes(b) => out.extend_from_slice(b),
+            Part::Ref(r) => {
+                let bytes = table
+                    .iter()
+                    .find(|(frame, _)| u64::from(*frame) == r.frame.as_u64())
+                    .map_or(&[][..], |(_, b)| *b);
+                out.extend_from_slice(bytes);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn scatter_gather_parts_match_plain_encoding() -> TestResult {
+    use subduction_protocol::blob_ref::{BlobRef, FrameId};
+    let f = fixture();
+    let blob_len = u32::try_from(f.blob.as_slice().len())?;
+
+    // Single-item message.
+    let blob_ref = BlobRef {
+        frame: FrameId::new(1),
+        offset: 0,
+        len: blob_len,
+    };
+    let parts =
+        subduction_protocol::wire::loose_commit_parts(f.id, &f.signed_commit, &f.heads, blob_ref);
+    let assembled = assemble(&parts, &[(1, f.blob.as_slice())]);
+    let plain = SyncMessage::LooseCommit {
+        id: f.id,
+        commit: f.signed_commit.clone(),
+        blob: f.blob.clone(),
+        sender_heads: f.heads.clone(),
+    }
+    .encode();
+    assert_eq!(assembled, plain, "loose-commit parts assemble identically");
+
+    // Batch response with one commit and one fragment blob.
+    let commit_blob = f.blob.clone();
+    let fragment_blob = Blob::new(vec![5u8; 32]);
+    let fragment = {
+        let meta = BlobMeta::new(&fragment_blob);
+        let frag = Fragment::new(
+            f.id,
+            CommitId::new([0x44; 32]),
+            std::collections::BTreeSet::new(),
+            &[],
+            meta,
+        );
+        let signer = MemorySigner::from_bytes(&[42u8; 32]);
+        futures::executor::block_on(Signed::seal::<Sendable, _>(&signer, frag)).into_signed()
+    };
+    let requesting = RequestedData {
+        commit_fingerprints: vec![sedimentree_core::crypto::fingerprint::Fingerprint::from_u64(4)],
+        fragment_fingerprints: vec![],
+    };
+    let c_ref = BlobRef {
+        frame: FrameId::new(2),
+        offset: 0,
+        len: u32::try_from(commit_blob.as_slice().len())?,
+    };
+    let g_ref = BlobRef {
+        frame: FrameId::new(3),
+        offset: 0,
+        len: u32::try_from(fragment_blob.as_slice().len())?,
+    };
+    let parts = subduction_protocol::wire::batch_sync_response_parts(
+        f.req_id,
+        f.id,
+        &[(f.signed_commit.clone(), c_ref)],
+        &[(fragment.clone(), g_ref)],
+        &requesting,
+        &f.heads,
+    );
+    let assembled = assemble(
+        &parts,
+        &[(2, commit_blob.as_slice()), (3, fragment_blob.as_slice())],
+    );
+    let plain = SyncMessage::BatchSyncResponse(BatchSyncResponse {
+        req_id: f.req_id,
+        id: f.id,
+        result: SyncResult::Ok(SyncDiff {
+            missing_commits: vec![(f.signed_commit, commit_blob)],
+            missing_fragments: vec![(fragment, fragment_blob)],
+            requesting,
+        }),
+        responder_heads: f.heads,
+    })
+    .encode();
+    assert_eq!(
+        assembled, plain,
+        "batch-response parts assemble identically"
+    );
+    Ok(())
 }

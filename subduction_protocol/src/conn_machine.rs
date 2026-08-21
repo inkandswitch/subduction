@@ -37,10 +37,20 @@
 use alloc::{collections::VecDeque, vec, vec::Vec};
 use core::time::Duration;
 
+use sedimentree_core::{
+    blob::{Blob, BlobMeta},
+    fragment::Fragment as TreeFragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+};
 use subduction_crypto::{nonce::Nonce, signed::Signed};
 
 use crate::{
-    edge::{ConnToCore, CoreToConn, EdgeId, EdgeSequencer, Sealed},
+    blob_ref::{BlobRef, FrameId},
+    edge::{
+        ConnToCore, CoreToConn, EdgeId, EdgeSequencer, ForwardStatus, Sealed, SyncForward,
+        VerifiedCommit, VerifiedFragment,
+    },
     event::Direction,
     handshake::{
         HANDSHAKE_SCHEMA, HandshakeMessage, MAX_PLAUSIBLE_DRIFT, SIMULTANEOUS_OPEN_MAX_DRIFT,
@@ -123,6 +133,11 @@ pub enum ConnEffect {
     /// A sealed message for the core (router-moved; unforgeable).
     ToCore(Sealed<ConnToCore>),
 
+    /// No [`BlobRef`]s escaped from this frame; the driver may free it.
+    /// (Frames with escaped refs are freed by ref releases + the edge
+    /// epoch backstop.)
+    ReleaseFrame(FrameId),
+
     /// An application-facing event from this connection.
     App(ConnAppEvent),
 }
@@ -199,6 +214,10 @@ pub struct ConnMachine {
     /// Sequence for sign tickets.
     ticket_seq: Seq,
     nonce_counter: u64,
+    /// Sync items dropped by verification (tier-2 telemetry).
+    rejected_items: u64,
+    /// Whether the current frame minted any escaping [`BlobRef`]s.
+    minted_from_frame: bool,
 }
 
 impl ConnMachine {
@@ -225,6 +244,8 @@ impl ConnMachine {
             from_core: EdgeSequencer::new(edge),
             ticket_seq: Seq::FIRST,
             nonce_counter: 0,
+            rejected_items: 0,
+            minted_from_frame: false,
         };
         machine.deadline = Some(
             now.monotonic
@@ -272,7 +293,15 @@ impl ConnMachine {
         }
 
         match event {
-            ConnEvent::MessageReceived { bytes, .. } => self.on_message(now, &bytes),
+            ConnEvent::MessageReceived { frame, bytes } => {
+                self.minted_from_frame = false;
+                let outcome = self.on_message(now, frame, &bytes);
+                if !self.minted_from_frame {
+                    // Nothing points into this frame; the driver may free it.
+                    self.effects.push_back(ConnEffect::ReleaseFrame(frame));
+                }
+                outcome
+            }
             ConnEvent::SignDone { ticket, signature } => self.on_signed(ticket, signature),
             ConnEvent::FromCore(sealed) => self.on_from_core(now, sealed),
             ConnEvent::SendExtension { bytes } => self.on_send_extension(bytes),
@@ -312,11 +341,11 @@ impl ConnMachine {
 
     // ── message handling ───────────────────────────────────────────
 
-    fn on_message(&mut self, now: Now, bytes: &[u8]) -> Outcome {
+    fn on_message(&mut self, now: Now, frame: FrameId, bytes: &[u8]) -> Outcome {
         match &self.state {
             State::Failed => Outcome::Ignored(IgnoreReason::ConnectionClosing(self.edge.conn)),
 
-            State::Authenticated => self.on_authenticated_message(bytes),
+            State::Authenticated => self.on_authenticated_message(frame, bytes),
 
             State::AwaitingChallenge => {
                 let Ok(msg) = HandshakeMessage::try_decode(bytes) else {
@@ -358,14 +387,15 @@ impl ConnMachine {
         }
     }
 
-    /// Post-auth routing by schema (ADR-010). Sync forwarding lands with
-    /// the next commit.
-    fn on_authenticated_message(&mut self, bytes: &[u8]) -> Outcome {
+    /// Post-auth routing by schema (ADR-010): sync messages are decoded,
+    /// verified inline, and forwarded to the core with blobs by
+    /// reference into the retained frame.
+    fn on_authenticated_message(&mut self, frame: FrameId, bytes: &[u8]) -> Outcome {
         let Some(schema) = bytes.get(..4) else {
             return self.fault(Fault::MalformedMessage);
         };
         match schema {
-            s if s == wire::MESSAGE_SCHEMA => Outcome::Ignored(IgnoreReason::NotYetImplemented),
+            s if s == wire::MESSAGE_SCHEMA => self.forward_sync(frame, bytes),
             s if s == HANDSHAKE_SCHEMA => self.fault(Fault::UnexpectedMessage),
             _extension => {
                 let Some(peer) = self.peer else {
@@ -681,6 +711,203 @@ impl ConnMachine {
         Outcome::Progressed
     }
 
+    // ── sync forwarding (post-auth) ────────────────────────────────
+
+    /// Decode, verify inline, and forward one sync message.
+    fn forward_sync(&mut self, frame: FrameId, bytes: &[u8]) -> Outcome {
+        let Ok((msg, spans)) = wire::SyncMessage::try_decode_indexed(bytes) else {
+            return self.fault(Fault::MalformedMessage);
+        };
+        let mut spans = spans.into_iter();
+
+        match msg {
+            wire::SyncMessage::BatchSyncRequest(request) => {
+                self.forward(SyncForward::Request(request));
+                Outcome::Progressed
+            }
+            wire::SyncMessage::LooseCommit {
+                id,
+                commit,
+                blob,
+                sender_heads,
+            } => {
+                let Some(span) = spans.next() else {
+                    return self.fault(Fault::MalformedMessage);
+                };
+                match self.verify_commit(id, commit, &blob, frame, span) {
+                    Some(item) => {
+                        self.minted_from_frame = true;
+                        self.forward(SyncForward::Commit {
+                            tree: id,
+                            item,
+                            sender_heads,
+                        });
+                    }
+                    // Item rejected: still deliver the heads rider
+                    // (legacy notifies heads before verification).
+                    None => self.forward(SyncForward::HeadsUpdate {
+                        tree: id,
+                        heads: sender_heads,
+                    }),
+                }
+                Outcome::Progressed
+            }
+            wire::SyncMessage::Fragment {
+                id,
+                fragment,
+                blob,
+                sender_heads,
+            } => {
+                let Some(span) = spans.next() else {
+                    return self.fault(Fault::MalformedMessage);
+                };
+                match self.verify_fragment(id, fragment, &blob, frame, span) {
+                    Some(item) => {
+                        self.minted_from_frame = true;
+                        self.forward(SyncForward::Fragment {
+                            tree: id,
+                            item,
+                            sender_heads,
+                        });
+                    }
+                    None => self.forward(SyncForward::HeadsUpdate {
+                        tree: id,
+                        heads: sender_heads,
+                    }),
+                }
+                Outcome::Progressed
+            }
+            wire::SyncMessage::BatchSyncResponse(response) => {
+                self.forward_response(frame, response, &mut spans)
+            }
+            wire::SyncMessage::HeadsUpdate { id, heads } => {
+                self.forward(SyncForward::HeadsUpdate { tree: id, heads });
+                Outcome::Progressed
+            }
+            wire::SyncMessage::RemoveSubscriptions(unsub) => {
+                self.forward(SyncForward::RemoveSubscriptions(unsub.ids));
+                Outcome::Progressed
+            }
+            wire::SyncMessage::DataRequestRejected(rejected) => {
+                self.forward(SyncForward::DataRequestRejected(rejected.id));
+                Outcome::Progressed
+            }
+        }
+    }
+
+    fn forward_response(
+        &mut self,
+        frame: FrameId,
+        response: wire::BatchSyncResponse,
+        spans: &mut impl Iterator<Item = (u32, u32)>,
+    ) -> Outcome {
+        let (status, diff) = match response.result {
+            wire::SyncResult::Ok(diff) => (ForwardStatus::Ok, Some(diff)),
+            wire::SyncResult::NotFound => (ForwardStatus::NotFound, None),
+            wire::SyncResult::Unauthorized => (ForwardStatus::Unauthorized, None),
+        };
+
+        let (mut commits, mut fragments, mut requesting) = (Vec::new(), Vec::new(), None);
+        let rejected_before = self.rejected_items;
+        if let Some(diff) = diff {
+            for (signed, blob) in diff.missing_commits {
+                let Some(span) = spans.next() else {
+                    return self.fault(Fault::MalformedMessage);
+                };
+                if let Some(item) = self.verify_commit(response.id, signed, &blob, frame, span) {
+                    self.minted_from_frame = true;
+                    commits.push(item);
+                }
+            }
+            for (signed, blob) in diff.missing_fragments {
+                let Some(span) = spans.next() else {
+                    return self.fault(Fault::MalformedMessage);
+                };
+                if let Some(item) = self.verify_fragment(response.id, signed, &blob, frame, span) {
+                    self.minted_from_frame = true;
+                    fragments.push(item);
+                }
+            }
+            requesting = Some(diff.requesting);
+        }
+
+        #[allow(clippy::cast_possible_truncation)] // bounded by u16 wire counts
+        let rejected = (self.rejected_items - rejected_before) as u32;
+        self.forward(SyncForward::Response {
+            req_id: response.req_id,
+            tree: response.id,
+            commits,
+            fragments,
+            requesting: requesting.unwrap_or_default(),
+            responder_heads: response.responder_heads,
+            status,
+            rejected,
+        });
+        Outcome::Progressed
+    }
+
+    /// Inline item verification (ADR-014/015): signature, tree binding,
+    /// and blob digest — the forgery gate, in machine code.
+    fn verify_commit(
+        &mut self,
+        tree: SedimentreeId,
+        signed: Signed<LooseCommit>,
+        blob: &Blob,
+        frame: FrameId,
+        span: (u32, u32),
+    ) -> Option<VerifiedCommit> {
+        let Ok(verified) = signed.try_verify() else {
+            self.rejected_items = self.rejected_items.saturating_add(1);
+            return None;
+        };
+        let payload = verified.payload();
+        if payload.sedimentree_id() != tree || BlobMeta::new(blob) != *payload.blob_meta() {
+            self.rejected_items = self.rejected_items.saturating_add(1);
+            return None;
+        }
+        let (offset, len) = span;
+        Some(VerifiedCommit {
+            commit: signed,
+            blob: BlobRef { frame, offset, len },
+        })
+    }
+
+    /// Fragment twin of [`Self::verify_commit`].
+    fn verify_fragment(
+        &mut self,
+        tree: SedimentreeId,
+        signed: Signed<TreeFragment>,
+        blob: &Blob,
+        frame: FrameId,
+        span: (u32, u32),
+    ) -> Option<VerifiedFragment> {
+        let Ok(verified) = signed.try_verify() else {
+            self.rejected_items = self.rejected_items.saturating_add(1);
+            return None;
+        };
+        let payload = verified.payload();
+        if payload.sedimentree_id() != tree || BlobMeta::new(blob) != payload.summary().blob_meta()
+        {
+            self.rejected_items = self.rejected_items.saturating_add(1);
+            return None;
+        }
+        let (offset, len) = span;
+        Some(VerifiedFragment {
+            fragment: signed,
+            blob: BlobRef { frame, offset, len },
+        })
+    }
+
+    fn forward(&mut self, forward: SyncForward) {
+        self.send_to_core(ConnToCore::Inbound(alloc::boxed::Box::new(forward)));
+    }
+
+    /// Items dropped by verification so far (tier-2 telemetry).
+    #[must_use]
+    pub const fn rejected_items(&self) -> u64 {
+        self.rejected_items
+    }
+
     // ── helpers ────────────────────────────────────────────────────
 
     fn authenticate(&mut self, peer: PeerId) -> Outcome {
@@ -823,6 +1050,10 @@ mod tests {
         app: Vec<ConnAppEvent>,
         /// Claims seen by the stub core (for replay simulation).
         claims: Vec<(PeerId, Nonce)>,
+        /// Frames the machine said were releasable.
+        released: Vec<crate::blob_ref::FrameId>,
+        /// Non-claim edge traffic observed (sync forwards etc.).
+        to_core: Vec<ConnToCore>,
         /// Sequence for minting core→conn verdicts.
         core_seq: Seq,
         disconnected: bool,
@@ -846,6 +1077,8 @@ mod tests {
                 outbox: Vec::new(),
                 app: Vec::new(),
                 claims: Vec::new(),
+                released: Vec::new(),
+                to_core: Vec::new(),
                 core_seq: Seq::FIRST,
                 disconnected: false,
             };
@@ -880,6 +1113,7 @@ mod tests {
                         self.outbox.push(bytes);
                     }
                     ConnEffect::Disconnect => self.disconnected = true,
+                    ConnEffect::ReleaseFrame(frame) => self.released.push(frame),
                     ConnEffect::Sign { ticket, payload } => {
                         let signature = self.key.sign(&payload).to_bytes();
                         let _outcome =
@@ -897,6 +1131,8 @@ mod tests {
                             );
                             self.core_seq = self.core_seq.next();
                             let _outcome = self.machine.handle(now(), ConnEvent::FromCore(verdict));
+                        } else {
+                            self.to_core.push(msg);
                         }
                     }
                     ConnEffect::App(event) => self.app.push(event),
@@ -1052,6 +1288,141 @@ mod tests {
         alice.run_effects();
         assert!(alice.disconnected, "deadline ⇒ disconnect");
         assert_eq!(alice.machine.poll_timeout(), None);
+    }
+
+    // ── sync forwarding ────────────────────────────────────────
+
+    fn authed_pair(seed_a: u8, seed_b: u8) -> (Peer, Peer) {
+        let mut bob = Peer::new(seed_b, Direction::Inbound, None);
+        let mut alice = Peer::new(seed_a, Direction::Outbound, Some(Audience::known(bob.id())));
+        pump(&mut alice, &mut bob);
+        assert!(bob.authenticated_with().is_some());
+        // Handshake frames are (correctly) released; start clean so the
+        // sync-path assertions see only their own frames.
+        for peer in [&mut alice, &mut bob] {
+            peer.released.clear();
+            peer.to_core.clear();
+        }
+        (alice, bob)
+    }
+
+    fn signed_commit_msg(
+        signer_seed: u8,
+        tree: SedimentreeId,
+        head: u8,
+        corrupt_blob: bool,
+    ) -> alloc::vec::Vec<u8> {
+        use sedimentree_core::loose_commit::id::CommitId;
+        let signer = subduction_crypto::signer::memory::MemorySigner::from_bytes(&[signer_seed; 32]);
+        let blob = Blob::new(alloc::vec![head; 16]);
+        let commit = LooseCommit::new(
+            tree,
+            CommitId::new([head; 32]),
+            alloc::collections::BTreeSet::new(),
+            BlobMeta::new(&blob),
+        );
+        let sealed =
+            futures::executor::block_on(Signed::seal::<future_form::Sendable, _>(&signer, commit))
+                .into_signed();
+        let wire_blob = if corrupt_blob {
+            Blob::new(alloc::vec![head ^ 1; 16])
+        } else {
+            blob
+        };
+        wire::SyncMessage::LooseCommit {
+            id: tree,
+            commit: sealed,
+            blob: wire_blob,
+            sender_heads: crate::remote_heads::RemoteHeads {
+                counter: 1,
+                heads: alloc::vec![CommitId::new([head; 32])],
+            },
+        }
+        .encode()
+    }
+
+    #[test]
+    fn verified_commit_is_forwarded_with_frame_ref() -> testresult::TestResult {
+        let (_alice, mut bob) = authed_pair(21, 22);
+        let tree = SedimentreeId::new([7u8; 32]);
+        let bytes = signed_commit_msg(21, tree, 0xA1, false);
+        let frame = crate::blob_ref::FrameId::new(77);
+
+        let outcome = bob.feed(ConnEvent::MessageReceived {
+            frame,
+            bytes: bytes.clone(),
+        });
+        assert_eq!(outcome, Outcome::Progressed);
+        assert!(bob.released.is_empty(), "refs escaped: frame stays retained");
+
+        let Some(ConnToCore::Inbound(forward)) = bob.to_core.pop() else {
+            return Err("expected a forward".into());
+        };
+        let SyncForward::Commit { tree: t, item, .. } = *forward else {
+            return Err("expected a commit forward".into());
+        };
+        assert_eq!(t, tree);
+        assert_eq!(item.blob.frame, frame);
+        // The ref slices the exact blob bytes out of the frame.
+        let (off, len) = (item.blob.offset as usize, item.blob.len as usize);
+        assert_eq!(bytes.get(off..off + len), Some(&[0xA1u8; 16][..]));
+        assert_eq!(bob.machine.rejected_items(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_blob_is_rejected_but_heads_still_flow() -> testresult::TestResult {
+        let (_alice, mut bob) = authed_pair(23, 24);
+        let tree = SedimentreeId::new([7u8; 32]);
+        let bytes = signed_commit_msg(23, tree, 0xB2, true); // blob ≠ signed meta
+        let frame = crate::blob_ref::FrameId::new(78);
+
+        let outcome = bob.feed(ConnEvent::MessageReceived { frame, bytes });
+        assert_eq!(outcome, Outcome::Progressed);
+        assert_eq!(bob.machine.rejected_items(), 1, "forgery gate fired");
+        assert_eq!(bob.released, [frame], "no refs escaped: frame releasable");
+
+        let Some(ConnToCore::Inbound(forward)) = bob.to_core.pop() else {
+            return Err("expected a forward".into());
+        };
+        assert!(
+            matches!(*forward, SyncForward::HeadsUpdate { tree: t, .. } if t == tree),
+            "heads rider still delivered on item rejection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_blob_messages_release_their_frames() {
+        let (_alice, mut bob) = authed_pair(25, 26);
+        let frame = crate::blob_ref::FrameId::new(79);
+        let msg = wire::SyncMessage::HeadsUpdate {
+            id: SedimentreeId::new([7u8; 32]),
+            heads: crate::remote_heads::RemoteHeads::default(),
+        };
+        let _outcome = bob.feed(ConnEvent::MessageReceived {
+            frame,
+            bytes: msg.encode(),
+        });
+        assert_eq!(bob.released, [frame]);
+        assert!(matches!(
+            bob.to_core.pop(),
+            Some(ConnToCore::Inbound(forward))
+                if matches!(*forward, SyncForward::HeadsUpdate { .. })
+        ));
+    }
+
+    #[test]
+    fn handshake_frames_are_released() {
+        // Inbound peer: the challenge frame itself must be releasable.
+        let mut bob = Peer::new(28, Direction::Inbound, None);
+        let alice = Peer::new(27, Direction::Outbound, Some(Audience::known(bob.id())));
+        let mut alice = alice;
+        pump(&mut alice, &mut bob);
+        assert!(
+            !bob.released.is_empty(),
+            "handshake frames mint no refs and are released"
+        );
     }
 
     #[test]

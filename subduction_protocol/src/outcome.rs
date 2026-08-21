@@ -65,6 +65,11 @@ pub enum IgnoreReason {
     /// handshake (e.g. an extension send — extension traffic is gated on
     /// authentication, ADR-010).
     NotAuthenticated(ConnId),
+
+    /// An inter-machine edge message failed the sequencing discipline
+    /// (stale generation, replay, gap, or misrouting) — a router/driver
+    /// bug made observable, never applied to state.
+    Edge(crate::edge::EdgeViolation),
 }
 
 /// Protocol violations that condemn a connection.

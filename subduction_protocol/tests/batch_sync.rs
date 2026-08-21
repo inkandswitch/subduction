@@ -247,6 +247,12 @@ impl TestPeer {
                 self.store.trees.remove(&tree);
                 StorageResult::TreeDeleted
             }
+
+            // Ref-world ops belong to the CoreMachine (Design D); the
+            // legacy single machine under test never issues them.
+            StorageOp::PersistItems { .. } | StorageOp::FetchItemRefs { .. } => {
+                unimplemented!("ref-world ops are not issued by the legacy machine")
+            }
         }
     }
 

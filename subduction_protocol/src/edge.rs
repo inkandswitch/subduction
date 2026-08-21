@@ -91,9 +91,6 @@ impl<M> Sealed<M> {
     }
 
     /// Open the envelope. Crate-internal: payloads are for machines.
-    // TODO(phase-2.5): remove this allow once ConnMachine/CoreMachine land
-    // and mint/open have real call sites — tracked in .ignore/TODO.md.
-    #[allow(dead_code)]
     pub(crate) fn open(self) -> (EdgeId, Seq, M) {
         (self.edge, self.seq, self.msg)
     }

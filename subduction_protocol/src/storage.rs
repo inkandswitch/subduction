@@ -102,6 +102,37 @@ pub enum StorageOp {
         provenance: Provenance,
     },
 
+    /// Persist already-verified items whose blobs live in the driver's
+    /// buffer table (Design D: verification happened inside the
+    /// connection machine — the driver's duty here is authorize +
+    /// persist ONLY; ADR-015 shrinks the driver's security surface to
+    /// custody and durability).
+    PersistItems {
+        /// The tree being written to.
+        tree: SedimentreeId,
+        /// The authenticated peer the data came from (policy input).
+        provenance: Provenance,
+        /// Verified signed commits with blob refs.
+        commits: Vec<(Signed<LooseCommit>, crate::blob_ref::BlobRef)>,
+        /// Verified signed fragments with blob refs.
+        fragments: Vec<(Signed<Fragment>, crate::blob_ref::BlobRef)>,
+    },
+
+    /// Authorize and load specific items, returning blobs as refs into
+    /// the driver's buffer table (the storage executor retains what it
+    /// reads and mints refs — the ref-world twin of
+    /// [`FetchItems`](StorageOp::FetchItems)).
+    FetchItemRefs {
+        /// The sedimentree being read.
+        tree: SedimentreeId,
+        /// Who is asking (policy input).
+        provenance: Provenance,
+        /// Commits to load, by causal identity.
+        commit_ids: Vec<CommitId>,
+        /// Fragments to load, by head identity.
+        fragment_heads: Vec<CommitId>,
+    },
+
     /// Seal and persist locally-authored commits in one round trip: for
     /// each item the driver hashes the blob, builds the [`LooseCommit`],
     /// signs it with the machine's identity key (which the driver holds),
@@ -173,6 +204,23 @@ pub enum StorageResult {
 
     /// A [`DeleteTree`](StorageOp::DeleteTree) finished.
     TreeDeleted,
+
+    /// A [`PersistItems`](StorageOp::PersistItems) finished. No
+    /// rejection list: items were verified before the op was issued;
+    /// only policy (whole-op `Unauthorized`) or backend failure apply.
+    Persisted {
+        /// Items durably persisted.
+        stored: u32,
+    },
+
+    /// A [`FetchItemRefs`](StorageOp::FetchItemRefs) finished. Missing
+    /// items are simply absent.
+    FetchedRefs {
+        /// Requested commits that were found, blobs as refs.
+        commits: Vec<(Signed<LooseCommit>, crate::blob_ref::BlobRef)>,
+        /// Requested fragments that were found, blobs as refs.
+        fragments: Vec<(Signed<Fragment>, crate::blob_ref::BlobRef)>,
+    },
 
     /// An [`IngestLocal`](StorageOp::IngestLocal) finished: the sealed,
     /// durably-persisted commits, in request order.

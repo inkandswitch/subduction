@@ -493,7 +493,9 @@ impl Machine {
             }
             StorageResult::Ingested { .. }
             | StorageResult::TreeDeleted
-            | StorageResult::LocallyIngested { .. } => self.driver_result_mismatch(tree),
+            | StorageResult::LocallyIngested { .. }
+            | StorageResult::Persisted { .. }
+            | StorageResult::FetchedRefs { .. } => self.driver_result_mismatch(tree),
         }
     }
 
@@ -558,7 +560,9 @@ impl Machine {
             }
             StorageResult::Ingested { .. }
             | StorageResult::TreeDeleted
-            | StorageResult::LocallyIngested { .. } => self.driver_result_mismatch(tree),
+            | StorageResult::LocallyIngested { .. }
+            | StorageResult::Persisted { .. }
+            | StorageResult::FetchedRefs { .. } => self.driver_result_mismatch(tree),
         }
     }
 
@@ -648,7 +652,9 @@ impl Machine {
             }
             StorageResult::Fetched { .. }
             | StorageResult::TreeDeleted
-            | StorageResult::LocallyIngested { .. } => self.driver_result_mismatch(tree),
+            | StorageResult::LocallyIngested { .. }
+            | StorageResult::Persisted { .. }
+            | StorageResult::FetchedRefs { .. } => self.driver_result_mismatch(tree),
         }
     }
 

@@ -370,7 +370,25 @@ impl SyncMessage {
     ///
     /// Returns an error if the message is malformed.
     pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        decode_message(bytes)
+        let mut spans = Vec::new();
+        decode_message(bytes, &mut spans)
+    }
+
+    /// Decode a message and report each blob's byte range within
+    /// `bytes` (frame-relative `(offset, len)`), in deterministic order:
+    /// the single blob for `LooseCommit`/`Fragment`; for
+    /// `BatchSyncResponse`, all commit blobs in diff order, then all
+    /// fragment blobs. Used by the connection machine to mint
+    /// [`BlobRef`](crate::blob_ref::BlobRef)s into the retained frame
+    /// instead of copying blob bytes onward.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message is malformed.
+    pub fn try_decode_indexed(bytes: &[u8]) -> Result<(Self, Vec<(u32, u32)>), DecodeError> {
+        let mut spans = Vec::new();
+        let msg = decode_message(bytes, &mut spans)?;
+        Ok((msg, spans))
     }
 
     fn payload_size(&self) -> usize {
@@ -440,7 +458,7 @@ impl Decode for SyncMessage {
     const MIN_SIZE: usize = ENVELOPE_HEADER_SIZE;
 
     fn try_decode(buf: &[u8]) -> Result<Self, DecodeError> {
-        decode_message(buf)
+        SyncMessage::try_decode(buf)
     }
 }
 
@@ -479,6 +497,150 @@ fn sync_diff_size(diff: &SyncDiff) -> usize {
         * 8;
 
     counts_size + commits_size + fragments_size + requested_fps_size
+}
+
+// ── scatter-gather encoding (blob-plane egress, ADR-015 cond. 5) ────
+//
+// These builders produce [`Part`] sequences byte-identical to
+// `encode()` of the equivalent message, with each blob spliced as a
+// [`Part::Ref`] for the transport assembler to resolve (writev-style).
+// Sizes come from the refs' lengths, so the envelope's total_size is
+// exact without touching blob bytes.
+
+use crate::blob_ref::{BlobRef, Part};
+
+/// Scatter-gather encoding of [`SyncMessage::LooseCommit`].
+#[must_use]
+pub fn loose_commit_parts(
+    id: SedimentreeId,
+    commit: &Signed<LooseCommit>,
+    sender_heads: &RemoteHeads,
+    blob: BlobRef,
+) -> Vec<Part> {
+    item_message_parts(tags::LOOSE_COMMIT, id, commit.as_bytes(), sender_heads, blob)
+}
+
+/// Scatter-gather encoding of [`SyncMessage::Fragment`].
+#[must_use]
+pub fn fragment_parts(
+    id: SedimentreeId,
+    fragment: &Signed<Fragment>,
+    sender_heads: &RemoteHeads,
+    blob: BlobRef,
+) -> Vec<Part> {
+    item_message_parts(tags::FRAGMENT, id, fragment.as_bytes(), sender_heads, blob)
+}
+
+/// Shared body of the two single-item builders (identical wire layout).
+fn item_message_parts(
+    tag: u8,
+    id: SedimentreeId,
+    signed_bytes: &[u8],
+    sender_heads: &RemoteHeads,
+    blob: BlobRef,
+) -> Vec<Part> {
+    let blob_len = blob.len as usize;
+    let payload_size = 32
+        + remote_heads_size(sender_heads)
+        + signed_bytes.len()
+        + bijoux::u64::encoded_len(u64::from(blob.len))
+        + blob_len;
+    let total_size = ENVELOPE_HEADER_SIZE + payload_size;
+
+    let mut prefix = Vec::with_capacity(total_size - blob_len);
+    prefix.extend_from_slice(&MESSAGE_SCHEMA);
+    #[allow(clippy::cast_possible_truncation)]
+    prefix.extend_from_slice(&(total_size as u32).to_be_bytes());
+    prefix.push(tag);
+    prefix.extend_from_slice(id.as_bytes());
+    encode_remote_heads(&mut prefix, sender_heads);
+    prefix.extend_from_slice(signed_bytes);
+    bijoux::u64::encode(u64::from(blob.len), &mut prefix);
+
+    alloc::vec![Part::Bytes(prefix), Part::Ref(blob)]
+}
+
+/// Scatter-gather encoding of a [`SyncMessage::BatchSyncResponse`] with
+/// an `Ok` diff whose blobs are refs. (NotFound/Unauthorized responses
+/// have no blobs — use plain `encode()`.)
+#[must_use]
+pub fn batch_sync_response_parts(
+    req_id: RequestId,
+    id: SedimentreeId,
+    commits: &[(Signed<LooseCommit>, BlobRef)],
+    fragments: &[(Signed<Fragment>, BlobRef)],
+    requesting: &RequestedData,
+    responder_heads: &RemoteHeads,
+) -> Vec<Part> {
+    // Payload size, mirroring payload_size()/sync_diff_size().
+    let counts_size = 2 + 2 + 2 + 2;
+    let items_size: usize = commits
+        .iter()
+        .map(|(signed, blob)| {
+            signed.as_bytes().len()
+                + bijoux::u64::encoded_len(u64::from(blob.len))
+                + blob.len as usize
+        })
+        .chain(fragments.iter().map(|(signed, blob)| {
+            signed.as_bytes().len()
+                + bijoux::u64::encoded_len(u64::from(blob.len))
+                + blob.len as usize
+        }))
+        .sum();
+    let fps_size =
+        (requesting.commit_fingerprints.len() + requesting.fragment_fingerprints.len()) * 8;
+    let payload_size = 32 // requestor
+        + 8  // nonce
+        + 32 // tree id
+        + 1  // result tag
+        + counts_size
+        + items_size
+        + fps_size
+        + remote_heads_size(responder_heads);
+    let total_size = ENVELOPE_HEADER_SIZE + payload_size;
+
+    let mut parts = Vec::with_capacity(2 * (commits.len() + fragments.len()) + 2);
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&MESSAGE_SCHEMA);
+    #[allow(clippy::cast_possible_truncation)]
+    buf.extend_from_slice(&(total_size as u32).to_be_bytes());
+    buf.push(tags::BATCH_SYNC_RESPONSE);
+    buf.extend_from_slice(req_id.requestor.as_bytes());
+    buf.extend_from_slice(&req_id.nonce.to_be_bytes());
+    buf.extend_from_slice(id.as_bytes());
+    buf.push(result_tags::OK);
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        buf.extend_from_slice(&(commits.len() as u16).to_be_bytes());
+        buf.extend_from_slice(&(fragments.len() as u16).to_be_bytes());
+        buf.extend_from_slice(&(requesting.commit_fingerprints.len() as u16).to_be_bytes());
+        buf.extend_from_slice(&(requesting.fragment_fingerprints.len() as u16).to_be_bytes());
+    }
+
+    for (signed, blob) in commits {
+        buf.extend_from_slice(signed.as_bytes());
+        bijoux::u64::encode(u64::from(blob.len), &mut buf);
+        parts.push(Part::Bytes(core::mem::take(&mut buf)));
+        parts.push(Part::Ref(*blob));
+    }
+    for (signed, blob) in fragments {
+        buf.extend_from_slice(signed.as_bytes());
+        bijoux::u64::encode(u64::from(blob.len), &mut buf);
+        parts.push(Part::Bytes(core::mem::take(&mut buf)));
+        parts.push(Part::Ref(*blob));
+    }
+
+    for fp in &requesting.commit_fingerprints {
+        buf.extend_from_slice(&fp.as_u64().to_be_bytes());
+    }
+    for fp in &requesting.fragment_fingerprints {
+        buf.extend_from_slice(&fp.as_u64().to_be_bytes());
+    }
+    encode_remote_heads(&mut buf, responder_heads);
+    if !buf.is_empty() {
+        parts.push(Part::Bytes(buf));
+    }
+    parts
 }
 
 fn encode_message(msg: &SyncMessage) -> Vec<u8> {
@@ -546,7 +708,7 @@ fn encode_message(msg: &SyncMessage) -> Vec<u8> {
 }
 
 #[allow(clippy::indexing_slicing)] // Length validated before access
-fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
+fn decode_message(bytes: &[u8], spans: &mut Vec<(u32, u32)>) -> Result<SyncMessage, DecodeError> {
     if bytes.len() < ENVELOPE_HEADER_SIZE {
         return Err(DecodeError::MessageTooShort {
             type_name: "Message envelope",
@@ -626,10 +788,10 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
     }
 
     match tag {
-        tags::LOOSE_COMMIT => decode_loose_commit(payload),
-        tags::FRAGMENT => decode_fragment(payload),
+        tags::LOOSE_COMMIT => decode_loose_commit(payload, spans),
+        tags::FRAGMENT => decode_fragment(payload, spans),
         tags::BATCH_SYNC_REQUEST => decode_batch_sync_request(payload),
-        tags::BATCH_SYNC_RESPONSE => decode_batch_sync_response(payload),
+        tags::BATCH_SYNC_RESPONSE => decode_batch_sync_response(payload, spans),
         tags::REMOVE_SUBSCRIPTIONS => decode_remove_subscriptions(payload),
         tags::DATA_REQUEST_REJECTED => decode_data_request_rejected(payload),
         tags::HEADS_UPDATE => decode_heads_update(payload),
@@ -751,7 +913,16 @@ fn encode_data_request_rejected(buf: &mut Vec<u8>, rejected: &DataRequestRejecte
     buf.extend_from_slice(rejected.id.as_bytes());
 }
 
-fn decode_loose_commit(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
+/// Record a blob's frame-relative span (`offset` is payload-relative).
+#[allow(clippy::cast_possible_truncation)] // wire sizes are u32-bounded by the envelope
+fn record_span(spans: &mut Vec<(u32, u32)>, payload_offset: usize, len: usize) {
+    spans.push(((ENVELOPE_HEADER_SIZE + payload_offset) as u32, len as u32));
+}
+
+fn decode_loose_commit(
+    payload: &[u8],
+    spans: &mut Vec<(u32, u32)>,
+) -> Result<SyncMessage, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -767,6 +938,7 @@ fn decode_loose_commit(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     offset += consumed;
 
     let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
+    record_span(spans, offset, blob_size);
 
     let blob = Blob::new(
         payload
@@ -788,7 +960,10 @@ fn decode_loose_commit(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     })
 }
 
-fn decode_fragment(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
+fn decode_fragment(
+    payload: &[u8],
+    spans: &mut Vec<(u32, u32)>,
+) -> Result<SyncMessage, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -804,6 +979,7 @@ fn decode_fragment(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     offset += consumed;
 
     let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
+    record_span(spans, offset, blob_size);
 
     let blob = Blob::new(
         payload
@@ -873,7 +1049,10 @@ fn decode_batch_sync_request(payload: &[u8]) -> Result<SyncMessage, DecodeError>
     }))
 }
 
-fn decode_batch_sync_response(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
+fn decode_batch_sync_response(
+    payload: &[u8],
+    spans: &mut Vec<(u32, u32)>,
+) -> Result<SyncMessage, DecodeError> {
     let mut offset = 0;
 
     let requestor = PeerId::new(read_array::<32>(payload, &mut offset)?);
@@ -884,7 +1063,7 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<SyncMessage, DecodeError
 
     let result_tag = read_u8(payload, &mut offset)?;
     let result = match result_tag {
-        result_tags::OK => SyncResult::Ok(decode_sync_diff(payload, &mut offset)?),
+        result_tags::OK => SyncResult::Ok(decode_sync_diff(payload, &mut offset, spans)?),
         result_tags::NOT_FOUND => SyncResult::NotFound,
         result_tags::UNAUTHORIZED => SyncResult::Unauthorized,
         _ => {
@@ -906,7 +1085,11 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<SyncMessage, DecodeError
     }))
 }
 
-fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, DecodeError> {
+fn decode_sync_diff(
+    payload: &[u8],
+    offset: &mut usize,
+    spans: &mut Vec<(u32, u32)>,
+) -> Result<SyncDiff, DecodeError> {
     let commit_count = read_u16(payload, offset)? as usize;
     let fragment_count = read_u16(payload, offset)? as usize;
     let requested_commit_count = read_u16(payload, offset)? as usize;
@@ -925,6 +1108,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
         *offset += consumed;
 
         let blob_size = read_bijou64_as_usize(payload, offset)?;
+        record_span(spans, *offset, blob_size);
         let blob = Blob::new(
             payload
                 .get(*offset..*offset + blob_size)
@@ -954,6 +1138,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
         *offset += consumed;
 
         let blob_size = read_bijou64_as_usize(payload, offset)?;
+        record_span(spans, *offset, blob_size);
         let blob = Blob::new(
             payload
                 .get(*offset..*offset + blob_size)
