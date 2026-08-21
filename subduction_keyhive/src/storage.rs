@@ -130,6 +130,26 @@ pub trait KeyhiveStorage<Async: FutureForm> {
     #[allow(clippy::type_complexity)]
     fn load_events(&self) -> Async::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
 
+    /// Load events with the peer each event was learned from.
+    ///
+    /// Stores that do not retain source attribution may use the default, which
+    /// reports every event as local/unknown. Durable admission consumers that
+    /// require attribution should override this method.
+    #[allow(clippy::type_complexity)]
+    fn load_events_with_source(
+        &self,
+    ) -> Async::Future<
+        '_,
+        Result<
+            Vec<(
+                StorageHash,
+                Vec<u8>,
+                Option<crate::peer_id::KeyhivePeerId>,
+            )>,
+            Self::Error,
+        >,
+    >;
+
     /// Delete an event from storage.
     fn delete_event(&self, hash: StorageHash) -> Async::Future<'_, Result<(), Self::Error>>;
 
@@ -223,6 +243,22 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         .boxed_local()
     }
 
+    fn load_events_with_source(
+        &self,
+    ) -> LocalBoxFuture<
+        '_,
+        Result<Vec<(StorageHash, Vec<u8>, Option<crate::peer_id::KeyhivePeerId>)>, Self::Error>,
+    > {
+        async move {
+            let events = self.events.lock().await;
+            Ok(events
+                .iter()
+                .map(|(hash, bytes)| (*hash, bytes.clone(), None))
+                .collect())
+        }
+        .boxed_local()
+    }
+
     fn delete_event(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
             self.events.lock().await.remove(&hash);
@@ -312,6 +348,22 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         async move {
             let events = self.events.lock().await;
             Ok(events.iter().map(|(k, v)| (*k, v.clone())).collect())
+        }
+        .boxed()
+    }
+
+    fn load_events_with_source(
+        &self,
+    ) -> BoxFuture<
+        '_,
+        Result<Vec<(StorageHash, Vec<u8>, Option<crate::peer_id::KeyhivePeerId>)>, Self::Error>,
+    > {
+        async move {
+            let events = self.events.lock().await;
+            Ok(events
+                .iter()
+                .map(|(hash, bytes)| (*hash, bytes.clone(), None))
+                .collect())
         }
         .boxed()
     }

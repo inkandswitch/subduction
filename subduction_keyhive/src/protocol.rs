@@ -146,9 +146,40 @@ pub struct VisibilityTargets {
     /// silently dropping them.
     pub unclassified: BTreeSet<EventHash>,
 }
-/// Post-ingestion change reporter: invoked with the hashes of events newly
-/// admitted to the keyhive projection and the peer they were learned from.
-type ChangeReporter = dyn Fn(Vec<EventHash>, Option<KeyhivePeerId>) + Send + Sync;
+/// Durable post-ingestion incorporation hook.
+///
+/// The sink is awaited before the protocol acknowledges the exchange, so the
+/// caller can durably record the projection boundary without coupling this
+/// crate to a particular async runtime.
+///
+/// [`Self::unadmitted_wal_events`] closes the persistence-to-admission crash
+/// window at boot: an event that was persisted into the raw WAL and applied to
+/// the projection but whose admission had not committed at crash time replays
+/// from the WAL on restart yet was never admitted. Implementations answer with
+/// ONE set-diff query over their own tables (WAL rows lacking an admission
+/// entry); the common boot returns an empty vector and the protocol then skips
+/// all recovery work. Each candidate includes its serialized event bytes so the
+/// protocol can probe only that event in the projection. Compaction may only
+/// delete WAL rows whose admission already completed, so archive-only state
+/// never appears here and original source attribution survives in the WAL row.
+pub trait DurableIncorporationSink<Async: future_form::FutureForm>: Send + Sync {
+    /// Durably record that these hashes were incorporated into the local
+    /// projection. Idempotent per event hash.
+    fn admit(
+        self: Arc<Self>,
+        hashes: Vec<EventHash>,
+        source: Option<KeyhivePeerId>,
+    ) -> <Async as future_form::FutureForm>::Future<'static, Result<(), StorageError>>;
+
+    /// Return WAL events that have no admission entry, with their original
+    /// source attribution. Must use one set-diff query and is typically empty.
+    fn unadmitted_wal_events(
+        self: Arc<Self>,
+    ) -> <Async as future_form::FutureForm>::Future<
+        'static,
+        Result<Vec<(EventHash, Vec<u8>, Option<KeyhivePeerId>)>, StorageError>,
+    >;
+}
 
 /// The Keyhive sync protocol: cache-busted event exchange, syncpoint
 /// tracking, and change reporting to connected consumers.
@@ -176,11 +207,17 @@ where
     ///
     /// False by default. Enable it with [`Self::with_storage_recovery`].
     attempt_storage_recovery: bool,
-    /// Post-ingestion change reporter: invoked once per sync exchange with the
-    /// hashes of events newly admitted to the keyhive projection and the peer
-    /// they were learned from (`None` for locally created events). Set with
-    /// [`Self::with_change_reporter`].
-    on_events_incorporated: Option<Arc<ChangeReporter>>,
+    /// Durable incorporation sink invoked once per sync exchange with the
+    /// hashes newly incorporated into the keyhive projection and the peer they
+    /// were learned from (`None` for locally created events). Set with
+    /// [`Self::with_durable_incorporation_sink`].
+    on_durable_incorporation: Option<Arc<dyn DurableIncorporationSink<Async>>>,
+    /// Incorporations whose durable hook failed and must be retried even when
+    /// raw event storage deduplicates the next arrival. The source is retained
+    /// so retries preserve remote attribution.
+    unreported_incorporations: Mutex<BTreeMap<EventHash, Option<KeyhivePeerId>>>,
+    /// The durable storage backend serializes writes; admission reconciliation
+    /// uses the retained event log and therefore does not need a protocol-wide lock.
     /// The keyhive projection's pending event set as of the last ingestion.
     /// The reporter boundary is "newly admitted to the projection", so the
     /// pending set is tracked to attribute resolutions (previously-pending
@@ -191,10 +228,10 @@ where
     cache: Mutex<PeriodicEventCache>,
     /// Serializes on-demand cache rebuilds; concurrent callers join the same rebuild.
     cache_refresh_lock: Mutex<()>,
-    /// Incremented whenever Keyhive changes and the cache becomes stale.
-    cache_generation: AtomicU64,
-    /// Generation represented by the published cache.
-    cache_published_generation: AtomicU64,
+    /// Keyhive projection generation captured at the last successful cache
+    /// refresh. The cache is stale whenever the hive's own generation has
+    /// moved past this value — no external change signal required.
+    snapshot_state_generation: AtomicU64,
     next_request_nonce: AtomicU64,
     outbound_requests: Mutex<Map<RequestId, OutboundRequest>>,
     _marker: core::marker::PhantomData<Async>,
@@ -253,13 +290,13 @@ where
             peers: Mutex::new(Map::new()),
             contact_card,
             attempt_storage_recovery: false,
-            on_events_incorporated: None,
+            on_durable_incorporation: None,
+            unreported_incorporations: Mutex::new(BTreeMap::new()),
             pending_hashes: Mutex::new(None),
             syncpoints: Mutex::new(SyncpointMap::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             cache_refresh_lock: Mutex::new(()),
-            cache_generation: AtomicU64::new(1),
-            cache_published_generation: AtomicU64::new(0),
+            snapshot_state_generation: AtomicU64::new(0),
             next_request_nonce: AtomicU64::new(0),
             outbound_requests: Mutex::new(Map::new()),
             _marker: core::marker::PhantomData,
@@ -273,17 +310,17 @@ where
         self
     }
 
-    /// Register a post-ingestion change reporter.
+    /// Register the durable post-ingestion incorporation hook.
     ///
-    /// The reporter is invoked once per sync exchange with the hashes of
-    /// newly inserted events and the peer they were learned from. It must be
-    /// cheap and non-blocking (a channel send); the protocol does not await it.
+    /// The sink is invoked once per sync exchange with hashes newly
+    /// incorporated into the keyhive projection. Ingestion does not complete
+    /// until [`DurableIncorporationSink::admit`] succeeds.
     #[must_use]
-    pub fn with_change_reporter(
+    pub fn with_durable_incorporation_sink(
         mut self,
-        reporter: impl Fn(Vec<EventHash>, Option<KeyhivePeerId>) + Send + Sync + 'static,
+        sink: Arc<dyn DurableIncorporationSink<Async>>,
     ) -> Self {
-        self.on_events_incorporated = Some(Arc::new(reporter));
+        self.on_durable_incorporation = Some(sink);
         self
     }
 
@@ -546,7 +583,9 @@ where
                 Some(cached)
             } else {
                 match self.get_events_for_peer_pair(target_id).await {
-                    Ok(pair) => pair.map(Arc::new),
+                    Ok(pair) => {
+                        pair.map(Arc::new)
+                    }
                     Err(error) => {
                         tracing::warn!(
                             target = %target_id,
@@ -869,18 +908,47 @@ where
             .into_iter()
             .filter(|h| !local_events.contains_key(h) && !our_pending_set.contains(h))
             .collect();
+        // TEMPORARY instrumentation
+        {
+            let send_prefixes: Vec<alloc::string::String> = found_ops
+                .iter()
+                .map(|bytes| {
+                    let h = crate::storage_ops::hash_event_bytes(bytes).0;
+                    let kind = match bincode_deserialize::<StaticEvent<Vec<u8>>>(bytes) {
+                        Ok(ev) => match &ev {
+                            StaticEvent::Delegated(_) => "deleg",
+                            StaticEvent::Revoked(_) => "revok",
+                            StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => "prek",
+                            StaticEvent::CgkaOperation(_) => "cgka",
+                        },
+                        Err(_) => "unk",
+                    };
+                    alloc::format!("{}:{kind}", Self::short_hash(&h))
+                })
+                .collect();
+            let req_prefixes: Vec<alloc::string::String> =
+                requested.iter().map(|h| Self::short_hash(h)).collect();
+            tracing::warn!(
+                local = %self.peer_id(),
+                from = %sender_id,
+                ?request_id,
+                sending = found_ops.len(),
+                ?send_prefixes,
+                requesting = requested.len(),
+                ?req_prefixes,
+                our_pending = our_pending_hashes.len(),
+                "INSTR sync response"
+            );
+        }
         tracing::debug!(
             from = %sender_id,
             ?request_id,
             sending = found_ops.len(),
             requesting = requested.len(),
-            cache_generation = self.cache_generation.load(Ordering::Acquire),
-            cache_published_generation = self.cache_published_generation.load(Ordering::Acquire),
             sync_responder_total,
             sync_requester_total,
             "sending sync response"
         );
-
         let response = Message::SyncResponse {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -927,8 +995,6 @@ where
             ?request_id,
             received = found_events.len(),
             requested = requested_hashes.len(),
-            cache_generation = self.cache_generation.load(Ordering::Acquire),
-            cache_published_generation = self.cache_published_generation.load(Ordering::Acquire),
             sync_responder_total,
             sync_requester_total,
             "handling sync response"
@@ -954,11 +1020,46 @@ where
             });
         }
 
+        // TEMPORARY instrumentation: incoming response hashes + kinds
+        let instr_received: Vec<alloc::string::String> = found_events
+            .iter()
+            .map(|bytes| {
+                let h = crate::storage_ops::hash_event_bytes(bytes.as_ref()).0;
+                let kind = match bincode_deserialize::<StaticEvent<Vec<u8>>>(bytes.as_ref()) {
+                    Ok(ev) => match &ev {
+                        StaticEvent::Delegated(_) => "deleg",
+                        StaticEvent::Revoked(_) => "revok",
+                        StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => "prek",
+                        StaticEvent::CgkaOperation(_) => "cgka",
+                    },
+                    Err(_) => "unk",
+                };
+                alloc::format!("{}:{kind}", Self::short_hash(&h))
+            })
+            .collect();
         let advanced = if found_events.is_empty() {
             false
         } else {
             self.ingest_events(&found_events, Some(sender_id.clone())).await?
         };
+        // TEMPORARY instrumentation
+        {
+            let pending_after: Vec<alloc::string::String> = self
+                .get_pending_hashes()
+                .await?
+                .iter()
+                .map(|h| Self::short_hash(h))
+                .collect();
+            tracing::warn!(
+                local = %self.peer_id(),
+                from = %sender_id,
+                received = ?instr_received,
+                pending_total = pending_after.len(),
+                ?pending_after,
+                advanced,
+                "INSTR sync resp ingested"
+            );
+        }
         // Serve requested operations from the immutable pair snapshot whose
         // hashes this request advertised, never from the current cache generation.
         if !requested_hashes.is_empty() {
@@ -1048,6 +1149,23 @@ where
             });
         };
 
+        // TEMPORARY instrumentation
+        let instr_incoming: Vec<alloc::string::String> = ops
+            .iter()
+            .map(|bytes| {
+                let h = crate::storage_ops::hash_event_bytes(bytes.as_ref()).0;
+                let kind = match bincode_deserialize::<StaticEvent<Vec<u8>>>(bytes.as_ref()) {
+                    Ok(ev) => match &ev {
+                        StaticEvent::Delegated(_) => "deleg",
+                        StaticEvent::Revoked(_) => "revok",
+                        StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => "prek",
+                        StaticEvent::CgkaOperation(_) => "cgka",
+                    },
+                    Err(_) => "unk",
+                };
+                alloc::format!("{}:{kind}", Self::short_hash(&h))
+            })
+            .collect();
         tracing::debug!(
             from = %sender_id,
             count = ops.len(),
@@ -1058,6 +1176,24 @@ where
         } else {
             self.ingest_events(&ops, Some(sender_id.clone())).await?
         };
+        // TEMPORARY instrumentation
+        {
+            let pending_after: Vec<alloc::string::String> = self
+                .get_pending_hashes()
+                .await?
+                .iter()
+                .map(|h| Self::short_hash(h))
+                .collect();
+            tracing::warn!(
+                local = %self.peer_id(),
+                from = %sender_id,
+                incoming = ?instr_incoming,
+                pending_total = pending_after.len(),
+                ?pending_after,
+                advanced,
+                "INSTR sync ops ingested"
+            );
+        }
         // Send confirmation after ingesting ops.
         // Our total is sync_responder_total (we are the responder).
         let confirmation = Message::SyncConfirmation {
@@ -1294,6 +1430,84 @@ where
     ///
     /// If some events remain pending (missing dependencies), attempts recovery
     /// by loading from storage and retrying.
+    /// TEMPORARY instrumentation: count Delegated events in a fresh
+    /// all-agent snapshot, plus per-agent set sizes.
+    pub async fn snapshot_probe(&self, peer: &KeyhivePeerId) -> (usize, Option<usize>) {
+        let snapshot = self
+            .all_agent_events(&Default::default())
+            .await
+            .expect("all_agent_events");
+        let delegs = snapshot
+            .event_data
+            .values()
+            .filter(|bytes| {
+                matches!(
+                    bincode_deserialize::<StaticEvent<Vec<u8>>>(bytes),
+                    Ok(StaticEvent::Delegated(_))
+                )
+            })
+            .count();
+        let peer_set = snapshot
+            .agent_hashes
+            .iter()
+            .find(|(k, _)| *k == peer)
+            .map(|(_, v)| v.len());
+        (delegs, peer_set)
+    }
+
+    /// TEMPORARY instrumentation: hash prefixes of every persisted event.
+    pub async fn load_event_hash_prefixes(&self) -> Vec<alloc::string::String> {
+        let mut out = Vec::new();
+        for (hash, bytes) in self.storage.load_events().await.expect("load events") {
+            let StorageHash(hb) = hash;
+            let mut s = alloc::string::String::new();
+            for b in hb.iter().take(4) {
+                use core::fmt::Write as _;
+                let _ = write!(s, "{b:02x}");
+            }
+            // Identify by SIGNATURE prefix — identical for the same logical
+            // event on every node, independent of storage-hash specifics.
+            let ident = match bincode_deserialize::<StaticEvent<Vec<u8>>>(&bytes) {
+                Ok(ev) => match &ev {
+                    StaticEvent::Delegated(sg) => {
+                        (alloc::format!("deleg"), sg.signature().to_bytes())
+                    }
+                    StaticEvent::Revoked(sg) => {
+                        (alloc::format!("revok"), sg.signature().to_bytes())
+                    }
+                    StaticEvent::PrekeysExpanded(sg) => {
+                        (alloc::format!("prekx"), sg.signature().to_bytes())
+                    }
+                    StaticEvent::PrekeyRotated(sg) => {
+                        (alloc::format!("prekr"), sg.signature().to_bytes())
+                    }
+                    StaticEvent::CgkaOperation(sg) => {
+                        (alloc::format!("cgka"), sg.signature().to_bytes())
+                    }
+                },
+                Err(_) => (alloc::format!("unk"), [0u8; 64]),
+            };
+            let mut ep = alloc::string::String::new();
+            for b in ident.1.iter().take(4) {
+                use core::fmt::Write as _;
+                let _ = write!(ep, "{b:02x}");
+            }
+            out.push(alloc::format!("{}={ep}", ident.0));
+        }
+        out.sort();
+        out
+    }
+
+    /// TEMPORARY instrumentation: short hex prefix of an event-hash for logs.
+    fn short_hash(h: &EventHash) -> alloc::string::String {
+        let mut s = alloc::string::String::new();
+        for b in &h[..4] {
+            use core::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    }
+
     async fn ingest_events<B: AsRef<[u8]>>(
         &self,
         event_bytes_list: &[B],
@@ -1327,8 +1541,8 @@ where
         // reporter can attribute resolutions to the exchange that resolved
         // them — including boot-time pending events that this exchange's
         // ingestion (or storage recovery) finally resolves.
-        let prev_pending: BTreeSet<EventHash> = match self.pending_hashes.lock().await.take() {
-            Some(prev) => prev,
+        let prev_pending: BTreeSet<EventHash> = match self.pending_hashes.lock().await.as_ref() {
+            Some(prev) => prev.clone(),
             None => self.pending_event_hashes().await,
         };
 
@@ -1368,7 +1582,46 @@ where
         // and must never observe an event before its corresponding state.
         // The exchange is not acknowledged until these writes complete, so a
         // crash between ingestion and persistence causes the sender to retry.
-        let mut learned_new_event = false;
+        let inserted = self
+            .persist_incorporated_event_bytes(event_bytes_list, source, prev_pending)
+            .await?;
+        Ok(!inserted.is_empty() || resolved_pending)
+    }
+
+    /// Persist locally-created events and await the durable incorporation hook.
+    ///
+    /// Call this immediately after the corresponding Keyhive mutation. Startup
+    /// full-projection reconciliation repairs any crash between mutation,
+    /// persistence, and durable admission.
+    pub async fn persist_local_events(
+        &self,
+        events: Vec<StaticEvent<CRef>>,
+    ) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError>> {
+        // Local events are created by mutating the projection outside Keyhive
+        // methods (delegations, revocations, CGKA updates), so the structural
+        // generation must be marked here — otherwise the next refresh
+        // early-exits and serves a cache missing these events.
+        self.keyhive.note_direct_mutation();
+        self.syncpoints.lock().await.invalidate_all();
+        let prev_pending = match self.pending_hashes.lock().await.as_ref() {
+            Some(previous) => previous.clone(),
+            None => self.pending_event_hashes().await,
+        };
+        let mut bytes = Vec::with_capacity(events.len());
+        for event in events {
+            bytes.push(bincode_serialize(&event)?);
+        }
+        self.persist_incorporated_event_bytes(&bytes, None, prev_pending)
+            .await
+    }
+
+    /// Single event-WAL/admission chokepoint for local and remote events.
+    async fn persist_incorporated_event_bytes<B: AsRef<[u8]>>(
+        &self,
+        event_bytes_list: &[B],
+        source: Option<KeyhivePeerId>,
+        prev_pending: BTreeSet<EventHash>,
+    ) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError>> {
         let mut inserted_hashes = Vec::new();
         for event_bytes in event_bytes_list {
             let (hash, inserted) = storage_ops::save_event_bytes(
@@ -1377,24 +1630,20 @@ where
                 source.clone(),
             )
             .await?;
-            learned_new_event |= inserted;
             if inserted {
                 inserted_hashes.push(hash.0);
             }
         }
-
-        let advanced = learned_new_event || resolved_pending;
-        if advanced {
-            self.note_local_keyhive_changed().await?;
-        }
-        // Report the hashes newly admitted to the keyhive projection: events
-        // persisted by this exchange that are not (still) pending, plus
-        // previously-pending events that this exchange resolved. The pending
-        // set is the projection's own, so the boundary is "admitted to the
-        // projection", not "persisted bytes".
-        self.report_newly_admitted(prev_pending, inserted_hashes, source)
-            .await?;
-        Ok(advanced)
+        self.report_newly_admitted(
+            prev_pending,
+            inserted_hashes
+                .iter()
+                .copied()
+                .map(|hash| (hash, source.clone()))
+                .collect(),
+        )
+        .await?;
+        Ok(inserted_hashes)
     }
 
     /// The keyhive projection's current pending event hashes.
@@ -1407,28 +1656,59 @@ where
             .collect()
     }
 
-    /// Report the hashes newly admitted to the keyhive projection since the
-    /// last ingestion, then record the new pending set.
+    /// Report hashes newly incorporated into the keyhive projection, then
+    /// record the new pending set only after durable reporting succeeds.
     async fn report_newly_admitted(
         &self,
         prev_pending: BTreeSet<EventHash>,
-        inserted_hashes: Vec<EventHash>,
-        source: Option<KeyhivePeerId>,
+        inserted_hashes: Vec<(EventHash, Option<KeyhivePeerId>)>,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
         let new_pending = self.pending_event_hashes().await;
-        *self.pending_hashes.lock().await = Some(new_pending.clone());
-        let mut reported: BTreeSet<EventHash> =
-            prev_pending.difference(&new_pending).copied().collect();
-        for hash in inserted_hashes {
-            if !new_pending.contains(&hash) {
-                reported.insert(hash);
+        let resolved: BTreeSet<_> = prev_pending.difference(&new_pending).copied().collect();
+        let mut newly_admitted = BTreeMap::new();
+
+        if !resolved.is_empty() {
+            let stored = self
+                .storage
+                .load_events_with_source()
+                .await
+                .map_err(|error| ProtocolError::Storage(StorageError::Load(error.to_string())))?;
+            for (hash, _, source) in stored {
+                if resolved.contains(hash.as_bytes()) {
+                    newly_admitted.insert(*hash.as_bytes(), source);
+                }
             }
         }
-        if !reported.is_empty()
-            && let Some(reporter) = &self.on_events_incorporated
-        {
-            reporter(reported.into_iter().collect(), source);
+        for (hash, source) in inserted_hashes {
+            if !new_pending.contains(&hash) {
+                newly_admitted.insert(hash, source);
+            }
         }
+
+        if let Some(sink) = &self.on_durable_incorporation {
+            let mut unreported = self.unreported_incorporations.lock().await;
+            for (hash, source) in newly_admitted {
+                unreported.entry(hash).or_insert(source);
+            }
+            let pending_reports = unreported.clone();
+            drop(unreported);
+
+            let mut by_source: BTreeMap<Option<KeyhivePeerId>, Vec<EventHash>> = BTreeMap::new();
+            for (hash, source) in &pending_reports {
+                by_source.entry(source.clone()).or_default().push(*hash);
+            }
+            for (source, hashes) in by_source {
+                sink.clone()
+                    .admit(hashes.clone(), source)
+                    .await
+                    .map_err(ProtocolError::Storage)?;
+                self.unreported_incorporations
+                    .lock()
+                    .await
+                    .retain(|hash, _| !hashes.contains(hash));
+            }
+        }
+        *self.pending_hashes.lock().await = Some(new_pending);
         Ok(())
     }
 
@@ -1479,6 +1759,10 @@ where
         contact_card: &ContactCard,
         source: Option<KeyhivePeerId>,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
+        let prev_pending = match self.pending_hashes.lock().await.as_ref() {
+            Some(previous) => previous.clone(),
+            None => self.pending_event_hashes().await,
+        };
         // Validate first: only persist after keyhive accepts the card.
         self.keyhive
             .receive_contact_card(contact_card)
@@ -1489,18 +1773,10 @@ where
             KeyOp::Add(add) => StaticEvent::PrekeysExpanded(Box::new(add.as_ref().clone())),
             KeyOp::Rotate(rot) => StaticEvent::PrekeyRotated(Box::new(rot.as_ref().clone())),
         };
-        let (hash, inserted) = storage_ops::save_event(&self.storage, &event, source.clone()).await?;
+        let bytes = [bincode_serialize(&event)?];
+        self.persist_incorporated_event_bytes(&bytes, source, prev_pending)
+            .await?;
 
-        // A contact-card (prekey) op is a real change to the projection:
-        // report it like any other newly-admitted event so consumers can
-        // refresh session state.
-        if inserted
-            && let Some(reporter) = &self.on_events_incorporated
-        {
-            reporter(vec![hash.0], source);
-        }
-
-        self.note_local_keyhive_changed().await?;
         tracing::debug!("ingested contact card");
         Ok(())
     }
@@ -1518,16 +1794,68 @@ where
         storage_ops::compact(&self.keyhive, &self.storage, storage_id).await
     }
 
-    /// Load and ingest all stored archives and events.
+    /// Load and ingest all stored archives and events, then reconcile the
+    /// durable incorporation boundary.
+    ///
+    /// Archives are async checkpoints; the event WAL is the durable log. An
+    /// event that was persisted and applied to the projection but whose
+    /// admission had not committed at crash time replays from the WAL here yet
+    /// was never admitted — this method closes exactly that window.
+    ///
+    /// Reconciliation is diff-first: candidates are WAL rows lacking an
+    /// admission entry (`DurableIncorporationSink::unadmitted_wal_events`, ONE
+    /// embedder-side set-diff query). The common boot has no candidates and
+    /// never reads event bytes or probes the projection. A non-empty candidate
+    /// set is checked event-by-event against the projection's owning stores;
+    /// unrelated projection history is never inventoried. Compaction deletes
+    /// WAL rows only after admission completed, so archive-only state needs no
+    /// repair here and original source attribution always survives.
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError`] if loading or ingestion fails.
+    /// Returns [`StorageError`] if loading, ingestion, or admission fails.
     pub async fn ingest_from_storage(&self) -> Result<(), StorageError> {
         storage_ops::ingest_from_storage(&self.keyhive, &self.storage).await?;
-        // Re-sync the tracked pending set so the next exchange's reporter
-        // diff starts from the post-boot projection.
+        let result = self.reconcile_unadmitted().await;
+        // Publish the post-recovery pending set so the next exchange's reporter
+        // diff starts from the recovered projection.
         *self.pending_hashes.lock().await = Some(self.pending_event_hashes().await);
+        result
+    }
+
+    /// Report WAL events incorporated by recovery but missing an admission
+    /// entry. See [`Self::ingest_from_storage`] for the rationale.
+    async fn reconcile_unadmitted(&self) -> Result<(), StorageError> {
+        let Some(sink) = &self.on_durable_incorporation else {
+            return Ok(());
+        };
+        let candidates = sink.clone().unadmitted_wal_events().await?;
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let pending = self.pending_event_hashes().await;
+        let mut by_source: BTreeMap<Option<KeyhivePeerId>, Vec<EventHash>> = BTreeMap::new();
+        for (hash, bytes, source) in candidates {
+            if pending.contains(&hash) {
+                continue;
+            }
+            let event: StaticEvent<CRef> = bincode_deserialize(&bytes)?;
+            let decoded_hash = *Digest::hash(&event).raw.as_bytes();
+            if decoded_hash != hash {
+                return Err(StorageError::Load(alloc::format!(
+                    "unadmitted WAL event hash mismatch: stored {hash:?}, decoded {decoded_hash:?}"
+                )));
+            }
+            if !self.keyhive.contains_incorporated_event(&event).await {
+                return Err(StorageError::Load(alloc::format!(
+                    "unadmitted WAL event {hash:?} is neither pending nor incorporated"
+                )));
+            }
+            by_source.entry(source).or_default().push(hash);
+        }
+        for (source, hashes) in by_source {
+            sink.clone().admit(hashes, source).await?;
+        }
         Ok(())
     }
 
@@ -1597,9 +1925,8 @@ where
         peer: &KeyhivePeerId,
         request_id: RequestId,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let syncpoint = self.syncpoints.lock().await.get(peer);
-
         self.ensure_cache_current().await?;
+        let syncpoint = self.syncpoints.lock().await.get(peer);
         match syncpoint {
             Some(sp) => {
                 self.sync_check_keyhive_for_request(peer, sp, request_id)
@@ -1607,22 +1934,6 @@ where
             }
             None => self.sync_keyhive_for_request(peer, request_id).await,
         }
-    }
-
-    /// Note that local keyhive state changed and refresh cache/syncpoints.
-    ///
-    /// Mark local Keyhive state dirty and invalidate syncpoints immediately.
-    /// The expensive cache rebuild is deferred until the next periodic or
-    /// on-demand refresh. Returns `Ok(true)` when the observed operation
-    /// total differs from the last published cache total.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProtocolError`] if the cache refresh fails.
-    pub async fn note_local_keyhive_changed(&self) -> Result<bool, ProtocolError<Conn::SendError>> {
-        self.cache_generation.fetch_add(1, Ordering::AcqRel);
-        self.syncpoints.lock().await.invalidate_all();
-        Ok(true)
     }
 
     /// Refresh the periodic event cache from the underlying keyhive.
@@ -1651,7 +1962,7 @@ where
         batch: VisibilityBatch<'_>,
     ) -> Result<VisibilityTargets, ProtocolError<Conn::SendError>> {
         self.ensure_cache_current().await?;
-        let published_generation = self.cache_published_generation.load(Ordering::Acquire);
+        let published_generation = self.snapshot_state_generation.load(Ordering::Acquire);
         let (peers, unclassified) = {
             let cache = self.cache.lock().await;
             cache.notification_targets(&self.peer_id, batch.connected, batch.changed)
@@ -1666,23 +1977,28 @@ where
     async fn ensure_cache_current(&self) -> Result<(), ProtocolError<Conn::SendError>> {
         let _refresh_guard = self.cache_refresh_lock.lock().await;
         loop {
-            let target_generation = self.cache_generation.load(Ordering::Acquire);
-            if self.cache_published_generation.load(Ordering::Acquire) == target_generation {
+            let snapshot_generation = self.snapshot_state_generation.load(Ordering::Acquire);
+            let before = self.keyhive.state_generation();
+            if snapshot_generation == before {
                 return Ok(());
             }
-            let before = self.total_ops().await;
+
+            // A structural projection change invalidates every peer syncpoint.
+            // Do this before rebuilding so no short-circuit can survive drift.
+            self.syncpoints.lock().await.invalidate_all();
             {
                 let mut cache = self.cache.lock().await;
                 cache.refresh(self).await?;
             }
-            let after = self.total_ops().await;
+            let after = self.keyhive.state_generation();
             if before != after {
                 continue;
             }
-            let generation = self.cache_generation.load(Ordering::Acquire);
-            self.cache_published_generation
-                .store(generation, Ordering::Release);
-            if generation == self.cache_generation.load(Ordering::Acquire) {
+
+            // Publish exactly the generation observed before and after the
+            // rebuild. Never label an older snapshot with a later generation.
+            self.snapshot_state_generation.store(before, Ordering::Release);
+            if self.keyhive.state_generation() == before {
                 return Ok(());
             }
         }
@@ -1821,12 +2137,65 @@ mod tests {
             make_protocol_with_shared_keyhive, run_sync_round, sync_pair_rounds,
         },
     };
-    use future_form::Local;
+    use future_form::{FutureForm, Local};
     use keyhive_core::{
         access::Access,
         principal::{identifier::Identifier, membered::Membered, peer::Peer},
     };
     use nonempty::nonempty;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+
+    /// Configurable [`DurableIncorporationSink`] for tests: records admits,
+    /// can simulate a crash (failed admit), and serves a canned
+    /// WAL-minus-admission diff.
+    struct RecordingSink {
+        reports: async_lock::Mutex<Vec<(Vec<EventHash>, Option<KeyhivePeerId>)>>,
+        admitted: async_lock::Mutex<BTreeSet<EventHash>>,
+        unadmitted: async_lock::Mutex<Vec<(EventHash, Vec<u8>, Option<KeyhivePeerId>)>>,
+        unadmitted_queries: AtomicUsize,
+        fail_admit: AtomicBool,
+    }
+
+    impl RecordingSink {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                reports: async_lock::Mutex::new(Vec::new()),
+                admitted: async_lock::Mutex::new(BTreeSet::new()),
+                unadmitted: async_lock::Mutex::new(Vec::new()),
+                unadmitted_queries: AtomicUsize::new(0),
+                fail_admit: AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl DurableIncorporationSink<Local> for RecordingSink {
+        fn admit(
+            self: Arc<Self>,
+            hashes: Vec<EventHash>,
+            source: Option<KeyhivePeerId>,
+        ) -> <Local as FutureForm>::Future<'static, Result<(), StorageError>> {
+            Local::from_future(async move {
+                if self.fail_admit.load(AtomicOrdering::SeqCst) {
+                    return Err(StorageError::Save("simulated crash".to_string()));
+                }
+                self.reports.lock().await.push((hashes.clone(), source));
+                self.admitted.lock().await.extend(hashes);
+                Ok(())
+            })
+        }
+
+        fn unadmitted_wal_events(
+            self: Arc<Self>,
+        ) -> <Local as FutureForm>::Future<
+            'static,
+            Result<Vec<(EventHash, Vec<u8>, Option<KeyhivePeerId>)>, StorageError>,
+        > {
+            Local::from_future(async move {
+                self.unadmitted_queries.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(self.unadmitted.lock().await.clone())
+            })
+        }
+    }
 
     /// Helper to create a test protocol instance.
     async fn make_protocol() -> (TestProtocol, SimpleKeyhive) {
@@ -2401,13 +2770,12 @@ mod tests {
         // Group-creation delegation.
         let group = other.generate_group(vec![]).await.unwrap();
         let group_id = group.lock().await.group_id();
-        let before_add: Vec<EventHash> = other_proto
+        let before_add_events = other_proto
             .get_events_for_agent(&other_id)
             .await
             .unwrap()
-            .expect("other resolves to an agent")
-            .into_keys()
-            .collect();
+            .expect("other resolves to an agent");
+        let before_add: Vec<EventHash> = before_add_events.keys().copied().collect();
         assert!(
             !before_add.is_empty(),
             "group creation should produce a delegation"
@@ -2439,6 +2807,29 @@ mod tests {
         assert!(
             !dependent.is_empty(),
             "add_member should introduce a dependent delegation"
+        );
+
+        // Persist the dependent first, then replay its dependencies. The
+        // dependent's pending-to-active transition must cross the same hook.
+        let dst_resolution = make_keyhive().await;
+        let sink_resolution = RecordingSink::new();
+        let proto_resolution = TestProtocol::new(
+            Arc::new(dst_resolution.clone()),
+            MemoryKeyhiveStorage::new(),
+            keyhive_peer_id(&dst_resolution),
+            dst_resolution.contact_card().await.unwrap(),
+        )
+        .with_durable_incorporation_sink(sink_resolution.clone());
+        proto_resolution.ingest_events(&dependent, None).await.unwrap();
+        assert!(sink_resolution.admitted.lock().await.is_empty());
+        let dependencies: Vec<Arc<[u8]>> = before_add_events.into_values().collect();
+        proto_resolution
+            .ingest_events(&dependencies, None)
+            .await
+            .unwrap();
+        assert!(
+            !sink_resolution.admitted.lock().await.is_empty(),
+            "pending-to-active replay must cross the incorporation hook"
         );
 
         // Store `other`'s full archive so recovery has deps to reload.
@@ -2623,26 +3014,225 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn ingest_from_storage_via_protocol() {
+    async fn boot_reconciliation_reports_crash_window_once() {
+        let keyhive = make_keyhive().await;
+        let peer_id = keyhive_peer_id(&keyhive);
+        let cc = keyhive.contact_card().await.unwrap();
+        let group = keyhive.generate_group(vec![]).await.unwrap();
+
+        let storage = MemoryKeyhiveStorage::new();
+        // Crash window: an incorporated founding event was persisted to the
+        // WAL, but admission never committed.
+        let card = keyhive.get_existing_contact_card().await;
+        let event: StaticEvent<[u8; 32]> = match card.op() {
+            KeyOp::Add(op) => StaticEvent::PrekeysExpanded(Box::new(op.as_ref().clone())),
+            KeyOp::Rotate(op) => StaticEvent::PrekeyRotated(Box::new(op.as_ref().clone())),
+        };
+        drop(group);
+        let hash: EventHash = *Digest::hash(&event).raw.as_bytes();
+        let event_bytes = bincode_serialize(&event).unwrap();
+        let (stored_hash, inserted) = storage_ops::save_event_bytes::<_, Local>(
+            &storage,
+            event_bytes.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(inserted);
+        assert_eq!(*stored_hash.as_bytes(), hash);
+
+        // Recovery materializes the archive before replaying the retained WAL.
+        let archive = keyhive.into_archive().await;
+        let storage_id = crate::storage::StorageHash::new([1u8; 32]);
+        storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+            .await
+            .unwrap();
+
+        let sink = RecordingSink::new();
+        sink.unadmitted
+            .lock()
+            .await
+            .push((hash, event_bytes, None));
+        let protocol = TestProtocol::new(Arc::new(keyhive), storage, peer_id, cc)
+            .with_durable_incorporation_sink(sink.clone());
+
+        protocol.ingest_from_storage().await.unwrap();
+        assert!(
+            sink.admitted.lock().await.contains(&hash),
+            "crash-window candidate must be admitted at boot"
+        );
+        let first_report_count = sink.reports.lock().await.len();
+        assert_eq!(first_report_count, 1);
+
+        // Admission committed; a second boot must not re-report.
+        sink.unadmitted.lock().await.clear();
+        protocol.ingest_from_storage().await.unwrap();
+        assert_eq!(
+            sink.reports.lock().await.len(),
+            first_report_count,
+            "duplicate reconciliation must be idempotent"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn boot_reconciliation_skips_pending_candidates() {
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
         let cc = keyhive.contact_card().await.unwrap();
 
+        // A candidate whose dependencies are missing stays pending after
+        // replay; it is unadmitted but not incorporated, so it must not be
+        // reported. Its admission fires when a later exchange resolves it.
+        let remote = make_keyhive().await;
+        let remote_doc = remote
+            .generate_doc(vec![], nonempty![[1u8; 32]])
+            .await
+            .unwrap();
+        let pending_operation = {
+            let document = remote_doc.lock().await;
+            document
+                .cgka_ops()
+                .unwrap()
+                .iter()
+                .flat_map(|epoch| epoch.iter())
+                .next()
+                .unwrap()
+                .as_ref()
+                .clone()
+        };
+        let pending_event: StaticEvent<[u8; 32]> =
+            StaticEvent::CgkaOperation(Box::new(pending_operation));
+        let pending_hash: EventHash = *Digest::hash(&pending_event).raw.as_bytes();
+        let pending_bytes = bincode_serialize(&pending_event).unwrap();
+        let source = Some(keyhive_peer_id(&remote));
         let storage = MemoryKeyhiveStorage::new();
+        storage_ops::save_event_bytes::<_, Local>(
+            &storage,
+            pending_bytes.clone(),
+            source.clone(),
+        )
+        .await
+        .unwrap();
 
-        // Save an archive
-        let archive = keyhive.into_archive().await;
-        let storage_id = crate::storage::StorageHash::new([1u8; 32]);
-        crate::storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+        let sink = RecordingSink::new();
+        sink.unadmitted
+            .lock()
+            .await
+            .push((pending_hash, pending_bytes, source));
+        let protocol = TestProtocol::new(Arc::new(keyhive), storage, peer_id, cc)
+            .with_durable_incorporation_sink(sink.clone());
+        protocol.ingest_from_storage().await.unwrap();
+        assert!(
+            sink.admitted.lock().await.is_empty(),
+            "pending candidates must not be admitted"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn boot_reconciliation_empty_diff_short_circuits() {
+        let keyhive = make_keyhive().await;
+        let sink = RecordingSink::new();
+        let protocol = TestProtocol::new(
+            Arc::new(keyhive.clone()),
+            MemoryKeyhiveStorage::new(),
+            keyhive_peer_id(&keyhive),
+            keyhive.contact_card().await.unwrap(),
+        )
+        .with_durable_incorporation_sink(sink.clone());
+
+        protocol.ingest_from_storage().await.unwrap();
+
+        assert_eq!(
+            sink.unadmitted_queries.load(AtomicOrdering::SeqCst),
+            1,
+            "boot must issue exactly one WAL-minus-admission query"
+        );
+        assert!(sink.reports.lock().await.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn boot_reconciliation_rejects_unknown_candidate() {
+        let keyhive = make_keyhive().await;
+        let remote = make_keyhive().await;
+        let other = make_keyhive().await;
+        let remote_card = remote.get_existing_contact_card().await;
+        keyhive.receive_contact_card(&remote_card).await.unwrap();
+        let other_card = other.get_existing_contact_card().await;
+        let (KeyOp::Add(remote_add), KeyOp::Add(other_add)) =
+            (remote_card.op(), other_card.op())
+        else {
+            panic!("fresh contact cards must contain add-key operations");
+        };
+        let mut invalid_add = remote_add.as_ref().clone();
+        invalid_add.signature = other_add.signature;
+        let event: StaticEvent<[u8; 32]> =
+            StaticEvent::PrekeysExpanded(Box::new(invalid_add));
+        let hash = *Digest::hash(&event).raw.as_bytes();
+        let bytes = bincode_serialize(&event).unwrap();
+        let source = Some(keyhive_peer_id(&remote));
+        let storage = MemoryKeyhiveStorage::new();
+        storage_ops::save_event_bytes::<_, Local>(&storage, bytes.clone(), source.clone())
+            .await
+            .unwrap();
+        let sink = RecordingSink::new();
+        sink.unadmitted
+            .lock()
+            .await
+            .push((hash, bytes, source));
+        let protocol = TestProtocol::new(
+            Arc::new(keyhive.clone()),
+            storage,
+            keyhive_peer_id(&keyhive),
+            keyhive.contact_card().await.unwrap(),
+        )
+        .with_durable_incorporation_sink(sink);
+
+        let error = protocol.ingest_from_storage().await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("neither pending nor incorporated"),
+            "unexpected recovery error: {error}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_and_remote_events_share_durable_incorporation_hook() {
+        let keyhive = make_keyhive().await;
+        let peer_id = keyhive_peer_id(&keyhive);
+        let storage = MemoryKeyhiveStorage::new();
+        let sink = RecordingSink::new();
+        let protocol = TestProtocol::new(
+            Arc::new(keyhive.clone()),
+            storage,
+            peer_id,
+            keyhive.contact_card().await.unwrap(),
+        )
+        .with_durable_incorporation_sink(sink.clone());
+
+        keyhive.generate_group(vec![]).await.unwrap();
+        let local_events = protocol
+            .all_agent_events(&BTreeSet::new())
+            .await
+            .unwrap()
+            .event_data
+            .values()
+            .map(|bytes| bincode_deserialize(bytes).unwrap())
+            .collect();
+        protocol.persist_local_events(local_events).await.unwrap();
+
+        let remote = make_keyhive().await;
+        let remote_id = keyhive_peer_id(&remote);
+        protocol
+            .ingest_contact_card(&remote.contact_card().await.unwrap(), Some(remote_id.clone()))
             .await
             .unwrap();
 
-        let shared = Arc::new(keyhive);
-        let protocol = TestProtocol::new(shared, storage, peer_id, cc);
-
-        // Ingest from storage should work
-        let result = protocol.ingest_from_storage().await;
-        assert!(result.is_ok());
+        let reports = sink.reports.lock().await;
+        assert!(reports.iter().any(|(hashes, source)| !hashes.is_empty() && source.is_none()));
+        assert!(reports
+            .iter()
+            .any(|(hashes, source)| !hashes.is_empty() && source.as_ref() == Some(&remote_id)));
     }
 
     // -----------------------------------------------------------------------
@@ -4479,6 +5069,16 @@ mod protocol_behavioural {
 
         let alice_proto = Arc::new(alice_proto);
 
+        // Settle the cache first: contact-card setup ingested events, so the
+        // first initiate performs a full sync and publishes the current
+        // structural generation (invalidating syncpoints there is expected).
+        alice_proto
+            .initiate_sync_with_peer(&bob_id)
+            .await
+            .expect("settle initiate_sync_with_peer");
+        drop(drain_channel(&bob_conn, &alice_id));
+
+        // Without pending drift, an existing syncpoint selects the cheap check.
         alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
 
         alice_proto
@@ -4490,6 +5090,62 @@ mod protocol_behavioural {
         assert!(
             matches!(messages.first(), Some(Message::SyncCheck { .. })),
             "expected SyncCheck, got {messages:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn structural_drift_invalidates_syncpoint_before_short_circuit() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        let alice_proto = Arc::new(alice_proto);
+        alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
+
+        alice_kh.generate_group(vec![]).await.unwrap();
+        alice_proto
+            .initiate_sync_with_peer(&bob_id)
+            .await
+            .expect("initiate_sync_with_peer after structural drift");
+
+        let messages = drain_channel(&bob_conn, &alice_id);
+        assert!(
+            matches!(messages.first(), Some(Message::SyncRequest { .. })),
+            "structural drift must invalidate the syncpoint before selection: {messages:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mutation_during_refresh_is_not_published_as_current() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_kh,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        let alice_proto = Arc::new(alice_proto);
+        alice_kh.generate_group(vec![]).await.unwrap();
+        alice_proto.refresh_cache().await.unwrap();
+        let remote = crate::test_utils::make_keyhive().await;
+        let remote_card = remote.contact_card().await.unwrap();
+
+        // Make the cache dirty, then prevent its walk from completing while a
+        // second structural mutation advances the generation.
+        alice_kh.expand_prekeys().await.unwrap();
+        let groups_guard = alice_kh.groups().lock().await;
+        let mut refresh = core::pin::pin!(alice_proto.refresh_cache());
+        assert!(futures::poll!(refresh.as_mut()).is_pending());
+        alice_kh.receive_contact_card(&remote_card).await.unwrap();
+        drop(groups_guard);
+        refresh.await.unwrap();
+
+        assert_eq!(
+            alice_proto.snapshot_state_generation.load(Ordering::Acquire),
+            alice_kh.state_generation(),
+            "a rebuild raced by mutation must retry instead of labeling stale data current"
         );
     }
 
@@ -4685,6 +5341,17 @@ mod protocol_behavioural {
 
         let alice_proto = Arc::new(alice_proto);
 
+        // Settle alice's cache so the round below exercises exactly the
+        // no-drift path: structural changes ingested during the previous round
+        // must publish (and legitimately invalidate) once, up front — they must
+        // not be conflated with this round's no-op ingest.
+        alice_proto
+            .initiate_sync_with_peer(&bob_id)
+            .await
+            .expect("settle initiate_sync_with_peer");
+        drop(drain_channel(&alice_conn, &bob_id));
+        drop(drain_channel(&bob_conn, &alice_id));
+
         let carol_id = KeyhivePeerId::from_bytes([0xCC; 32]);
         alice_proto
             .syncpoints
@@ -4814,389 +5481,6 @@ mod protocol_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn note_local_keyhive_changed_invalidates_syncpoints_when_changed() {
-        let TwoPeerHarness {
-            alice_proto,
-            bob_proto,
-            bob_kh,
-            alice_id,
-            bob_id,
-            alice_conn,
-            bob_conn,
-            ..
-        } = exchange_contact_cards_and_setup().await;
-
-        // Baseline ops then sync so both sides have state.
-        {
-            let kh = bob_kh.clone();
-            create_group_with_read_members(&kh, &[&alice_id]).await;
-        }
-        run_sync_round(
-            &bob_proto,
-            &alice_proto,
-            &bob_id,
-            &alice_id,
-            &bob_conn,
-            &alice_conn,
-        )
-        .await;
-        drop(drain_channel(&alice_conn, &bob_id));
-        drop(drain_channel(&bob_conn, &alice_id));
-
-        let alice_proto = Arc::new(alice_proto);
-
-        // First note establishes the cache baseline.
-        alice_proto
-            .note_local_keyhive_changed()
-            .await
-            .expect("first note_local_keyhive_changed");
-
-        // Record a syncpoint for an unrelated peer.
-        let carol_id = KeyhivePeerId::from_bytes([0xCC; 32]);
-        alice_proto
-            .syncpoints
-            .lock()
-            .await
-            .set(carol_id.clone(), 42);
-
-        // Advance local state: bob creates new ops and pushes them.
-        {
-            let kh = bob_kh.clone();
-            create_group_with_read_members(&kh, &[&alice_id]).await;
-        }
-        bob_proto
-            .sync_keyhive(Some(&alice_id))
-            .await
-            .expect("bob sync_keyhive");
-        let sync_request = alice_conn
-            .inbound_rx
-            .try_recv()
-            .expect("alice should receive sync request");
-        alice_proto
-            .handle_message(&bob_id, sync_request, None)
-            .await
-            .expect("alice handle sync request");
-        let sync_response = bob_conn
-            .inbound_rx
-            .try_recv()
-            .expect("bob should receive sync response");
-        bob_proto
-            .handle_message(&alice_id, sync_response, None)
-            .await
-            .expect("bob handle sync response");
-        drop(drain_channel(&alice_conn, &bob_id));
-        drop(drain_channel(&bob_conn, &alice_id));
-
-        // note_local_keyhive_changed should see the advanced total_ops,
-        // rebuild the cache, and invalidate all stale syncpoints.
-        let changed = alice_proto
-            .note_local_keyhive_changed()
-            .await
-            .expect("second note_local_keyhive_changed");
-        assert!(
-            changed,
-            "cache should report a change after new inbound ops"
-        );
-
-        let map = alice_proto.syncpoints.lock().await;
-        assert!(
-            map.get(&carol_id).is_none(),
-            "carol's syncpoint should be invalidated after note_local_keyhive_changed"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn note_local_keyhive_changed_preserves_syncpoints_when_unchanged() {
-        let TwoPeerHarness {
-            alice_proto,
-            bob_proto,
-            bob_kh,
-            alice_id,
-            bob_id,
-            alice_conn,
-            bob_conn,
-            ..
-        } = exchange_contact_cards_and_setup().await;
-
-        // Baseline ops then sync.
-        {
-            let kh = bob_kh.clone();
-            create_group_with_read_members(&kh, &[&alice_id]).await;
-        }
-        run_sync_round(
-            &bob_proto,
-            &alice_proto,
-            &bob_id,
-            &alice_id,
-            &bob_conn,
-            &alice_conn,
-        )
-        .await;
-        drop(drain_channel(&alice_conn, &bob_id));
-        drop(drain_channel(&bob_conn, &alice_id));
-
-        let alice_proto = Arc::new(alice_proto);
-
-        // First call establishes baseline (cache was empty -> rebuilds).
-        alice_proto
-            .note_local_keyhive_changed()
-            .await
-            .expect("first note_local_keyhive_changed");
-
-        // Set a syncpoint for an unrelated peer.
-        let carol_id = KeyhivePeerId::from_bytes([0xCC; 32]);
-        alice_proto
-            .syncpoints
-            .lock()
-            .await
-            .set(carol_id.clone(), 42);
-
-        // Second call: no new ops, cache already fresh.
-        let changed = alice_proto
-            .note_local_keyhive_changed()
-            .await
-            .expect("second note_local_keyhive_changed");
-        assert!(!changed, "no change expected when keyhive hasn't advanced");
-
-        let map = alice_proto.syncpoints.lock().await;
-        assert_eq!(
-            map.get(&carol_id),
-            Some(42),
-            "carol's syncpoint should survive when cache was already fresh"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn concurrent_note_local_keyhive_changed_coalesces() {
-        let TwoPeerHarness {
-            alice_proto,
-            bob_proto,
-            bob_kh,
-            alice_id,
-            bob_id,
-            alice_conn,
-            bob_conn,
-            ..
-        } = exchange_contact_cards_and_setup().await;
-
-        // Create some ops so the cache has work to do.
-        {
-            let kh = bob_kh.clone();
-            create_group_with_read_members(&kh, &[&alice_id]).await;
-        }
-        run_sync_round(
-            &bob_proto,
-            &alice_proto,
-            &bob_id,
-            &alice_id,
-            &bob_conn,
-            &alice_conn,
-        )
-        .await;
-        drop(drain_channel(&alice_conn, &bob_id));
-        drop(drain_channel(&bob_conn, &alice_id));
-
-        let alice_proto = Arc::new(alice_proto);
-        let p1 = alice_proto.clone();
-        let p2 = alice_proto.clone();
-
-        // Two concurrent refreshes: the first rebuilds the cache,
-        // the second sees last_total_ops already matches and skips.
-        let (r1, r2) = tokio::join!(
-            p1.note_local_keyhive_changed(),
-            p2.note_local_keyhive_changed(),
-        );
-        let r1 = r1.expect("first note_local_keyhive_changed");
-        let r2 = r2.expect("second note_local_keyhive_changed");
-        assert!(
-            r1 != r2,
-            "exactly one concurrent caller should report a change; \
-             the other should see a fresh cache. got ({r1}, {r2})"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn inbound_stale_cache_freshened_by_note_changed() {
-        let TwoPeerHarness {
-            alice_proto,
-            bob_proto,
-            bob_kh,
-            alice_id,
-            bob_id,
-            alice_conn,
-            bob_conn,
-            ..
-        } = exchange_contact_cards_and_setup().await;
-
-        let alice_proto = Arc::new(alice_proto);
-
-        // Populate the cache with the baseline state.
-        alice_proto
-            .refresh_cache()
-            .await
-            .expect("initial cache refresh");
-
-        // Bob creates new ops without telling Alice.
-        {
-            let kh = bob_kh.clone();
-            create_group_with_read_members(&kh, &[&alice_id]).await;
-        }
-
-        // Alice's cache is now stale -- the pre-refresh snapshot doesn't
-        // include Bob's new ops. cached_events_for_pair_with_peer serves
-        // whatever was in the cache before Bob's events arrived.
-        // (We can't assert it's empty per se; the point is it hasn't been
-        // refreshed. The stale snapshot itself is the regression we guard
-        // against by ensuring note_local_keyhive_changed freshens it.)
-
-        // Sync Bob's new events into Alice's keyhive.
-        bob_proto
-            .sync_keyhive(Some(&alice_id))
-            .await
-            .expect("bob sync_keyhive");
-        let sync_request = alice_conn
-            .inbound_rx
-            .try_recv()
-            .expect("alice should receive sync request");
-        alice_proto
-            .handle_message(&bob_id, sync_request, None)
-            .await
-            .expect("alice handle sync request");
-        let sync_response = bob_conn
-            .inbound_rx
-            .try_recv()
-            .expect("bob should receive sync response");
-        bob_proto
-            .handle_message(&alice_id, sync_response, None)
-            .await
-            .expect("bob handle sync response");
-        drop(drain_channel(&alice_conn, &bob_id));
-        drop(drain_channel(&bob_conn, &alice_id));
-
-        // Alice's cache is still stale (handle_message doesn't refresh it).
-        let stale = alice_proto.cached_events_for_pair_with_peer(&bob_id).await;
-
-        // Freshen the cache via note_local_keyhive_changed.
-        let changed = alice_proto
-            .note_local_keyhive_changed()
-            .await
-            .expect("note_local_keyhive_changed");
-        assert!(
-            changed,
-            "note_local_keyhive_changed must detect the inbound events"
-        );
-
-        // After refresh the cache should serve the pair's events.
-        let fresh = alice_proto.cached_events_for_pair_with_peer(&bob_id).await;
-        let stale_was_empty = stale.as_ref().map_or(true, |m| m.is_empty());
-        let fresh_is_nonempty = fresh.as_ref().map_or(false, |m| !m.is_empty());
-        assert!(
-            stale_was_empty || fresh_is_nonempty,
-            "cache should be non-empty after refresh; stale snapshot was empty={}, \
-             fresh non-empty={}",
-            stale_was_empty,
-            fresh_is_nonempty
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn note_local_keyhive_changed_does_not_rebuild_synchronously() {
-        let TwoPeerHarness {
-            alice_proto,
-            bob_proto,
-            bob_kh,
-            alice_id,
-            bob_id,
-            alice_conn,
-            bob_conn,
-            ..
-        } = exchange_contact_cards_and_setup().await;
-
-        // Baseline ops then sync.
-        {
-            let kh = bob_kh.clone();
-            create_group_with_read_members(&kh, &[&alice_id]).await;
-        }
-        run_sync_round(
-            &bob_proto,
-            &alice_proto,
-            &bob_id,
-            &alice_id,
-            &bob_conn,
-            &alice_conn,
-        )
-        .await;
-        drop(drain_channel(&alice_conn, &bob_id));
-        drop(drain_channel(&bob_conn, &alice_id));
-
-        let alice_proto = Arc::new(alice_proto);
-
-        // Populate the cache by refreshing.
-        alice_proto.refresh_cache().await.expect("initial refresh");
-
-        let gen_initial = alice_proto.cache_generation.load(Ordering::Acquire);
-        let pub_initial = alice_proto
-            .cache_published_generation
-            .load(Ordering::Acquire);
-        assert_eq!(
-            pub_initial, gen_initial,
-            "cache is published after initial refresh"
-        );
-
-        // Record a syncpoint for an unrelated peer.
-        let carol_id = KeyhivePeerId::from_bytes([0xCC; 32]);
-        alice_proto
-            .syncpoints
-            .lock()
-            .await
-            .set(carol_id.clone(), 42);
-
-        // note_local_keyhive_changed — bumps generation, invalidates syncpoints,
-        // but does NOT synchronously rebuild the cache.
-        alice_proto
-            .note_local_keyhive_changed()
-            .await
-            .expect("note_local_keyhive_changed");
-
-        // Syncpoints are invalidated.
-        let map = alice_proto.syncpoints.lock().await;
-        assert!(
-            map.get(&carol_id).is_none(),
-            "syncpoints should be invalidated"
-        );
-        drop(map);
-
-        // Generation bumped but NOT published — no synchronous rebuild.
-        let gen_after = alice_proto.cache_generation.load(Ordering::Acquire);
-        let pub_after = alice_proto
-            .cache_published_generation
-            .load(Ordering::Acquire);
-        assert!(
-            gen_after > gen_initial,
-            "cache_generation bumped after note_local_keyhive_changed"
-        );
-        assert_eq!(
-            pub_after, pub_initial,
-            "cache_published_generation unchanged — no synchronous rebuild"
-        );
-
-        // refresh_cache now rebuilds and publishes the new generation.
-        alice_proto.refresh_cache().await.expect("refresh_cache");
-        let gen_refreshed = alice_proto.cache_generation.load(Ordering::Acquire);
-        let pub_refreshed = alice_proto
-            .cache_published_generation
-            .load(Ordering::Acquire);
-        assert_eq!(
-            pub_refreshed, gen_refreshed,
-            "cache published generation matches after refresh"
-        );
-        assert_eq!(
-            gen_refreshed, gen_after,
-            "generation unchanged by refresh (only published)"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
     async fn refresh_cache_rebuilds_on_demand_after_stale() {
         let TwoPeerHarness {
             alice_proto,
@@ -5245,9 +5529,7 @@ mod protocol_behavioural {
         drop(drain_channel(&bob_conn, &alice_id));
 
         // Before refresh: cache is stale (doesn't reflect Bob's new ops).
-        let stale_gen = alice_proto
-            .cache_published_generation
-            .load(Ordering::Acquire);
+        let stale_gen = alice_proto.snapshot_state_generation.load(Ordering::Acquire);
 
         // refresh_cache on demand should bring the cache current.
         alice_proto
@@ -5255,10 +5537,8 @@ mod protocol_behavioural {
             .await
             .expect("on-demand refresh");
 
-        let fresh_gen = alice_proto
-            .cache_published_generation
-            .load(Ordering::Acquire);
-        let current_gen = alice_proto.cache_generation.load(Ordering::Acquire);
+        let fresh_gen = alice_proto.snapshot_state_generation.load(Ordering::Acquire);
+        let current_gen = alice_proto.keyhive.state_generation();
         assert_eq!(
             fresh_gen, current_gen,
             "published generation catches up to current generation"
@@ -5325,7 +5605,7 @@ mod protocol_behavioural {
         drop(drain_channel(&bob_conn, &alice_id));
 
         // Cache is now stale (Alice's keyhive advanced but cache not rebuilt).
-        let gen_keyhive_changed = alice_proto.cache_generation.load(Ordering::Acquire);
+        let gen_keyhive_changed = alice_proto.keyhive.state_generation();
 
         // Bob sends a SyncRequest WITH his contact card.
         // Building the message manually so we control include_contact_card.
@@ -5361,10 +5641,8 @@ mod protocol_behavioural {
             .expect("handle_message with contact card");
 
         // The cache must be fully current after handle_message returns.
-        let gen_after_handle = alice_proto.cache_generation.load(Ordering::Acquire);
-        let pub_after_handle = alice_proto
-            .cache_published_generation
-            .load(Ordering::Acquire);
+        let gen_after_handle = alice_proto.keyhive.state_generation();
+        let pub_after_handle = alice_proto.snapshot_state_generation.load(Ordering::Acquire);
         assert_eq!(
             pub_after_handle, gen_after_handle,
             "cache is current after handle_message (published == generation)"
@@ -5386,6 +5664,6 @@ mod protocol_behavioural {
             "cached pair for Alice+Bob is non-empty after inbound handle_message"
         );
 
-        let _ = status;
+        drop(status);
     }
 }

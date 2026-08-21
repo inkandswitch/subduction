@@ -53,6 +53,7 @@ test-utils = ["dep:async-channel", "serde"]
 dhat-heap = ["dep:dhat", "test-utils"]
 
 [dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 async-channel = { workspace = true }
 criterion = { workspace = true }
 nonempty = "0.10.0"

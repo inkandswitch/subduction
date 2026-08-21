@@ -181,8 +181,14 @@ impl PeriodicEventCache {
 
     /// Refresh the cache from the protocol's keyhive view.
     ///
-    /// Returns `Ok(true)` if the cache was rebuilt, `Ok(false)` if the
-    /// total op count was unchanged since the last refresh.
+    /// Always performs a full walk of the keyhive's per-agent visible event
+    /// sets. Callers gate on cache-generation currency
+    /// ([`crate::protocol`]'s `ensure_cache_current`), which only requests a
+    /// rebuild after an explicit change signal; a rebuild must never be
+    /// skipped here based on indirect heuristics. `total_ops` is not a sound
+    /// change detector: pending-to-resolved incorporations and offsetting
+    /// membership changes alter the projection without changing the count,
+    /// and skipping their walk republishes a stale snapshot as current.
     ///
     /// # Errors
     ///
@@ -210,7 +216,7 @@ impl PeriodicEventCache {
             Store,
             Async,
         >,
-    ) -> Result<bool, ProtocolError<Conn::SendError>>
+    ) -> Result<(), ProtocolError<Conn::SendError>>
     where
         Signer: AsyncSigner<Async> + Clone,
         CRef: ContentRef + serde::de::DeserializeOwned,
@@ -226,11 +232,6 @@ impl PeriodicEventCache {
         Store: KeyhiveStorage<Async>,
         Async: future_form::FutureForm,
     {
-        let total = protocol.total_ops().await;
-        if self.last_total_ops == Some(total) {
-            return Ok(false);
-        }
-
         let known: alloc::collections::BTreeSet<_> = self.event_data.keys().copied().collect();
         let all_agent_events = protocol.all_agent_events(&known).await?;
 
@@ -249,8 +250,8 @@ impl PeriodicEventCache {
         // Materialize the public set once per refresh so per-request serving
         // can share it by `Arc` instead of rebuilding it.
         self.public_map = Arc::new(self.build_public_map());
-        self.last_total_ops = Some(total);
-        Ok(true)
+        self.last_total_ops = Some(protocol.total_ops().await);
+        Ok(())
     }
 }
 
