@@ -5558,10 +5558,16 @@ dependencies = [
 name = "subduction_runtime"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "ed25519-dalek 2.2.0",
  "future_form",
  "futures",
  "metrics",
+ "sedimentree_core",
+ "subduction_crypto",
  "subduction_protocol",
+ "testresult",
+ "thiserror 2.0.20",
  "tracing",
 ]
 

@@ -17,11 +17,20 @@ default = []
 metrics = ["dep:metrics"]
 
 [dependencies]
+async-channel = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["std"] }
 future_form = { workspace = true }
 futures = { workspace = true }
 metrics = { workspace = true, optional = true }
-subduction_protocol = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_protocol = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["attributes"] }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor", "thread-pool"] }
+testresult = { workspace = true }
 
 [lints]
 workspace = true
