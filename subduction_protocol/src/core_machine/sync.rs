@@ -23,6 +23,8 @@ use sedimentree_core::{
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 
+use subduction_crypto::signed::Signed;
+
 use super::{CoreEffect, CoreMachine, Now};
 use crate::{
     blob_ref::{BlobRef, Part},
@@ -472,9 +474,7 @@ impl CoreMachine {
                     .push_back(CoreEffect::App(AppEvent::StorageError { tree, failure }));
                 Outcome::Progressed
             }
-            StorageResult::Ingested { .. }
-            | StorageResult::Fetched { .. }
-            | StorageResult::Persisted { .. }
+            StorageResult::Persisted { .. }
             | StorageResult::TreeDeleted
             | StorageResult::LocallyIngested { .. } => self.driver_result_mismatch(tree),
         }
@@ -498,12 +498,14 @@ impl CoreMachine {
                     .unwrap_or_default();
                 for (signed, blob) in &commits {
                     let sender_heads = self.next_sender_heads(peer, heads.clone());
-                    let parts = wire::loose_commit_parts(tree, signed, &sender_heads, *blob);
+                    let parts =
+                        wire::loose_commit_parts(tree, signed, &sender_heads, Part::Ref(*blob));
                     self.effects.push_back(CoreEffect::Send { conn, parts });
                 }
                 for (signed, blob) in &fragments {
                     let sender_heads = self.next_sender_heads(peer, heads.clone());
-                    let parts = wire::fragment_parts(tree, signed, &sender_heads, *blob);
+                    let parts =
+                        wire::fragment_parts(tree, signed, &sender_heads, Part::Ref(*blob));
                     self.effects.push_back(CoreEffect::Send { conn, parts });
                 }
                 self.release_refs(commits.iter().map(|(_, r)| *r));
@@ -526,9 +528,7 @@ impl CoreMachine {
                     .push_back(CoreEffect::App(AppEvent::StorageError { tree, failure }));
                 Outcome::Progressed
             }
-            StorageResult::Ingested { .. }
-            | StorageResult::Fetched { .. }
-            | StorageResult::Persisted { .. }
+            StorageResult::Persisted { .. }
             | StorageResult::TreeDeleted
             | StorageResult::LocallyIngested { .. } => self.driver_result_mismatch(tree),
         }
@@ -551,8 +551,8 @@ impl CoreMachine {
                 // Merge metadata (parse WITHOUT re-verifying: the conn
                 // machine already verified) and keep the fresh items for
                 // the subscriber forward (freshness = the damping factor).
-                let mut fresh_commits: Vec<&VerifiedCommit> = Vec::new();
-                let mut fresh_fragments: Vec<&VerifiedFragment> = Vec::new();
+                let mut fresh_commits: Vec<(&Signed<LooseCommit>, Part)> = Vec::new();
+                let mut fresh_fragments: Vec<(&Signed<Fragment>, Part)> = Vec::new();
                 {
                     let entry = self.trees.entry(tree).or_default();
                     for item in commits {
@@ -560,7 +560,7 @@ impl CoreMachine {
                             LooseCommit::try_decode_fields(item.commit.fields_bytes())
                             && entry.add_commit(commit)
                         {
-                            fresh_commits.push(item);
+                            fresh_commits.push((&item.commit, Part::Ref(item.blob)));
                         }
                     }
                     for item in fragments {
@@ -568,7 +568,7 @@ impl CoreMachine {
                             Fragment::try_decode_fields(item.fragment.fields_bytes())
                             && entry.add_fragment(fragment)
                         {
-                            fresh_fragments.push(item);
+                            fresh_fragments.push((&item.fragment, Part::Ref(item.blob)));
                         }
                     }
                 }
@@ -615,9 +615,7 @@ impl CoreMachine {
                 }));
                 Outcome::Progressed
             }
-            StorageResult::Ingested { .. }
-            | StorageResult::Fetched { .. }
-            | StorageResult::FetchedRefs { .. }
+            StorageResult::FetchedRefs { .. }
             | StorageResult::TreeDeleted
             | StorageResult::LocallyIngested { .. } => self.driver_result_mismatch(tree),
         }
@@ -674,11 +672,14 @@ impl CoreMachine {
 
     /// Push fresh items to every subscribed, authenticated edge except
     /// the source, with fresh sender-heads, blobs by ref.
-    fn broadcast_items(
+    /// Push items to a tree's subscribers. Blobs arrive as [`Part`]s:
+    /// refs for remote-sourced items (zero-copy fan-out), inline bytes
+    /// for local writes.
+    pub(super) fn broadcast_items(
         &mut self,
         tree: SedimentreeId,
-        commits: &[&VerifiedCommit],
-        fragments: &[&VerifiedFragment],
+        commits: &[(&Signed<LooseCommit>, Part)],
+        fragments: &[(&Signed<Fragment>, Part)],
         exclude: Option<ConnId>,
     ) {
         if commits.is_empty() && fragments.is_empty() {
@@ -707,9 +708,9 @@ impl CoreMachine {
             .unwrap_or_default();
 
         for (subscriber, peer) in targets {
-            for item in commits {
+            for (signed, blob) in commits {
                 let sender_heads = self.next_sender_heads(peer, heads.clone());
-                let parts = wire::loose_commit_parts(tree, &item.commit, &sender_heads, item.blob);
+                let parts = wire::loose_commit_parts(tree, signed, &sender_heads, blob.clone());
                 self.effects.push_back(CoreEffect::Send {
                     conn: subscriber,
                     parts,
@@ -717,9 +718,9 @@ impl CoreMachine {
                 self.stats.subscription_pushes =
                     self.stats.subscription_pushes.saturating_add(1);
             }
-            for item in fragments {
+            for (signed, blob) in fragments {
                 let sender_heads = self.next_sender_heads(peer, heads.clone());
-                let parts = wire::fragment_parts(tree, &item.fragment, &sender_heads, item.blob);
+                let parts = wire::fragment_parts(tree, signed, &sender_heads, blob.clone());
                 self.effects.push_back(CoreEffect::Send {
                     conn: subscriber,
                     parts,
@@ -847,7 +848,7 @@ mod tests {
         edge::{ConnToCore, EdgeId, Sealed},
         event::Direction,
         id::{Generation, Seq},
-        machine::Now,
+        timestamp::Now,
         wall_clock::TimestampSeconds,
     };
     use alloc::collections::BTreeSet;

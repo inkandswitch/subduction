@@ -5530,6 +5530,7 @@ dependencies = [
  "serde",
  "subduction_crypto",
  "subduction_protocol",
+ "subduction_testkit",
  "testresult",
  "thiserror 2.0.20",
 ]
@@ -5564,6 +5565,18 @@ dependencies = [
  "metrics",
  "subduction_protocol",
  "tracing",
+]
+
+[[package]]
+name = "subduction_testkit"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek 2.2.0",
+ "future_form",
+ "futures",
+ "sedimentree_core",
+ "subduction_crypto",
+ "subduction_protocol",
 ]
 
 [[package]]

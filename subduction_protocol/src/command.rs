@@ -1,7 +1,7 @@
 //! Local commands: what the application asks the machine to do.
 //!
-//! Commands arrive as [`Event::Command`](crate::event::Event::Command) —
-//! same funnel as everything else, so ordering with network events is
+//! Commands arrive as [`NodeEvent::Command`](crate::node::NodeEvent::Command)
+//! — same funnel as everything else, so ordering with network events is
 //! total and there is no separate API surface to synchronize.
 //!
 //! # Local writes are fused driver ops

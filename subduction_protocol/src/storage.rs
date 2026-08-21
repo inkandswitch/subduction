@@ -8,7 +8,7 @@
 //!
 //! # The powerbox pattern (fused authorization)
 //!
-//! Legacy gated storage behind async [`StoragePolicy`] checks and wrapped
+//! Legacy gated storage behind async `StoragePolicy` checks and wrapped
 //! access in capability objects (`StoragePowerbox` → `Fetcher`/`Putter`).
 //! Policies can do IO (e.g. keyhive lookups), so they cannot be pure
 //! machine verdicts. Instead, every op carries its [`Provenance`] and the
@@ -16,12 +16,12 @@
 //! persistence as **one unit**, answering with a single result:
 //!
 //! ```text
-//! machine ─ Ingest { provenance, items… } ──▶ driver:
+//! machine ─ PersistItems { provenance, items… } ──▶ driver:
 //!                                               1. authorize (policy)
 //!                                               2. verify signatures
 //!                                               3. check blob digests
 //!                                               4. persist atomically-ish
-//! machine ◀─ StorageDone { Ingested / Unauthorized / Failed } ──┘
+//! machine ◀─ StorageDone { Persisted / Unauthorized / Failed } ──┘
 //! ```
 //!
 //! One round-trip per ingest (ADR-006a), and [`StorageResult::Unauthorized`]
@@ -36,7 +36,6 @@
 use alloc::vec::Vec;
 
 use sedimentree_core::{
-    blob::Blob,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{id::CommitId, LooseCommit},
@@ -64,36 +63,6 @@ pub enum Provenance {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum StorageOp {
-    /// Authorize, verify (signatures + blob digests), and persist a batch
-    /// of commits and fragments.
-    ///
-    /// Item-level verification failures reject the *item* (reported in
-    /// [`StorageResult::Ingested::rejected`]); a policy denial rejects the
-    /// *whole op* ([`StorageResult::Unauthorized`]).
-    Ingest {
-        /// The sedimentree being written to.
-        tree: SedimentreeId,
-        /// Who supplied the data (policy input).
-        provenance: Provenance,
-        /// Signed commits with their blobs.
-        commits: Vec<(Signed<LooseCommit>, Blob)>,
-        /// Signed fragments with their blobs.
-        fragments: Vec<(Signed<Fragment>, Blob)>,
-    },
-
-    /// Authorize and load specific items *with their blobs* (for building
-    /// sync responses; the machine already knows the metadata).
-    FetchItems {
-        /// The sedimentree being read.
-        tree: SedimentreeId,
-        /// Who is asking (policy input).
-        provenance: Provenance,
-        /// Commits to load, by causal identity.
-        commit_ids: Vec<CommitId>,
-        /// Fragments to load, by head identity.
-        fragment_heads: Vec<CommitId>,
-    },
-
     /// Delete a sedimentree and all its data.
     DeleteTree {
         /// The sedimentree to remove.
@@ -121,7 +90,7 @@ pub enum StorageOp {
     /// Authorize and load specific items, returning blobs as refs into
     /// the driver's buffer table (the storage executor retains what it
     /// reads and mints refs — the ref-world twin of
-    /// [`FetchItems`](StorageOp::FetchItems)).
+    /// [`FetchItemRefs`](StorageOp::FetchItemRefs)).
     FetchItemRefs {
         /// The sedimentree being read.
         tree: SedimentreeId,
@@ -150,7 +119,7 @@ pub enum StorageOp {
     },
 }
 
-/// Why one item within an [`Ingest`](StorageOp::Ingest) was rejected.
+/// Why one item within an ingest was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
@@ -179,29 +148,10 @@ pub enum ItemKind {
 }
 
 /// The result of a [`StorageOp`], echoed back via
-/// [`Event::StorageDone`](crate::event::Event::StorageDone).
+/// [`NodeEvent::StorageDone`](crate::node::NodeEvent::StorageDone).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum StorageResult {
-    /// An [`Ingest`](StorageOp::Ingest) finished. `stored` counts durably
-    /// persisted items; `rejected` lists per-item verification failures
-    /// (indexes into the op's `commits`/`fragments` vectors).
-    Ingested {
-        /// Items durably persisted (commits + fragments).
-        stored: u32,
-        /// Items dropped, with reasons (tier-3 telemetry feeds on this).
-        rejected: Vec<(ItemKind, u32, IngestRejection)>,
-    },
-
-    /// A [`FetchItems`](StorageOp::FetchItems) finished. Missing items are
-    /// simply absent (the store may have pruned them).
-    Fetched {
-        /// Requested commits that were found, with blobs.
-        commits: Vec<(Signed<LooseCommit>, Blob)>,
-        /// Requested fragments that were found, with blobs.
-        fragments: Vec<(Signed<Fragment>, Blob)>,
-    },
-
     /// A [`DeleteTree`](StorageOp::DeleteTree) finished.
     TreeDeleted,
 

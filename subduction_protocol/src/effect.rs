@@ -1,107 +1,20 @@
-//! Effects: everything the machine asks the driver to do.
+//! Application-facing effect vocabulary shared by the machines.
 //!
-//! Effects are drained via `poll_effect` after feeding events. They are
-//! plain data (bytes, ids, tickets) so the boundary crosses FFI unchanged.
+//! The composed driver-facing alphabet lives on
+//! [`NodeEffect`](crate::node::NodeEffect); the per-machine alphabets
+//! live with their machines. This module keeps the shared pieces:
+//! [`AppEvent`] (surfaced to the application) and [`SyncStatus`].
 //!
-//! Timers are deliberately *not* effects: the machine keeps its own
-//! deadline map and exposes only the next deadline via `poll_timeout`
+//! Timers are deliberately *not* effects: the machines keep their own
+//! deadline maps and expose only the next deadline via `poll_timeout`
 //! (quinn-proto style). The driver arms a single timer and sends a bare
-//! [`Event::Wake`](crate::event::Event::Wake) on expiry — no timer ids, no
-//! cancellation races.
+//! wake on expiry — no timer ids, no cancellation races.
 
 use alloc::vec::Vec;
 
 use sedimentree_core::{id::SedimentreeId, loose_commit::id::CommitId};
 
-use crate::{
-    id::ConnId,
-    peer_id::PeerId,
-    storage::{StorageFailure, StorageOp},
-    ticket::{CryptoTicket, StorageTicket},
-};
-
-/// An instruction from the machine to the driver.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub enum Effect {
-    /// Send one complete wire message on a connection.
-    ///
-    /// `bytes` is exactly one encoded protocol message. Transports that
-    /// fragment (WebSocket frames, QUIC stream chunks, …) must deliver it
-    /// atomically as a unit — fragmentation and reassembly live below this
-    /// boundary, inside the transport.
-    SendMessage {
-        /// The connection to send on.
-        conn: ConnId,
-        /// One complete encoded wire message.
-        bytes: Vec<u8>,
-    },
-
-    /// Close a connection. The driver must eventually answer with
-    /// [`Event::Disconnected`](crate::event::Event::Disconnected).
-    Disconnect {
-        /// The connection to close.
-        conn: ConnId,
-    },
-
-    /// Perform a crypto operation on a worker and answer with
-    /// [`Event::CryptoDone`](crate::event::Event::CryptoDone) carrying the
-    /// same ticket.
-    Crypto {
-        /// Witness pairing the completion with current machine state.
-        ticket: CryptoTicket,
-        /// The operation to perform.
-        op: CryptoOp,
-    },
-
-    /// Perform a storage operation (authorization + verification +
-    /// persistence fused, powerbox-style — see [`crate::storage`]) and
-    /// answer with [`Event::StorageDone`](crate::event::Event::StorageDone)
-    /// carrying the same ticket.
-    Storage {
-        /// Witness pairing the completion with current machine state.
-        ticket: StorageTicket,
-        /// The operation to perform.
-        op: StorageOp,
-    },
-
-    /// Surface an application-facing event (subscriptions, auth, data).
-    App(AppEvent),
-}
-
-/// A crypto operation requiring external key custody (ADR-014: signing
-/// only — the key may live in an HSM, secure enclave, `WebCrypto`
-/// non-extractable slot, or remote signer, which is why this is an effect
-/// rather than inline computation. Verification is pure and runs inline
-/// in the machine; bulk verification is fused into storage ops, ADR-012).
-///
-/// A single-variant enum on purpose: future custody-bound operations
-/// (e.g. ECDH for key exchange) are additive here.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub enum CryptoOp {
-    /// Sign `payload` with the machine's identity signing key (held by the
-    /// driver; the machine never sees key material).
-    Sign {
-        /// The bytes to sign.
-        payload: Vec<u8>,
-    },
-}
-
-/// The result of a [`CryptoOp`], echoed back via
-/// [`Event::CryptoDone`](crate::event::Event::CryptoDone).
-// Not `Copy`: future custody-bound results (ECDH shared secrets, batch
-// signatures) will carry data, and removing `Copy` later is breaking.
-#[allow(missing_copy_implementations)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub enum CryptoResult {
-    /// The signature produced by [`CryptoOp::Sign`].
-    Signed {
-        /// The ed25519 signature bytes.
-        signature: [u8; 64],
-    },
-}
+use crate::{id::ConnId, peer_id::PeerId, storage::StorageFailure};
 
 /// How a batch sync request concluded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

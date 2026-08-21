@@ -19,6 +19,7 @@ members = [
   "legacy/subduction_websocket",
   "subduction_protocol",
   "subduction_runtime",
+  "subduction_testkit",
 ]
 
 [workspace.package]

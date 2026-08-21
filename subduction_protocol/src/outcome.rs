@@ -44,7 +44,7 @@ pub enum IgnoreReason {
     /// An event referenced a connection the machine does not know.
     UnknownConnection(ConnId),
 
-    /// [`Connected`](crate::event::Event::Connected) arrived for a
+    /// [`Connected`](crate::node::NodeEvent::Connected) arrived for a
     /// [`ConnId`] that already exists (driver bug — ids must be fresh).
     DuplicateConnection(ConnId),
 

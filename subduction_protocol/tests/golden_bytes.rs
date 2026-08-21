@@ -402,7 +402,7 @@ fn assemble(parts: &[subduction_protocol::blob_ref::Part], table: &[(u32, &[u8])
 
 #[test]
 fn scatter_gather_parts_match_plain_encoding() -> TestResult {
-    use subduction_protocol::blob_ref::{BlobRef, FrameId};
+    use subduction_protocol::blob_ref::{BlobRef, FrameId, Part};
     let f = fixture();
     let blob_len = u32::try_from(f.blob.as_slice().len())?;
 
@@ -412,8 +412,12 @@ fn scatter_gather_parts_match_plain_encoding() -> TestResult {
         offset: 0,
         len: blob_len,
     };
-    let parts =
-        subduction_protocol::wire::loose_commit_parts(f.id, &f.signed_commit, &f.heads, blob_ref);
+    let parts = subduction_protocol::wire::loose_commit_parts(
+        f.id,
+        &f.signed_commit,
+        &f.heads,
+        Part::Ref(blob_ref),
+    );
     let assembled = assemble(&parts, &[(1, f.blob.as_slice())]);
     let plain = SyncMessage::LooseCommit {
         id: f.id,
@@ -423,6 +427,17 @@ fn scatter_gather_parts_match_plain_encoding() -> TestResult {
     }
     .encode();
     assert_eq!(assembled, plain, "loose-commit parts assemble identically");
+
+    // Inline-bytes variant (local-write broadcast) must be byte-identical
+    // to the ref variant and the plain encoding.
+    let inline_parts = subduction_protocol::wire::loose_commit_parts(
+        f.id,
+        &f.signed_commit,
+        &f.heads,
+        Part::Bytes(f.blob.as_slice().to_vec()),
+    );
+    let inline_assembled = assemble(&inline_parts, &[]);
+    assert_eq!(inline_assembled, plain, "inline blob parts assemble identically");
 
     // Batch response with one commit and one fragment blob.
     let commit_blob = f.blob.clone();

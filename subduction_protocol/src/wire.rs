@@ -47,9 +47,9 @@ use crate::{peer_id::PeerId, remote_heads::RemoteHeads};
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SyncMessage {
-    /// A single loose commit being sent for a particular [`Sedimentree`].
+    /// A single loose commit being sent for a particular [`Sedimentree`](sedimentree_core::sedimentree::Sedimentree).
     LooseCommit {
-        /// The ID of the [`Sedimentree`] that this commit belongs to.
+        /// The ID of the sedimentree that this commit belongs to.
         id: SedimentreeId,
 
         /// The signed [`LooseCommit`] being sent.
@@ -62,9 +62,9 @@ pub enum SyncMessage {
         sender_heads: RemoteHeads,
     },
 
-    /// A single fragment being sent for a particular [`Sedimentree`].
+    /// A single fragment being sent for a particular [`Sedimentree`](sedimentree_core::sedimentree::Sedimentree).
     Fragment {
-        /// The ID of the [`Sedimentree`] that this fragment belongs to.
+        /// The ID of the sedimentree that this fragment belongs to.
         id: SedimentreeId,
 
         /// The signed [`Fragment`] being sent.
@@ -77,7 +77,7 @@ pub enum SyncMessage {
         sender_heads: RemoteHeads,
     },
 
-    /// A request to "batch sync" an entire [`Sedimentree`].
+    /// A request to "batch sync" an entire [`Sedimentree`](sedimentree_core::sedimentree::Sedimentree).
     BatchSyncRequest(BatchSyncRequest),
 
     /// A response to a [`BatchSyncRequest`].
@@ -379,7 +379,7 @@ impl SyncMessage {
     /// the single blob for `LooseCommit`/`Fragment`; for
     /// `BatchSyncResponse`, all commit blobs in diff order, then all
     /// fragment blobs. Used by the connection machine to mint
-    /// [`BlobRef`](crate::blob_ref::BlobRef)s into the retained frame
+    /// [`BlobRef`]s into the retained frame
     /// instead of copying blob bytes onward.
     ///
     /// # Errors
@@ -509,55 +509,58 @@ fn sync_diff_size(diff: &SyncDiff) -> usize {
 
 use crate::blob_ref::{BlobRef, Part};
 
-/// Scatter-gather encoding of [`SyncMessage::LooseCommit`].
+/// Scatter-gather encoding of [`SyncMessage::LooseCommit`]. The blob may
+/// be a driver-frame ref (remote fan-out: zero copies) or inline bytes
+/// (local writes: the core already holds them).
 #[must_use]
 pub fn loose_commit_parts(
     id: SedimentreeId,
     commit: &Signed<LooseCommit>,
     sender_heads: &RemoteHeads,
-    blob: BlobRef,
+    blob: Part,
 ) -> Vec<Part> {
     item_message_parts(tags::LOOSE_COMMIT, id, commit.as_bytes(), sender_heads, blob)
 }
 
-/// Scatter-gather encoding of [`SyncMessage::Fragment`].
+/// Scatter-gather encoding of [`SyncMessage::Fragment`]. See
+/// [`loose_commit_parts`] for the blob-part contract.
 #[must_use]
 pub fn fragment_parts(
     id: SedimentreeId,
     fragment: &Signed<Fragment>,
     sender_heads: &RemoteHeads,
-    blob: BlobRef,
+    blob: Part,
 ) -> Vec<Part> {
     item_message_parts(tags::FRAGMENT, id, fragment.as_bytes(), sender_heads, blob)
 }
 
 /// Shared body of the two single-item builders (identical wire layout).
+#[allow(clippy::cast_possible_truncation)]
 fn item_message_parts(
     tag: u8,
     id: SedimentreeId,
     signed_bytes: &[u8],
     sender_heads: &RemoteHeads,
-    blob: BlobRef,
+    blob: Part,
 ) -> Vec<Part> {
-    let blob_len = blob.len as usize;
+    let blob_len = blob.len();
     let payload_size = 32
         + remote_heads_size(sender_heads)
         + signed_bytes.len()
-        + bijoux::u64::encoded_len(u64::from(blob.len))
-        + blob_len;
+        + bijoux::u64::encoded_len(blob_len)
+        + blob_len as usize;
     let total_size = ENVELOPE_HEADER_SIZE + payload_size;
 
-    let mut prefix = Vec::with_capacity(total_size - blob_len);
+    let mut prefix = Vec::with_capacity(total_size - blob_len as usize);
     prefix.extend_from_slice(&MESSAGE_SCHEMA);
-    #[allow(clippy::cast_possible_truncation)]
     prefix.extend_from_slice(&(total_size as u32).to_be_bytes());
     prefix.push(tag);
     prefix.extend_from_slice(id.as_bytes());
     encode_remote_heads(&mut prefix, sender_heads);
     prefix.extend_from_slice(signed_bytes);
-    bijoux::u64::encode(u64::from(blob.len), &mut prefix);
+    bijoux::u64::encode(blob_len, &mut prefix);
 
-    alloc::vec![Part::Bytes(prefix), Part::Ref(blob)]
+    alloc::vec![Part::Bytes(prefix), blob]
 }
 
 /// Scatter-gather encoding of a [`SyncMessage::BatchSyncResponse`] with

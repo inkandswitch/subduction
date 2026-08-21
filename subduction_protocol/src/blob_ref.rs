@@ -83,3 +83,20 @@ pub enum Part {
     /// never emit a torn frame.
     Ref(BlobRef),
 }
+
+impl Part {
+    /// The number of bytes this part contributes to the assembled frame.
+    #[must_use]
+    pub fn len(&self) -> u64 {
+        match self {
+            Self::Bytes(bytes) => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            Self::Ref(blob) => u64::from(blob.len),
+        }
+    }
+
+    /// Whether this part contributes no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}

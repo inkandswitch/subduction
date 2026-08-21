@@ -33,11 +33,10 @@ use crate::{
     event::Direction,
     handshake::audience::Audience,
     id::{ConnId, Generation},
-    machine::Now,
     outcome::{IgnoreReason, Outcome},
     storage::{StorageOp, StorageResult},
     ticket::{CryptoTicket, Entity, StorageTicket},
-    timestamp::Timestamp,
+    timestamp::{Now, Timestamp},
 };
 
 use sedimentree_core::collections::Map;
@@ -61,6 +60,7 @@ pub struct NodeConfig {
 
 /// Everything the driver tells the node.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum NodeEvent {
     /// A transport connection is up. `conn` is driver-allocated, never
     /// reused.
@@ -229,6 +229,12 @@ impl Node {
     /// Next queued leaf effect.
     pub fn poll_effect(&mut self) -> Option<NodeEffect> {
         self.effects.pop_front()
+    }
+
+    /// A snapshot of the core machine's telemetry counters.
+    #[must_use]
+    pub const fn stats(&self) -> crate::stats::Stats {
+        self.core.stats()
     }
 
     /// The earliest deadline across all machines.

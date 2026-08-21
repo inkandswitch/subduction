@@ -27,8 +27,8 @@
 //! additively during the Phase 2.5 split. Bulk data never rides the
 //! edge: verified items carry [`BlobRef`]s (see [`crate::blob_ref`]).
 //!
-//! [`ConnMachine`]: crate — lands with the Phase 2.5 split
-//! [`CoreMachine`]: crate — lands with the Phase 2.5 split
+//! [`ConnMachine`]: crate::conn_machine::ConnMachine
+//! [`CoreMachine`]: crate::core_machine::CoreMachine
 
 use alloc::vec::Vec;
 

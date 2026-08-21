@@ -28,12 +28,15 @@ use alloc::{collections::VecDeque, vec::Vec};
 use core::time::Duration;
 
 use sedimentree_core::{
+    blob::Blob,
     collections::{Map, Set},
     depth::CountLeadingZeroBytes,
+    fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::id::CommitId,
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::minimized::MinimizedSedimentree,
 };
+use subduction_crypto::signed::Signed;
 
 use crate::{
     blob_ref::Part,
@@ -41,14 +44,13 @@ use crate::{
     edge::{ConnToCore, CoreToConn, EdgeId, EdgeSequencer, Sealed},
     effect::AppEvent,
     id::{ConnId, Generation, Seq},
-    machine::Now,
     nonce_cache::NonceCache,
     outcome::{IgnoreReason, Outcome},
     peer_id::PeerId,
     stats::Stats,
     storage::{Provenance, StorageFailure, StorageOp, StorageResult},
     ticket::{Entity, StorageTicket},
-    timestamp::Timestamp,
+    timestamp::{Now, Timestamp},
     wire,
 };
 
@@ -440,8 +442,22 @@ impl CoreMachine {
         fragments: Vec<crate::command::NewFragment>,
     ) -> Outcome {
         let ticket = self.issue_local_ticket();
-        self.local_pending
-            .insert(ticket.seq, LocalPending::Ingest { tree });
+        let commit_blobs = commits
+            .iter()
+            .map(|new| (new.head, new.blob.clone()))
+            .collect();
+        let fragment_blobs = fragments
+            .iter()
+            .map(|new| (new.head, new.blob.clone()))
+            .collect();
+        self.local_pending.insert(
+            ticket.seq,
+            LocalPending::Ingest {
+                tree,
+                commit_blobs,
+                fragment_blobs,
+            },
+        );
         self.effects.push_back(CoreEffect::Storage {
             ticket,
             op: StorageOp::IngestLocal {
@@ -491,7 +507,11 @@ impl CoreMachine {
 
         match (pending, result) {
             (
-                LocalPending::Ingest { tree },
+                LocalPending::Ingest {
+                    tree,
+                    commit_blobs,
+                    fragment_blobs,
+                },
                 StorageResult::LocallyIngested { commits, fragments },
             ) => {
                 if !self.trees.contains_key(&tree) && self.local_delete_pending(tree) {
@@ -499,17 +519,29 @@ impl CoreMachine {
                 }
                 let entry = self.trees.entry(tree).or_default();
                 let mut heads = Vec::with_capacity(commits.len());
+                let mut push_commits: Vec<(&Signed<LooseCommit>, Part)> = Vec::new();
                 for signed in &commits {
                     if let Ok(verified) = signed.try_verify() {
-                        heads.push(verified.payload().head());
+                        let head = verified.payload().head();
+                        heads.push(head);
                         let _fresh = entry.add_commit(verified.payload().clone());
+                        if let Some(blob) = commit_blobs.get(&head) {
+                            push_commits
+                                .push((signed, Part::Bytes(blob.as_slice().to_vec())));
+                        }
                     }
                 }
                 let mut fragment_heads = Vec::with_capacity(fragments.len());
+                let mut push_fragments: Vec<(&Signed<Fragment>, Part)> = Vec::new();
                 for signed in &fragments {
                     if let Ok(verified) = signed.try_verify() {
-                        fragment_heads.push(verified.payload().head());
+                        let head = verified.payload().head();
+                        fragment_heads.push(head);
                         let _fresh = entry.add_fragment(verified.payload().clone());
+                        if let Some(blob) = fragment_blobs.get(&head) {
+                            push_fragments
+                                .push((signed, Part::Bytes(blob.as_slice().to_vec())));
+                        }
                     }
                 }
                 if !heads.is_empty() {
@@ -523,8 +555,9 @@ impl CoreMachine {
                             heads: fragment_heads,
                         }));
                 }
-                // Subscriber broadcast of local writes lands with the
-                // sync-session commit (needs blob refs from the driver).
+                // Local writes push to subscribers with inline blob bytes
+                // (the core already holds them; no driver frames involved).
+                self.broadcast_items(tree, &push_commits, &push_fragments, None);
                 Outcome::Progressed
             }
 
@@ -535,7 +568,7 @@ impl CoreMachine {
             }
 
             (
-                LocalPending::Ingest { tree } | LocalPending::Delete { tree },
+                LocalPending::Ingest { tree, .. } | LocalPending::Delete { tree },
                 StorageResult::Failed(failure),
             ) => {
                 self.effects
@@ -544,10 +577,8 @@ impl CoreMachine {
             }
 
             (
-                LocalPending::Ingest { tree } | LocalPending::Delete { tree },
-                StorageResult::Ingested { .. }
-                | StorageResult::Fetched { .. }
-                | StorageResult::FetchedRefs { .. }
+                LocalPending::Ingest { tree, .. } | LocalPending::Delete { tree },
+                StorageResult::FetchedRefs { .. }
                 | StorageResult::Persisted { .. }
                 | StorageResult::TreeDeleted
                 | StorageResult::LocallyIngested { .. }
@@ -614,12 +645,20 @@ impl EdgeEntry {
 }
 
 /// A pending local storage operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalPending {
-    /// A fused local seal+persist awaiting durability.
+    /// A fused local seal+persist awaiting durability. Carries the blob
+    /// bytes so the subscriber broadcast can splice them inline — local
+    /// writes never touch the driver's frame table.
     Ingest {
         /// The tree being appended to.
         tree: SedimentreeId,
+
+        /// Commit blobs by head id.
+        commit_blobs: Map<CommitId, Blob>,
+
+        /// Fragment blobs by head id.
+        fragment_blobs: Map<CommitId, Blob>,
     },
 
     /// A tree deletion awaiting completion.
@@ -881,6 +920,166 @@ mod tests {
             core.poll_effect(),
             Some(CoreEffect::App(AppEvent::CommitsStored { .. }))
         ));
+        Ok(())
+    }
+
+    /// Seal + persist one `IngestLocal` op like a real driver would.
+    fn execute_ingest_local(
+        tree: SedimentreeId,
+        commits: &[crate::command::NewCommit],
+    ) -> StorageResult {
+        use sedimentree_core::blob::BlobMeta;
+        let signer = subduction_crypto::signer::memory::MemorySigner::from_bytes(&[42u8; 32]);
+        let sealed: Vec<_> = commits
+            .iter()
+            .map(|new| {
+                let commit = LooseCommit::new(
+                    tree,
+                    new.head,
+                    new.parents.clone(),
+                    BlobMeta::new(&new.blob),
+                );
+                futures::executor::block_on(Signed::seal::<future_form::Sendable, _>(
+                    &signer, commit,
+                ))
+                .into_signed()
+            })
+            .collect();
+        StorageResult::LocallyIngested {
+            commits: sealed,
+            fragments: alloc::vec![],
+        }
+    }
+
+    fn new_commit(head: u8) -> crate::command::NewCommit {
+        use sedimentree_core::blob::Blob;
+        crate::command::NewCommit {
+            head: CommitId::new([head; 32]),
+            parents: alloc::collections::BTreeSet::new(),
+            blob: Blob::new(alloc::vec![head; 8]),
+        }
+    }
+
+    #[test]
+    fn remove_tree_round_trips() -> testresult::TestResult {
+        let mut core = core();
+        let tree = SedimentreeId::new([7u8; 32]);
+
+        let _outcome = core.handle(
+            now_at(0),
+            CoreEvent::Command(Command::HydrateTree {
+                tree,
+                commits: alloc::vec![LooseCommit::new(
+                    tree,
+                    CommitId::new([1u8; 32]),
+                    alloc::collections::BTreeSet::new(),
+                    sedimentree_core::blob::BlobMeta::new(&sedimentree_core::blob::Blob::new(
+                        alloc::vec![1u8; 8],
+                    )),
+                )],
+                fragments: alloc::vec![],
+            }),
+        );
+
+        let outcome = core.handle(now_at(1), CoreEvent::Command(Command::RemoveTree { tree }));
+        assert_eq!(outcome, Outcome::Progressed);
+        assert_eq!(core.tree_heads(tree), None, "resident state gone at once");
+
+        let Some(CoreEffect::Storage { ticket, op }) = core.poll_effect() else {
+            return Err("expected a storage effect".into());
+        };
+        assert!(matches!(op, StorageOp::DeleteTree { tree: t, .. } if t == tree));
+
+        let outcome = core.handle(
+            now_at(2),
+            CoreEvent::StorageDone {
+                ticket,
+                result: StorageResult::TreeDeleted,
+            },
+        );
+        assert_eq!(outcome, Outcome::Progressed);
+        assert_eq!(
+            core.poll_effect(),
+            Some(CoreEffect::App(AppEvent::TreeRemoved { tree }))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ingest_completion_after_remove_is_dropped() -> testresult::TestResult {
+        let mut core = core();
+        let tree = SedimentreeId::new([7u8; 32]);
+
+        // Ingest goes out…
+        let _outcome = core.handle(
+            now_at(0),
+            CoreEvent::Command(Command::AddCommits {
+                tree,
+                commits: alloc::vec![new_commit(9)],
+            }),
+        );
+        let Some(CoreEffect::Storage { ticket, op }) = core.poll_effect() else {
+            return Err("expected ingest effect".into());
+        };
+        let StorageOp::IngestLocal { commits, .. } = op else {
+            return Err("expected IngestLocal".into());
+        };
+
+        // …but the app removes the tree while the write is in flight.
+        let _outcome = core.handle(now_at(1), CoreEvent::Command(Command::RemoveTree { tree }));
+        let Some(CoreEffect::Storage { .. }) = core.poll_effect() else {
+            return Err("expected delete effect".into());
+        };
+
+        // The ingest completion lands after the removal decision: dropped.
+        let result = execute_ingest_local(tree, &commits);
+        let outcome = core.handle(now_at(2), CoreEvent::StorageDone { ticket, result });
+        assert_eq!(outcome, Outcome::Ignored(IgnoreReason::StaleTicket));
+        assert_eq!(core.tree_heads(tree), None, "removed tree stays removed");
+        Ok(())
+    }
+
+    #[test]
+    fn mutated_local_ticket_is_ignored() -> testresult::TestResult {
+        let mut core = core();
+        let tree = SedimentreeId::new([7u8; 32]);
+
+        let _outcome = core.handle(
+            now_at(0),
+            CoreEvent::Command(Command::AddCommits {
+                tree,
+                commits: alloc::vec![new_commit(9)],
+            }),
+        );
+        let Some(CoreEffect::Storage { ticket, op }) = core.poll_effect() else {
+            return Err("expected ingest effect".into());
+        };
+        let StorageOp::IngestLocal { commits, .. } = op else {
+            return Err("expected IngestLocal".into());
+        };
+
+        // A completion whose ticket seq was mutated must be ignored…
+        let mut mutated = ticket;
+        mutated.seq = mutated.seq.next();
+        let result = execute_ingest_local(tree, &commits);
+        let outcome = core.handle(
+            now_at(1),
+            CoreEvent::StorageDone {
+                ticket: mutated,
+                result: result.clone(),
+            },
+        );
+        assert_eq!(outcome, Outcome::Ignored(IgnoreReason::UnknownTicket));
+        assert_eq!(core.tree_heads(tree), None, "mutated ticket lands nothing");
+        assert_eq!(core.poll_effect(), None);
+
+        // …while the exact witness still lands.
+        let outcome = core.handle(now_at(2), CoreEvent::StorageDone { ticket, result });
+        assert_eq!(outcome, Outcome::Progressed);
+        assert_eq!(
+            core.tree_heads(tree),
+            Some(alloc::vec![CommitId::new([9u8; 32])])
+        );
         Ok(())
     }
 }

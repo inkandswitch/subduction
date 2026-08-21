@@ -1,0 +1,21 @@
+[package]
+name = "subduction_testkit"
+version = "0.1.0"
+description = "In-memory network harness for testing Subduction nodes: fake leaf drivers with data-plane invariant enforcement"
+
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ed25519-dalek = { workspace = true, features = ["std"] }
+future_form = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_protocol = { path = "../subduction_protocol", features = ["std"] }
+
+[lints]
+workspace = true

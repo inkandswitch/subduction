@@ -1,18 +1,30 @@
-//! Opaque, driver-supplied monotonic time.
+//! Opaque, driver-supplied time.
 //!
-//! The machine never tells the time. Every [`Machine::handle`] call takes a
-//! [`Timestamp`] supplied by the driver, measured in milliseconds since an
-//! arbitrary (per-process) epoch. The only requirements are:
+//! The machines never tell the time. Every `handle` call takes a [`Now`]
+//! supplied by the driver. The only requirements are:
 //!
-//! - **Monotonic**: never decreases across calls.
-//! - **Consistent**: one clock per machine instance.
-//!
-//! Wall-clock time (needed for handshake challenge freshness) is a separate
-//! concept and a separate type — see the handshake module.
-//!
-//! [`Machine::handle`]: `crate::wire` — placeholder link until the machine module lands
+//! - **Monotonic**: [`Now::monotonic`] never decreases across calls.
+//! - **Consistent**: one clock per node instance.
 
 use core::time::Duration;
+
+use crate::wall_clock::TimestampSeconds;
+
+/// The driver's view of "now", supplied with every `handle` call.
+///
+/// Two clocks because they answer different questions: `monotonic` orders
+/// deadlines and never goes backwards; `wall` is Unix time that crosses the
+/// wire in handshake freshness checks and may be corrected/skewed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+pub struct Now {
+    /// Monotonic driver time (deadlines).
+    pub monotonic: Timestamp,
+
+    /// Wall-clock Unix seconds (handshake freshness, nonce buckets).
+    pub wall: TimestampSeconds,
+}
 
 /// A monotonic timestamp in milliseconds since an arbitrary epoch.
 ///

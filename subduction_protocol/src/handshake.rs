@@ -33,10 +33,9 @@
 //!
 //! - The async `initiate`/`respond` drivers — inverted into the machine's
 //!   per-connection handshake sub-machine.
-//! - Inline signing (`Signed::seal`) and verification (`try_verify`) —
-//!   emitted as [`Crypto`](crate::effect::Effect::Crypto) effects
-//!   (ADR-006a); the pure checks ([`Challenge::validate`],
-//!   [`Response::validate`]) stay here.
+//! - Inline signing (`Signed::seal`) — emitted as `Sign` effects
+//!   (ADR-006a/ADR-014); verification (`try_verify`) and the pure checks
+//!   (`Challenge::validate`, `Response::validate`) run inline.
 
 pub mod audience;
 pub mod challenge;
@@ -203,7 +202,7 @@ impl HandshakeMessage {
     /// For signed variants, the entire byte slice is the `Signed<T>` — the
     /// discriminant at byte 4 is validated by [`Signed::try_decode`].
     /// **Decoding does not verify signatures** — the machine emits a
-    /// [`Verify`](crate::effect::CryptoOp::Verify) effect for that.
+    /// dedicated effect for that (ADR-014: verification is computation).
     ///
     /// # Errors
     ///

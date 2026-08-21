@@ -31,7 +31,7 @@
 //! Post-authentication this machine is a verify-and-forward gate:
 //! extension-schema messages surface directly (auth-gated, ADR-010);
 //! sync-schema messages will be decoded, verified, and forwarded as
-//! [`SyncForward`](crate::edge::SyncForward) — that half lands with the
+//! [`SyncForward`] — that half lands with the
 //! next Phase 2.5 commit.
 
 use alloc::{collections::VecDeque, vec, vec::Vec};
@@ -62,11 +62,10 @@ use crate::{
         signed_preimage,
     },
     id::{ConnId, Generation, Seq},
-    machine::Now,
     outcome::{Fault, IgnoreReason, Outcome},
     peer_id::PeerId,
     ticket::{CryptoTicket, Entity},
-    timestamp::Timestamp,
+    timestamp::{Now, Timestamp},
     wire,
 };
 
@@ -164,7 +163,7 @@ pub enum ConnAppEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnEvent {
     /// One complete wire message arrived (frame retained by the driver;
-    /// the id anchors any [`BlobRef`](crate::blob_ref::BlobRef)s minted
+    /// the id anchors any [`BlobRef`]s minted
     /// from it).
     MessageReceived {
         /// The retained frame's id.

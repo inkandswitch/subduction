@@ -1,7 +1,7 @@
 //! Tier-2 telemetry: pull-based internal counters (ADR-003).
 //!
 //! Plain `u64` fields, snapshotted on demand via
-//! [`Machine::stats`](crate::machine::Machine::stats) — no allocation, no
+//! `stats()` on the machines — no allocation, no
 //! effect traffic, crosses FFI as a plain struct (quinn-proto style).
 
 /// A snapshot of the machine's internal counters.
