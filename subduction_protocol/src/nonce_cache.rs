@@ -1,18 +1,17 @@
 //! Nonce tracking for handshake replay protection.
 //!
 //! Tracks `(PeerId, Nonce)` pairs from successful handshakes to prevent
-//! replay attacks. Failed handshake attempts should *not* call
+//! replay attacks. Failed handshake attempts should _not_ call
 //! [`NonceCache::try_claim`] to avoid denial-of-service via cache filling.
 //!
-//! Copied from `legacy/subduction_core/src/nonce_cache.rs` with the
-//! `async_lock::Mutex` removed: the cache is plain machine state behind
-//! `&mut self` (the machine serializes access by construction).
+//! The cache is plain machine state behind `&mut self`: the machine
+//! serializes access by construction, so no lock is needed.
 //!
 //! Each claim records its owning edge. Re-claims from the same connection
-//! (same or newer [`Generation`](crate::id::Generation)) are idempotent, so
-//! a supervisor-restarted connection machine can safely retry a claim
-//! without being mistaken for a replay. Claims from a
-//! *different* connection — the actual replay/MITM case — are denied.
+//! (same or newer [`Generation`](crate::id::Generation)) are idempotent,
+//! so a supervisor-restarted connection machine can safely retry a claim
+//! without being mistaken for a replay. Claims from a _different_
+//! connection — the actual replay/MITM case — are denied.
 //!
 //! # Design
 //!
@@ -98,7 +97,7 @@ impl NonceCache {
     /// # Errors
     ///
     /// Returns [`NonceReused`] if this `(peer, nonce)` pair was already
-    /// claimed by a different connection (replay), or by a *newer*
+    /// claimed by a different connection (replay), or by a _newer_
     /// incarnation of the same connection (stale claimant).
     pub fn try_claim(
         &mut self,
@@ -110,10 +109,8 @@ impl NonceCache {
         let key = (peer, nonce);
         let bucket_num = self.bucket_number(timestamp);
 
-        // Advance head if needed (clears old buckets)
         self.advance_head(bucket_num);
 
-        // Check all active buckets
         for bucket in &mut self.buckets {
             let Some(owner) = bucket.get_mut(&key) else {
                 continue;
@@ -129,7 +126,6 @@ impl NonceCache {
             return Err(NonceReused);
         }
 
-        // Insert into appropriate bucket
         let idx = Self::bucket_index(bucket_num);
         #[allow(clippy::indexing_slicing)] // idx is always < BUCKET_COUNT (4)
         let _previous = self.buckets[idx].insert(key, claimant);
@@ -208,11 +204,21 @@ mod tests {
     fn nonce_tracked_across_active_buckets() -> TestResult {
         let mut cache = NonceCache::default();
 
-        cache.try_claim(edge(1, 0), peer(1), Nonce::from_u128(1), TimestampSeconds::new(0))?;
+        cache.try_claim(
+            edge(1, 0),
+            peer(1),
+            Nonce::from_u128(1),
+            TimestampSeconds::new(0),
+        )?;
 
         // 6 minutes later: still within the 12-minute window.
         assert_eq!(
-            cache.try_claim(edge(2, 0), peer(1), Nonce::from_u128(1), TimestampSeconds::new(360)),
+            cache.try_claim(
+                edge(2, 0),
+                peer(1),
+                Nonce::from_u128(1),
+                TimestampSeconds::new(360)
+            ),
             Err(NonceReused)
         );
         Ok(())
@@ -222,10 +228,20 @@ mod tests {
     fn nonce_expires_after_window() -> TestResult {
         let mut cache = NonceCache::default();
 
-        cache.try_claim(edge(1, 0), peer(1), Nonce::from_u128(1), TimestampSeconds::new(0))?;
+        cache.try_claim(
+            edge(1, 0),
+            peer(1),
+            Nonce::from_u128(1),
+            TimestampSeconds::new(0),
+        )?;
 
         // 15 minutes later: bucket 0 has rotated out.
-        cache.try_claim(edge(2, 0), peer(1), Nonce::from_u128(1), TimestampSeconds::new(900))?;
+        cache.try_claim(
+            edge(2, 0),
+            peer(1),
+            Nonce::from_u128(1),
+            TimestampSeconds::new(900),
+        )?;
         Ok(())
     }
 

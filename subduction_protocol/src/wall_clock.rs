@@ -2,8 +2,8 @@
 //!
 //! Distinct from [`crate::timestamp::Timestamp`] (monotonic driver time):
 //! wall-clock seconds cross the wire in challenges/responses and feed
-//! drift correction. Copied from `legacy/subduction_core/src/timestamp.rs`
-//! minus the `system_time` constructor — the driver supplies wall time.
+//! drift correction. There is no system-time constructor — the driver
+//! supplies wall time.
 
 use core::time::Duration;
 

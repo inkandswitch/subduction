@@ -6,7 +6,7 @@
 //!
 //! # Local writes are fused driver ops
 //!
-//! [`AddCommits`](Command::AddCommits) hands *raw parts* (head, parents,
+//! [`AddCommits`](Command::AddCommits) hands _raw parts_ (head, parents,
 //! blob) to the machine, which forwards them as one
 //! [`IngestLocal`](crate::storage::StorageOp::IngestLocal) storage op. The
 //! driver — which holds the signing key — hashes each blob, builds and
@@ -64,9 +64,9 @@ pub struct NewFragment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Command {
-    /// Install a sedimentree's *metadata* loaded from storage by the
+    /// Install a sedimentree's _metadata_ loaded from storage by the
     /// driver at startup. Merging is idempotent and monotone; no effects
-    /// are produced (the data came *from* storage).
+    /// are produced (the data came _from_ storage).
     HydrateTree {
         /// The tree being hydrated.
         tree: SedimentreeId,

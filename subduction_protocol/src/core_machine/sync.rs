@@ -1,7 +1,7 @@
 //! Sync sessions over sealed edges.
 //!
 //! Everything here operates on already-verified data (the connection
-//! machines are the forgery gate); the core's jobs are the *joins*:
+//! machines are the forgery gate); the core's jobs are the _joins_:
 //! resident-tree diffing, session matching, subscription fan-out, and
 //! heads staleness — each entry touching exactly one tree (the
 //! no-cross-tree invariant; the per-peer heads counters are the
@@ -57,8 +57,6 @@ pub(super) struct OutboundRequest {
     /// differ at response time, local writes landed inside the
     /// snapshot→subscription window — items no diff and no push will
     /// ever carry — and the requester must immediately re-sync.
-    /// (Found by DST seed 0; legacy masked this hole with its
-    /// broadcast-to-all-when-no-subscribers fallback.)
     pub(super) issued_heads: Vec<CommitId>,
 }
 
@@ -356,12 +354,11 @@ impl CoreMachine {
         match status {
             ForwardStatus::NotFound => {
                 // The peer lacks the tree entirely. With subscribe:true
-                // the sync relationship still forms — and the diff
-                // degenerates to "send everything" (replaces legacy's
-                // broadcast-to-all-when-no-subscribers fallback; found
-                // by DST seed 2). Without it, our data would never
-                // cross: no diff carries it (they can't summarize a
-                // tree they lack) and no push does (no subscription).
+                // the sync relationship still forms and the diff
+                // degenerates to "send everything". Without it, our
+                // data would never cross: no diff carries it (they
+                // can't summarize a tree they lack) and no push does
+                // (no subscription).
                 if request.subscribe {
                     let _new = self.subscriptions.entry(tree).or_default().insert(conn);
                     self.push_all_resident(conn, tree);
@@ -376,7 +373,7 @@ impl CoreMachine {
             ForwardStatus::Ok => {}
         }
 
-        // Mutual subscription on success (legacy parity).
+        // Mutual subscription on success.
         if request.subscribe {
             let _new = self.subscriptions.entry(tree).or_default().insert(conn);
         }
@@ -395,8 +392,8 @@ impl CoreMachine {
         // response fell into a window no diff and no push covers: the
         // summary predates them and the mutual subscription postdates
         // them. Re-sync immediately — the fresh summary includes them.
-        // Terminates: re-triggers only while writes keep landing mid-
-        // flight (DST seed 0 regression).
+        // Terminates: re-triggers only while writes keep landing
+        // mid-flight.
         if self.sorted_heads(tree) != request.issued_heads {
             let _outcome = self.start_sync(now, conn, tree, request.subscribe);
         }
@@ -659,7 +656,7 @@ impl CoreMachine {
                     .push_back(CoreEffect::App(AppEvent::TreeUpdated { tree, peer }));
 
                 // Ack individual pushes with our updated heads (1.5-RTT
-                // second half, legacy parity).
+                // second half).
                 if ack {
                     let heads: Vec<CommitId> = self
                         .trees
@@ -905,7 +902,7 @@ impl CoreMachine {
             }));
     }
 
-    /// Per-peer received-heads staleness filter (legacy parity).
+    /// Per-peer received-heads staleness filter.
     fn notify_heads(&mut self, tree: SedimentreeId, conn: ConnId, heads: RemoteHeads) {
         let Some(peer) = self.edges.get(&conn).and_then(|entry| entry.peer) else {
             return;

@@ -1,9 +1,7 @@
 //! Remote heads: a peer's current tips for a sedimentree.
 //!
-//! The wire struct is copied verbatim from
-//! `legacy/subduction_core/src/remote_heads.rs`. The legacy observer /
-//! notifier machinery does not come along: staleness filtering becomes
-//! machine state, and notifications become application-event effects.
+//! Staleness filtering is machine state; notifications surface as
+//! application-event effects.
 
 use alloc::vec::Vec;
 

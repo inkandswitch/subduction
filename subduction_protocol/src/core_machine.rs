@@ -12,15 +12,15 @@
 //!
 //! # Leases
 //!
-//! The core arms a lease per edge covering the **handshake window only**
+//! The core arms a lease per edge covering the _handshake window only_
 //! (`Opened` → `Authenticated`): a connection machine that dies mid-
 //! handshake without a `Closed` message is cleaned up at lease expiry
 //! via `poll_timeout`. Post-authentication liveness is a transport
-//! concern (keepalives live in the driver; supervision in Phase 3) —
-//! an idle authenticated edge is healthy, not expired.
+//! concern (keepalives and supervision live in the driver) — an idle
+//! authenticated edge is healthy, not expired.
 //!
-//! Sync sessions land in the next Phase 2.5 commit; this file owns the
-//! shell: edge lifecycle, nonce arbitration, and local data commands.
+//! This file owns edge lifecycle, nonce arbitration, and local data
+//! commands; sync sessions live in the `sync` submodule.
 
 mod sync;
 
@@ -904,7 +904,7 @@ mod tests {
         }
         assert!(closed, "closure surfaced to the app");
 
-        // Reopening the same conn with a NEW generation works (fresh
+        // Reopening the same conn with a new generation works (fresh
         // sequencer), and the old generation is dead.
         let e2 = edge(1, Generation::FIRST.next());
         let outcome = core.handle(

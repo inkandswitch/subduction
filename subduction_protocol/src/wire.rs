@@ -1,9 +1,7 @@
 //! Sync protocol wire messages and their canonical binary codec.
 //!
-//! Copied verbatim from `legacy/subduction_core/src/connection/message.rs`
-//! (wire compatibility is a hard constraint — see `design/sans-io.md`).
-//! The legacy routing traits (`TryAs*`) did not come along: the machine
-//! routes with a plain `match`.
+//! Wire compatibility is a hard constraint (see `design/sans-io.md`):
+//! encodings are pinned byte-for-byte by the golden-bytes tests.
 //!
 //! # Wire Layout
 //!
@@ -34,7 +32,7 @@ use sedimentree_core::{
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;

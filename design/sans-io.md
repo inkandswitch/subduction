@@ -290,8 +290,6 @@ table records which tier now feeds it (audited against
 
 ## Status & Migration
 
-Rewrite phases, the module-by-module migration map, and current progress
-are tracked in the working plan (`.ignore/PLAN.md` in development clones).
 Legacy crates remain building workspace members under `legacy/` until
-Phase 4 reaches parity. No releases are cut from this tree during the
+the rewrite reaches parity. No releases are cut from this tree during the
 rewrite.

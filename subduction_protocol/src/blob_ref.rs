@@ -1,4 +1,4 @@
-//! The blob data plane: machines route *references* to bulk bytes; the
+//! The blob data plane: machines route _references_ to bulk bytes; the
 //! driver warehouses the bytes themselves.
 //!
 //! A [`BlobRef`] points into a driver-retained ingress frame. Machines
@@ -10,10 +10,10 @@
 //! # Validity is a liveness property, not a type property
 //!
 //! A `BlobRef` is a claim check, like a file descriptor: resolution can
-//! fail, and the design makes failure *clean and loud* rather than
+//! fail, and the design makes failure _clean and loud_ rather than
 //! impossible:
 //!
-//! - [`FrameId`]s are monotonic and **never reused** — a stale ref can
+//! - [`FrameId`]s are monotonic and _never reused_ — a stale ref can
 //!   only mean "gone", never "someone else's bytes" (no ABA).
 //! - Content addressing backstops everything else: every downstream
 //!   consumer of blob bytes sits behind a digest check, so wrong bytes
@@ -24,7 +24,7 @@
 
 /// A driver-assigned identifier for one retained ingress frame.
 ///
-/// Monotonic per driver instance; **never reused** (a `u64` counter
+/// Monotonic per driver instance; _never reused_ (a `u64` counter
 /// cannot realistically wrap). Reuse would reintroduce the ABA problem —
 /// a stale [`BlobRef`] silently resolving to different content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

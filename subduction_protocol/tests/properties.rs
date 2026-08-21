@@ -43,7 +43,7 @@ fn node(seed: u8) -> (Node, SigningKey) {
 
 /// Drain effects: complete signs with the real key, collect assembled
 /// sends and app events, drop everything else (storage never completes —
-/// pending ops simply stay pending, which the machines must tolerate).
+/// pending ops stay pending, which the machines must tolerate).
 fn run_effects(
     node: &mut Node,
     key: &SigningKey,

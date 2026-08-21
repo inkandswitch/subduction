@@ -52,10 +52,6 @@ pub enum IgnoreReason {
     /// (a disconnect effect is in flight).
     ConnectionClosing(ConnId),
 
-    /// The message is valid but its handling is not yet implemented in
-    /// this phase of the rewrite (post-handshake sync messages — Phase 2).
-    NotYetImplemented,
-
     /// A sync response arrived that matches no in-flight request
     /// (already answered, timed out, or never ours). Unsolicited but
     /// harmless — dropped without touching state.
@@ -87,8 +83,7 @@ pub enum Fault {
 
     /// The authenticated peer did not match the pinned
     /// [`Audience::Known`](crate::handshake::audience::Audience::Known)
-    /// identity. (Stricter than legacy, which never re-checked the
-    /// responder against the dialed audience.)
+    /// identity.
     PeerMismatch,
 
     /// A handshake deadline expired.

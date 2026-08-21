@@ -30,12 +30,7 @@
 //! Nothing in this crate blocks, sleeps, spawns, locks, or tells the time.
 //! `no_std + alloc` by construction.
 //!
-//! ## Status
-//!
-//! Phase 2.5 — the split-machine architecture is complete and the old
-//! single-machine implementation has been deleted. See
-//! `design/sans-io.md` in the repository root for the architecture plan
-//! and `.ignore/PLAN.md` for the working task list.
+//! See `design/sans-io.md` in the repository root for the architecture.
 //!
 //! [`ConnMachine`]: conn_machine::ConnMachine
 //! [`CoreMachine`]: core_machine::CoreMachine

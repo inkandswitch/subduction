@@ -53,7 +53,7 @@ impl TryFrom<u8> for RejectionReason {
 ///
 /// # Security Note
 ///
-/// This message is unsigned. Clients should NOT use the `server_timestamp`
+/// This message is unsigned. Clients must not use the `server_timestamp`
 /// for drift correction if the drift is implausible (> [`super::MAX_PLAUSIBLE_DRIFT`]).
 /// An attacker could send fake rejections with manipulated timestamps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

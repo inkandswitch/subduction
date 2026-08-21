@@ -1,14 +1,14 @@
 //! Identifiers used across the machine boundary.
 //!
 //! All ids are plain integers so they cross FFI unchanged. [`ConnId`] is
-//! allocated by the *driver* (it owns the sockets); [`Generation`] and
-//! [`Seq`] are allocated by the *machine* (they witness machine state).
+//! allocated by the _driver_ (it owns the sockets); [`Generation`] and
+//! [`Seq`] are allocated by the _machine_ (they witness machine state).
 
 /// A driver-allocated identifier for one transport connection.
 ///
 /// The driver must never reuse a `ConnId` within the lifetime of a machine,
 /// even after the connection closes. (A `u64` counter cannot realistically
-/// wrap; this replaces the legacy manager-assigned `ConnectionId`.)
+/// wrap.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
@@ -40,7 +40,7 @@ impl core::fmt::Display for ConnId {
 ///
 /// Bumped whenever the entity is torn down or restarted. Completions carry
 /// the generation they were issued under; a completion whose generation is
-/// not current is *stale* and is dropped — this is how the machine stays
+/// not current is _stale_ and is dropped — this is how the machine stays
 /// safe under interleaved completions without locks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]

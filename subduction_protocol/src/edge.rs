@@ -8,23 +8,23 @@
 //! opaquely; they cannot construct one, so they cannot inject
 //! "already-verified" data into the core — the forgery gate stays in
 //! machine code on every platform. The router and both machine types are
-//! shipped Rust; only *leaf* effects (transport bytes, storage, signing,
+//! shipped Rust; only _leaf_ effects (transport bytes, storage, signing,
 //! clocks) cross to native driver code.
 //!
 //! # Edges and epochs
 //!
 //! An edge is identified by [`EdgeId`] = (connection, generation). A
-//! supervisor restart of a connection's machine starts a **new
-//! generation**: messages from the old incarnation fail the sequencer's
+//! supervisor restart of a connection's machine starts a _new
+//! generation_: messages from the old incarnation fail the sequencer's
 //! edge check and drop. Within an edge, messages carry a monotonic
-//! [`Seq`]; the receiving side's [`EdgeSequencer`] enforces **in-order,
-//! exactly-once** delivery — loss, duplication, and reordering between
-//! machines are driver bugs made *detectable* rather than trusted away.
+//! [`Seq`]; the receiving side's [`EdgeSequencer`] enforces _in-order,
+//! exactly-once_ delivery — loss, duplication, and reordering between
+//! machines are driver bugs made _detectable_ rather than trusted away.
 //!
 //! # The alphabet
 //!
 //! [`ConnToCore`] and [`CoreToConn`] are deliberately small and grow
-//! additively during the Phase 2.5 split. Bulk data never rides the
+//! additively. Bulk data never rides the
 //! edge: verified items carry [`BlobRef`]s (see [`crate::blob_ref`]).
 //!
 //! [`ConnMachine`]: crate::conn_machine::ConnMachine
@@ -307,8 +307,9 @@ pub enum ConnToCore {
         peer: PeerId,
         /// The challenge nonce.
         nonce: Nonce,
-        /// The challenge's signed wall-clock timestamp (bucketing key —
-        /// legacy parity: bucket by message time, not arrival time).
+        /// The challenge's signed wall-clock timestamp — the bucketing
+        /// key (message time, not arrival time, so claims replay
+        /// deterministically).
         timestamp: crate::wall_clock::TimestampSeconds,
     },
 

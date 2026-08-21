@@ -14,7 +14,7 @@
 //!        (Outbound)                     (Inbound)
 //!            │                              │
 //!   AwaitingChallengeSign            AwaitingChallenge
-//!            │ SignDone                     │ challenge: verify INLINE
+//!            │ SignDone                     │ challenge: verify inline
 //!            ▼                              ▼
 //!    AwaitingResponse ──crossed──▶   AwaitingNonceClaim ←─ the one
 //!            │ response:  challenge:        │ NonceVerdict   core round
@@ -24,15 +24,12 @@
 //!       AUTHENTICATED ◀─────────────────────┘
 //! ```
 //!
-//! Simultaneous open follows the same sequence as the single-machine
-//! port (reflection guards → inline verify → tie-break → loser signs
-//! first), reusing this module's sign states.
+//! Simultaneous open (reflection guards → inline verify → tie-break →
+//! loser signs first) reuses this module's sign states.
 //!
 //! Post-authentication this machine is a verify-and-forward gate:
-//! extension-schema messages surface directly (auth-gated);
-//! sync-schema messages will be decoded, verified, and forwarded as
-//! [`SyncForward`] — that half lands with the
-//! next Phase 2.5 commit.
+//! extension-schema messages surface directly (auth-gated); sync-schema
+//! messages are decoded, verified, and forwarded as [`SyncForward`].
 
 use alloc::{collections::VecDeque, vec, vec::Vec};
 use core::time::Duration;
@@ -175,7 +172,7 @@ pub enum ConnEvent {
     /// A signing completion (ticket echoed from [`ConnEffect::Sign`]).
     ///
     /// _Trust boundary:_ the signature bytes are appended to the wire
-    /// message **unverified** — the driver's signer is the local trust
+    /// message _unverified_ — the driver's signer is the local trust
     /// root (it holds the signing key). A corrupt signature costs only
     /// liveness: the remote peer rejects the handshake message.
     SignDone {
@@ -445,10 +442,10 @@ impl ConnMachine {
         self.send_to_core(ConnToCore::ClaimNonce {
             peer: initiator,
             nonce: challenge.nonce,
-            // Deliberate legacy divergence: legacy buckets by ARRIVAL
-            // time; we bucket by the message-signed timestamp so the
-            // claim is a pure function of the message (journal/replay-
-            // deterministic). Node-local; wire behavior unchanged.
+            // Bucketed by the message-signed timestamp (not arrival
+            // time) so the claim is a pure function of the message and
+            // stays journal/replay-deterministic. Node-local; wire
+            // behavior unchanged.
             timestamp: challenge.timestamp,
         });
         Outcome::Progressed
@@ -751,8 +748,8 @@ impl ConnMachine {
                             sender_heads,
                         });
                     }
-                    // Item rejected: still deliver the heads rider
-                    // (legacy notifies heads before verification).
+                    // Item rejected: still deliver the heads rider —
+                    // heads are independent of item validity.
                     None => self.forward(SyncForward::HeadsUpdate {
                         tree: id,
                         heads: sender_heads,

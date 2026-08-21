@@ -26,16 +26,11 @@
 //!
 //! # Sans-io split
 //!
-//! This module holds the *pure* handshake vocabulary, copied from
-//! `legacy/subduction_core/src/handshake.rs`: message types, codec,
-//! validation math, drift correction, and errors. What did **not** come
-//! along:
-//!
-//! - The async `initiate`/`respond` drivers — inverted into the machine's
-//!   per-connection handshake sub-machine.
-//! - Inline signing (`Signed::seal`) — emitted as `Sign` effects
-//!   ; verification (`try_verify`) and the pure checks
-//!   (`Challenge::validate`, `Response::validate`) run inline.
+//! This module holds the _pure_ handshake vocabulary: message types,
+//! codec, validation math, drift correction, and errors. The handshake
+//! _flow_ lives in the per-connection machine: signing is emitted as
+//! `Sign` effects, while verification (`try_verify`) and the pure checks
+//! (`Challenge::validate`, `Response::validate`) run inline.
 
 pub mod audience;
 pub mod challenge;
@@ -156,7 +151,7 @@ pub(crate) const HANDSHAKE_SCHEMA: [u8; 4] = Challenge::SCHEMA;
 
 /// Variant tag bytes within the `SUH\0` handshake protocol.
 mod handshake_tags {
-    use super::{Challenge, response::Response};
+    use super::{response::Response, Challenge};
 
     pub(super) const CHALLENGE: u8 = Challenge::TAG;
     pub(super) const RESPONSE: u8 = Response::TAG;
@@ -201,7 +196,7 @@ impl HandshakeMessage {
     ///
     /// For signed variants, the entire byte slice is the `Signed<T>` — the
     /// discriminant at byte 4 is validated by [`Signed::try_decode`].
-    /// **Decoding does not verify signatures** — the machine emits a
+    /// _Decoding does not verify signatures_ — the machine emits a
     /// dedicated effect for that: verification is computation.
     ///
     /// # Errors

@@ -2,8 +2,8 @@
 //! composed into one pure artifact.
 //!
 //! This is the shape platforms bind: sealed inter-machine traffic is
-//! routed *inside* [`Node::handle`] and never crosses to driver code —
-//! drivers see only **leaf** effects (bytes to send, storage ops,
+//! routed _inside_ [`Node::handle`] and never crosses to driver code —
+//! drivers see only _leaf_ effects (bytes to send, storage ops,
 //! signing, releases, app events) and feed only world events. A driver
 //! cannot fabricate verified data because the types it would need are
 //! unconstructible outside this crate.

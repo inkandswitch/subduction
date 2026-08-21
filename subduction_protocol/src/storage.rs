@@ -1,9 +1,9 @@
 //! Storage effect vocabulary: what the machine asks of the store.
 //!
-//! The machine holds sedimentree *metadata* in memory (hydrated by the
+//! The machine holds sedimentree _metadata_ in memory (hydrated by the
 //! driver at startup) and makes all sync decisions against it. Storage
 //! effects exist for the two things the machine cannot do itself:
-//! durable writes and blob reads. Blob bytes only ever *transit* the
+//! durable writes and blob reads. Blob bytes only ever _transit_ the
 //! machine (wire message ↔ effect); they are never resident state.
 //!
 //! # Fused authorization
@@ -40,7 +40,7 @@ use alloc::vec::Vec;
 use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_crypto::signed::Signed;
 
@@ -136,7 +136,7 @@ pub enum StorageResult {
     },
 
     /// A [`FetchItemRefs`](StorageOp::FetchItemRefs) finished. Missing
-    /// items are simply absent.
+    /// items are absent from the result.
     FetchedRefs {
         /// Requested commits that were found, blobs as refs.
         commits: Vec<(Signed<LooseCommit>, crate::blob_ref::BlobRef)>,

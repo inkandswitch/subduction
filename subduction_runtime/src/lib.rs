@@ -27,16 +27,16 @@
 //!
 //! ## Status
 //!
-//! Phase 3 scaffolding — traits and the actor loop land after the
+//! Scaffolding — traits and the actor loop land after the
 //! protocol vocabulary stabilizes. See `design/sans-io.md`.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-// Phase 3 modules land here:
+// Planned modules:
 // pub mod clock;      — Clock trait (monotonic Timestamp source)
 // pub mod crypto;     — CryptoWorker trait (sign/verify/digest offload)
 // pub mod driver;     — actor funnel + effect executor + timer wheel
-// pub mod spawn;      — Spawn trait (copied from legacy)
+// pub mod spawn;      — Spawn trait
 // pub mod storage;    — Storage trait + in-memory impl + conformance suite
 // pub mod telemetry;  — tier-1/tier-3 mapping (feature-gated)
-// pub mod transport;  — byte Transport trait (contract copied from legacy)
+// pub mod transport;  — byte Transport trait

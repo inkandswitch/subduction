@@ -1,6 +1,6 @@
 //! Peer identity types.
 //!
-//! Copied verbatim from `legacy/subduction_core/src/peer/id.rs`.
+//! The wire format is pinned by the golden-bytes tests.
 
 use alloc::string::String;
 use core::fmt::Write;

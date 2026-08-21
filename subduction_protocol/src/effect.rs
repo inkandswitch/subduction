@@ -5,7 +5,7 @@
 //! live with their machines. This module keeps the shared pieces:
 //! [`AppEvent`] (surfaced to the application) and [`SyncStatus`].
 //!
-//! Timers are deliberately *not* effects: the machines keep their own
+//! Timers are deliberately _not_ effects: the machines keep their own
 //! deadline maps and expose only the next deadline via `poll_timeout`
 //! (quinn-proto style). The driver arms a single timer and sends a bare
 //! wake on expiry — no timer ids, no cancellation races.
@@ -39,8 +39,8 @@ pub enum SyncStatus {
 ///
 /// Drivers translate these into callbacks, streams, or platform-native
 /// notifications; they also feed tier-1/tier-3 telemetry.
-// Not `Copy`: Phase 2 adds data-carrying variants (ingested commits, heads
-// updates), and removing a `Copy` impl later is a breaking change.
+// Not `Copy`: data-carrying variants (ingested commits, heads
+// updates) may be added, and removing a `Copy` impl later is a breaking change.
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
