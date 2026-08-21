@@ -17,7 +17,7 @@ use sedimentree_core::{
 use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 use subduction_protocol::{
     command::{Command, NewCommit},
-    effect::{AppEvent, CryptoOp, CryptoResult, Effect, SignatureCheck, SyncStatus},
+    effect::{AppEvent, CryptoOp, CryptoResult, Effect, SyncStatus},
     event::{Direction, Event},
     handshake::audience::Audience,
     id::ConnId,
@@ -112,26 +112,9 @@ impl TestPeer {
                 Effect::Disconnect { .. } => {}
                 Effect::App(event) => self.app.push(event),
                 Effect::Crypto { ticket, op } => {
-                    let result = match op {
-                        CryptoOp::Sign { payload } => CryptoResult::Signed {
-                            signature: self.signing_key.sign(&payload).to_bytes(),
-                        },
-                        CryptoOp::Verify(item) => {
-                            let ok = ed25519_dalek::VerifyingKey::from_bytes(&item.verifying_key)
-                                .is_ok_and(|vk| {
-                                    vk.verify_strict(
-                                        &item.payload,
-                                        &ed25519_dalek::Signature::from_bytes(&item.signature),
-                                    )
-                                    .is_ok()
-                                });
-                            CryptoResult::Verified(if ok {
-                                SignatureCheck::Valid
-                            } else {
-                                SignatureCheck::Invalid
-                            })
-                        }
-                        CryptoOp::VerifyBatch(_) => unimplemented!("not used in this test"),
+                    let CryptoOp::Sign { payload } = op;
+                    let result = CryptoResult::Signed {
+                        signature: self.signing_key.sign(&payload).to_bytes(),
                     };
                     let _outcome = self
                         .machine

@@ -7,7 +7,7 @@ use sedimentree_core::codec::{
     decode::DecodeFields as _, encode::EncodeFields as _, schema::Schema as _,
 };
 use subduction_protocol::{
-    effect::{AppEvent, CryptoOp, CryptoResult, Effect, SignatureCheck},
+    effect::{AppEvent, CryptoOp, CryptoResult, Effect},
     event::{Direction, Event},
     handshake::{audience::Audience, challenge::Challenge, response::Response, HandshakeMessage},
     id::ConnId,
@@ -68,14 +68,9 @@ impl TestPeer {
                 Effect::Storage { .. } => {}
                 Effect::App(app) => self.app.push(app),
                 Effect::Crypto { ticket, op } => {
-                    let result = match op {
-                        CryptoOp::Sign { payload } => CryptoResult::Signed {
-                            signature: self.signing_key.sign(&payload).to_bytes(),
-                        },
-                        CryptoOp::Verify(item) => CryptoResult::Verified(check_item(&item)),
-                        CryptoOp::VerifyBatch(items) => {
-                            CryptoResult::BatchVerified(items.iter().map(check_item).collect())
-                        }
+                    let CryptoOp::Sign { payload } = op;
+                    let result = CryptoResult::Signed {
+                        signature: self.signing_key.sign(&payload).to_bytes(),
                     };
                     let outcome = self
                         .machine
@@ -101,18 +96,6 @@ impl TestPeer {
             | AppEvent::TreeUpdated { .. }
             | AppEvent::RemoteHeadsUpdated { .. } => None,
         })
-    }
-}
-
-fn check_item(item: &subduction_protocol::effect::VerifyItem) -> SignatureCheck {
-    let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&item.verifying_key) else {
-        return SignatureCheck::Invalid;
-    };
-    let sig = ed25519_dalek::Signature::from_bytes(&item.signature);
-    if vk.verify_strict(&item.payload, &sig).is_ok() {
-        SignatureCheck::Valid
-    } else {
-        SignatureCheck::Invalid
     }
 }
 
@@ -321,9 +304,7 @@ fn stale_completion_after_disconnect_is_ignored() -> TestResult {
     };
 
     // The completion lands anyway — it must be a no-op.
-    let CryptoOp::Sign { payload } = op else {
-        return Err("expected a sign op".into());
-    };
+    let CryptoOp::Sign { payload } = op;
     let signature = alice.signing_key.sign(&payload).to_bytes();
     let outcome = alice.machine.handle(
         t,
@@ -419,8 +400,8 @@ fn replayed_challenge_is_rejected() -> TestResult {
             audience: None,
         },
     );
-    // The signature is valid, so the fault fires on the internally-fed
-    // verify completion — recorded by the harness.
+    // Verification is inline (ADR-014): the replay faults synchronously
+    // on the message event itself.
     let outcome = bob.feed(
         t,
         Event::MessageReceived {
@@ -428,16 +409,15 @@ fn replayed_challenge_is_rejected() -> TestResult {
             bytes: challenge_bytes,
         },
     );
-    assert_eq!(outcome, Outcome::Progressed, "pure checks pass");
-    assert_eq!(
-        bob.faults,
-        [(
-            replay_conn,
-            Fault::ChallengeRejected(
+    assert!(matches!(
+        outcome,
+        Outcome::ConnectionFault {
+            conn,
+            fault: Fault::ChallengeRejected(
                 subduction_protocol::handshake::rejection::RejectionReason::ReplayedNonce
-            )
-        )]
-    );
+            ),
+        } if conn == replay_conn
+    ));
     Ok(())
 }
 
@@ -487,8 +467,9 @@ fn peer_mismatch_is_detected() -> TestResult {
     let mut response_bytes = preimage;
     response_bytes.extend_from_slice(&signature);
 
-    // Mallory's signature is valid, so the digest check and verify pass;
-    // the pin check faults on the internally-fed verify completion.
+    // Verification is inline (ADR-014): Mallory's signature is valid and
+    // the digest binds, but the pin check faults synchronously on the
+    // message event itself.
     let outcome = alice.feed(
         t,
         Event::MessageReceived {
@@ -496,8 +477,13 @@ fn peer_mismatch_is_detected() -> TestResult {
             bytes: response_bytes,
         },
     );
-    assert_eq!(outcome, Outcome::Progressed, "digest binding passes");
-    assert_eq!(alice.faults, [(A_CONN, Fault::PeerMismatch)]);
+    assert!(matches!(
+        outcome,
+        Outcome::ConnectionFault {
+            conn: A_CONN,
+            fault: Fault::PeerMismatch,
+        }
+    ));
     Ok(())
 }
 

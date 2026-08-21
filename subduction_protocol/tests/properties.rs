@@ -12,7 +12,7 @@
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use subduction_protocol::{
-    effect::{AppEvent, CryptoOp, CryptoResult, Effect, SignatureCheck, VerifyItem},
+    effect::{AppEvent, CryptoOp, CryptoResult, Effect},
     event::{Direction, Event},
     handshake::audience::Audience,
     id::ConnId,
@@ -23,18 +23,6 @@ use subduction_protocol::{
     ticket::CryptoTicket,
     wall_clock::TimestampSeconds,
 };
-
-fn check_item(item: &VerifyItem) -> SignatureCheck {
-    let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&item.verifying_key) else {
-        return SignatureCheck::Invalid;
-    };
-    let sig = ed25519_dalek::Signature::from_bytes(&item.signature);
-    if vk.verify_strict(&item.payload, &sig).is_ok() {
-        SignatureCheck::Valid
-    } else {
-        SignatureCheck::Invalid
-    }
-}
 
 /// Execute crypto effects synchronously; collect sends and app events.
 fn run_effects(
@@ -56,14 +44,9 @@ fn run_effects(
             Effect::Disconnect { .. } | Effect::Storage { .. } => {}
             Effect::App(event) => app.push(event),
             Effect::Crypto { ticket, op } => {
-                let result = match op {
-                    CryptoOp::Sign { payload } => CryptoResult::Signed {
-                        signature: signing_key.sign(&payload).to_bytes(),
-                    },
-                    CryptoOp::Verify(item) => CryptoResult::Verified(check_item(&item)),
-                    CryptoOp::VerifyBatch(items) => {
-                        CryptoResult::BatchVerified(items.iter().map(check_item).collect())
-                    }
+                let CryptoOp::Sign { payload } = op;
+                let result = CryptoResult::Signed {
+                    signature: signing_key.sign(&payload).to_bytes(),
                 };
                 let _outcome = machine.handle(now, Event::CryptoDone { ticket, result });
             }

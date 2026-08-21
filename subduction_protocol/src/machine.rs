@@ -60,10 +60,10 @@ use subduction_crypto::{nonce::Nonce, signed::Signed};
 
 use crate::{
     command::Command,
-    effect::{AppEvent, CryptoOp, CryptoResult, Effect, SignatureCheck, VerifyItem},
+    effect::{AppEvent, CryptoOp, CryptoResult, Effect},
     event::{Direction, Event},
     handshake::{
-        HANDSHAKE_SCHEMA, HandshakeMessage, MAX_PLAUSIBLE_DRIFT,
+        HANDSHAKE_SCHEMA, HandshakeMessage, MAX_PLAUSIBLE_DRIFT, pinned_peer, signed_preimage,
         audience::Audience,
         challenge::Challenge,
         rejection::{Rejection, RejectionReason},
@@ -341,13 +341,9 @@ impl Machine {
             HandshakeState::AwaitingChallenge
             | HandshakeState::AwaitingChallengeSign { .. }
             | HandshakeState::AwaitingResponse { .. }
-            | HandshakeState::AwaitingResponseVerify { .. }
-            | HandshakeState::AwaitingChallengeVerify { .. }
             | HandshakeState::AwaitingResponseSign { .. }
-            | HandshakeState::SimOpenChallengeVerify { .. }
             | HandshakeState::SimOpenLoserSign { .. }
-            | HandshakeState::SimOpenAwaitTheirResponse { .. }
-            | HandshakeState::SimOpenResponseVerify { .. } => {
+            | HandshakeState::SimOpenAwaitTheirResponse { .. } => {
                 self.stats.handshakes_failed = self.stats.handshakes_failed.saturating_add(1);
             }
             HandshakeState::Authenticated | HandshakeState::Closing => {}
@@ -450,94 +446,93 @@ impl Machine {
             }
 
             HandshakeState::SimOpenAwaitTheirResponse { .. } => {
-                self.on_sim_open_message(conn, bytes)
+                self.on_sim_open_message(now, conn, bytes)
             }
 
             // No message is legal while we hold the turn's crypto pending.
             HandshakeState::AwaitingChallengeSign { .. }
-            | HandshakeState::AwaitingResponseVerify { .. }
-            | HandshakeState::AwaitingChallengeVerify { .. }
             | HandshakeState::AwaitingResponseSign { .. }
-            | HandshakeState::SimOpenChallengeVerify { .. }
-            | HandshakeState::SimOpenLoserSign { .. }
-            | HandshakeState::SimOpenResponseVerify { .. } => {
+            | HandshakeState::SimOpenLoserSign { .. } => {
                 self.fault(conn, Fault::UnexpectedMessage)
             }
         }
     }
 
-    /// Responder: a challenge arrived. Pure checks first (audience,
-    /// freshness), then hand the signature to the driver.
+    /// Responder: a challenge arrived. Verification is inline (ADR-014):
+    /// signature first (as legacy — spoofed issuers must not trigger
+    /// cheap rejections), then audience/freshness, then the nonce claim,
+    /// then our response goes to the driver for signing.
     fn on_inbound_challenge(
         &mut self,
         now: Now,
         conn: ConnId,
         signed: &Signed<Challenge>,
     ) -> Outcome {
-        let challenge = match self.decode_and_validate_challenge(now, signed) {
-            Ok(challenge) => challenge,
-            Err(reason) => {
-                self.effects.push_back(Effect::SendMessage {
-                    conn,
-                    bytes: HandshakeMessage::Rejection(Rejection::new(reason, now.wall)).encode(),
-                });
-                return self.fault(conn, Fault::ChallengeRejected(reason));
-            }
+        let Ok(verified) = signed.try_verify() else {
+            return self.reject_challenge(now, conn, RejectionReason::InvalidSignature);
         };
+        let challenge = *verified.payload();
+        let initiator = PeerId::from(verified.issuer());
 
-        let initiator = PeerId::from(signed.issuer());
-        let item = verify_item(signed);
+        if let Err(reason) = self.validate_challenge(now, &challenge) {
+            return self.reject_challenge(now, conn, reason);
+        }
 
+        // Claim the nonce only after signature verification (cache-filling
+        // DoS prevention, as legacy).
+        if self
+            .nonce_cache
+            .try_claim(initiator, challenge.nonce, now.wall)
+            .is_err()
+        {
+            return self.reject_challenge(now, conn, RejectionReason::ReplayedNonce);
+        }
+
+        let response = Response::for_challenge(&challenge, now.wall);
+        let preimage = signed_preimage(&self.config.local_peer, &response);
         let Some(entry) = self.conns.get_mut(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
         let ticket = entry.issue_ticket(conn);
-        entry.state = HandshakeState::AwaitingChallengeVerify {
+        entry.state = HandshakeState::AwaitingResponseSign {
             ticket,
-            challenge,
+            preimage: preimage.clone(),
             initiator,
         };
         self.effects.push_back(Effect::Crypto {
             ticket,
-            op: CryptoOp::Verify(item),
+            op: CryptoOp::Sign { payload: preimage },
         });
         Outcome::Progressed
     }
 
-    /// Initiator: a response arrived. Check the digest binding (pure),
-    /// then hand the signature to the driver.
+    /// Initiator: a response arrived. Verification, digest binding, and
+    /// the pin check all run inline (ADR-014) — authentication completes
+    /// in this turn.
     fn on_outbound_response(&mut self, conn: ConnId, signed: &Signed<Response>) -> Outcome {
-        let Some(entry) = self.conns.get_mut(&conn) else {
+        let Some(entry) = self.conns.get(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
         };
         let HandshakeState::AwaitingResponse { challenge, .. } = &entry.state else {
             return self.fault(conn, Fault::UnexpectedMessage);
         };
         let pinned = pinned_peer(challenge);
+        let challenge = *challenge;
 
-        let Ok((response, _consumed)) = try_decode_payload::<Response>(signed) else {
-            self.stats.malformed_messages = self.stats.malformed_messages.saturating_add(1);
-            return self.fault(conn, Fault::MalformedMessage);
+        let Ok(verified) = signed.try_verify() else {
+            return self.fault(conn, Fault::HandshakeVerificationFailed);
         };
-
-        if response.validate(challenge).is_err() {
+        if verified.payload().validate(&challenge).is_err() {
             return self.fault(conn, Fault::HandshakeVerificationFailed);
         }
 
-        let responder = PeerId::from(signed.issuer());
-        let item = verify_item(signed);
-
-        let ticket = entry.issue_ticket(conn);
-        entry.state = HandshakeState::AwaitingResponseVerify {
-            ticket,
-            responder,
-            pinned,
-        };
-        self.effects.push_back(Effect::Crypto {
-            ticket,
-            op: CryptoOp::Verify(item),
-        });
-        Outcome::Progressed
+        let responder = PeerId::from(verified.issuer());
+        if let Some(pinned) = pinned
+            && pinned != responder
+        {
+            return self.fault(conn, Fault::PeerMismatch);
+        }
+        self.authenticate(conn, responder)
     }
 
     fn on_command(&mut self, now: Now, command: Command) -> Outcome {
@@ -818,18 +813,23 @@ impl Machine {
         }
 
         match &entry.state {
-            HandshakeState::SimOpenChallengeVerify { .. }
-            | HandshakeState::SimOpenLoserSign { .. }
-            | HandshakeState::SimOpenAwaitTheirResponse { .. }
-            | HandshakeState::SimOpenResponseVerify { .. } => {
-                self.sim_open_crypto_done(now, conn, ticket, result)
+            HandshakeState::SimOpenLoserSign {
+                ticket: expected,
+                preimage,
+                our_challenge,
+                expected: expected_peer,
+            } if *expected == ticket => {
+                let (preimage, our_challenge, expected_peer) =
+                    (preimage.clone(), *our_challenge, *expected_peer);
+                let CryptoResult::Signed { signature } = result;
+                self.on_sim_open_loser_signed(conn, preimage, our_challenge, expected_peer, signature)
             }
             HandshakeState::AwaitingChallenge
             | HandshakeState::AwaitingChallengeSign { .. }
             | HandshakeState::AwaitingResponse { .. }
-            | HandshakeState::AwaitingResponseVerify { .. }
-            | HandshakeState::AwaitingChallengeVerify { .. }
             | HandshakeState::AwaitingResponseSign { .. }
+            | HandshakeState::SimOpenLoserSign { .. }
+            | HandshakeState::SimOpenAwaitTheirResponse { .. }
             | HandshakeState::Authenticated
             | HandshakeState::Closing => self.handshake_crypto_done(now, conn, ticket, result),
         }
@@ -839,7 +839,7 @@ impl Machine {
     /// The caller has already validated connection and generation.
     fn handshake_crypto_done(
         &mut self,
-        now: Now,
+        _now: Now,
         conn: ConnId,
         ticket: CryptoTicket,
         result: CryptoResult,
@@ -868,47 +868,6 @@ impl Machine {
                 Outcome::Progressed
             }
 
-            // ── initiator: response verified ───────────────────────
-            (
-                HandshakeState::AwaitingResponseVerify {
-                    ticket: expected,
-                    responder,
-                    pinned,
-                },
-                CryptoResult::Verified(check),
-            ) if *expected == ticket => match check {
-                SignatureCheck::Invalid => self.fault(conn, Fault::HandshakeVerificationFailed),
-                SignatureCheck::Valid => {
-                    if let Some(pinned) = pinned
-                        && pinned != responder
-                    {
-                        return self.fault(conn, Fault::PeerMismatch);
-                    }
-                    let peer = *responder;
-                    self.authenticate(conn, peer)
-                }
-            },
-
-            // ── responder: challenge verified ──────────────────────
-            (
-                HandshakeState::AwaitingChallengeVerify {
-                    ticket: expected,
-                    challenge,
-                    initiator,
-                },
-                CryptoResult::Verified(check),
-            ) if *expected == ticket => {
-                let (challenge, initiator) = (*challenge, *initiator);
-                match check {
-                    SignatureCheck::Invalid => {
-                        self.reject_challenge(now, conn, RejectionReason::InvalidSignature)
-                    }
-                    SignatureCheck::Valid => {
-                        self.on_challenge_verified(now, conn, &challenge, initiator)
-                    }
-                }
-            }
-
             // ── responder: response signed ─────────────────────────
             (
                 HandshakeState::AwaitingResponseSign {
@@ -931,18 +890,12 @@ impl Machine {
                 HandshakeState::AwaitingChallenge
                 | HandshakeState::AwaitingChallengeSign { .. }
                 | HandshakeState::AwaitingResponse { .. }
-                | HandshakeState::AwaitingResponseVerify { .. }
-                | HandshakeState::AwaitingChallengeVerify { .. }
                 | HandshakeState::AwaitingResponseSign { .. }
-                | HandshakeState::SimOpenChallengeVerify { .. }
                 | HandshakeState::SimOpenLoserSign { .. }
                 | HandshakeState::SimOpenAwaitTheirResponse { .. }
-                | HandshakeState::SimOpenResponseVerify { .. }
                 | HandshakeState::Authenticated
                 | HandshakeState::Closing,
-                CryptoResult::Signed { .. }
-                | CryptoResult::Verified(_)
-                | CryptoResult::BatchVerified(_),
+                CryptoResult::Signed { .. },
             ) => {
                 self.stats.unknown_tickets = self.stats.unknown_tickets.saturating_add(1);
                 Outcome::Ignored(IgnoreReason::UnknownTicket)
@@ -951,42 +904,6 @@ impl Machine {
     }
 
     // ── helpers ────────────────────────────────────────────────────
-
-    /// Responder: the challenge signature checked out. Claim the nonce
-    /// (only after verification — cache-filling `DoS` prevention, as
-    /// legacy), then hand our response to the driver for signing.
-    fn on_challenge_verified(
-        &mut self,
-        now: Now,
-        conn: ConnId,
-        challenge: &Challenge,
-        initiator: PeerId,
-    ) -> Outcome {
-        if self
-            .nonce_cache
-            .try_claim(initiator, challenge.nonce, now.wall)
-            .is_err()
-        {
-            return self.reject_challenge(now, conn, RejectionReason::ReplayedNonce);
-        }
-
-        let response = Response::for_challenge(challenge, now.wall);
-        let preimage = signed_preimage(&self.config.local_peer, &response);
-        let Some(entry) = self.conns.get_mut(&conn) else {
-            return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
-        };
-        let ticket = entry.issue_ticket(conn);
-        entry.state = HandshakeState::AwaitingResponseSign {
-            ticket,
-            preimage: preimage.clone(),
-            initiator,
-        };
-        self.effects.push_back(Effect::Crypto {
-            ticket,
-            op: CryptoOp::Sign { payload: preimage },
-        });
-        Outcome::Progressed
-    }
 
     /// Responder: send an unsigned [`Rejection`] and condemn the
     /// connection.
@@ -998,16 +915,9 @@ impl Machine {
         self.fault(conn, Fault::ChallengeRejected(reason))
     }
 
-    /// Pure challenge checks: decode fields, audience, freshness.
-    fn decode_and_validate_challenge(
-        &self,
-        now: Now,
-        signed: &Signed<Challenge>,
-    ) -> Result<Challenge, RejectionReason> {
-        let Ok((challenge, _consumed)) = try_decode_payload::<Challenge>(signed) else {
-            return Err(RejectionReason::InvalidSignature);
-        };
-
+    /// Pure challenge checks (audience, freshness) on an
+    /// already-verified challenge.
+    fn validate_challenge(&self, now: Now, challenge: &Challenge) -> Result<(), RejectionReason> {
         let known = Audience::known(self.config.local_peer);
         let audience_ok = challenge.audience == known
             || self
@@ -1023,7 +933,7 @@ impl Machine {
             return Err(RejectionReason::ClockDrift);
         }
 
-        Ok(challenge)
+        Ok(())
     }
 
     /// Condemn a connection: queue a disconnect, park it in `Closing`.
@@ -1183,15 +1093,6 @@ enum HandshakeState {
         signed_bytes: Vec<u8>,
     },
 
-    /// Simultaneous open: their crossed challenge is being verified.
-    SimOpenChallengeVerify {
-        ticket: CryptoTicket,
-        our_challenge: Challenge,
-        their_challenge: Challenge,
-        their_peer: PeerId,
-        we_win: bool,
-    },
-
     /// Simultaneous open, loser: our response to their challenge is being
     /// signed (loser sends first, then awaits their response to ours).
     SimOpenLoserSign {
@@ -1210,28 +1111,6 @@ enum HandshakeState {
         expected: PeerId,
     },
 
-    /// Simultaneous open: their response signature is being verified.
-    SimOpenResponseVerify {
-        ticket: CryptoTicket,
-        owed: Option<Challenge>,
-        expected: PeerId,
-        responder: PeerId,
-    },
-
-    /// Outbound: the response signature is at the driver being verified.
-    AwaitingResponseVerify {
-        ticket: CryptoTicket,
-        responder: PeerId,
-        pinned: Option<PeerId>,
-    },
-
-    /// Inbound: the challenge signature is at the driver being verified.
-    AwaitingChallengeVerify {
-        ticket: CryptoTicket,
-        challenge: Challenge,
-        initiator: PeerId,
-    },
-
     /// Inbound: our response is at the driver being signed.
     AwaitingResponseSign {
         ticket: CryptoTicket,
@@ -1248,40 +1127,10 @@ enum HandshakeState {
 
 // ── free helpers ────────────────────────────────────────────────────
 
-/// The identity pin implied by a challenge's audience: dialing a
-/// [`Audience::Known`] peer pins the authenticated identity to it.
-const fn pinned_peer(challenge: &Challenge) -> Option<PeerId> {
-    match challenge.audience {
-        Audience::Known(peer) => Some(peer),
-        Audience::Discover(_) => None,
-    }
-}
 
-/// Build the byte preimage that [`Signed::seal`] signs:
-/// `schema + discriminant? + issuer + fields`. Appending an ed25519
-/// signature over these bytes yields valid `Signed<T>` wire bytes.
-fn signed_preimage<T: Schema + EncodeFields>(issuer: &PeerId, payload: &T) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&T::SCHEMA);
-    if let Some(disc) = T::DISCRIMINANT {
-        buf.push(disc);
-    }
-    buf.extend_from_slice(issuer.as_bytes());
-    payload.encode_fields(&mut buf);
-    buf
-}
 
-/// The verification job for a received [`Signed<T>`]: check the claimed
-/// issuer's signature over the signed region.
-fn verify_item<T: Schema + EncodeFields + sedimentree_core::codec::decode::DecodeFields>(
-    signed: &Signed<T>,
-) -> VerifyItem {
-    VerifyItem {
-        verifying_key: signed.issuer().to_bytes(),
-        payload: signed.payload_bytes().to_vec(),
-        signature: signed.signature().to_bytes(),
-    }
-}
+
+
 
 /// Decode the typed payload fields out of a received [`Signed<T>`]
 /// without verifying the signature (verification is a driver effect).

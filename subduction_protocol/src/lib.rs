@@ -38,7 +38,10 @@
 
 extern crate alloc;
 
+pub mod blob_ref;
 pub mod command;
+pub mod conn_machine;
+pub mod edge;
 pub mod effect;
 pub mod event;
 pub mod handshake;

@@ -69,9 +69,14 @@ pub enum Effect {
     App(AppEvent),
 }
 
-/// A crypto operation for a driver worker (ADR-006a: sign/verify are
-/// effects; small metadata hashing stays inline in the machine; blob
-/// digests are fused into storage/ingest effects).
+/// A crypto operation requiring external key custody (ADR-014: signing
+/// only — the key may live in an HSM, secure enclave, `WebCrypto`
+/// non-extractable slot, or remote signer, which is why this is an effect
+/// rather than inline computation. Verification is pure and runs inline
+/// in the machine; bulk verification is fused into storage ops, ADR-012).
+///
+/// A single-variant enum on purpose: future custody-bound operations
+/// (e.g. ECDH for key exchange) are additive here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum CryptoOp {
@@ -81,46 +86,13 @@ pub enum CryptoOp {
         /// The bytes to sign.
         payload: Vec<u8>,
     },
-
-    /// Verify one ed25519 signature.
-    Verify(VerifyItem),
-
-    /// Verify many signatures; the driver may fan these across a worker
-    /// pool and must answer with per-item results in the same order.
-    VerifyBatch(Vec<VerifyItem>),
-}
-
-/// One signature to verify.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct VerifyItem {
-    /// The claimed ed25519 verifying key.
-    pub verifying_key: [u8; 32],
-
-    /// The signed payload bytes.
-    pub payload: Vec<u8>,
-
-    /// The claimed ed25519 signature.
-    pub signature: [u8; 64],
-}
-
-/// The result of one signature check.
-///
-/// A dedicated two-state enum rather than `bool` so completions read
-/// unambiguously at call sites and across FFI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-pub enum SignatureCheck {
-    /// The signature is valid for the payload and key.
-    Valid,
-
-    /// The signature is invalid.
-    Invalid,
 }
 
 /// The result of a [`CryptoOp`], echoed back via
 /// [`Event::CryptoDone`](crate::event::Event::CryptoDone).
+// Not `Copy`: future custody-bound results (ECDH shared secrets, batch
+// signatures) will carry data, and removing `Copy` later is breaking.
+#[allow(missing_copy_implementations)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum CryptoResult {
@@ -129,12 +101,6 @@ pub enum CryptoResult {
         /// The ed25519 signature bytes.
         signature: [u8; 64],
     },
-
-    /// The outcome of [`CryptoOp::Verify`].
-    Verified(SignatureCheck),
-
-    /// The outcomes of [`CryptoOp::VerifyBatch`], in request order.
-    BatchVerified(Vec<SignatureCheck>),
 }
 
 /// How a batch sync request concluded.

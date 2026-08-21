@@ -54,6 +54,7 @@ use subduction_crypto::signed::Signed;
 use thiserror::Error;
 
 use crate::wall_clock::TimestampSeconds;
+use audience::Audience;
 use challenge::{Challenge, ChallengeValidationError};
 use rejection::Rejection;
 use response::ResponseValidationError;
@@ -283,6 +284,33 @@ pub enum HandshakeError {
     /// Response validation failed.
     #[error("response validation failed: {0}")]
     ResponseValidation(#[from] ResponseValidationError),
+}
+
+/// The identity pin implied by a challenge's audience: dialing a
+/// [`Audience::Known`] peer pins the authenticated identity to it.
+#[must_use]
+pub(crate) const fn pinned_peer(challenge: &Challenge) -> Option<crate::peer_id::PeerId> {
+    match challenge.audience {
+        Audience::Known(peer) => Some(peer),
+        Audience::Discover(_) => None,
+    }
+}
+
+/// Build the byte preimage that [`Signed::seal`] signs:
+/// `schema + discriminant? + issuer + fields`. Appending an ed25519
+/// signature over these bytes yields valid `Signed<T>` wire bytes.
+pub(crate) fn signed_preimage<T: Schema + sedimentree_core::codec::encode::EncodeFields>(
+    issuer: &crate::peer_id::PeerId,
+    payload: &T,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&T::SCHEMA);
+    if let Some(disc) = T::DISCRIMINANT {
+        buf.push(disc);
+    }
+    buf.extend_from_slice(issuer.as_bytes());
+    payload.encode_fields(&mut buf);
+    buf
 }
 
 #[cfg(test)]
