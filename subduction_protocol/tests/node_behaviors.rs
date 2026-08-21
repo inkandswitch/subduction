@@ -509,3 +509,136 @@ fn dialing_the_wrong_peer_never_authenticates() -> TestResult {
     )?;
     Ok(())
 }
+
+// ── lagging subscribers (ADR-017: pause + resync) ───────────────────
+
+/// A subscriber whose acks stop coming gets paused after the credit
+/// limit, with a `SubscriberLagging` event and a `HeadsUpdate` nudge —
+/// and recovers fully via one re-sync once its link heals.
+#[test]
+fn lagging_subscriber_is_paused_then_recovers_by_resync() -> TestResult {
+    let tree = SedimentreeId::new([16u8; 32]);
+    let mut net = Net::from_drivers(vec![
+        subduction_testkit::TestDriver::custom(1, |c| c.max_outstanding_pushes = 3),
+        subduction_testkit::TestDriver::new(2),
+    ]);
+    let (publisher, subscriber) = (0, 1);
+    let (cs, cp) = net.connect(subscriber, publisher)?;
+
+    net.driver_mut(publisher).add_commit(tree, 0xA0)?;
+    sync_tree(&mut net, subscriber, cs, tree, true)?;
+
+    // The subscriber goes silent (acks vanish on the wire).
+    net.drop_from(subscriber, cs);
+
+    // Push past the credit limit.
+    for head in [0xA1, 0xA2, 0xA3, 0xA4, 0xA5] {
+        net.driver_mut(publisher).add_commit(tree, head)?;
+        let _messages = net.pump()?;
+    }
+
+    ensure(
+        net.driver(publisher).app.iter().any(|e| {
+            matches!(
+                e,
+                AppEvent::SubscriberLagging { conn, tree: t } if *conn == cp && *t == tree
+            )
+        }),
+        "publisher must report the lagging subscriber",
+    )?;
+    // Pushes stopped: the subscriber is missing at least one commit.
+    ensure(
+        net.driver(subscriber).stored_commit_ids(tree).len() < 6,
+        "paused subscriber must have missed pushes",
+    )?;
+
+    // The link heals; the subscriber re-syncs (as the nudge directs).
+    net.restore_from(subscriber, cs);
+    sync_tree(&mut net, subscriber, cs, tree, true)?;
+
+    let mut expected: Vec<CommitId> = [0xA0u8, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5]
+        .iter()
+        .map(|b| CommitId::new([*b; 32]))
+        .collect();
+    expected.sort();
+    assert_eq!(
+        net.driver(subscriber).stored_commit_ids(tree),
+        expected,
+        "one re-sync fully recovers the paused subscriber"
+    );
+
+    // And the subscription is live again: a fresh push arrives.
+    net.driver_mut(publisher).add_commit(tree, 0xA6)?;
+    let _messages = net.pump()?;
+    ensure(
+        net.driver(subscriber)
+            .stored_commit_ids(tree)
+            .contains(&CommitId::new([0xA6; 32])),
+        "re-subscription must be live after recovery",
+    )?;
+
+    net.check_no_leaks()?;
+    Ok(())
+}
+
+// ── time discipline ─────────────────────────────────────────────────
+
+/// A regressed driver clock (suspend/resume, broken monotonic source)
+/// must never fire deadlines early: the node clamps to its high-water
+/// mark, so a sync requested "in the past" still gets its full window.
+#[test]
+fn regressed_clock_never_fires_deadlines_early() -> TestResult {
+    let tree = SedimentreeId::new([17u8; 32]);
+    let mut net = Net::new(&[1, 2]);
+    let (cb, _) = net.connect(1, 0)?;
+    net.driver_mut(0).add_commit(tree, 0xA1)?;
+
+    // Handshake happened at a large clock value…
+    net.driver_mut(1).clock_ms = 1_000_000;
+    net.driver_mut(1).feed(NodeEvent::Wake)?;
+
+    // …then the driver's clock regresses to zero and a sync (whose
+    // request never gets a response) is issued at the "old" time.
+    net.drop_from(1, cb);
+    net.driver_mut(1).clock_ms = 0;
+    net.driver_mut(1)
+        .feed(NodeEvent::Command(Command::SyncTree {
+            conn: cb,
+            tree,
+            subscribe: false,
+        }))?;
+
+    // A wake "40s later" by the broken clock is still BEFORE the
+    // clamped request deadline (1_000_000 + 30_000): no timeout.
+    net.driver_mut(1).clock_ms = 40_000;
+    net.driver_mut(1).feed(NodeEvent::Wake)?;
+    ensure(
+        !net.driver(1).app.iter().any(|e| {
+            matches!(
+                e,
+                AppEvent::SyncFinished {
+                    status: SyncStatus::TimedOut,
+                    ..
+                }
+            )
+        }),
+        "clamped clock must not fire the sync deadline early",
+    )?;
+
+    // Once real time passes the clamped deadline, the timeout fires.
+    net.driver_mut(1).clock_ms = 1_031_000;
+    net.driver_mut(1).feed(NodeEvent::Wake)?;
+    ensure(
+        net.driver(1).app.iter().any(|e| {
+            matches!(
+                e,
+                AppEvent::SyncFinished {
+                    status: SyncStatus::TimedOut,
+                    ..
+                }
+            )
+        }),
+        "deadline fires at the clamped time",
+    )?;
+    Ok(())
+}

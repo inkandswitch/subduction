@@ -40,7 +40,7 @@ use crate::{
 };
 
 /// An in-flight batch sync request we initiated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct OutboundRequest {
     /// The (single) tree being synced.
     pub(super) tree: SedimentreeId,
@@ -53,6 +53,14 @@ pub(super) struct OutboundRequest {
 
     /// When this request expires.
     pub(super) deadline: Timestamp,
+
+    /// Resident heads (sorted) when the summary was taken. If they
+    /// differ at response time, local writes landed inside the
+    /// snapshot→subscription window — items no diff and no push will
+    /// ever carry — and the requester must immediately re-sync.
+    /// (Found by DST seed 0; legacy masked this hole with its
+    /// broadcast-to-all-when-no-subscribers fallback.)
+    pub(super) issued_heads: Vec<CommitId>,
 }
 
 /// A driver storage op in flight for an edge.
@@ -95,6 +103,7 @@ impl CoreMachine {
     ) -> Outcome {
         let seed = self.next_seed();
         let summary = self.summarize(tree, &seed);
+        let issued_heads = self.sorted_heads(tree);
 
         let Some(entry) = self.edges.get_mut(&conn) else {
             return Outcome::Ignored(IgnoreReason::UnknownConnection(conn));
@@ -116,6 +125,7 @@ impl CoreMachine {
                 seed,
                 subscribe,
                 deadline: now.monotonic.saturating_add(self.config.sync_timeout),
+                issued_heads,
             },
         );
 
@@ -160,7 +170,7 @@ impl CoreMachine {
 
     pub(super) fn on_sync_forward(
         &mut self,
-        _now: Now,
+        now: Now,
         conn: ConnId,
         forward: SyncForward,
     ) -> Outcome {
@@ -176,6 +186,7 @@ impl CoreMachine {
                 status,
                 ..
             } => self.on_response(
+                now,
                 conn,
                 req_id,
                 tree,
@@ -202,6 +213,11 @@ impl CoreMachine {
                 self.persist_remote(conn, tree, vec![], vec![item], true)
             }
             SyncForward::HeadsUpdate { tree, heads } => {
+                // Each individual push is acked by one HeadsUpdate
+                // (1.5-RTT): drain the lagging gauge (ADR-017).
+                if let Some(entry) = self.edges.get_mut(&conn) {
+                    entry.outstanding_pushes = entry.outstanding_pushes.saturating_sub(1);
+                }
                 self.notify_heads(tree, conn, heads);
                 Outcome::Progressed
             }
@@ -231,6 +247,13 @@ impl CoreMachine {
 
         if request.subscribe {
             let _new = self.subscriptions.entry(tree).or_default().insert(conn);
+        }
+        // A fresh full-diff request supersedes any unacked pushes: the
+        // response carries everything they lack, so the lagging gauge
+        // resets (ADR-017 recovery point). Re-breach is bounded per
+        // cycle, and each cycle costs the peer a full sync request.
+        if let Some(entry) = self.edges.get_mut(&conn) {
+            entry.outstanding_pushes = 0;
         }
 
         let Some(resident) = self.trees.get_mut(&tree) else {
@@ -301,6 +324,7 @@ impl CoreMachine {
     #[allow(clippy::too_many_arguments)] // mirrors the forwarded wire shape
     fn on_response(
         &mut self,
+        now: Now,
         conn: ConnId,
         req_id: wire::RequestId,
         tree: SedimentreeId,
@@ -326,6 +350,17 @@ impl CoreMachine {
 
         match status {
             ForwardStatus::NotFound => {
+                // The peer lacks the tree entirely. With subscribe:true
+                // the sync relationship still forms — and the diff
+                // degenerates to "send everything" (replaces legacy's
+                // broadcast-to-all-when-no-subscribers fallback; found
+                // by DST seed 2). Without it, our data would never
+                // cross: no diff carries it (they can't summarize a
+                // tree they lack) and no push does (no subscription).
+                if request.subscribe {
+                    let _new = self.subscriptions.entry(tree).or_default().insert(conn);
+                    self.push_all_resident(conn, tree);
+                }
                 self.finish_sync(conn, tree, SyncStatus::NotFound);
                 return Outcome::Progressed;
             }
@@ -350,6 +385,16 @@ impl CoreMachine {
         }
 
         self.finish_sync(conn, tree, SyncStatus::Completed);
+
+        // Local writes that landed between the summary snapshot and this
+        // response fell into a window no diff and no push covers: the
+        // summary predates them and the mutual subscription postdates
+        // them. Re-sync immediately — the fresh summary includes them.
+        // Terminates: re-triggers only while writes keep landing mid-
+        // flight (DST seed 0 regression).
+        if self.sorted_heads(tree) != request.issued_heads {
+            let _outcome = self.start_sync(now, conn, tree, request.subscribe);
+        }
         Outcome::Progressed
     }
 
@@ -379,6 +424,44 @@ impl CoreMachine {
                 .iter()
                 .filter_map(|fp| resolver.resolve_fragment(fp))
                 .collect();
+            (commit_ids, fragment_heads)
+        };
+        if commit_ids.is_empty() && fragment_heads.is_empty() {
+            return;
+        }
+        let Some(entry) = self.edges.get_mut(&conn) else {
+            return;
+        };
+        let ticket = entry.issue_ticket();
+        entry
+            .pending
+            .insert(ticket.seq, CorePending::ReturnRequested { tree });
+        self.effects.push_back(CoreEffect::Storage {
+            ticket,
+            op: StorageOp::FetchItemRefs {
+                tree,
+                provenance: Provenance::Remote(peer),
+                commit_ids,
+                fragment_heads,
+            },
+        });
+    }
+
+    /// Push every resident item for `tree` to `conn` as individual
+    /// item messages (the degenerate diff against a peer with nothing).
+    fn push_all_resident(&mut self, conn: ConnId, tree: SedimentreeId) {
+        let Some(peer) = self.edges.get(&conn).and_then(|entry| entry.peer) else {
+            return;
+        };
+        let (commit_ids, fragment_heads) = {
+            let Some(resident) = self.trees.get_mut(&tree) else {
+                return;
+            };
+            let minimal = resident.minimized(&CountLeadingZeroBytes);
+            let commit_ids: Vec<CommitId> =
+                minimal.commit_entries().map(|(id, _)| *id).collect();
+            let fragment_heads: Vec<CommitId> =
+                minimal.fragment_entries().map(|(id, _)| *id).collect();
             (commit_ids, fragment_heads)
         };
         if commit_ids.is_empty() && fragment_heads.is_empty() {
@@ -709,6 +792,9 @@ impl CoreMachine {
 
         for (subscriber, peer) in targets {
             for (signed, blob) in commits {
+                if !self.try_push_credit(subscriber, tree, peer, &heads) {
+                    break;
+                }
                 let sender_heads = self.next_sender_heads(peer, heads.clone());
                 let parts = wire::loose_commit_parts(tree, signed, &sender_heads, blob.clone());
                 self.effects.push_back(CoreEffect::Send {
@@ -719,6 +805,9 @@ impl CoreMachine {
                     self.stats.subscription_pushes.saturating_add(1);
             }
             for (signed, blob) in fragments {
+                if !self.try_push_credit(subscriber, tree, peer, &heads) {
+                    break;
+                }
                 let sender_heads = self.next_sender_heads(peer, heads.clone());
                 let parts = wire::fragment_parts(tree, signed, &sender_heads, blob.clone());
                 self.effects.push_back(CoreEffect::Send {
@@ -729,6 +818,54 @@ impl CoreMachine {
                     self.stats.subscription_pushes.saturating_add(1);
             }
         }
+    }
+
+    /// Spend one push credit for `subscriber`, or pause its subscription
+    /// to `tree` (ADR-017: pause + resync, never unbounded queues).
+    ///
+    /// A paused subscriber gets a `HeadsUpdate` nudge: if it is alive,
+    /// it sees heads it does not hold and re-syncs (which re-subscribes
+    /// and computes a full diff, covering the skipped pushes). Liveness
+    /// of DEAD peers is the transport/supervision layer's job — no
+    /// protocol timeout here, by design.
+    fn try_push_credit(
+        &mut self,
+        subscriber: ConnId,
+        tree: SedimentreeId,
+        peer: PeerId,
+        heads: &[CommitId],
+    ) -> bool {
+        let limit = self.config.max_outstanding_pushes;
+        let Some(entry) = self.edges.get_mut(&subscriber) else {
+            return false;
+        };
+        if entry.outstanding_pushes < limit {
+            entry.outstanding_pushes += 1;
+            return true;
+        }
+
+        // Pause: drop the subscription; their next sync re-forms it.
+        if let Some(conns) = self.subscriptions.get_mut(&tree) {
+            let _removed = conns.remove(&subscriber);
+            if conns.is_empty() {
+                let _entry = self.subscriptions.remove(&tree);
+            }
+        }
+        self.stats.subscribers_paused = self.stats.subscribers_paused.saturating_add(1);
+        let sender_heads = self.next_sender_heads(peer, heads.to_vec());
+        let msg = wire::SyncMessage::HeadsUpdate {
+            id: tree,
+            heads: sender_heads,
+        };
+        self.effects.push_back(CoreEffect::Send {
+            conn: subscriber,
+            parts: vec![Part::Bytes(msg.encode())],
+        });
+        self.effects.push_back(CoreEffect::App(AppEvent::SubscriberLagging {
+            conn: subscriber,
+            tree,
+        }));
+        false
     }
 
     fn respond_plain(
@@ -800,6 +937,17 @@ impl CoreMachine {
     }
 
     /// Deterministic-but-unpredictable fingerprint seed from entropy.
+    /// Resident heads for `tree`, sorted (∅ when not resident).
+    fn sorted_heads(&mut self, tree: SedimentreeId) -> Vec<CommitId> {
+        let mut heads: Vec<CommitId> = self
+            .trees
+            .get_mut(&tree)
+            .map(|t| t.heads(&CountLeadingZeroBytes))
+            .unwrap_or_default();
+        heads.sort_unstable();
+        heads
+    }
+
     fn next_seed(&mut self) -> FingerprintSeed {
         let hash = blake3::keyed_hash(&self.config.entropy, &self.seed_counter.to_be_bytes());
         self.seed_counter = self.seed_counter.saturating_add(1);

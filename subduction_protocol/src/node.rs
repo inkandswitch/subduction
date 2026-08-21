@@ -56,6 +56,23 @@ pub struct NodeConfig {
     /// Root entropy; per-connection entropy is derived deterministically
     /// (journal/replay-friendly).
     pub entropy: [u8; 32],
+
+    /// Maximum unacked subscription pushes per connection before that
+    /// subscriber is paused (ADR-017).
+    pub max_outstanding_pushes: u32,
+}
+
+impl NodeConfig {
+    /// Defaults for everything but identity and entropy.
+    #[must_use]
+    pub const fn new(local_peer: crate::peer_id::PeerId, entropy: [u8; 32]) -> Self {
+        Self {
+            local_peer,
+            discovery: None,
+            entropy,
+            max_outstanding_pushes: 64,
+        }
+    }
 }
 
 /// Everything the driver tells the node.
@@ -163,25 +180,39 @@ pub struct Node {
     core: CoreMachine,
     conns: Map<ConnId, ConnMachine>,
     effects: VecDeque<NodeEffect>,
+    /// Monotonic high-water mark: the machines never see time move
+    /// backwards, even if a driver's clock does (suspend/resume, NTP
+    /// slew on a misconfigured monotonic source).
+    high_water: Timestamp,
 }
 
 impl Node {
     /// Create a node.
     #[must_use]
     pub fn new(config: NodeConfig) -> Self {
-        let core = CoreMachine::new(CoreConfig::new(config.local_peer, config.entropy));
+        let mut core_config = CoreConfig::new(config.local_peer, config.entropy);
+        core_config.max_outstanding_pushes = config.max_outstanding_pushes;
+        let core = CoreMachine::new(core_config);
         Self {
             config,
             core,
             conns: Map::new(),
             effects: VecDeque::new(),
+            high_water: Timestamp::from_millis(0),
         }
     }
 
     /// Feed one event; internal edge traffic is routed to quiescence
     /// within this turn. Drain [`poll_effect`](Self::poll_effect) after.
     pub fn handle(&mut self, now: Now, event: NodeEvent) -> Outcome {
-        
+        // Time discipline: clamp to the high-water mark. A regressed
+        // driver clock must never re-arm deadlines in the past or
+        // un-expire state.
+        self.high_water = self.high_water.max(now.monotonic);
+        let now = Now {
+            monotonic: self.high_water,
+            wall: now.wall,
+        };
         match event {
             NodeEvent::Connected {
                 conn,

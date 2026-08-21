@@ -22,6 +22,8 @@
 //! plane (use-after-free, double release, leaked frame) surfaces as a
 //! test error with a message rather than silent corruption.
 
+pub mod sim;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -87,6 +89,11 @@ pub struct TestDriver {
     pub disconnects: Vec<ConnId>,
     /// Monotonic clock, milliseconds.
     pub clock_ms: u64,
+    /// When set, storage ops queue in [`pending_storage`](Self::pending_storage)
+    /// instead of completing inline — the simulator schedules them.
+    pub defer_storage: bool,
+    /// Deferred storage ops awaiting a scheduled completion.
+    pub pending_storage: Vec<(subduction_protocol::ticket::StorageTicket, StorageOp)>,
     signing_key: SigningKey,
     signer: MemorySigner,
     frames: BTreeMap<u64, FrameSlot>,
@@ -107,19 +114,26 @@ impl TestDriver {
     /// responder.
     #[must_use]
     pub fn with_discovery(seed: u8, discovery: Option<Audience>) -> Self {
+        Self::custom(seed, |config| config.discovery = discovery)
+    }
+
+    /// Like [`new`](Self::new), with arbitrary [`NodeConfig`] tweaks
+    /// (identity and entropy stay seed-derived).
+    #[must_use]
+    pub fn custom(seed: u8, tweak: impl FnOnce(&mut NodeConfig)) -> Self {
         let signing_key = SigningKey::from_bytes(&[seed; 32]);
         let signer = MemorySigner::from_bytes(&[seed; 32]);
         let local_peer = PeerId::from(signing_key.verifying_key());
+        let mut config = NodeConfig::new(local_peer, [seed ^ 0x55; 32]);
+        tweak(&mut config);
         Self {
-            node: Node::new(NodeConfig {
-                local_peer,
-                discovery,
-                entropy: [seed ^ 0x55; 32],
-            }),
+            node: Node::new(config),
             outbox: Vec::new(),
             app: Vec::new(),
             disconnects: Vec::new(),
             clock_ms: 0,
+            defer_storage: false,
+            pending_storage: Vec::new(),
             signing_key,
             signer,
             frames: BTreeMap::new(),
@@ -272,10 +286,14 @@ impl TestDriver {
                 }
                 NodeEffect::App(event) => self.app.push(event),
                 NodeEffect::Storage { ticket, op } => {
-                    let result = self.run_storage(op)?;
-                    let _outcome = self
-                        .node
-                        .handle(self.now(), NodeEvent::StorageDone { ticket, result });
+                    if self.defer_storage {
+                        self.pending_storage.push((ticket, op));
+                    } else {
+                        let result = self.run_storage(op)?;
+                        let _outcome = self
+                            .node
+                            .handle(self.now(), NodeEvent::StorageDone { ticket, result });
+                    }
                 }
             }
         }
@@ -439,6 +457,18 @@ impl TestDriver {
         Ok(blob_ref)
     }
 
+    /// Execute one deferred storage op (by queue index) and feed its
+    /// completion. Simulator use; requires [`defer_storage`](Self::defer_storage).
+    ///
+    /// # Errors
+    /// Propagates storage/effect failures; fails on a bad index.
+    pub fn complete_storage(&mut self, index: usize) -> Result<(), TestError> {
+        ensure(index < self.pending_storage.len(), "bad storage index")?;
+        let (ticket, op) = self.pending_storage.remove(index);
+        let result = self.run_storage(op)?;
+        self.feed(NodeEvent::StorageDone { ticket, result })
+    }
+
     /// Commit ids persisted for `tree`, in id order.
     #[must_use]
     pub fn stored_commit_ids(&self, tree: SedimentreeId) -> Vec<CommitId> {
@@ -521,11 +551,11 @@ impl std::fmt::Debug for TestDriver {
 
 /// An in-memory network of nodes with point-to-point links.
 pub struct Net {
-    drivers: Vec<TestDriver>,
+    pub(crate) drivers: Vec<TestDriver>,
     /// (node index, local conn) → (peer index, peer's conn).
-    links: BTreeMap<(usize, ConnId), (usize, ConnId)>,
+    pub(crate) links: BTreeMap<(usize, ConnId), (usize, ConnId)>,
     /// Endpoints whose outgoing messages are silently discarded.
-    dropped: BTreeSet<(usize, ConnId)>,
+    pub(crate) dropped: BTreeSet<(usize, ConnId)>,
 }
 
 impl std::fmt::Debug for Net {
@@ -642,6 +672,13 @@ impl Net {
         Ok((ci, cj))
     }
 
+    /// Register a bidirectional link between two already-allocated
+    /// endpoints without feeding any events (simulator wiring).
+    pub fn link(&mut self, i: usize, ci: ConnId, j: usize, cj: ConnId) {
+        let _link = self.links.insert((i, ci), (j, cj));
+        let _link = self.links.insert((j, cj), (i, ci));
+    }
+
     fn wire(&mut self, i: usize, j: usize) -> Result<(ConnId, ConnId), TestError> {
         ensure(i != j, "cannot wire a node to itself")?;
         let ci = self.driver_mut(i).alloc_conn();
@@ -654,6 +691,11 @@ impl Net {
     /// Discard future messages sent from endpoint `(i, conn)`.
     pub fn drop_from(&mut self, i: usize, conn: ConnId) {
         let _new = self.dropped.insert((i, conn));
+    }
+
+    /// Stop discarding messages from endpoint `(i, conn)`.
+    pub fn restore_from(&mut self, i: usize, conn: ConnId) {
+        let _removed = self.dropped.remove(&(i, conn));
     }
 
     /// Shuttle messages until quiescence. Returns messages delivered —

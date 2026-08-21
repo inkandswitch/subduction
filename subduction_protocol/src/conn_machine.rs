@@ -440,6 +440,10 @@ impl ConnMachine {
         self.send_to_core(ConnToCore::ClaimNonce {
             peer: initiator,
             nonce: challenge.nonce,
+            // Deliberate legacy divergence: legacy buckets by ARRIVAL
+            // time; we bucket by the message-signed timestamp so the
+            // claim is a pure function of the message (journal/replay-
+            // deterministic). Node-local; wire behavior unchanged.
             timestamp: challenge.timestamp,
         });
         Outcome::Progressed

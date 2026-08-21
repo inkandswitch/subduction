@@ -123,6 +123,38 @@ Platform capabilities are traits over `FutureForm` (`Sendable` for tokio,
 bounded event channel is the single backpressure point, replacing the
 legacy semaphores and spawn guards.
 
+### The frame table (blob data plane)
+
+The driver retains each inbound wire frame in a buffer table keyed by
+`FrameId` (monotonic, never reused — a stale ref reads as "gone", never
+as wrong bytes). Machines reference blob regions inside retained frames
+as `BlobRef { frame, offset, len }` and splice them into outbound
+messages as scatter-gather `Part::Ref`s, so fan-out to N subscribers
+costs N envelopes and zero blob copies.
+
+Ownership rules (all machine-driven; the driver only obeys):
+
+1. **Retain on delivery.** `MessageReceived { frame, bytes }` transfers
+   the frame into the table.
+2. **`ReleaseFrame(frame)`** — no refs escaped this frame; free it.
+   Emitted by the connection machine when a message produced nothing
+   that outlives the turn.
+3. **`ReleaseBlob(ref)`** — one escaped ref is done (persisted or
+   sent); decrement that frame's retention. Machines emit it strictly
+   *after* the last effect that uses the ref, and drivers must execute
+   effects in emission order — so a `Send` holding a ref always
+   resolves before its release.
+4. **Epoch bulk-free.** When a connection dies (`Disconnected`, or a
+   machine-requested `Disconnect` completes), the driver frees *every*
+   frame minted for that connection generation in one sweep — no
+   per-frame releases arrive from a torn-down machine. Refs that
+   escaped into still-pending storage ops resolve as "gone" and the op
+   fails cleanly; monotonic ids make ABA impossible.
+
+The testkit's frame table enforces all four rules as test invariants:
+use-after-free, double-free, over-release, release-with-escaped-refs,
+and leak-at-quiescence all fail tests loudly.
+
 ## Extension Protocols (Multiplexing)
 
 Other protocols (ephemeral messages, keyhive, application-defined) share

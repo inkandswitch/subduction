@@ -17,6 +17,9 @@ pub struct Stats {
     /// Handshakes that reached `Authenticated`.
     pub handshakes_completed: u64,
 
+    /// Subscriptions paused for lagging (unacked pushes over the limit).
+    pub subscribers_paused: u64,
+
     /// Handshakes that failed (fault, rejection, or timeout).
     pub handshakes_failed: u64,
 

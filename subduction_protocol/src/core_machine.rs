@@ -71,6 +71,10 @@ pub struct CoreConfig {
 
     /// Entropy for fingerprint seeds (CSPRNG-seeded, per machine).
     pub entropy: [u8; 32],
+
+    /// Maximum unacked subscription pushes per connection before the
+    /// subscriber is deemed lagging and paused (ADR-017).
+    pub max_outstanding_pushes: u32,
 }
 
 impl CoreConfig {
@@ -82,6 +86,7 @@ impl CoreConfig {
             sync_timeout: Duration::from_secs(30),
             handshake_lease: Duration::from_secs(60),
             entropy,
+            max_outstanding_pushes: 64,
         }
     }
 }
@@ -304,6 +309,7 @@ impl CoreMachine {
                 requests: Map::new(),
                 pending: Map::new(),
                 next_ticket: Seq::FIRST,
+                outstanding_pushes: 0,
             },
         );
         if let Some(stale) = stale {
@@ -630,6 +636,10 @@ struct EdgeEntry {
     pending: Map<Seq, sync::CorePending>,
     /// Sequence for storage tickets on this edge.
     next_ticket: Seq,
+    /// Subscription pushes sent minus `HeadsUpdate` acks received —
+    /// the lagging-subscriber gauge (ADR-017). Conn-scoped, like the
+    /// per-peer heads counters (documented cross-tree exception).
+    outstanding_pushes: u32,
 }
 
 impl EdgeEntry {

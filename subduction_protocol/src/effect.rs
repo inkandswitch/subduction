@@ -118,6 +118,16 @@ pub enum AppEvent {
         peer: PeerId,
     },
 
+    /// A subscriber fell behind (too many unacked pushes) and its
+    /// subscription was paused (ADR-017). It was nudged with a
+    /// `HeadsUpdate`; if alive, it re-syncs and re-subscribes.
+    SubscriberLagging {
+        /// The lagging connection.
+        conn: ConnId,
+        /// The tree whose subscription was paused.
+        tree: SedimentreeId,
+    },
+
     /// A peer reported new heads for a tree (stale reports are filtered
     /// by the per-peer monotonic counter).
     RemoteHeadsUpdated {

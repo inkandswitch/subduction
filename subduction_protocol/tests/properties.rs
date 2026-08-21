@@ -35,14 +35,7 @@ const fn now_at(millis: u64) -> Now {
 fn node(seed: u8) -> (Node, SigningKey) {
     let key = SigningKey::from_bytes(&[seed; 32]);
     let local_peer = PeerId::from(key.verifying_key());
-    (
-        Node::new(NodeConfig {
-            local_peer,
-            discovery: None,
-            entropy: [seed ^ 0x55; 32],
-        }),
-        key,
-    )
+    (Node::new(NodeConfig::new(local_peer, [seed ^ 0x55; 32])), key)
 }
 
 /// Drain effects: complete signs with the real key, collect assembled
@@ -258,6 +251,7 @@ impl Side {
             | AppEvent::StorageError { .. }
             | AppEvent::SyncFinished { .. }
             | AppEvent::TreeUpdated { .. }
+            | AppEvent::SubscriberLagging { .. }
             | AppEvent::RemoteHeadsUpdated { .. } => None,
         })
     }
