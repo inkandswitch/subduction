@@ -1347,7 +1347,10 @@ mod tests {
             .filter(|e| matches!(e, CoreEffect::App(AppEvent::SubscriberLagging { .. })))
             .count();
         assert_eq!(nudges, 1, "exactly one HeadsUpdate nudge per breach");
-        assert_eq!(lagging_events, 1, "exactly one SubscriberLagging per breach");
+        assert_eq!(
+            lagging_events, 1,
+            "exactly one SubscriberLagging per breach"
+        );
         assert_eq!(core.stats.subscribers_paused, 1);
     }
 }

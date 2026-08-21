@@ -151,7 +151,7 @@ pub(crate) const HANDSHAKE_SCHEMA: [u8; 4] = Challenge::SCHEMA;
 
 /// Variant tag bytes within the `SUH\0` handshake protocol.
 mod handshake_tags {
-    use super::{response::Response, Challenge};
+    use super::{Challenge, response::Response};
 
     pub(super) const CHALLENGE: u8 = Challenge::TAG;
     pub(super) const RESPONSE: u8 = Response::TAG;

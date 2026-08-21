@@ -1280,8 +1280,7 @@ mod tests {
 
     #[test]
     fn handshake_deadline_fires() {
-        let bob_id =
-            PeerId::from(SigningKey::from_bytes(&[12u8; 32]).verifying_key());
+        let bob_id = PeerId::from(SigningKey::from_bytes(&[12u8; 32]).verifying_key());
         let mut alice = Peer::new(11, Direction::Outbound, Some(Audience::known(bob_id)));
         assert!(alice.machine.poll_timeout().is_some());
 

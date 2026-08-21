@@ -789,10 +789,7 @@ mod tests {
         let Some(CoreEffect::ToConn(sealed)) = core.poll_effect() else {
             return Err("expected a verdict".into());
         };
-        assert_eq!(
-            sealed.open().2,
-            CoreToConn::NonceVerdict { granted: true }
-        );
+        assert_eq!(sealed.open().2, CoreToConn::NonceVerdict { granted: true });
 
         // Supervisor restart: fresh incarnation of the SAME conn re-opens
         // (bumped generation) and retries the claim.
