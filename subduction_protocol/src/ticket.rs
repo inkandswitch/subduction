@@ -23,22 +23,6 @@
 
 use crate::id::{ConnId, Generation, Seq};
 
-/// What machine entity an operation was issued against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Entity {
-    /// Scoped to one connection (e.g. handshake verification): stale when
-    /// the connection's generation moves on.
-    Connection(ConnId),
-
-    /// A local operation not tied to any connection (e.g. sealing and
-    /// persisting a locally authored commit): stale only across machine
-    /// restarts, which drivers must not span.
-    Local,
-}
-
 /// A completion ticket for a driver-performed crypto operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -72,4 +56,20 @@ pub struct StorageTicket {
 
     /// Distinguishes in-flight operations under the same generation.
     pub seq: Seq,
+}
+
+/// What machine entity an operation was issued against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Entity {
+    /// Scoped to one connection (e.g. handshake verification): stale when
+    /// the connection's generation moves on.
+    Connection(ConnId),
+
+    /// A local operation not tied to any connection (e.g. sealing and
+    /// persisting a locally authored commit): stale only across machine
+    /// restarts, which drivers must not span.
+    Local,
 }

@@ -18,16 +18,18 @@
 //! driver-internal optimization that can land later without touching the
 //! protocol.
 //!
-//! Scheduling stays with the caller: [`Handle::connect`] returns the
-//! connection's read-loop future for the _application_ to spawn on its
-//! runtime. The driver never spawns tasks.
+//! Scheduling stays with the caller:
+//! [`Handle::connect`](handle::Handle::connect) returns the connection's
+//! read-loop future for the _application_ to spawn on its runtime. The
+//! driver never spawns tasks.
 //!
 //! # Capability-shaped connection authority
 //!
-//! The API splits authority in two. [`Handle`] carries only _ambient_
-//! (tree-local) operations: local writes, hydration, queries, app
-//! events. Everything conn-scoped — sync, unsubscribe, extension sends,
-//! disconnect — lives on the [`Connection`] capability, minted only by
+//! The API splits authority in two. [`handle::Handle`] carries
+//! only _ambient_ (tree-local) operations: local writes, hydration,
+//! queries, app events. Everything conn-scoped — sync, unsubscribe,
+//! extension sends, disconnect — lives on the
+//! [`Connection`](connection::Connection) capability, minted only by
 //! completing a handshake:
 //!
 //! ```text
@@ -46,6 +48,9 @@
 //! and an [`AppEvent::ConnectionClosed`], exactly as before. The plain
 //! `ConnId` vocabulary underneath is unchanged: this layer is Rust
 //! sugar; FFI bindings keep speaking the frozen L1 surface.
+
+pub mod connection;
+pub mod handle;
 
 use core::time::Duration;
 
@@ -66,7 +71,7 @@ use sedimentree_core::{
 use subduction_crypto::{signed::Signed, signer::Signer};
 use subduction_protocol::{
     blob_ref::{BlobRef, Part},
-    command::{Command, NewCommit, NewFragment},
+    command::Command,
     effect::AppEvent,
     event::Direction,
     handshake::audience::Audience,
@@ -81,394 +86,12 @@ use thiserror::Error;
 use crate::{
     clock::Clock,
     frames::FrameTable,
-    storage::{Policy, Storage, StorageAction, Verdict},
+    policy::{Policy, StorageAction, Verdict},
+    storage::Storage,
     transport::Transport,
 };
 
-/// How a connection's handshake concluded.
-enum AuthOutcome {
-    /// The peer authenticated.
-    Authenticated { peer: PeerId },
-
-    /// The connection died before authenticating.
-    Closed,
-}
-
-/// Everything that can arrive at the driver task.
-enum Input<T> {
-    /// Register a transport as a new connection.
-    Connect {
-        transport: T,
-        direction: Direction,
-        audience: Option<Audience>,
-        reply: oneshot::Sender<ConnId>,
-        auth: oneshot::Sender<AuthOutcome>,
-    },
-
-    /// One complete inbound message (from a read loop).
-    Inbound { conn: ConnId, bytes: Vec<u8> },
-
-    /// A read loop ended: the transport is gone.
-    ConnClosed { conn: ConnId },
-
-    /// A [`Connection`] capability asked to close its connection.
-    Disconnect { conn: ConnId },
-
-    /// A local application command.
-    Command(Command),
-
-    /// Query: a resident tree's heads.
-    TreeHeads {
-        tree: SedimentreeId,
-        reply: oneshot::Sender<Option<Vec<CommitId>>>,
-    },
-
-    /// Stop the driver.
-    Shutdown,
-}
-
-/// The driver was shut down or dropped; the operation cannot complete.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("driver closed")]
-pub struct DriverClosed;
-
-/// The handshake did not produce an authenticated connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum ConnectError {
-    /// The connection closed (transport death, handshake fault, or
-    /// timeout) before authenticating.
-    #[error("connection closed before authenticating")]
-    Closed,
-
-    /// The driver was shut down.
-    #[error(transparent)]
-    Driver(#[from] DriverClosed),
-}
-
-/// A connection whose handshake is still in flight.
-///
-/// The only way to reach conn-scoped operations is
-/// [`authenticated`](Self::authenticated): sync and extension traffic on
-/// an unauthenticated connection is unrepresentable at this surface.
-#[derive(Debug)]
-pub struct PendingConnection<T> {
-    id: ConnId,
-    tx: Sender<Input<T>>,
-    outcome: oneshot::Receiver<AuthOutcome>,
-}
-
-impl<T> PendingConnection<T> {
-    /// Wait for the handshake to conclude, upgrading to an
-    /// authenticated [`Connection`] capability.
-    ///
-    /// # Errors
-    ///
-    /// [`ConnectError::Closed`] if the connection died first;
-    /// [`ConnectError::Driver`] if the driver stopped.
-    pub async fn authenticated(self) -> Result<Connection<T>, ConnectError> {
-        match self.outcome.await {
-            Ok(AuthOutcome::Authenticated { peer }) => Ok(Connection {
-                id: self.id,
-                peer,
-                tx: self.tx,
-            }),
-            Ok(AuthOutcome::Closed) => Err(ConnectError::Closed),
-            Err(_canceled) => Err(ConnectError::Driver(DriverClosed)),
-        }
-    }
-}
-
-/// An authenticated-connection capability: the witness that a handshake
-/// completed, and the only source of conn-scoped operations.
-///
-/// Unforgeable — minted solely by
-/// [`PendingConnection::authenticated`] — and self-routing: it carries
-/// its own channel to the driver that created it, so "wrong driver"
-/// misuse is unrepresentable rather than merely tolerated. Cloning is
-/// delegation: handing a clone to a subsystem grants it this connection.
-#[derive(Debug)]
-pub struct Connection<T> {
-    id: ConnId,
-    peer: PeerId,
-    tx: Sender<Input<T>>,
-}
-
-impl<T> Clone for Connection<T> {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            peer: self.peer,
-            tx: self.tx.clone(),
-        }
-    }
-}
-
-impl<T> Connection<T> {
-    /// The verified identity of the peer on the far end (pinned at
-    /// handshake time).
-    #[must_use]
-    pub const fn peer(&self) -> PeerId {
-        self.peer
-    }
-
-    /// The raw connection id — for correlating with [`AppEvent`]s and
-    /// telemetry, which speak the plain FFI vocabulary. Deliberately
-    /// one-way: there is no `from_raw`.
-    #[must_use]
-    pub const fn id(&self) -> ConnId {
-        self.id
-    }
-
-    /// Batch-sync `tree` with this peer. Concludes with
-    /// [`AppEvent::SyncFinished`]; incoming data additionally surfaces
-    /// as [`AppEvent::TreeUpdated`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn sync_tree(
-        &self,
-        tree: SedimentreeId,
-        subscribe: bool,
-    ) -> Result<(), DriverClosed> {
-        self.command(Command::SyncTree {
-            conn: self.id,
-            tree,
-            subscribe,
-        })
-        .await
-    }
-
-    /// Stop receiving pushes for `trees` from this peer.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn unsubscribe(&self, trees: Vec<SedimentreeId>) -> Result<(), DriverClosed> {
-        self.command(Command::Unsubscribe {
-            conn: self.id,
-            trees,
-        })
-        .await
-    }
-
-    /// Send one extension-protocol message (schema prefix included).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn send_extension(&self, bytes: Vec<u8>) -> Result<(), DriverClosed> {
-        self.command(Command::SendExtension {
-            conn: self.id,
-            bytes,
-        })
-        .await
-    }
-
-    /// Close this connection. Consumes the capability: no operations on
-    /// a connection you asked to tear down.
-    pub async fn disconnect(self) {
-        let _result = self.tx.send(Input::Disconnect { conn: self.id }).await;
-    }
-
-    /// Conn-bearing commands are built here and only here.
-    async fn command(&self, command: Command) -> Result<(), DriverClosed> {
-        self.tx
-            .send(Input::Command(command))
-            .await
-            .map_err(|_| DriverClosed)
-    }
-}
-
-/// A clonable handle for talking to a running [`Driver`].
-///
-/// Carries only _ambient_ (tree-local) authority; conn-scoped
-/// operations require the [`Connection`] capability minted by
-/// [`connect`](Self::connect).
-#[derive(Debug)]
-pub struct Handle<T> {
-    tx: Sender<Input<T>>,
-    app_rx: Receiver<AppEvent>,
-}
-
-impl<T> Clone for Handle<T> {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            app_rx: self.app_rx.clone(),
-        }
-    }
-}
-
-impl<T> Handle<T> {
-    /// Register `transport` as a new connection.
-    ///
-    /// Returns the [`PendingConnection`] (upgrade it via
-    /// [`PendingConnection::authenticated`]) and the connection's
-    /// read-loop future, which the caller must spawn (or otherwise poll)
-    /// on its own runtime — the driver never schedules tasks. The read
-    /// loop feeds inbound messages to the driver and reports transport
-    /// death.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn connect<Async>(
-        &self,
-        transport: T,
-        direction: Direction,
-        audience: Option<Audience>,
-    ) -> Result<
-        (
-            PendingConnection<T>,
-            impl Future<Output = ()> + use<Async, T>,
-        ),
-        DriverClosed,
-    >
-    where
-        Async: FutureForm,
-        T: Transport<Async>,
-    {
-        let (reply, response) = oneshot::channel();
-        let (auth, outcome) = oneshot::channel();
-        self.tx
-            .send(Input::Connect {
-                transport: transport.clone(),
-                direction,
-                audience,
-                reply,
-                auth,
-            })
-            .await
-            .map_err(|_| DriverClosed)?;
-        let conn = response.await.map_err(|_| DriverClosed)?;
-        let pump = read_loop::<Async, T>(transport, conn, self.tx.clone());
-        Ok((
-            PendingConnection {
-                id: conn,
-                tx: self.tx.clone(),
-                outcome,
-            },
-            pump,
-        ))
-    }
-
-    /// Author new commits locally (sealed + persisted by the driver;
-    /// [`AppEvent::CommitsStored`] confirms durability).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn add_commits(
-        &self,
-        tree: SedimentreeId,
-        commits: Vec<NewCommit>,
-    ) -> Result<(), DriverClosed> {
-        self.command(Command::AddCommits { tree, commits }).await
-    }
-
-    /// Author new fragments locally — the fragment twin of
-    /// [`add_commits`](Self::add_commits).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn add_fragments(
-        &self,
-        tree: SedimentreeId,
-        fragments: Vec<NewFragment>,
-    ) -> Result<(), DriverClosed> {
-        self.command(Command::AddFragments { tree, fragments })
-            .await
-    }
-
-    /// Install a tree's metadata loaded from storage at startup.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn hydrate_tree(
-        &self,
-        tree: SedimentreeId,
-        commits: Vec<LooseCommit>,
-        fragments: Vec<Fragment>,
-    ) -> Result<(), DriverClosed> {
-        self.command(Command::HydrateTree {
-            tree,
-            commits,
-            fragments,
-        })
-        .await
-    }
-
-    /// Remove a tree locally ([`AppEvent::TreeRemoved`] confirms).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn remove_tree(&self, tree: SedimentreeId) -> Result<(), DriverClosed> {
-        self.command(Command::RemoveTree { tree }).await
-    }
-
-    /// Tree-local commands only: conn-bearing commands are minted by
-    /// [`Connection`], keeping connection authority capability-shaped.
-    async fn command(&self, command: Command) -> Result<(), DriverClosed> {
-        self.tx
-            .send(Input::Command(command))
-            .await
-            .map_err(|_| DriverClosed)
-    }
-
-    /// A resident tree's current heads, or `None` if the tree is unknown.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped.
-    pub async fn tree_heads(
-        &self,
-        tree: SedimentreeId,
-    ) -> Result<Option<Vec<CommitId>>, DriverClosed> {
-        let (reply, response) = oneshot::channel();
-        self.tx
-            .send(Input::TreeHeads { tree, reply })
-            .await
-            .map_err(|_| DriverClosed)?;
-        response.await.map_err(|_| DriverClosed)
-    }
-
-    /// Receive the next application event.
-    ///
-    /// Events are distributed, not broadcast: with multiple handles
-    /// receiving concurrently, each event goes to exactly one of them.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DriverClosed`] if the driver has stopped and the event
-    /// queue is drained.
-    pub async fn next_app_event(&self) -> Result<AppEvent, DriverClosed> {
-        self.app_rx.recv().await.map_err(|_| DriverClosed)
-    }
-
-    /// Stop the driver. Idempotent; pending operations are dropped.
-    pub async fn shutdown(&self) {
-        let _result = self.tx.send(Input::Shutdown).await;
-    }
-}
-
-/// Pump one transport's inbound messages into the driver until the
-/// transport or the driver goes away.
-async fn read_loop<Async, T>(transport: T, conn: ConnId, tx: Sender<Input<T>>)
-where
-    Async: FutureForm,
-    T: Transport<Async>,
-{
-    while let Ok(Some(bytes)) = transport.recv_bytes().await {
-        if tx.send(Input::Inbound { conn, bytes }).await.is_err() {
-            return;
-        }
-    }
-    let _result = tx.send(Input::ConnClosed { conn }).await;
-}
+use handle::Handle;
 
 /// The driver: owns the node and executes its effects. See the
 /// [module docs](self).
@@ -482,17 +105,14 @@ pub struct Driver<Async, T, S, P, Sg, C> {
     frames: FrameTable,
     conns: Map<ConnId, T>,
     /// Handshake-outcome notifiers for connections whose
-    /// [`PendingConnection`] is still waiting.
+    /// [`PendingConnection`](connection::PendingConnection) is still
+    /// waiting.
     pending_auth: Map<ConnId, oneshot::Sender<AuthOutcome>>,
     next_conn: u64,
     rx: Receiver<Input<T>>,
     app_tx: Sender<AppEvent>,
     _form: core::marker::PhantomData<Async>,
 }
-
-/// How many queued inputs the driver accepts before senders wait — the
-/// single backpressure point.
-const INPUT_QUEUE_DEPTH: usize = 1024;
 
 impl<Async, T, S, P, Sg, C> Driver<Async, T, S, P, Sg, C>
 where
@@ -527,11 +147,11 @@ where
             app_tx,
             _form: core::marker::PhantomData,
         };
-        (driver, Handle { tx, app_rx })
+        (driver, Handle::new(tx, app_rx))
     }
 
-    /// Run until [`Handle::shutdown`] or every handle and read loop is
-    /// gone.
+    /// Run until [`Handle::shutdown`](handle::Handle::shutdown) or every
+    /// handle and read loop is gone.
     pub async fn run(mut self) {
         loop {
             let input = match self.node.poll_timeout() {
@@ -839,3 +459,56 @@ where
             .collect()
     }
 }
+
+/// How many queued inputs the driver accepts before senders wait — the
+/// single backpressure point.
+const INPUT_QUEUE_DEPTH: usize = 1024;
+
+/// Everything that can arrive at the driver task — the shared alphabet
+/// of [`handle::Handle`] and [`connection::Connection`].
+enum Input<T> {
+    /// Register a transport as a new connection.
+    Connect {
+        transport: T,
+        direction: Direction,
+        audience: Option<Audience>,
+        reply: oneshot::Sender<ConnId>,
+        auth: oneshot::Sender<AuthOutcome>,
+    },
+
+    /// One complete inbound message (from a read loop).
+    Inbound { conn: ConnId, bytes: Vec<u8> },
+
+    /// A read loop ended: the transport is gone.
+    ConnClosed { conn: ConnId },
+
+    /// A [`Connection`](connection::Connection) capability asked to
+    /// close its connection.
+    Disconnect { conn: ConnId },
+
+    /// A local application command.
+    Command(Command),
+
+    /// Query: a resident tree's heads.
+    TreeHeads {
+        tree: SedimentreeId,
+        reply: oneshot::Sender<Option<Vec<CommitId>>>,
+    },
+
+    /// Stop the driver.
+    Shutdown,
+}
+
+/// How a connection's handshake concluded.
+enum AuthOutcome {
+    /// The peer authenticated.
+    Authenticated { peer: PeerId },
+
+    /// The connection died before authenticating.
+    Closed,
+}
+
+/// The driver was shut down or dropped; the operation cannot complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("driver closed")]
+pub struct DriverClosed;

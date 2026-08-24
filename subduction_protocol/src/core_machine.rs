@@ -41,7 +41,7 @@ use subduction_crypto::signed::Signed;
 use crate::{
     blob_ref::Part,
     command::Command,
-    edge::{ConnToCore, CoreToConn, EdgeId, EdgeSequencer, Sealed},
+    edge::{ConnToCore, CoreToConn, EdgeId, Sealed, sequencer::EdgeSequencer},
     effect::AppEvent,
     id::{ConnId, Generation, Seq},
     nonce_cache::NonceCache,
@@ -53,102 +53,6 @@ use crate::{
     timestamp::{Now, Timestamp},
     wire,
 };
-
-/// Static configuration for the [`CoreMachine`].
-// Not `Copy`: will grow policy hooks; removing `Copy` later is breaking.
-#[allow(missing_copy_implementations)]
-#[derive(Debug, Clone)]
-pub struct CoreConfig {
-    /// Our identity (for `RequestId`s and mutual-subscription logic).
-    pub local_peer: PeerId,
-
-    /// How long a batch sync request may await its response.
-    pub sync_timeout: Duration,
-
-    /// How long an edge may sit between `Opened` and `Authenticated`
-    /// before the core presumes the connection machine dead.
-    pub handshake_lease: Duration,
-
-    /// Entropy for fingerprint seeds (CSPRNG-seeded, per machine).
-    pub entropy: [u8; 32],
-
-    /// Maximum unacked subscription pushes per connection before the
-    /// subscriber is deemed lagging and paused.
-    pub max_outstanding_pushes: u32,
-}
-
-impl CoreConfig {
-    /// Defaults for everything but identity/entropy.
-    #[must_use]
-    pub const fn new(local_peer: PeerId, entropy: [u8; 32]) -> Self {
-        Self {
-            local_peer,
-            sync_timeout: Duration::from_secs(30),
-            handshake_lease: Duration::from_secs(60),
-            entropy,
-            max_outstanding_pushes: 64,
-        }
-    }
-}
-
-/// What the core asks of the world.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreEffect {
-    /// Send one wire message on a connection (scatter-gather; blob
-    /// regions ride as refs).
-    Send {
-        /// The target connection.
-        conn: ConnId,
-        /// The message parts.
-        parts: Vec<Part>,
-    },
-
-    /// A sealed control answer for a connection machine.
-    ToConn(Sealed<CoreToConn>),
-
-    /// A storage operation (authorize + persist / fetch).
-    Storage {
-        /// Completion witness.
-        ticket: StorageTicket,
-        /// The operation.
-        op: StorageOp,
-    },
-
-    /// Tear down a connection (lease expiry, lagging subscriber policy).
-    Disconnect {
-        /// The condemned connection.
-        conn: ConnId,
-    },
-
-    /// A blob ref has left core state; the driver may decrement its
-    /// retention.
-    ReleaseBlob(crate::blob_ref::BlobRef),
-
-    /// An application-facing event.
-    App(AppEvent),
-}
-
-/// Inputs to the core.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreEvent {
-    /// A sealed edge message from a connection machine.
-    FromConn(Sealed<ConnToCore>),
-
-    /// A storage completion (ticket echoed from
-    /// [`CoreEffect::Storage`]).
-    StorageDone {
-        /// The witness.
-        ticket: StorageTicket,
-        /// The result.
-        result: StorageResult,
-    },
-
-    /// A local application request.
-    Command(Command),
-
-    /// Timer service.
-    Wake,
-}
 
 /// The core machine. See the [module docs](self).
 #[derive(Debug)]
@@ -618,6 +522,103 @@ impl CoreMachine {
         ticket
     }
 }
+
+/// Static configuration for the [`CoreMachine`].
+// Not `Copy`: will grow policy hooks; removing `Copy` later is breaking.
+#[allow(missing_copy_implementations)]
+#[derive(Debug, Clone)]
+pub struct CoreConfig {
+    /// Our identity (for `RequestId`s and mutual-subscription logic).
+    pub local_peer: PeerId,
+
+    /// How long a batch sync request may await its response.
+    pub sync_timeout: Duration,
+
+    /// How long an edge may sit between `Opened` and `Authenticated`
+    /// before the core presumes the connection machine dead.
+    pub handshake_lease: Duration,
+
+    /// Entropy for fingerprint seeds (CSPRNG-seeded, per machine).
+    pub entropy: [u8; 32],
+
+    /// Maximum unacked subscription pushes per connection before the
+    /// subscriber is deemed lagging and paused.
+    pub max_outstanding_pushes: u32,
+}
+
+impl CoreConfig {
+    /// Defaults for everything but identity/entropy.
+    #[must_use]
+    pub const fn new(local_peer: PeerId, entropy: [u8; 32]) -> Self {
+        Self {
+            local_peer,
+            sync_timeout: Duration::from_secs(30),
+            handshake_lease: Duration::from_secs(60),
+            entropy,
+            max_outstanding_pushes: 64,
+        }
+    }
+}
+
+/// What the core asks of the world.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreEffect {
+    /// Send one wire message on a connection (scatter-gather; blob
+    /// regions ride as refs).
+    Send {
+        /// The target connection.
+        conn: ConnId,
+        /// The message parts.
+        parts: Vec<Part>,
+    },
+
+    /// A sealed control answer for a connection machine.
+    ToConn(Sealed<CoreToConn>),
+
+    /// A storage operation (authorize + persist / fetch).
+    Storage {
+        /// Completion witness.
+        ticket: StorageTicket,
+        /// The operation.
+        op: StorageOp,
+    },
+
+    /// Tear down a connection (lease expiry, lagging subscriber policy).
+    Disconnect {
+        /// The condemned connection.
+        conn: ConnId,
+    },
+
+    /// A blob ref has left core state; the driver may decrement its
+    /// retention.
+    ReleaseBlob(crate::blob_ref::BlobRef),
+
+    /// An application-facing event.
+    App(AppEvent),
+}
+
+/// Inputs to the core.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreEvent {
+    /// A sealed edge message from a connection machine.
+    FromConn(Sealed<ConnToCore>),
+
+    /// A storage completion (ticket echoed from
+    /// [`CoreEffect::Storage`]).
+    StorageDone {
+        /// The witness.
+        ticket: StorageTicket,
+        /// The result.
+        result: StorageResult,
+    },
+
+    /// A local application request.
+    Command(Command),
+
+    /// Timer service.
+    Wake,
+}
+
 
 /// Per-edge core-side state.
 #[derive(Debug)]

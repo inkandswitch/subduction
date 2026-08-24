@@ -12,43 +12,6 @@ use thiserror::Error;
 
 use crate::wall_clock::TimestampSeconds;
 
-/// Reasons for rejecting a handshake (sent unsigned).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[repr(u8)]
-pub enum RejectionReason {
-    /// Client's timestamp is too far from server's clock.
-    ClockDrift = 0x00,
-
-    /// The audience field doesn't match this server.
-    InvalidAudience = 0x01,
-
-    /// This nonce was already used (replay attack detected).
-    ReplayedNonce = 0x02,
-
-    /// The signature on the challenge is invalid.
-    InvalidSignature = 0x03,
-}
-
-impl TryFrom<u8> for RejectionReason {
-    type Error = InvalidEnumTag;
-
-    fn try_from(tag: u8) -> Result<Self, Self::Error> {
-        match tag {
-            0x00 => Ok(Self::ClockDrift),
-            0x01 => Ok(Self::InvalidAudience),
-            0x02 => Ok(Self::ReplayedNonce),
-            0x03 => Ok(Self::InvalidSignature),
-            _ => Err(InvalidEnumTag {
-                tag,
-                type_name: "RejectionReason",
-            }),
-        }
-    }
-}
-
 /// An unsigned rejection message.
 ///
 /// # Security Note
@@ -122,6 +85,43 @@ impl Rejection {
             reason,
             server_timestamp: TimestampSeconds::new(u64::from_be_bytes(timestamp_bytes)),
         })
+    }
+}
+
+/// Reasons for rejecting a handshake (sent unsigned).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[repr(u8)]
+pub enum RejectionReason {
+    /// Client's timestamp is too far from server's clock.
+    ClockDrift = 0x00,
+
+    /// The audience field doesn't match this server.
+    InvalidAudience = 0x01,
+
+    /// This nonce was already used (replay attack detected).
+    ReplayedNonce = 0x02,
+
+    /// The signature on the challenge is invalid.
+    InvalidSignature = 0x03,
+}
+
+impl TryFrom<u8> for RejectionReason {
+    type Error = InvalidEnumTag;
+
+    fn try_from(tag: u8) -> Result<Self, Self::Error> {
+        match tag {
+            0x00 => Ok(Self::ClockDrift),
+            0x01 => Ok(Self::InvalidAudience),
+            0x02 => Ok(Self::ReplayedNonce),
+            0x03 => Ok(Self::InvalidSignature),
+            _ => Err(InvalidEnumTag {
+                tag,
+                type_name: "RejectionReason",
+            }),
+        }
     }
 }
 

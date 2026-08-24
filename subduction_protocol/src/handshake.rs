@@ -55,69 +55,6 @@ use response::ResponseValidationError;
 
 pub use challenge::Challenge as HandshakeChallenge;
 
-/// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
-// `Duration::from_mins` is not yet const-stable (rust-lang/rust#140881), so
-// stay on `from_secs` until the MSRV catches up. The `unknown_lints` allow
-// keeps older toolchains (pre-1.95) quiet about the unrecognized lint name.
-#[allow(unknown_lints, clippy::duration_suboptimal_units)]
-pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
-
-/// Maximum clock drift tolerated during simultaneous open handshakes.
-#[allow(unknown_lints, clippy::duration_suboptimal_units)]
-pub const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(10 * 60);
-
-/// Client-side drift correction.
-///
-/// Tracks clock drift learned from server responses and applies bounded
-/// corrections to future timestamps. Retry logic (e.g., "try adjusted once,
-/// then fall back to original") belongs in the caller.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DriftCorrection {
-    /// The computed drift offset (`server_time` - `client_time`).
-    offset_secs: i32,
-}
-
-impl DriftCorrection {
-    /// Create a new drift correction with no offset.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self { offset_secs: 0 }
-    }
-
-    /// Adjust drift based on a server timestamp.
-    ///
-    /// Returns `true` if the drift was plausible and applied.
-    /// Returns `false` if the drift exceeds [`MAX_PLAUSIBLE_DRIFT`].
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    pub fn adjust(
-        &mut self,
-        server_timestamp: TimestampSeconds,
-        client_timestamp: TimestampSeconds,
-    ) -> bool {
-        let drift = server_timestamp.signed_diff(client_timestamp);
-        let max_drift_secs = i64::from(i32::MAX).min(MAX_PLAUSIBLE_DRIFT.as_secs() as i64);
-
-        if drift.abs() > max_drift_secs {
-            return false;
-        }
-
-        self.offset_secs = drift as i32;
-        true
-    }
-
-    /// Apply the drift correction to a timestamp.
-    #[must_use]
-    pub fn apply(&self, timestamp: TimestampSeconds) -> TimestampSeconds {
-        timestamp.add_signed(i64::from(self.offset_secs))
-    }
-
-    /// Get the current drift offset in seconds.
-    #[must_use]
-    pub const fn offset_secs(&self) -> i32 {
-        self.offset_secs
-    }
-}
-
 /// Wire format for handshake messages.
 ///
 /// All handshake types share the `SUH\x00` schema. Byte 4 (the
@@ -263,6 +200,69 @@ impl HandshakeMessage {
         }
     }
 }
+/// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
+// `Duration::from_mins` is not yet const-stable (rust-lang/rust#140881), so
+// stay on `from_secs` until the MSRV catches up. The `unknown_lints` allow
+// keeps older toolchains (pre-1.95) quiet about the unrecognized lint name.
+#[allow(unknown_lints, clippy::duration_suboptimal_units)]
+pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
+
+/// Maximum clock drift tolerated during simultaneous open handshakes.
+#[allow(unknown_lints, clippy::duration_suboptimal_units)]
+pub const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(10 * 60);
+
+/// Client-side drift correction.
+///
+/// Tracks clock drift learned from server responses and applies bounded
+/// corrections to future timestamps. Retry logic (e.g., "try adjusted once,
+/// then fall back to original") belongs in the caller.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DriftCorrection {
+    /// The computed drift offset (`server_time` - `client_time`).
+    offset_secs: i32,
+}
+
+impl DriftCorrection {
+    /// Create a new drift correction with no offset.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { offset_secs: 0 }
+    }
+
+    /// Adjust drift based on a server timestamp.
+    ///
+    /// Returns `true` if the drift was plausible and applied.
+    /// Returns `false` if the drift exceeds [`MAX_PLAUSIBLE_DRIFT`].
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    pub fn adjust(
+        &mut self,
+        server_timestamp: TimestampSeconds,
+        client_timestamp: TimestampSeconds,
+    ) -> bool {
+        let drift = server_timestamp.signed_diff(client_timestamp);
+        let max_drift_secs = i64::from(i32::MAX).min(MAX_PLAUSIBLE_DRIFT.as_secs() as i64);
+
+        if drift.abs() > max_drift_secs {
+            return false;
+        }
+
+        self.offset_secs = drift as i32;
+        true
+    }
+
+    /// Apply the drift correction to a timestamp.
+    #[must_use]
+    pub fn apply(&self, timestamp: TimestampSeconds) -> TimestampSeconds {
+        timestamp.add_signed(i64::from(self.offset_secs))
+    }
+
+    /// Get the current drift offset in seconds.
+    #[must_use]
+    pub const fn offset_secs(&self) -> i32 {
+        self.offset_secs
+    }
+}
+
 
 /// Errors that can occur during the handshake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]

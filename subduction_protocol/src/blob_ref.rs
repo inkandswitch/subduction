@@ -22,6 +22,25 @@
 //!   emit an explicit release when a ref leaves machine state; refs are
 //!   tagged with their edge epoch so edge death bulk-frees stragglers.
 
+/// A reference to a blob's bytes inside a driver-retained frame.
+///
+/// Plain integers so it crosses machine state, the event journal, and
+/// FFI unchanged. See the [module docs](self) for failure semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BlobRef {
+    /// The retained frame holding the bytes.
+    pub frame: FrameId,
+
+    /// Byte offset of the blob within the frame.
+    pub offset: u32,
+
+    /// Blob length in bytes.
+    pub len: u32,
+}
+
 /// A driver-assigned identifier for one retained ingress frame.
 ///
 /// Monotonic per driver instance; _never reused_ (a `u64` counter
@@ -46,25 +65,6 @@ impl FrameId {
     pub const fn as_u64(&self) -> u64 {
         self.0
     }
-}
-
-/// A reference to a blob's bytes inside a driver-retained frame.
-///
-/// Plain integers so it crosses machine state, the event journal, and
-/// FFI unchanged. See the [module docs](self) for failure semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BlobRef {
-    /// The retained frame holding the bytes.
-    pub frame: FrameId,
-
-    /// Byte offset of the blob within the frame.
-    pub offset: u32,
-
-    /// Blob length in bytes.
-    pub len: u32,
 }
 
 /// One piece of an outbound message: scatter-gather parts let the machine

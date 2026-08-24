@@ -27,39 +27,6 @@ use sedimentree_core::{
 
 use crate::id::ConnId;
 
-/// A new, locally-authored commit as raw parts. The driver seals it with
-/// the machine's identity key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct NewCommit {
-    /// The commit's causal identity.
-    pub head: CommitId,
-
-    /// Parent commit ids.
-    pub parents: BTreeSet<CommitId>,
-
-    /// The commit's payload bytes.
-    pub blob: Blob,
-}
-
-/// A new, locally-authored fragment as raw parts. The driver seals it
-/// with the machine's identity key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct NewFragment {
-    /// The fragment's head commit.
-    pub head: CommitId,
-
-    /// Boundary commit ids.
-    pub boundary: BTreeSet<CommitId>,
-
-    /// Checkpoint commit ids.
-    pub checkpoints: Vec<CommitId>,
-
-    /// The fragment's payload bytes.
-    pub blob: Blob,
-}
-
 /// An application request to the machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -139,4 +106,37 @@ pub enum Command {
         /// One complete extension message, schema prefix included.
         bytes: Vec<u8>,
     },
+}
+
+/// A new, locally-authored commit as raw parts. The driver seals it with
+/// the machine's identity key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct NewCommit {
+    /// The commit's causal identity.
+    pub head: CommitId,
+
+    /// Parent commit ids.
+    pub parents: BTreeSet<CommitId>,
+
+    /// The commit's payload bytes.
+    pub blob: Blob,
+}
+
+/// A new, locally-authored fragment as raw parts. The driver seals it
+/// with the machine's identity key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct NewFragment {
+    /// The fragment's head commit.
+    pub head: CommitId,
+
+    /// Boundary commit ids.
+    pub boundary: BTreeSet<CommitId>,
+
+    /// Checkpoint commit ids.
+    pub checkpoints: Vec<CommitId>,
+
+    /// The fragment's payload bytes.
+    pub blob: Blob,
 }

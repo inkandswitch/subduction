@@ -47,11 +47,6 @@ const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(3 * 60);
 /// Number of buckets.
 const BUCKET_COUNT: usize = 4;
 
-/// Error returned when a nonce has already been used by another edge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("nonce has already been used")]
-pub struct NonceReused;
-
 /// Cache of recently-seen nonces for replay protection.
 ///
 /// Uses 4 time-based buckets with configurable duration. Lookup is O(4)
@@ -153,6 +148,12 @@ impl NonceCache {
         }
     }
 }
+
+/// Error returned when a nonce has already been used by another edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("nonce has already been used")]
+pub struct NonceReused;
+
 
 #[cfg(test)]
 mod tests {

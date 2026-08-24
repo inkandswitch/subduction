@@ -22,10 +22,11 @@
 //! The driver task has exclusive access to the node, the frame table
 //! (blob custody), and the connection registry. Capabilities are
 //! injected: [`clock::Clock`], [`transport::Transport`],
-//! [`storage::Storage`], [`storage::Policy`], and
+//! [`storage::Storage`], [`policy::Policy`], and
 //! [`subduction_crypto::signer::Signer`]. Scheduling stays with the
-//! caller — [`driver::Handle::connect`] hands back each connection's
-//! read-loop future for the application to spawn on its own runtime.
+//! caller — [`driver::handle::Handle::connect`] hands back each
+//! connection's read-loop future for the application to spawn on its own
+//! runtime.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -36,5 +37,6 @@ pub mod conformance;
 pub mod driver;
 pub mod frames;
 pub mod memory;
+pub mod policy;
 pub mod storage;
 pub mod transport;

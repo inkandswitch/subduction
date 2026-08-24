@@ -9,7 +9,7 @@ use subduction_protocol::{
     effect::{AppEvent, SyncStatus},
     node::NodeEvent,
 };
-use subduction_testkit::{Net, TestError, ensure};
+use subduction_testkit::{TestError, ensure, net::Net};
 use testresult::TestResult;
 
 fn sync_tree(
@@ -466,8 +466,8 @@ fn discovery_audience_handshake_completes() -> TestResult {
     let discovery =
         subduction_protocol::handshake::audience::Audience::discover(b"sync.example.com");
     let mut net = Net::from_drivers(vec![
-        subduction_testkit::TestDriver::new(1),
-        subduction_testkit::TestDriver::with_discovery(2, Some(discovery)),
+        subduction_testkit::driver::TestDriver::new(1),
+        subduction_testkit::driver::TestDriver::with_discovery(2, Some(discovery)),
     ]);
 
     let (ca, _cb) = net.connect_with_audience(0, 1, discovery)?;
@@ -519,8 +519,8 @@ fn dialing_the_wrong_peer_never_authenticates() -> TestResult {
 fn lagging_subscriber_is_paused_then_recovers_by_resync() -> TestResult {
     let tree = SedimentreeId::new([16u8; 32]);
     let mut net = Net::from_drivers(vec![
-        subduction_testkit::TestDriver::custom(1, |c| c.max_outstanding_pushes = 3),
-        subduction_testkit::TestDriver::new(2),
+        subduction_testkit::driver::TestDriver::custom(1, |c| c.max_outstanding_pushes = 3),
+        subduction_testkit::driver::TestDriver::new(2),
     ]);
     let (publisher, subscriber) = (0, 1);
     let (cs, cp) = net.connect(subscriber, publisher)?;

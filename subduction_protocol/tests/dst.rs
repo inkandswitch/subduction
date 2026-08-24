@@ -8,7 +8,7 @@ use subduction_protocol::{
     command::Command, effect::AppEvent, event::Direction, handshake::audience::Audience,
     node::NodeEvent,
 };
-use subduction_testkit::{Net, TestError, ensure, sim::Sim};
+use subduction_testkit::{TestError, ensure, net::Net, sim::Sim};
 use testresult::TestResult;
 
 /// Wire two nodes and run the handshake to completion UNDER the sim

@@ -41,138 +41,6 @@ use crate::{
 
 use sedimentree_core::collections::Map;
 
-/// Node configuration (fans out into per-machine configs).
-// Not `Copy`: will grow policy hooks.
-#[allow(missing_copy_implementations)]
-#[derive(Debug, Clone)]
-pub struct NodeConfig {
-    /// Our identity (verifying-key bytes; the signing key stays with the
-    /// driver).
-    pub local_peer: crate::peer_id::PeerId,
-
-    /// Discovery audience accepted as a responder, if any.
-    pub discovery: Option<Audience>,
-
-    /// Root entropy; per-connection entropy is derived deterministically
-    /// (journal/replay-friendly).
-    pub entropy: [u8; 32],
-
-    /// Maximum unacked subscription pushes per connection before that
-    /// subscriber is paused.
-    pub max_outstanding_pushes: u32,
-}
-
-impl NodeConfig {
-    /// Defaults for everything but identity and entropy.
-    #[must_use]
-    pub const fn new(local_peer: crate::peer_id::PeerId, entropy: [u8; 32]) -> Self {
-        Self {
-            local_peer,
-            discovery: None,
-            entropy,
-            max_outstanding_pushes: 64,
-        }
-    }
-}
-
-/// Everything the driver tells the node.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub enum NodeEvent {
-    /// A transport connection is up. `conn` is driver-allocated, never
-    /// reused.
-    Connected {
-        /// The new connection.
-        conn: ConnId,
-        /// Who initiated it.
-        direction: Direction,
-        /// Who we are dialing (required outbound; pins `Known`).
-        audience: Option<Audience>,
-    },
-
-    /// A transport connection is gone.
-    Disconnected {
-        /// The closed connection.
-        conn: ConnId,
-    },
-
-    /// One complete wire message arrived (frame retained by the driver).
-    MessageReceived {
-        /// The receiving connection.
-        conn: ConnId,
-        /// The retained frame's id.
-        frame: FrameId,
-        /// The frame bytes.
-        bytes: Vec<u8>,
-    },
-
-    /// A signing completion.
-    SignDone {
-        /// The witness from the issuing effect.
-        ticket: CryptoTicket,
-        /// The signature.
-        signature: [u8; 64],
-    },
-
-    /// A storage completion.
-    StorageDone {
-        /// The witness from the issuing effect.
-        ticket: StorageTicket,
-        /// The result.
-        result: StorageResult,
-    },
-
-    /// A local application request.
-    Command(Command),
-
-    /// Timer service.
-    Wake,
-}
-
-/// Everything the node asks of the driver — leaf effects only; sealed
-/// inter-machine traffic never appears here.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeEffect {
-    /// Send one wire message (scatter-gather parts).
-    Send {
-        /// The connection to send on.
-        conn: ConnId,
-        /// The message parts.
-        parts: Vec<Part>,
-    },
-
-    /// Close a connection.
-    Disconnect {
-        /// The condemned connection.
-        conn: ConnId,
-    },
-
-    /// Sign with the node's identity key (external custody).
-    Sign {
-        /// Completion witness.
-        ticket: CryptoTicket,
-        /// Bytes to sign.
-        payload: Vec<u8>,
-    },
-
-    /// A storage operation.
-    Storage {
-        /// Completion witness.
-        ticket: StorageTicket,
-        /// The operation.
-        op: StorageOp,
-    },
-
-    /// A frame minted no escaping refs; the driver may free it.
-    ReleaseFrame(FrameId),
-
-    /// A blob ref left node state; decrement its retention.
-    ReleaseBlob(crate::blob_ref::BlobRef),
-
-    /// An application-facing event.
-    App(AppEvent),
-}
-
 /// The composed node. See the [module docs](self).
 #[derive(Debug)]
 pub struct Node {
@@ -472,3 +340,136 @@ impl Node {
         *blake3::keyed_hash(&self.config.entropy, &conn.as_u64().to_be_bytes()).as_bytes()
     }
 }
+
+/// Node configuration (fans out into per-machine configs).
+// Not `Copy`: will grow policy hooks.
+#[allow(missing_copy_implementations)]
+#[derive(Debug, Clone)]
+pub struct NodeConfig {
+    /// Our identity (verifying-key bytes; the signing key stays with the
+    /// driver).
+    pub local_peer: crate::peer_id::PeerId,
+
+    /// Discovery audience accepted as a responder, if any.
+    pub discovery: Option<Audience>,
+
+    /// Root entropy; per-connection entropy is derived deterministically
+    /// (journal/replay-friendly).
+    pub entropy: [u8; 32],
+
+    /// Maximum unacked subscription pushes per connection before that
+    /// subscriber is paused.
+    pub max_outstanding_pushes: u32,
+}
+
+impl NodeConfig {
+    /// Defaults for everything but identity and entropy.
+    #[must_use]
+    pub const fn new(local_peer: crate::peer_id::PeerId, entropy: [u8; 32]) -> Self {
+        Self {
+            local_peer,
+            discovery: None,
+            entropy,
+            max_outstanding_pushes: 64,
+        }
+    }
+}
+
+/// Everything the driver tells the node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub enum NodeEvent {
+    /// A transport connection is up. `conn` is driver-allocated, never
+    /// reused.
+    Connected {
+        /// The new connection.
+        conn: ConnId,
+        /// Who initiated it.
+        direction: Direction,
+        /// Who we are dialing (required outbound; pins `Known`).
+        audience: Option<Audience>,
+    },
+
+    /// A transport connection is gone.
+    Disconnected {
+        /// The closed connection.
+        conn: ConnId,
+    },
+
+    /// One complete wire message arrived (frame retained by the driver).
+    MessageReceived {
+        /// The receiving connection.
+        conn: ConnId,
+        /// The retained frame's id.
+        frame: FrameId,
+        /// The frame bytes.
+        bytes: Vec<u8>,
+    },
+
+    /// A signing completion.
+    SignDone {
+        /// The witness from the issuing effect.
+        ticket: CryptoTicket,
+        /// The signature.
+        signature: [u8; 64],
+    },
+
+    /// A storage completion.
+    StorageDone {
+        /// The witness from the issuing effect.
+        ticket: StorageTicket,
+        /// The result.
+        result: StorageResult,
+    },
+
+    /// A local application request.
+    Command(Command),
+
+    /// Timer service.
+    Wake,
+}
+
+/// Everything the node asks of the driver — leaf effects only; sealed
+/// inter-machine traffic never appears here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeEffect {
+    /// Send one wire message (scatter-gather parts).
+    Send {
+        /// The connection to send on.
+        conn: ConnId,
+        /// The message parts.
+        parts: Vec<Part>,
+    },
+
+    /// Close a connection.
+    Disconnect {
+        /// The condemned connection.
+        conn: ConnId,
+    },
+
+    /// Sign with the node's identity key (external custody).
+    Sign {
+        /// Completion witness.
+        ticket: CryptoTicket,
+        /// Bytes to sign.
+        payload: Vec<u8>,
+    },
+
+    /// A storage operation.
+    Storage {
+        /// Completion witness.
+        ticket: StorageTicket,
+        /// The operation.
+        op: StorageOp,
+    },
+
+    /// A frame minted no escaping refs; the driver may free it.
+    ReleaseFrame(FrameId),
+
+    /// A blob ref left node state; decrement its retention.
+    ReleaseBlob(crate::blob_ref::BlobRef),
+
+    /// An application-facing event.
+    App(AppEvent),
+}
+

@@ -14,7 +14,7 @@ use subduction_protocol::{
     event::Direction,
     handshake::audience::Audience,
 };
-use subduction_runtime::memory::MemoryTransport;
+use subduction_runtime::memory::transport::MemoryTransport;
 use testresult::TestResult;
 
 #[test]

@@ -9,7 +9,7 @@ use subduction_protocol::{
     effect::{AppEvent, SyncStatus},
     node::NodeEvent,
 };
-use subduction_testkit::Net;
+use subduction_testkit::net::Net;
 use testresult::TestResult;
 
 #[test]

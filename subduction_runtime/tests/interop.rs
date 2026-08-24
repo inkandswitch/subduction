@@ -41,7 +41,7 @@ use subduction_protocol::{
     handshake::audience::Audience,
     peer_id::PeerId,
 };
-use subduction_runtime::memory::MemoryTransport;
+use subduction_runtime::memory::transport::MemoryTransport;
 use testresult::TestResult;
 use thiserror::Error;
 

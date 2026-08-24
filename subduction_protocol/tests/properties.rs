@@ -340,7 +340,7 @@ fn prop_adversarial_delivery_never_misauthenticates() {
 fn prop_one_sync_converges_arbitrary_divergence() {
     use sedimentree_core::{blob::Blob, id::SedimentreeId, loose_commit::id::CommitId};
     use subduction_protocol::command::{Command, NewCommit};
-    use subduction_testkit::Net;
+    use subduction_testkit::net::Net;
 
     let tree = SedimentreeId::new([14u8; 32]);
 

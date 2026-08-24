@@ -1,18 +1,16 @@
-//! Storage and policy capabilities: the driver's custody + durability duties.
+//! Storage capability: the driver's custody + durability duties.
 //!
 //! The node's [`StorageOp`](subduction_protocol::storage::StorageOp)s speak
 //! blob _refs_; the driver resolves refs to bytes before anything reaches a
-//! backend, so backends only ever see whole items. Signature verification is
-//! not a backend duty (remote items were verified in the connection
-//! machine); policy authorization is, and it may perform IO — hence the
-//! separate async [`Policy`] trait consulted by the effect executor before
-//! each operation.
+//! backend, so backends only ever see whole items. Signature verification
+//! is not a backend duty (remote items were verified in the connection
+//! machine), and neither is authorization (the effect executor consults
+//! [`Policy`](crate::policy::Policy) first — see [`crate::policy`]).
 //!
-//! Errors cross this boundary as
-//! [`StorageFailure`]
-//! (retryable vs permanent): the machine cannot meaningfully distinguish
-//! finer backend causes, and the driver's telemetry sees the raw error
-//! before it is coarsened.
+//! Errors cross this boundary as [`StorageFailure`] (retryable vs
+//! permanent): the machine cannot meaningfully distinguish finer backend
+//! causes, and the driver's telemetry sees the raw error before it is
+//! coarsened.
 
 use std::{rc::Rc, sync::Arc};
 
@@ -20,20 +18,10 @@ use future_form::FutureForm;
 use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 use subduction_crypto::signed::Signed;
-use subduction_protocol::storage::{Provenance, StorageFailure};
-
-/// Items loaded by [`Storage::fetch_items`], blobs as bytes.
-#[derive(Debug, Clone, Default)]
-pub struct FetchedItems {
-    /// Requested commits that were found.
-    pub commits: Vec<(Signed<LooseCommit>, Vec<u8>)>,
-
-    /// Requested fragments that were found.
-    pub fragments: Vec<(Signed<Fragment>, Vec<u8>)>,
-}
+use subduction_protocol::storage::StorageFailure;
 
 /// Durable item storage, byte-world.
 pub trait Storage<Async: FutureForm> {
@@ -92,38 +80,12 @@ macro_rules! delegate_storage {
 delegate_storage!(Rc);
 delegate_storage!(Arc);
 
-/// What a storage operation wants to do — the policy check's input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StorageAction {
-    /// Persist items into a tree.
-    Write,
+/// Items loaded by [`Storage::fetch_items`], blobs as bytes.
+#[derive(Debug, Clone, Default)]
+pub struct FetchedItems {
+    /// Requested commits that were found.
+    pub commits: Vec<(Signed<LooseCommit>, Vec<u8>)>,
 
-    /// Load items from a tree.
-    Read,
-
-    /// Delete a tree.
-    Delete,
-}
-
-/// A policy verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    /// The operation may proceed.
-    Allow,
-
-    /// The operation is denied (surfaced as
-    /// [`StorageResult::Unauthorized`](subduction_protocol::storage::StorageResult::Unauthorized)).
-    Deny,
-}
-
-/// Authorization for storage operations. Policies may perform IO
-/// (e.g. capability lookups), so verdicts are async.
-pub trait Policy<Async: FutureForm> {
-    /// Authorize `action` on `tree` by `provenance`.
-    fn authorize(
-        &self,
-        provenance: &Provenance,
-        tree: SedimentreeId,
-        action: StorageAction,
-    ) -> Async::Future<'_, Verdict>;
+    /// Requested fragments that were found.
+    pub fragments: Vec<(Signed<Fragment>, Vec<u8>)>,
 }

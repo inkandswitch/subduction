@@ -16,25 +16,6 @@ use sedimentree_core::{id::SedimentreeId, loose_commit::id::CommitId};
 
 use crate::{id::ConnId, peer_id::PeerId, storage::StorageFailure};
 
-/// How a batch sync request concluded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-pub enum SyncStatus {
-    /// The response was processed (ingest durability is reported
-    /// separately via `TreeUpdated`).
-    Completed,
-
-    /// The peer does not have the tree.
-    NotFound,
-
-    /// The peer says we may not read the tree.
-    Unauthorized,
-
-    /// No response arrived within the sync deadline.
-    TimedOut,
-}
-
 /// An application-facing event surfaced by the machine.
 ///
 /// Drivers translate these into callbacks, streams, or platform-native
@@ -155,4 +136,23 @@ pub enum AppEvent {
         /// The complete extension message, schema prefix included.
         bytes: Vec<u8>,
     },
+}
+
+/// How a batch sync request concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+pub enum SyncStatus {
+    /// The response was processed (ingest durability is reported
+    /// separately via `TreeUpdated`).
+    Completed,
+
+    /// The peer does not have the tree.
+    NotFound,
+
+    /// The peer says we may not read the tree.
+    Unauthorized,
+
+    /// No response arrived within the sync deadline.
+    TimedOut,
 }

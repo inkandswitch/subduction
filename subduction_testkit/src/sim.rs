@@ -22,67 +22,7 @@
 
 use subduction_protocol::{id::ConnId, ticket::StorageTicket};
 
-use crate::{Net, TestError};
-
-/// One scheduling decision, journaled for replay/debugging.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Choice {
-    /// Deliver the oldest undelivered message on `(from, conn)`.
-    Deliver {
-        /// Sending node index.
-        from: usize,
-        /// Sending connection.
-        conn: ConnId,
-        /// Receiving node index.
-        to: usize,
-        /// Receiving connection.
-        to_conn: ConnId,
-        /// Message length (a cheap content fingerprint for journal diffs).
-        len: usize,
-    },
-
-    /// Complete one deferred storage op.
-    Storage {
-        /// The node whose driver completes the op.
-        node: usize,
-        /// The op's ticket (identifies it in journal diffs).
-        ticket: StorageTicket,
-    },
-
-    /// Advance one node's clock and deliver a wake.
-    Advance {
-        /// The node whose clock moves.
-        node: usize,
-        /// Milliseconds advanced.
-        ms: u64,
-    },
-}
-
-/// splitmix64: tiny, dependency-free, deterministic across platforms.
-#[derive(Debug, Clone)]
-struct SplitMix64(u64);
-
-impl SplitMix64 {
-    const fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    #[allow(clippy::cast_possible_truncation)] // len < 2^32 in practice
-    const fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-}
-
-/// Per-node cap on random clock advancement, so deadlines (30 s
-/// handshake/sync windows) never fire spuriously mid-scenario.
-const MAX_TOTAL_ADVANCE_MS: u64 = 10_000;
-
-/// Max milliseconds per single advance.
-const MAX_STEP_ADVANCE_MS: u64 = 50;
+use crate::{TestError, net::Net};
 
 /// A seeded scheduler over a [`Net`]. Build the topology on
 /// [`net`](Self::net) (drivers should set `defer_storage`), then
@@ -219,3 +159,65 @@ impl Sim {
         }
     }
 }
+
+/// One scheduling decision, journaled for replay/debugging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// Deliver the oldest undelivered message on `(from, conn)`.
+    Deliver {
+        /// Sending node index.
+        from: usize,
+        /// Sending connection.
+        conn: ConnId,
+        /// Receiving node index.
+        to: usize,
+        /// Receiving connection.
+        to_conn: ConnId,
+        /// Message length (a cheap content fingerprint for journal diffs).
+        len: usize,
+    },
+
+    /// Complete one deferred storage op.
+    Storage {
+        /// The node whose driver completes the op.
+        node: usize,
+        /// The op's ticket (identifies it in journal diffs).
+        ticket: StorageTicket,
+    },
+
+    /// Advance one node's clock and deliver a wake.
+    Advance {
+        /// The node whose clock moves.
+        node: usize,
+        /// Milliseconds advanced.
+        ms: u64,
+    },
+}
+
+
+/// splitmix64: tiny, dependency-free, deterministic across platforms.
+#[derive(Debug, Clone)]
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    const fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    #[allow(clippy::cast_possible_truncation)] // len < 2^32 in practice
+    const fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// Per-node cap on random clock advancement, so deadlines (30 s
+/// handshake/sync windows) never fire spuriously mid-scenario.
+const MAX_TOTAL_ADVANCE_MS: u64 = 10_000;
+
+/// Max milliseconds per single advance.
+const MAX_STEP_ADVANCE_MS: u64 = 50;
+

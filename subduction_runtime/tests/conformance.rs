@@ -18,8 +18,8 @@ use subduction_protocol::{
 };
 use subduction_runtime::{
     conformance,
-    memory::{MemoryStorage, MemoryTransport},
-    storage::{Policy, StorageAction, Verdict},
+    memory::{storage::MemoryStorage, transport::MemoryTransport},
+    policy::{Policy, StorageAction, Verdict},
 };
 use testresult::TestResult;
 

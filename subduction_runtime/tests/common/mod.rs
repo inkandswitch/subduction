@@ -25,9 +25,9 @@ use subduction_protocol::{
 };
 use subduction_runtime::{
     clock::Clock,
-    driver::{Driver, Handle},
-    memory::{AllowAll, MemoryStorage, MemoryTransport},
-    storage::Policy,
+    driver::{handle::Handle, Driver},
+    memory::{policy::AllowAll, storage::MemoryStorage, transport::MemoryTransport},
+    policy::Policy,
 };
 
 /// A real wall/monotonic clock whose `sleep` never resolves: fine for

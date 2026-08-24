@@ -45,7 +45,8 @@ use subduction_crypto::{nonce::Nonce, signed::Signed};
 use crate::{
     blob_ref::{BlobRef, FrameId},
     edge::{
-        ConnToCore, CoreToConn, EdgeId, EdgeSequencer, ForwardStatus, Sealed, SyncForward,
+        ConnToCore, CoreToConn, EdgeId, ForwardStatus, Sealed, SyncForward,
+        sequencer::EdgeSequencer,
         VerifiedCommit, VerifiedFragment,
     },
     event::Direction,
@@ -66,137 +67,6 @@ use crate::{
     wire,
 };
 
-/// Static configuration for one [`ConnMachine`].
-// Not `Copy`: will grow non-`Copy` fields (per-conn policy hooks), and
-// removing a `Copy` impl later is a breaking change.
-#[allow(missing_copy_implementations)]
-#[derive(Debug, Clone)]
-pub struct ConnConfig {
-    /// Our identity (the bytes of our verifying key).
-    pub local_peer: PeerId,
-
-    /// Discovery audience we accept as a responder, if any.
-    pub discovery: Option<Audience>,
-
-    /// Maximum tolerated clock drift for challenge freshness.
-    pub max_drift: Duration,
-
-    /// Handshake deadline (also covers the nonce-claim round trip).
-    pub handshake_timeout: Duration,
-
-    /// Per-machine entropy for challenge nonces (CSPRNG-seeded, unique
-    /// per incarnation).
-    pub entropy: [u8; 32],
-}
-
-impl ConnConfig {
-    /// Defaults for everything but identity/entropy.
-    #[must_use]
-    pub const fn new(local_peer: PeerId, entropy: [u8; 32]) -> Self {
-        Self {
-            local_peer,
-            discovery: None,
-            max_drift: MAX_PLAUSIBLE_DRIFT,
-            handshake_timeout: Duration::from_secs(30),
-            entropy,
-        }
-    }
-}
-
-/// What a [`ConnMachine`] asks of the world. Everything here is either a
-/// leaf effect (driver-executed) or a sealed edge message (router-moved,
-/// driver-opaque).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnEffect {
-    /// Send one complete wire message on this connection.
-    Send {
-        /// Scatter-gather parts (handshake traffic is always literal
-        /// bytes; blob refs appear on the sync path).
-        parts: Vec<crate::blob_ref::Part>,
-    },
-
-    /// Close this connection.
-    Disconnect,
-
-    /// Sign with the machine's identity key (external custody).
-    Sign {
-        /// Completion witness.
-        ticket: CryptoTicket,
-        /// Bytes to sign.
-        payload: Vec<u8>,
-    },
-
-    /// A sealed message for the core (router-moved; unforgeable).
-    ToCore(Sealed<ConnToCore>),
-
-    /// No [`BlobRef`]s escaped from this frame; the driver may free it.
-    /// (Frames with escaped refs are freed by ref releases + the edge
-    /// epoch backstop.)
-    ReleaseFrame(FrameId),
-
-    /// An application-facing event from this connection.
-    App(ConnAppEvent),
-}
-
-/// Application-facing events surfaced directly by a connection machine.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnAppEvent {
-    /// The handshake completed.
-    PeerAuthenticated {
-        /// The verified peer.
-        peer: PeerId,
-    },
-
-    /// An extension-protocol message arrived (auth-gated).
-    ExtensionMessage {
-        /// The authenticated peer.
-        peer: PeerId,
-        /// The complete message, schema prefix included.
-        bytes: Vec<u8>,
-    },
-}
-
-/// Inputs to a [`ConnMachine`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnEvent {
-    /// One complete wire message arrived (frame retained by the driver;
-    /// the id anchors any [`BlobRef`]s minted
-    /// from it).
-    MessageReceived {
-        /// The retained frame's id.
-        frame: crate::blob_ref::FrameId,
-        /// The frame's bytes.
-        bytes: Vec<u8>,
-    },
-
-    /// A signing completion (ticket echoed from [`ConnEffect::Sign`]).
-    ///
-    /// _Trust boundary:_ the signature bytes are appended to the wire
-    /// message _unverified_ — the driver's signer is the local trust
-    /// root (it holds the signing key). A corrupt signature costs only
-    /// liveness: the remote peer rejects the handshake message.
-    SignDone {
-        /// The witness.
-        ticket: CryptoTicket,
-        /// The signature.
-        signature: [u8; 64],
-    },
-
-    /// A sealed answer from the core.
-    FromCore(Sealed<CoreToConn>),
-
-    /// The application wants to send an extension message.
-    SendExtension {
-        /// The complete extension message.
-        bytes: Vec<u8>,
-    },
-
-    /// The transport is gone; emit teardown and become terminal.
-    TransportClosed,
-
-    /// Timer service (deadlines are re-derived from `now`).
-    Wake,
-}
 
 /// The per-connection handshake/gating machine. See the [module
 /// docs](self).
@@ -975,6 +845,138 @@ impl ConnMachine {
         bytes.copy_from_slice(&hash.as_bytes()[..16]);
         Nonce::from_bytes(bytes)
     }
+}
+
+/// Static configuration for one [`ConnMachine`].
+// Not `Copy`: will grow non-`Copy` fields (per-conn policy hooks), and
+// removing a `Copy` impl later is a breaking change.
+#[allow(missing_copy_implementations)]
+#[derive(Debug, Clone)]
+pub struct ConnConfig {
+    /// Our identity (the bytes of our verifying key).
+    pub local_peer: PeerId,
+
+    /// Discovery audience we accept as a responder, if any.
+    pub discovery: Option<Audience>,
+
+    /// Maximum tolerated clock drift for challenge freshness.
+    pub max_drift: Duration,
+
+    /// Handshake deadline (also covers the nonce-claim round trip).
+    pub handshake_timeout: Duration,
+
+    /// Per-machine entropy for challenge nonces (CSPRNG-seeded, unique
+    /// per incarnation).
+    pub entropy: [u8; 32],
+}
+
+impl ConnConfig {
+    /// Defaults for everything but identity/entropy.
+    #[must_use]
+    pub const fn new(local_peer: PeerId, entropy: [u8; 32]) -> Self {
+        Self {
+            local_peer,
+            discovery: None,
+            max_drift: MAX_PLAUSIBLE_DRIFT,
+            handshake_timeout: Duration::from_secs(30),
+            entropy,
+        }
+    }
+}
+
+/// What a [`ConnMachine`] asks of the world. Everything here is either a
+/// leaf effect (driver-executed) or a sealed edge message (router-moved,
+/// driver-opaque).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnEffect {
+    /// Send one complete wire message on this connection.
+    Send {
+        /// Scatter-gather parts (handshake traffic is always literal
+        /// bytes; blob refs appear on the sync path).
+        parts: Vec<crate::blob_ref::Part>,
+    },
+
+    /// Close this connection.
+    Disconnect,
+
+    /// Sign with the machine's identity key (external custody).
+    Sign {
+        /// Completion witness.
+        ticket: CryptoTicket,
+        /// Bytes to sign.
+        payload: Vec<u8>,
+    },
+
+    /// A sealed message for the core (router-moved; unforgeable).
+    ToCore(Sealed<ConnToCore>),
+
+    /// No [`BlobRef`]s escaped from this frame; the driver may free it.
+    /// (Frames with escaped refs are freed by ref releases + the edge
+    /// epoch backstop.)
+    ReleaseFrame(FrameId),
+
+    /// An application-facing event from this connection.
+    App(ConnAppEvent),
+}
+
+/// Application-facing events surfaced directly by a connection machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnAppEvent {
+    /// The handshake completed.
+    PeerAuthenticated {
+        /// The verified peer.
+        peer: PeerId,
+    },
+
+    /// An extension-protocol message arrived (auth-gated).
+    ExtensionMessage {
+        /// The authenticated peer.
+        peer: PeerId,
+        /// The complete message, schema prefix included.
+        bytes: Vec<u8>,
+    },
+}
+
+/// Inputs to a [`ConnMachine`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnEvent {
+    /// One complete wire message arrived (frame retained by the driver;
+    /// the id anchors any [`BlobRef`]s minted
+    /// from it).
+    MessageReceived {
+        /// The retained frame's id.
+        frame: crate::blob_ref::FrameId,
+        /// The frame's bytes.
+        bytes: Vec<u8>,
+    },
+
+    /// A signing completion (ticket echoed from [`ConnEffect::Sign`]).
+    ///
+    /// _Trust boundary:_ the signature bytes are appended to the wire
+    /// message _unverified_ — the driver's signer is the local trust
+    /// root (it holds the signing key). A corrupt signature costs only
+    /// liveness: the remote peer rejects the handshake message.
+    SignDone {
+        /// The witness.
+        ticket: CryptoTicket,
+        /// The signature.
+        signature: [u8; 64],
+    },
+
+    /// A sealed answer from the core.
+    FromCore(Sealed<CoreToConn>),
+
+    /// The application wants to send an extension message.
+    SendExtension {
+        /// The complete extension message.
+        bytes: Vec<u8>,
+    },
+
+    /// The transport is gone; emit teardown and become terminal.
+    TransportClosed,
+
+    /// Timer service (deadlines are re-derived from `now`).
+    Wake,
 }
 
 /// The handshake typestate for one connection incarnation.

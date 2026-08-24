@@ -2,7 +2,7 @@
 //!
 //! Every [`Storage`] implementation must pass [`certify`] before a
 //! driver ships on it. Platform crates run it against their adapter in a
-//! test; [`crate::memory::MemoryStorage`] is the reference backend.
+//! test; [`crate::memory::storage::MemoryStorage`] is the reference backend.
 //!
 //! # Layer boundaries
 //!

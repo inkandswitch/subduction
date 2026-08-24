@@ -20,24 +20,6 @@ use subduction_protocol::{
     id::ConnId,
 };
 
-/// One retained frame.
-#[derive(Debug)]
-struct Slot {
-    bytes: Vec<u8>,
-
-    /// The connection this frame's lifecycle is keyed to, if any.
-    /// `None` for frames minted from local storage fetches, which are
-    /// freed only by their refs.
-    owner: Option<ConnId>,
-
-    /// Escaped refs not yet released.
-    outstanding: u32,
-
-    /// Whether any ref ever escaped (a frame with escapes is freed by
-    /// its last `ReleaseBlob`, not by `ReleaseFrame`).
-    saw_refs: bool,
-}
-
 /// The driver-owned buffer table. See the [module docs](self).
 #[derive(Debug, Default)]
 pub struct FrameTable {
@@ -128,6 +110,24 @@ impl FrameTable {
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
+}
+
+/// One retained frame.
+#[derive(Debug)]
+struct Slot {
+    bytes: Vec<u8>,
+
+    /// The connection this frame's lifecycle is keyed to, if any.
+    /// `None` for frames minted from local storage fetches, which are
+    /// freed only by their refs.
+    owner: Option<ConnId>,
+
+    /// Escaped refs not yet released.
+    outstanding: u32,
+
+    /// Whether any ref ever escaped (a frame with escapes is freed by
+    /// its last `ReleaseBlob`, not by `ReleaseFrame`).
+    saw_refs: bool,
 }
 
 #[cfg(test)]

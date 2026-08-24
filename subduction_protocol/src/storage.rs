@@ -46,20 +46,6 @@ use subduction_crypto::signed::Signed;
 
 use crate::peer_id::PeerId;
 
-/// Where data (or a request for it) came from — determines which policy
-/// check the driver applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Provenance {
-    /// A local application operation (no peer policy applies).
-    Local,
-
-    /// Data or a request from an authenticated remote peer.
-    Remote(PeerId),
-}
-
 /// A storage operation for the driver, always paired with a
 /// [`StorageTicket`](crate::ticket::StorageTicket) on the emitting effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +148,20 @@ pub enum StorageResult {
     /// The backend failed (IO error, corruption, …). The machine surfaces
     /// this to the application; retry policy is a driver/app concern.
     Failed(StorageFailure),
+}
+
+/// Where data (or a request for it) came from — determines which policy
+/// check the driver applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Provenance {
+    /// A local application operation (no peer policy applies).
+    Local,
+
+    /// Data or a request from an authenticated remote peer.
+    Remote(PeerId),
 }
 
 /// A backend failure, kept coarse: the machine cannot meaningfully

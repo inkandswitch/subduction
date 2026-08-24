@@ -65,7 +65,7 @@ pub enum IgnoreReason {
     /// An inter-machine edge message failed the sequencing discipline
     /// (stale generation, replay, gap, or misrouting) — a router/driver
     /// bug made observable, never applied to state.
-    Edge(crate::edge::EdgeViolation),
+    Edge(crate::edge::sequencer::EdgeViolation),
 }
 
 /// Protocol violations that condemn a connection.
