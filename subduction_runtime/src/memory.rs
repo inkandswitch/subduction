@@ -5,20 +5,22 @@
 use core::cell::RefCell;
 
 use async_channel::{Receiver, Sender};
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::future::LocalBoxFuture;
 use sedimentree_core::{
     collections::Map,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::signed::Signed;
 use subduction_protocol::storage::{Provenance, StorageFailure};
 use thiserror::Error;
 
-use crate::storage::{FetchedItems, Policy, Storage, StorageAction, Verdict};
-use crate::transport::Transport;
+use crate::{
+    storage::{FetchedItems, Policy, Storage, StorageAction, Verdict},
+    transport::Transport,
+};
 
 /// The peer end of a memory transport is gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

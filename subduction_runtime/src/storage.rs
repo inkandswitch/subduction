@@ -20,7 +20,7 @@ use future_form::FutureForm;
 use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::signed::Signed;
 use subduction_protocol::storage::{Provenance, StorageFailure};

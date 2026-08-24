@@ -61,7 +61,7 @@ use sedimentree_core::{
     collections::Map,
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::{signed::Signed, signer::Signer};
 use subduction_protocol::{
@@ -318,7 +318,13 @@ impl<T> Handle<T> {
         transport: T,
         direction: Direction,
         audience: Option<Audience>,
-    ) -> Result<(PendingConnection<T>, impl Future<Output = ()> + use<Async, T>), DriverClosed>
+    ) -> Result<
+        (
+            PendingConnection<T>,
+            impl Future<Output = ()> + use<Async, T>,
+        ),
+        DriverClosed,
+    >
     where
         Async: FutureForm,
         T: Transport<Async>,
@@ -372,7 +378,8 @@ impl<T> Handle<T> {
         tree: SedimentreeId,
         fragments: Vec<NewFragment>,
     ) -> Result<(), DriverClosed> {
-        self.command(Command::AddFragments { tree, fragments }).await
+        self.command(Command::AddFragments { tree, fragments })
+            .await
     }
 
     /// Install a tree's metadata loaded from storage at startup.
@@ -627,10 +634,10 @@ where
                 NodeEffect::App(event) => {
                     // Resolve the waiting connection capability, if any.
                     if let AppEvent::PeerAuthenticated { conn, peer } = &event
-                        && let Some(auth) = self.pending_auth.remove(conn) {
-                            let _receiver =
-                                auth.send(AuthOutcome::Authenticated { peer: *peer });
-                        }
+                        && let Some(auth) = self.pending_auth.remove(conn)
+                    {
+                        let _receiver = auth.send(AuthOutcome::Authenticated { peer: *peer });
+                    }
                     // Unbounded and receiver-optional: app events must
                     // never wedge the protocol.
                     let _result = self.app_tx.try_send(event);

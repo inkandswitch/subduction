@@ -36,7 +36,7 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta},
     fragment::Fragment,
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_crypto::signed::Signed;
 use thiserror::Error;

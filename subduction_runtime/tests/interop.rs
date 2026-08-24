@@ -32,7 +32,7 @@ use subduction_core::{
     subduction::builder::SubductionBuilder,
     timeout::call::CallTimeout,
     timestamp::TimestampSeconds,
-    transport::{message::MessageTransport, Transport as LegacyTransport},
+    transport::{Transport as LegacyTransport, message::MessageTransport},
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_protocol::{
