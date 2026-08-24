@@ -30,6 +30,9 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod clock;
+#[cfg(feature = "conformance")]
+#[cfg_attr(docsrs, doc(cfg(feature = "conformance")))]
+pub mod conformance;
 pub mod driver;
 pub mod frames;
 pub mod memory;

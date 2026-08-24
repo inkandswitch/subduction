@@ -10,7 +10,6 @@ use future_form::Local;
 use futures::{executor::LocalPool, task::LocalSpawnExt as _};
 use sedimentree_core::{id::SedimentreeId, loose_commit::id::CommitId};
 use subduction_protocol::{
-    command::Command,
     effect::{AppEvent, SyncStatus},
     event::Direction,
     handshake::audience::Audience,
@@ -34,12 +33,12 @@ fn two_stacks_handshake_sync_and_push() -> TestResult {
     let result: Result<(), String> = pool.run_until(async {
         // Wire the two stacks together.
         let (ta, tb) = MemoryTransport::pair();
-        let (conn_a, pump_a) = a
+        let (pending_a, pump_a) = a
             .handle
             .connect::<Local>(ta, Direction::Outbound, Some(Audience::known(b.peer)))
             .await
             .map_err(|e| e.to_string())?;
-        let (_conn_b, pump_b) = b
+        let (pending_b, pump_b) = b
             .handle
             .connect::<Local>(tb, Direction::Inbound, None)
             .await
@@ -47,26 +46,15 @@ fn two_stacks_handshake_sync_and_push() -> TestResult {
         spawner.spawn_local(pump_a).map_err(|e| e.to_string())?;
         spawner.spawn_local(pump_b).map_err(|e| e.to_string())?;
 
-        // Both sides authenticate.
-        let peer_seen_by_a = wait_for(&a, |event| match event {
-            AppEvent::PeerAuthenticated { peer, .. } => Some(*peer),
-            _ => None,
-        })
-        .await?;
-        assert_eq!(peer_seen_by_a, b.peer, "a authenticated b");
-        let peer_seen_by_b = wait_for(&b, |event| match event {
-            AppEvent::PeerAuthenticated { peer, .. } => Some(*peer),
-            _ => None,
-        })
-        .await?;
-        assert_eq!(peer_seen_by_b, a.peer, "b authenticated a");
+        // Both sides authenticate: the pending capabilities upgrade.
+        let conn_a = pending_a.authenticated().await.map_err(|e| e.to_string())?;
+        assert_eq!(conn_a.peer(), b.peer, "a authenticated b");
+        let conn_b = pending_b.authenticated().await.map_err(|e| e.to_string())?;
+        assert_eq!(conn_b.peer(), a.peer, "b authenticated a");
 
         // B authors a commit locally (sealed + persisted by its driver).
         b.handle
-            .command(Command::AddCommits {
-                tree,
-                commits: vec![commit(0xA1)],
-            })
+            .add_commits(tree, vec![commit(0xA1)])
             .await
             .map_err(|e| e.to_string())?;
         wait_for(&b, |event| match event {
@@ -75,13 +63,10 @@ fn two_stacks_handshake_sync_and_push() -> TestResult {
         })
         .await?;
 
-        // A syncs the tree from B, subscribing.
-        a.handle
-            .command(Command::SyncTree {
-                conn: conn_a,
-                tree,
-                subscribe: true,
-            })
+        // A syncs the tree from B, subscribing — an operation only the
+        // authenticated-connection capability can express.
+        conn_a
+            .sync_tree(tree, true)
             .await
             .map_err(|e| e.to_string())?;
         let status = wait_for(&a, |event| match event {
@@ -103,10 +88,7 @@ fn two_stacks_handshake_sync_and_push() -> TestResult {
         // A live push: B authors another commit; A receives it via its
         // subscription without asking.
         b.handle
-            .command(Command::AddCommits {
-                tree,
-                commits: vec![commit(0xA2)],
-            })
+            .add_commits(tree, vec![commit(0xA2)])
             .await
             .map_err(|e| e.to_string())?;
         // The sync above may have queued its own TreeUpdated; wait until

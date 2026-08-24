@@ -27,6 +27,7 @@ use subduction_runtime::{
     clock::Clock,
     driver::{Driver, Handle},
     memory::{AllowAll, MemoryStorage, MemoryTransport},
+    storage::Policy,
 };
 
 /// A real wall/monotonic clock whose `sleep` never resolves: fine for
@@ -63,8 +64,11 @@ impl Clock<Local> for TestClock {
     }
 }
 
-pub type TestDriver =
-    Driver<Local, MemoryTransport, Rc<MemoryStorage>, AllowAll, MemorySigner, TestClock>;
+/// A test-stack driver over memory capabilities, generic in policy.
+pub type PolicyDriver<P> =
+    Driver<Local, MemoryTransport, Rc<MemoryStorage>, P, MemorySigner, TestClock>;
+
+pub type TestDriver = PolicyDriver<AllowAll>;
 
 /// One full local stack's handles.
 pub struct Stack {
@@ -76,15 +80,21 @@ pub struct Stack {
 /// A driver + stack with seed-derived identity, entropy, and storage.
 #[must_use]
 pub fn stack(seed: u8) -> (TestDriver, Stack) {
+    stack_with_policy(seed, AllowAll)
+}
+
+/// Like [`stack`], with a custom storage policy.
+#[must_use]
+pub fn stack_with_policy<P: Policy<Local>>(seed: u8, policy: P) -> (PolicyDriver<P>, Stack) {
     let signing_key = SigningKey::from_bytes(&[seed; 32]);
     let peer = PeerId::from(signing_key.verifying_key());
     let storage = Rc::new(MemoryStorage::new());
-    let (driver, handle) = TestDriver::new(
+    let (driver, handle) = Driver::new(
         NodeConfig::new(peer, [seed ^ 0x55; 32]),
         TestClock::new(),
         MemorySigner::from_bytes(&[seed; 32]),
         Rc::clone(&storage),
-        AllowAll,
+        policy,
     );
     (
         driver,

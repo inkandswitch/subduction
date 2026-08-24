@@ -5567,6 +5567,7 @@ dependencies = [
  "subduction_core",
  "subduction_crypto",
  "subduction_protocol",
+ "subduction_runtime",
  "testresult",
  "thiserror 2.0.20",
  "tokio",

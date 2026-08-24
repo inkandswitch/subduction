@@ -23,6 +23,12 @@ sedimentree_core = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
 
+# getrandom 0.2 has no wasm32-unknown-unknown backend without `js`; enable
+# it here (the crate that owns the unconditional dep) so every downstream
+# consumer builds on wasm without repeating this.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { workspace = true, features = ["js"] }
+
 [dev-dependencies]
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
 bolero = { workspace = true, features = ["arbitrary"] }
@@ -39,7 +45,7 @@ std = [
   "ed25519-dalek/std",
   "sedimentree_core/std",
   "serde/std",
-  "thiserror/std"
+  "thiserror/std",
 ]
 
 [lints]

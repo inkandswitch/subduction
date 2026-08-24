@@ -36,7 +36,6 @@ use subduction_core::{
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_protocol::{
-    command::Command,
     effect::{AppEvent, SyncStatus},
     event::Direction,
     handshake::audience::Audience,
@@ -236,7 +235,7 @@ async fn new_node_initiates_and_syncs_both_ways_with_legacy() -> TestResult {
 
             let (driver, ours) = stack(1);
             drop(tokio::task::spawn_local(driver.run()));
-            let (conn, pump) = ours
+            let (pending, pump) = ours
                 .handle
                 .connect::<Local>(
                     our_transport,
@@ -247,21 +246,12 @@ async fn new_node_initiates_and_syncs_both_ways_with_legacy() -> TestResult {
                 .map_err(|e| e.to_string())?;
             drop(tokio::task::spawn_local(pump));
 
-            let authenticated_peer = wait_for(&ours, |event| match event {
-                AppEvent::PeerAuthenticated { peer, .. } => Some(*peer),
-                _ => None,
-            })
-            .await?;
-            assert_eq!(authenticated_peer, legacy_peer, "we authenticated legacy");
+            let conn = pending.authenticated().await.map_err(|e| e.to_string())?;
+            assert_eq!(conn.peer(), legacy_peer, "we authenticated legacy");
             respond.await.map_err(|e| e.to_string())?;
 
             // Legacy → new: batch sync (with subscription).
-            ours.handle
-                .command(Command::SyncTree {
-                    conn,
-                    tree,
-                    subscribe: true,
-                })
+            conn.sync_tree(tree, true)
                 .await
                 .map_err(|e| e.to_string())?;
             let status = wait_for(&ours, |event| match event {
@@ -280,10 +270,7 @@ async fn new_node_initiates_and_syncs_both_ways_with_legacy() -> TestResult {
             // New → legacy: local write pushed over the mutual
             // subscription; legacy ingests the wire LooseCommit.
             ours.handle
-                .command(Command::AddCommits {
-                    tree,
-                    commits: vec![commit(0xB2)],
-                })
+                .add_commits(tree, vec![commit(0xB2)])
                 .await
                 .map_err(|e| e.to_string())?;
             wait_for(&ours, |event| match event {
@@ -315,10 +302,7 @@ async fn legacy_initiates_and_pulls_from_new_node() -> TestResult {
             let (driver, ours) = stack(1);
             drop(tokio::task::spawn_local(driver.run()));
             ours.handle
-                .command(Command::AddCommits {
-                    tree,
-                    commits: vec![commit(0xC3)],
-                })
+                .add_commits(tree, vec![commit(0xC3)])
                 .await
                 .map_err(|e| e.to_string())?;
             wait_for(&ours, |event| match event {
@@ -362,18 +346,14 @@ async fn legacy_initiates_and_pulls_from_new_node() -> TestResult {
                     .expect("legacy add_connection");
             });
 
-            let (_conn, pump) = ours
+            let (pending, pump) = ours
                 .handle
                 .connect::<Local>(our_transport, Direction::Inbound, None)
                 .await
                 .map_err(|e| e.to_string())?;
             drop(tokio::task::spawn_local(pump));
 
-            let _peer = wait_for(&ours, |event| match event {
-                AppEvent::PeerAuthenticated { peer, .. } => Some(*peer),
-                _ => None,
-            })
-            .await?;
+            let _conn = pending.authenticated().await.map_err(|e| e.to_string())?;
             initiate.await.map_err(|e| e.to_string())?;
 
             // Legacy pulls: 1.5-RTT bidirectional sync fetches our
