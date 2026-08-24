@@ -31,6 +31,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod clock;
+pub mod composite;
 #[cfg(feature = "conformance")]
 #[cfg_attr(docsrs, doc(cfg(feature = "conformance")))]
 pub mod conformance;
@@ -39,4 +40,5 @@ pub mod frames;
 pub mod memory;
 pub mod policy;
 pub mod storage;
+pub mod telemetry;
 pub mod transport;

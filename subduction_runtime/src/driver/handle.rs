@@ -18,6 +18,7 @@ use subduction_protocol::{
     event::Direction,
     handshake::audience::Audience,
     id::ConnId,
+    stats::Stats,
 };
 
 use super::{connection::PendingConnection, DriverClosed, Input};
@@ -154,6 +155,20 @@ impl<T> Handle<T> {
         let (reply, response) = oneshot::channel();
         self.tx
             .send(Input::TreeHeads { tree, reply })
+            .await
+            .map_err(|_| DriverClosed)?;
+        response.await.map_err(|_| DriverClosed)
+    }
+
+    /// The node's tier-2 counter snapshot (pull-based telemetry).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DriverClosed`] if the driver has stopped.
+    pub async fn stats(&self) -> Result<Stats, DriverClosed> {
+        let (reply, response) = oneshot::channel();
+        self.tx
+            .send(Input::Stats { reply })
             .await
             .map_err(|_| DriverClosed)?;
         response.await.map_err(|_| DriverClosed)

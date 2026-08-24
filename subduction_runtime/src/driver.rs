@@ -77,9 +77,12 @@ use subduction_protocol::{
     handshake::audience::Audience,
     id::ConnId,
     node::{Node, NodeConfig, NodeEffect, NodeEvent},
+    outcome::Outcome,
     peer_id::PeerId,
+    stats::Stats,
     storage::{Provenance, StorageFailure, StorageOp, StorageResult},
     ticket::{Entity, StorageTicket},
+    timestamp::Now,
 };
 use thiserror::Error;
 
@@ -88,6 +91,7 @@ use crate::{
     frames::FrameTable,
     policy::{Policy, StorageAction, Verdict},
     storage::Storage,
+    telemetry::{OpSummary, Telemetry},
     transport::Transport,
 };
 
@@ -111,6 +115,7 @@ pub struct Driver<Async, T, S, P, Sg, C> {
     next_conn: u64,
     rx: Receiver<Input<T>>,
     app_tx: Sender<AppEvent>,
+    telemetry: Telemetry,
     _form: core::marker::PhantomData<Async>,
 }
 
@@ -145,6 +150,7 @@ where
             next_conn: 1,
             rx,
             app_tx,
+            telemetry: Telemetry::default(),
             _form: core::marker::PhantomData,
         };
         (driver, Handle::new(tx, app_rx))
@@ -180,7 +186,7 @@ where
             let now = self.clock.now();
             match input {
                 None => {
-                    let _outcome = self.node.handle(now, NodeEvent::Wake);
+                    let _outcome = self.feed(now, NodeEvent::Wake);
                 }
                 Some(Input::Shutdown) => return,
                 Some(Input::Connect {
@@ -194,7 +200,8 @@ where
                     self.next_conn += 1;
                     let _previous = self.conns.insert(conn, transport);
                     let _pending = self.pending_auth.insert(conn, auth);
-                    let _outcome = self.node.handle(
+                    self.telemetry.on_connected(conn, now.monotonic);
+                    let _outcome = self.feed(
                         now,
                         NodeEvent::Connected {
                             conn,
@@ -207,25 +214,40 @@ where
                 Some(Input::Inbound { conn, bytes }) => {
                     // A message for a torn-down conn raced its death; drop.
                     if self.conns.contains_key(&conn) {
+                        self.telemetry.on_inbound(bytes.len());
                         let frame = self.frames.retain(Some(conn), bytes.clone());
-                        let _outcome = self
-                            .node
-                            .handle(now, NodeEvent::MessageReceived { conn, frame, bytes });
+                        let _outcome =
+                            self.feed(now, NodeEvent::MessageReceived { conn, frame, bytes });
                     }
                 }
                 Some(Input::ConnClosed { conn } | Input::Disconnect { conn }) => {
                     self.teardown(conn).await;
                 }
                 Some(Input::Command(command)) => {
-                    let _outcome = self.node.handle(now, NodeEvent::Command(command));
+                    if let Command::SyncTree { conn, tree, .. } = &command {
+                        self.telemetry
+                            .on_sync_requested(*conn, *tree, now.monotonic);
+                    }
+                    let _outcome = self.feed(now, NodeEvent::Command(command));
                 }
                 Some(Input::TreeHeads { tree, reply }) => {
                     let _receiver = reply.send(self.node.tree_heads(tree));
+                }
+                Some(Input::Stats { reply }) => {
+                    let _receiver = reply.send(self.node.stats());
                 }
             }
 
             self.drain_effects().await;
         }
+    }
+
+    /// Feed one event to the node, routing the outcome through tier-3
+    /// telemetry.
+    fn feed(&mut self, now: Now, event: NodeEvent) -> Outcome {
+        let outcome = self.node.handle(now, event);
+        self.telemetry.on_outcome(&outcome);
+        outcome
     }
 
     /// Execute queued node effects, in emission order, feeding
@@ -238,20 +260,22 @@ where
                 NodeEffect::Sign { ticket, payload } => {
                     let signature = self.signer.sign(&payload).await.to_bytes();
                     let now = self.clock.now();
-                    let _outcome = self
-                        .node
-                        .handle(now, NodeEvent::SignDone { ticket, signature });
+                    let _outcome = self.feed(now, NodeEvent::SignDone { ticket, signature });
                 }
                 NodeEffect::Storage { ticket, op } => {
+                    let summary = OpSummary::of(&op);
+                    let started = self.clock.now().monotonic;
                     let result = self.execute_storage(&ticket, op).await;
                     let now = self.clock.now();
-                    let _outcome = self
-                        .node
-                        .handle(now, NodeEvent::StorageDone { ticket, result });
+                    self.telemetry
+                        .on_storage_op(summary, &result, started, now.monotonic);
+                    let _outcome = self.feed(now, NodeEvent::StorageDone { ticket, result });
                 }
                 NodeEffect::ReleaseFrame(frame) => self.frames.release_frame(frame),
                 NodeEffect::ReleaseBlob(blob) => self.frames.release_blob(blob),
                 NodeEffect::App(event) => {
+                    let now = self.clock.now();
+                    self.telemetry.on_app_event(&event, now.monotonic);
                     // Resolve the waiting connection capability, if any.
                     if let AppEvent::PeerAuthenticated { conn, peer } = &event
                         && let Some(auth) = self.pending_auth.remove(conn)
@@ -283,6 +307,7 @@ where
                 },
             }
         }
+        self.telemetry.on_outbound(bytes.len());
         if transport.send_bytes(bytes).await.is_err() {
             self.teardown(conn).await;
         }
@@ -301,7 +326,7 @@ where
         transport.disconnect().await;
         self.frames.sweep_conn(conn);
         let now = self.clock.now();
-        let _outcome = self.node.handle(now, NodeEvent::Disconnected { conn });
+        let _outcome = self.feed(now, NodeEvent::Disconnected { conn });
     }
 
     /// Execute one storage op: authorize, resolve refs, run the backend.
@@ -494,6 +519,9 @@ enum Input<T> {
         tree: SedimentreeId,
         reply: oneshot::Sender<Option<Vec<CommitId>>>,
     },
+
+    /// Query: the node's tier-2 counter snapshot.
+    Stats { reply: oneshot::Sender<Stats> },
 
     /// Stop the driver.
     Shutdown,
