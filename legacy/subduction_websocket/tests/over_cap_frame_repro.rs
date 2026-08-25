@@ -27,7 +27,7 @@ use std::time::Duration;
 use future_form::Sendable;
 use futures_util::StreamExt;
 use subduction_core::peer::id::PeerId;
-use subduction_websocket::websocket::WebSocket;
+use subduction_websocket_legacy::websocket::WebSocket;
 use tokio::net::{TcpListener, TcpStream};
 use tungstenite::protocol::WebSocketConfig;
 
@@ -180,7 +180,7 @@ async fn oversized_frame_poisons_receiver_stream() {
 /// resolves with `Err` immediately, rather than stranding until keepalive reaps
 /// the peer (~80 s). It also sends the peer a graceful Close frame.
 ///
-/// Drives a real `subduction_websocket::WebSocket` receiver against a raw
+/// Drives a real `subduction_websocket_legacy::WebSocket` receiver against a raw
 /// `async-tungstenite` sender, runs `listen()` and a concurrent `recv_bytes()`
 /// together, and requires the recv to resolve within a short budget.
 #[tokio::test]

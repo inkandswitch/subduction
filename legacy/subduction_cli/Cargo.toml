@@ -52,7 +52,7 @@ subduction_keyhive = { workspace = true, features = ["runtime"] }
 subduction_redb_storage = { workspace = true, features = ["metrics"] }
 subduction_http_longpoll = { workspace = true, features = ["metrics", "server", "std"] }
 subduction_iroh = { workspace = true }
-subduction_websocket = { workspace = true, features = ["metrics"] }
+subduction_websocket = { package = "subduction_websocket_legacy", path = "../subduction_websocket", version = "0.11.0", default-features = false, features = ["metrics"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
@@ -71,7 +71,7 @@ subduction_core = { workspace = true, features = ["std", "test_utils"] }
 testresult = { workspace = true }
 subduction_crypto = { workspace = true }
 subduction_http_longpoll = { workspace = true, features = ["std", "native-tls"] }
-subduction_websocket = { workspace = true, features = ["futures-timer"] }
+subduction_websocket = { package = "subduction_websocket_legacy", path = "../subduction_websocket", version = "0.11.0", default-features = false, features = ["futures-timer"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
 

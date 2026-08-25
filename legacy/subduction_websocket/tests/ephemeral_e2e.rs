@@ -25,7 +25,7 @@ use subduction_ephemeral::{
     message::{EphemeralMessage, EphemeralPayload},
     topic::Topic,
 };
-use subduction_websocket::{
+use subduction_websocket_legacy::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
         TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient,

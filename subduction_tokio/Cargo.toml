@@ -1,0 +1,26 @@
+[package]
+name = "subduction_tokio"
+version = "0.1.0"
+description = "Tokio platform glue for the Subduction sans-io driver: clock and timer capabilities"
+
+categories = ["asynchronous", "network-programming"]
+keywords = ["tokio", "sans-io", "subduction", "sync"]
+readme = "./README.md"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+future_form = { workspace = true }
+futures = { workspace = true }
+subduction_protocol = { workspace = true, features = ["std"] }
+subduction_runtime = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[lints]
+workspace = true

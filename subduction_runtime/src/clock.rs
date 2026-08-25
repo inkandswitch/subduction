@@ -2,8 +2,9 @@
 //!
 //! The node never tells the time — the driver samples [`Clock::now`] before
 //! every `handle` call and arms one timer from `poll_timeout` via
-//! [`Clock::sleep`]. Platform crates supply real implementations (tokio
-//! timers, browser `setTimeout`); tests supply virtual ones.
+//! [`Clock::sleep`]. Platform crates supply real implementations (e.g.
+//! `subduction_tokio`'s `TokioClock`, browser `setTimeout`); tests supply
+//! virtual ones.
 
 use core::time::Duration;
 

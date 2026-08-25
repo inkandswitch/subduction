@@ -25,7 +25,7 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::{
+use subduction_websocket_legacy::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
         TimeoutTokio, TokioSpawn, TrackedTokioSpawn, client::TokioWebSocketClient,
@@ -158,7 +158,7 @@ async fn batch_sync() -> TestResult {
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        .build::<Sendable, MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())
@@ -312,7 +312,7 @@ async fn second_sync_round_is_empty() -> TestResult {
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        .build::<Sendable, MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())
@@ -457,7 +457,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        .build::<Sendable, MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())
@@ -563,7 +563,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        .build::<Sendable, MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())

@@ -18,7 +18,9 @@ members = [
   "legacy/subduction_wasm_bootstrap",
   "legacy/subduction_websocket",
   "subduction_protocol",
+  "subduction_websocket",
   "subduction_runtime",
+  "subduction_tokio",
   "subduction_testkit",
 ]
 
@@ -51,9 +53,10 @@ subduction_keyhive = { version = "0.7.0", path = "legacy/subduction_keyhive" }
 subduction_protocol = { version = "0.1.0", path = "subduction_protocol", default-features = false }
 subduction_redb_storage = { version = "0.1.0", path = "legacy/subduction_redb_storage" }
 subduction_runtime = { version = "0.1.0", path = "subduction_runtime", default-features = false }
+subduction_tokio = { version = "0.1.0", path = "subduction_tokio", default-features = false }
 subduction_wasm = { version = "0.20.0", path = "legacy/subduction_wasm" }
 subduction_wasm_bootstrap = { version = "0.2.0", path = "legacy/subduction_wasm_bootstrap" }
-subduction_websocket = { version = "0.11.0", path = "legacy/subduction_websocket", default-features = false }
+subduction_websocket = { version = "0.1.0", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"

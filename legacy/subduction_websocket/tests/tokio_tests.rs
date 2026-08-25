@@ -25,7 +25,7 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::{
+use subduction_websocket_legacy::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
         TimeoutTokio, TokioSpawn, TrackedTokioSpawn, client::TokioWebSocketClient,
@@ -108,11 +108,11 @@ type ServerSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
+        MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
+            MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>,
             OpenPolicy,
             CountLeadingZeroBytes,
             TrackedTokioSpawn,
@@ -128,7 +128,7 @@ type ServerHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
+        MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>,
         OpenPolicy,
         CountLeadingZeroBytes,
         TrackedTokioSpawn,
@@ -147,7 +147,7 @@ type ClientSyncHandler = SyncHandler<
 type ServerSyncHandler = SyncHandler<
     Sendable,
     MemoryStorage,
-    MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
+    MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>,
     OpenPolicy,
     CountLeadingZeroBytes,
     TrackedTokioSpawn,
@@ -191,7 +191,7 @@ fn setup_server_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
+        MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>,
         ServerSyncHandler,
         OpenPolicy,
         MemorySigner,
@@ -206,7 +206,7 @@ fn setup_server_subduction(
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
         .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>()
+        .build::<Sendable, MessageTransport<subduction_websocket_legacy::tokio::unified::UnifiedWebSocket>>()
 }
 
 #[tokio::test]
@@ -367,7 +367,7 @@ async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
     // `>= 1` rather than `== 1`: the old connection may still be
     // visible (its listener task lingers until the server's keepalive
     // closes the dead socket — see the FIXME in
-    // `subduction_websocket::tokio::client::reconnect`).
+    // `subduction_websocket_legacy::tokio::client::reconnect`).
     let after = server_subduction.connected_peer_ids().await.len();
     assert!(
         after >= 1,

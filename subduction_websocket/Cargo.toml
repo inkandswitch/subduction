@@ -1,0 +1,36 @@
+[package]
+name = "subduction_websocket"
+version = "0.1.0"
+description = "WebSocket transport for the Subduction sans-io driver"
+
+categories = ["network-programming", "web-programming::websocket"]
+keywords = ["websocket", "sans-io", "subduction", "sync"]
+readme = "./README.md"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+async-tungstenite = { workspace = true, features = ["tokio-runtime"] }
+future_form = { workspace = true }
+futures = { workspace = true }
+subduction_runtime = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["net"] }
+tracing = { workspace = true, features = ["attributes"] }
+tungstenite = { workspace = true }
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true, features = ["std"] }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_protocol = { workspace = true, features = ["std"] }
+subduction_tokio = { workspace = true }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt"] }
+
+[lints]
+workspace = true

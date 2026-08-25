@@ -71,7 +71,7 @@ use subduction_core::{
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
-use subduction_websocket::{
+use subduction_websocket_legacy::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
         TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
@@ -381,7 +381,7 @@ fn assert_full_sync(
                 TokioWebSocketClient<MemorySigner>,
                 Sendable,
             >,
-            subduction_core::connection::managed::CallError<subduction_websocket::error::SendError>,
+            subduction_core::connection::managed::CallError<subduction_websocket_legacy::error::SendError>,
         )>,
         Vec<(
             SedimentreeId,
@@ -409,7 +409,7 @@ fn assert_full_sync(
 /// Per-connection call errors returned by `sync_with_peer`.
 type SyncCallErrs = Vec<(
     subduction_core::authenticated::Authenticated<TokioWebSocketClient<MemorySigner>, Sendable>,
-    subduction_core::connection::managed::CallError<subduction_websocket::error::SendError>,
+    subduction_core::connection::managed::CallError<subduction_websocket_legacy::error::SendError>,
 )>;
 
 /// The `Result` type of [`Subduction::sync_with_peer`] for these benches.

@@ -28,7 +28,7 @@ hex = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 subduction_core = { workspace = true, features = ["system_time"] }
 subduction_crypto = { workspace = true }
-subduction_websocket = { workspace = true, features = ["tokio_client"] }
+subduction_websocket = { package = "subduction_websocket_legacy", path = "../subduction_websocket", version = "0.11.0", default-features = false, features = ["tokio_client"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true, default-features = true }
 tracing-subscriber = { workspace = true, default-features = true }
