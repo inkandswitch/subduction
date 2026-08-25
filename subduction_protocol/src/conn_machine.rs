@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn extension_gating_pre_and_post_auth() {
         let mut bob = Peer::new(8, Direction::Inbound, None);
-        let alice = Peer::new(7, Direction::Outbound, Some(Audience::known(bob.id())));
+        let _alice = Peer::new(7, Direction::Outbound, Some(Audience::known(bob.id())));
 
         // Pre-auth extension bytes: condemned.
         let outcome = bob.feed(ConnEvent::MessageReceived {
@@ -1260,8 +1260,6 @@ mod tests {
             bytes: b"SUE\x00pre-auth".to_vec(),
         });
         assert!(matches!(outcome, Outcome::ConnectionFault { .. }));
-
-        drop(alice);
 
         // Fresh pair completes; post-auth extension bytes surface.
         let mut bob = Peer::new(10, Direction::Inbound, None);

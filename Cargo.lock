@@ -5340,7 +5340,7 @@ dependencies = [
  "subduction_http_longpoll",
  "subduction_iroh",
  "subduction_keyhive",
- "subduction_redb_storage",
+ "subduction_redb_storage_legacy",
  "subduction_websocket_legacy",
  "tempfile",
  "testresult",
@@ -5535,6 +5535,26 @@ dependencies = [
 
 [[package]]
 name = "subduction_redb_storage"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek 2.2.0",
+ "future_form",
+ "futures",
+ "redb",
+ "sedimentree_core",
+ "subduction_crypto",
+ "subduction_protocol",
+ "subduction_runtime",
+ "subduction_tokio",
+ "tempfile",
+ "testresult",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "subduction_redb_storage_legacy"
 version = "0.1.0"
 dependencies = [
  "bolero",

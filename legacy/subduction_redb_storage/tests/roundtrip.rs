@@ -14,7 +14,7 @@ use sedimentree_core::{
 };
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
-use subduction_redb_storage::RedbStorage;
+use subduction_redb_storage_legacy::RedbStorage;
 
 fn test_signer() -> MemorySigner {
     MemorySigner::from_bytes(&[42u8; 32])
@@ -333,7 +333,7 @@ fn blob_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 
     let mut out = Vec::new();
     walk(
-        &root.join(subduction_redb_storage::BLOBS_DIR_NAME),
+        &root.join(subduction_redb_storage_legacy::BLOBS_DIR_NAME),
         &mut out,
     );
     out
@@ -747,7 +747,7 @@ async fn adjacent_tree_ids_do_not_leak() -> testresult::TestResult {
 /// byte-identically.
 #[tokio::test]
 async fn default_threshold_boundary_dispatch() -> testresult::TestResult {
-    use subduction_redb_storage::DEFAULT_INLINE_THRESHOLD;
+    use subduction_redb_storage_legacy::DEFAULT_INLINE_THRESHOLD;
 
     let dir = tempfile::tempdir()?;
     let storage = RedbStorage::new(dir.path())?;

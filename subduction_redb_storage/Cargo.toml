@@ -1,0 +1,36 @@
+[package]
+name = "subduction_redb_storage"
+version = "0.1.0"
+description = "redb storage backend for the Subduction sans-io driver"
+
+categories = ["database"]
+keywords = ["redb", "sans-io", "storage", "subduction"]
+readme = "./README.md"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+future_form = { workspace = true }
+futures = { workspace = true }
+redb = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_protocol = { workspace = true, features = ["std"] }
+subduction_runtime = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true, features = ["attributes"] }
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true, features = ["std"] }
+subduction_runtime = { workspace = true, features = ["conformance"] }
+subduction_tokio = { workspace = true }
+tempfile = { workspace = true }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

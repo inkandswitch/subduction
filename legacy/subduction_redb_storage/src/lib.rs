@@ -68,7 +68,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use subduction_redb_storage::RedbStorage;
+//! use subduction_redb_storage_legacy::RedbStorage;
 //! use std::path::PathBuf;
 //!
 //! let storage = RedbStorage::new(PathBuf::from("./data")).expect("failed to open storage");

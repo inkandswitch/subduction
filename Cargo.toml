@@ -18,6 +18,7 @@ members = [
   "legacy/subduction_wasm_bootstrap",
   "legacy/subduction_websocket",
   "subduction_protocol",
+  "subduction_redb_storage",
   "subduction_websocket",
   "subduction_runtime",
   "subduction_tokio",
@@ -51,7 +52,7 @@ subduction_http_longpoll = { version = "0.10.0", path = "legacy/subduction_http_
 subduction_iroh = { version = "0.9.0", path = "legacy/subduction_iroh" }
 subduction_keyhive = { version = "0.7.0", path = "legacy/subduction_keyhive" }
 subduction_protocol = { version = "0.1.0", path = "subduction_protocol", default-features = false }
-subduction_redb_storage = { version = "0.1.0", path = "legacy/subduction_redb_storage" }
+subduction_redb_storage = { version = "0.1.0", path = "subduction_redb_storage" }
 subduction_runtime = { version = "0.1.0", path = "subduction_runtime", default-features = false }
 subduction_tokio = { version = "0.1.0", path = "subduction_tokio", default-features = false }
 subduction_wasm = { version = "0.20.0", path = "legacy/subduction_wasm" }

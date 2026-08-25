@@ -159,8 +159,8 @@ fn legacy_node(seed: u8) -> (LegacyNode, LegacyStorage, MemorySigner) {
         .spawner(TokioSpawn)
         .timer(InstantTimeout)
         .build::<Sendable, MessageTransport<LegacyDuct>>();
-    drop(tokio::spawn(listener));
-    drop(tokio::spawn(manager));
+    let _listener_task = tokio::spawn(listener);
+    let _manager_task = tokio::spawn(manager);
     (sd, storage, signer)
 }
 
@@ -234,7 +234,7 @@ async fn new_node_initiates_and_syncs_both_ways_with_legacy() -> TestResult {
             });
 
             let (driver, ours) = stack(1);
-            drop(tokio::task::spawn_local(driver.run()));
+            let _driver_task = tokio::task::spawn_local(driver.run());
             let (pending, pump) = ours
                 .handle
                 .connect::<Local>(
@@ -244,7 +244,7 @@ async fn new_node_initiates_and_syncs_both_ways_with_legacy() -> TestResult {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-            drop(tokio::task::spawn_local(pump));
+            let _pump_task = tokio::task::spawn_local(pump);
 
             let conn = pending.authenticated().await.map_err(|e| e.to_string())?;
             assert_eq!(conn.peer(), legacy_peer, "we authenticated legacy");
@@ -300,7 +300,7 @@ async fn legacy_initiates_and_pulls_from_new_node() -> TestResult {
 
             // The new node authors a commit before legacy connects.
             let (driver, ours) = stack(1);
-            drop(tokio::task::spawn_local(driver.run()));
+            let _driver_task = tokio::task::spawn_local(driver.run());
             ours.handle
                 .add_commits(tree, vec![commit(0xC3)])
                 .await
@@ -351,7 +351,7 @@ async fn legacy_initiates_and_pulls_from_new_node() -> TestResult {
                 .connect::<Local>(our_transport, Direction::Inbound, None)
                 .await
                 .map_err(|e| e.to_string())?;
-            drop(tokio::task::spawn_local(pump));
+            let _pump_task = tokio::task::spawn_local(pump);
 
             let _conn = pending.authenticated().await.map_err(|e| e.to_string())?;
             initiate.await.map_err(|e| e.to_string())?;

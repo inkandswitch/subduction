@@ -20,7 +20,7 @@ use sedimentree_core::{
 };
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
-use subduction_redb_storage::{
+use subduction_redb_storage_legacy::{
     BLOBS_DIR_NAME, DB_FILE_NAME, FileOp, RedbStorage, RedbStorageError,
 };
 

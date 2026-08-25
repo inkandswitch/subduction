@@ -40,7 +40,7 @@ use sedimentree_core::{
 };
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
-use subduction_redb_storage::RedbStorage;
+use subduction_redb_storage_legacy::RedbStorage;
 
 /// Build an inline-only store holding `records` commits of `blob_size`
 /// bytes each, returning the db file's length.
@@ -68,7 +68,7 @@ async fn inline_db_size(records: u32, blob_size: usize) -> testresult::TestResul
     Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
     drop(storage);
 
-    Ok(std::fs::metadata(dir.path().join(subduction_redb_storage::DB_FILE_NAME))?.len())
+    Ok(std::fs::metadata(dir.path().join(subduction_redb_storage_legacy::DB_FILE_NAME))?.len())
 }
 
 /// External-assumption tripwire — **not** a behavior test of this crate. It
@@ -145,7 +145,7 @@ async fn inline_size_amplification_probe() -> testresult::TestResult {
         Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
         drop(storage);
 
-        let db = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
+        let db = dir.path().join(subduction_redb_storage_legacy::DB_FILE_NAME);
         let file_len = std::fs::metadata(&db)?.len();
         let logical = 1000 * blob_size as u64;
         let amp = file_len as f64 / logical as f64;

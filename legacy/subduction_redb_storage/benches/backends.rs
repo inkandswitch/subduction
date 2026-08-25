@@ -83,7 +83,7 @@ use sedimentree_core::{
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::storage::traits::Storage;
 use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMeta};
-use subduction_redb_storage::RedbStorage;
+use subduction_redb_storage_legacy::RedbStorage;
 use tokio::runtime::Runtime;
 
 const TREE: [u8; 32] = [0xAB; 32];
@@ -333,7 +333,7 @@ fn measure_size<S: Storage<Sendable>>(
     let (apparent, allocated) = disk_usage(dir.path());
 
     let compacted = backend.compactable.then(|| {
-        let db_path = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
+        let db_path = dir.path().join(subduction_redb_storage_legacy::DB_FILE_NAME);
         let mut db = redb::Database::create(&db_path).expect("reopen redb for compaction");
         db.compact().expect("compact redb");
         drop(db);
@@ -999,7 +999,7 @@ fn measure_replica_size<S: Storage<Sendable>>(
     }
     let (apparent, allocated) = disk_usage(dir.path());
     let compacted = backend.compactable.then(|| {
-        let db_path = dir.path().join(subduction_redb_storage::DB_FILE_NAME);
+        let db_path = dir.path().join(subduction_redb_storage_legacy::DB_FILE_NAME);
         let mut db = redb::Database::create(&db_path).expect("reopen redb for compaction");
         db.compact().expect("compact redb");
         drop(db);

@@ -82,8 +82,8 @@ async fn two_stacks_sync_over_a_real_websocket() -> TestResult {
             let tree = SedimentreeId::new([7u8; 32]);
             let (driver_a, a) = stack(1);
             let (driver_b, b) = stack(2);
-            drop(tokio::task::spawn_local(driver_a.run()));
-            drop(tokio::task::spawn_local(driver_b.run()));
+            let _driver_a_task = tokio::task::spawn_local(driver_a.run());
+            let _driver_b_task = tokio::task::spawn_local(driver_b.run());
 
             // Real loopback TCP + WebSocket handshake.
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -98,8 +98,8 @@ async fn two_stacks_sync_over_a_real_websocket() -> TestResult {
             let (client_transport, client_pump) =
                 client::connect(&url).await.map_err(|e| e.to_string())?;
             let (server_transport, server_pump) = serve.await.map_err(|e| e.to_string())?;
-            drop(tokio::task::spawn_local(client_pump));
-            drop(tokio::task::spawn_local(server_pump));
+            let _client_pump_task = tokio::task::spawn_local(client_pump);
+            let _server_pump_task = tokio::task::spawn_local(server_pump);
 
             // Wire the transports into the drivers.
             let (pending_a, read_a) = a
@@ -116,8 +116,8 @@ async fn two_stacks_sync_over_a_real_websocket() -> TestResult {
                 .connect::<Local>(server_transport, Direction::Inbound, None)
                 .await
                 .map_err(|e| e.to_string())?;
-            drop(tokio::task::spawn_local(read_a));
-            drop(tokio::task::spawn_local(read_b));
+            let _read_a_task = tokio::task::spawn_local(read_a);
+            let _read_b_task = tokio::task::spawn_local(read_b);
 
             let conn_a = pending_a.authenticated().await.map_err(|e| e.to_string())?;
             assert_eq!(conn_a.peer(), b.peer, "authenticated over the socket");

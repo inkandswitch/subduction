@@ -1,5 +1,5 @@
 [package]
-name = "subduction_redb_storage"
+name = "subduction_redb_storage_legacy"
 version = "0.1.0"
 publish = true
 description = "Hybrid redb + filesystem storage backend for Sedimentree"
