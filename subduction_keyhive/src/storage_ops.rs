@@ -3,7 +3,7 @@
 //! This module provides high-level functions for persisting, loading, and compacting
 //! keyhive state using the [`KeyhiveStorage`] trait.
 
-use alloc::{string::ToString, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeMap, string::ToString, sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use keyhive_core::{
@@ -12,10 +12,17 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    principal::active::LocalPrekeySecret,
+    principal::{
+        active::{PrekeyStateDelta, LocalPrekeySecret, PREKEY_STATE_DELTA_MAGIC, PREKEY_STATE_FORMAT_VERSION},
+        individual::op::KeyOp,
+    },
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
-use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    share_key::ShareSecretKey,
+    signer::{async_signer::AsyncSigner},
+};
 
 use crate::{
     collections::{Map, Set},
@@ -29,6 +36,12 @@ const LOCAL_KEY_MATERIAL_MAGIC: &[u8; 8] = b"KHLOCAL1";
 enum LocalKeyMaterial {
     Cgka(LocalCgkaSecret),
     Prekey(LocalPrekeySecret),
+    /// A combined prekey-state change: the signed membership op AND the
+    /// secret half of the key it publishes. One durable record per prekey
+    /// state change, so op and secret can never be separated by a crash.
+    /// Appended last: legacy `Cgka`/`Prekey` records decode unchanged (serde
+    /// bincode orders enum variants by index).
+    PrekeyChange { op: KeyOp, secret: ShareSecretKey },
 }
 
 fn encode_local_key_material(material: &LocalKeyMaterial) -> Result<Vec<u8>, StorageError> {
@@ -275,16 +288,23 @@ where
     Ok((hash, inserted))
 }
 
-/// Persist a local-only prekey private-key delta.
-pub async fn save_local_prekey_secret<S, Async>(
+/// Persist a combined prekey-state change: the signed membership op plus the
+/// secret half of the key it publishes, as ONE content-addressed durable
+/// record. The record is atomic — op and secret are never separated by a
+/// crash — and idempotent under replay (deduped by content hash).
+pub async fn save_local_prekey_change<S, Async>(
     storage: &S,
-    secret: &LocalPrekeySecret,
+    op: &KeyOp,
+    secret: &ShareSecretKey,
 ) -> Result<(StorageHash, bool), StorageError>
 where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
-    let bytes = encode_local_key_material(&LocalKeyMaterial::Prekey(*secret))?;
+    let bytes = encode_local_key_material(&LocalKeyMaterial::PrekeyChange {
+        op: op.clone(),
+        secret: *secret,
+    })?;
     let hash = hash_event_bytes(&bytes);
     let inserted = storage
         .save_local_secret(hash, bytes)
@@ -323,6 +343,7 @@ where
         .filter_map(|(hash, material)| match material {
             LocalKeyMaterial::Cgka(secret) => Some((hash, secret)),
             LocalKeyMaterial::Prekey(_) => None,
+            LocalKeyMaterial::PrekeyChange { .. } => None,
         })
         .collect())
 }
@@ -341,9 +362,30 @@ where
         .filter_map(|(hash, material)| match material {
             LocalKeyMaterial::Cgka(_) => None,
             LocalKeyMaterial::Prekey(secret) => Some((hash, secret)),
+            LocalKeyMaterial::PrekeyChange { .. } => None,
         })
         .collect())
 }
+    /// Load all combined prekey-state change records (signed membership op +
+    /// secret half) in insertion order.
+    pub async fn load_local_prekey_changes<S, Async>(
+        storage: &S,
+    ) -> Result<Vec<(StorageHash, KeyOp, ShareSecretKey)>, StorageError>
+    where
+        S: KeyhiveStorage<Async>,
+        Async: FutureForm,
+    {
+        Ok(load_local_key_material(storage)
+            .await?
+            .into_iter()
+            .filter_map(|(hash, material)| match material {
+                LocalKeyMaterial::Cgka(_) => None,
+                LocalKeyMaterial::Prekey(_) => None,
+                LocalKeyMaterial::PrekeyChange { op, secret } => Some((hash, op, secret)),
+            })
+            .collect())
+    }
+
 
 /// Ingest all stored archives, local secrets, and events into a keyhive instance.
 ///
@@ -412,26 +454,41 @@ where
     let (pending, resolved_pending) = keyhive
         .ingest_unsorted_static_events_with_pending_progress(event_list)
         .await;
-
+    let mut local_prekey_prewarm = BTreeMap::new();
+    let mut local_prekey_ops: Vec<KeyOp> = Vec::new();
     for (_, material) in load_local_key_material(storage).await? {
         match material {
             LocalKeyMaterial::Cgka(secret) => keyhive
                 .import_local_cgka_secret(secret)
                 .await
                 .map_err(|error| {
-                    StorageError::Load(alloc::format!(
-                        "local CGKA secret ingestion failed: {error:?}"
-                    ))
+                    StorageError::Load(alloc::format!("local CGKA secret ingestion failed: {error:?}"))
                 })?,
             LocalKeyMaterial::Prekey(secret) => keyhive
                 .import_local_prekey_secret(secret)
                 .await
                 .map_err(|error| {
-                    StorageError::Load(alloc::format!(
-                        "local prekey secret ingestion failed: {error:?}"
-                    ))
+                    StorageError::Load(alloc::format!("local prekey secret ingestion failed: {error:?}"))
                 })?,
+            LocalKeyMaterial::PrekeyChange { op, secret } => {
+                local_prekey_ops.push(op);
+                local_prekey_prewarm.insert(secret.share_key(), secret);
+            }
         }
+    }
+    if !local_prekey_ops.is_empty() {
+        let delta = PrekeyStateDelta {
+            magic: PREKEY_STATE_DELTA_MAGIC,
+            format_version: PREKEY_STATE_FORMAT_VERSION,
+            prekey_pairs: BTreeMap::from_iter(local_prekey_prewarm),
+            ops: local_prekey_ops,
+        };
+        let encoded = bincode::serialize(&delta)
+            .map_err(|error| StorageError::Load(alloc::format!("{error:?}")))?;
+        keyhive
+            .import_prekey_state(&encoded)
+            .await
+            .map_err(|error| StorageError::Load(alloc::format!("local prekey state replay failed: {error:?}")))?;
     }
 
     tracing::debug!(
@@ -540,6 +597,26 @@ where
                         "local prekey secret ingestion failed: {error:?}"
                     ))
                 })?,
+            LocalKeyMaterial::PrekeyChange { op, secret } => {
+                let delta = PrekeyStateDelta {
+                    magic: PREKEY_STATE_DELTA_MAGIC,
+                    format_version: PREKEY_STATE_FORMAT_VERSION,
+                    prekey_pairs: alloc::collections::BTreeMap::from_iter([(
+                        secret.share_key(),
+                        secret,
+                    )]),
+                    ops: alloc::vec::Vec::from([op]),
+                };
+                let encoded = bincode_serialize(&delta)?;
+                keyhive
+                    .import_prekey_state(&encoded)
+                    .await
+                    .map_err(|error| {
+                        StorageError::Load(alloc::format!(
+                            "local prekey state replay failed: {error:?}"
+                        ))
+                    })?;
+            }
         }
     }
 
