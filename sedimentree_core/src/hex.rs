@@ -11,11 +11,12 @@ pub fn decode_hex(s: &str) -> Option<Vec<u8>> {
     }
 
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| {
-            #[allow(clippy::get_first)] // Clearer together
-            let hi = decode_hex_nibble(*c.get(0)?)?;
-            let lo = decode_hex_nibble(*c.get(1)?)?;
+            let hi = decode_hex_nibble(c[0])?;
+            let lo = decode_hex_nibble(c[1])?;
             Some((hi << 4) | lo)
         })
         .collect()

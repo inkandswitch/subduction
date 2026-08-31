@@ -116,6 +116,15 @@ pub(crate) async fn recv_batch_sync_response<
         };
 
         let commit_id = verified_meta.payload().head();
+        if verified_meta.payload().sedimentree_id() != id {
+            tracing::warn!(
+                expected = ?id,
+                actual = ?verified_meta.payload().sedimentree_id(),
+                commit_id = ?commit_id,
+                "batch commit payload sedimentree_id does not match response id; rejecting"
+            );
+            continue;
+        }
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
@@ -168,6 +177,15 @@ pub(crate) async fn recv_batch_sync_response<
         };
 
         let fragment_id = verified_meta.payload().head();
+        if verified_meta.payload().sedimentree_id() != id {
+            tracing::warn!(
+                expected = ?id,
+                actual = ?verified_meta.payload().sedimentree_id(),
+                commit_id = ?fragment_id,
+                "batch fragment payload sedimentree_id does not match response id; rejecting"
+            );
+            continue;
+        }
         let author = verified_meta.verified_author();
         let author_id = PeerId::from(*author.verifying_key());
 
@@ -304,7 +322,19 @@ pub(crate) async fn insert_commit_locally<
     let id = putter.sedimentree_id();
     let commit = verified_meta.payload().clone();
     let head = commit.head();
-
+    // Object membership: a commit is only valid for the sedimentree its own
+    // payload names. The wire/session id is untrusted routing metadata; two
+    // sedimentrees that share a fork base contain causally-connected commits,
+    // so causal reachability must never be treated as membership.
+    if commit.sedimentree_id() != id {
+        tracing::warn!(
+            expected = ?id,
+            actual = ?commit.sedimentree_id(),
+            commit_id = ?head,
+            "commit payload sedimentree_id does not match its wire id; rejecting"
+        );
+        return Ok(false);
+    }
     tracing::debug!(digest = ?Digest::hash(&commit), "inserting commit locally");
 
     // Newness ("was this commit not already known?") is judged against the
@@ -366,6 +396,16 @@ pub(crate) async fn insert_fragment_locally<
     let id = putter.sedimentree_id();
     let fragment = verified_meta.payload().clone();
     let head = fragment.head();
+    // Object membership: see the comment in `insert_commit_locally`.
+    if fragment.sedimentree_id() != id {
+        tracing::warn!(
+            expected = ?id,
+            actual = ?fragment.sedimentree_id(),
+            commit_id = ?head,
+            "fragment payload sedimentree_id does not match its wire id; rejecting"
+        );
+        return Ok(false);
+    }
 
     // Newness from pre-save tree state (resident or hydrated); see
     // `insert_commit_locally`.
