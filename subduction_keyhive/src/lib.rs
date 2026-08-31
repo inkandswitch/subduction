@@ -77,6 +77,10 @@ pub use protocol::{
 #[cfg(feature = "serde")]
 pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,
-    load_local_cgka_secrets, load_local_prekey_secrets, save_event, save_event_bytes,
-    save_keyhive_archive, save_local_cgka_secret, save_local_prekey_secret,
+    load_local_cgka_secrets, load_local_prekey_changes, load_local_prekey_secrets, save_event,
+    save_event_bytes, save_keyhive_archive, save_local_cgka_secret, save_local_prekey_change,
 };
+
+
+
+

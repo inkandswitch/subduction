@@ -179,11 +179,11 @@ fn serving_membench() {
                 let doc = docs[idx].clone();
                 let _op = shared.force_pcs_update(doc).await;
             }
-            let rebuilt = cache.refresh(&proto).await.expect("refresh");
+            cache.refresh(&proto).await.expect("refresh");    // refresh returns () now
             let s = dhat::HeapStats::get();
             eprintln!(
                 "{it:9} | {:7} | {:11.1} | {:7.1}",
-                if rebuilt { "yes" } else { "skip" },
+                "yes", // rebuilt-or-skip signal no longer returned by refresh
                 s.curr_bytes as f64 / MB,
                 s.max_bytes as f64 / MB,
             );
