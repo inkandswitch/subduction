@@ -29,7 +29,7 @@ use testresult::TestResult;
 #[tokio::test]
 async fn failed_manager_handoff_rolls_back_registration() -> TestResult {
     let (subduction, _handler, _listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
@@ -72,7 +72,7 @@ async fn failed_manager_handoff_rolls_back_registration() -> TestResult {
 #[tokio::test]
 async fn failed_reconnect_handoff_rolls_back_registration() -> TestResult {
     let (subduction, _handler, _listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)

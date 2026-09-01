@@ -56,7 +56,7 @@ fn connections_gauge_healed_by_every_mutation() {
     metrics::with_local_recorder(&recorder, || {
         futures::executor::block_on(async {
             let (subduction, _handler, _listener_fut, _actor_fut) =
-                SubductionBuilder::<_, _, _, _, _, 256>::new()
+                SubductionBuilder::<_, _, _, _, _, _, 256>::new()
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TestSpawn)
