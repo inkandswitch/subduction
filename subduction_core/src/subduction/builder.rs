@@ -345,6 +345,7 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
+            send_counter: self.send_counter,
             max_resident_trees: self.max_resident_trees,
             sedimentrees: self.sedimentrees,
         }
