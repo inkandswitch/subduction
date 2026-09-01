@@ -340,7 +340,7 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
             spawner: self.spawner,
             storage: self.storage,
             timer: self.timer,
-            heads_observer: heads_observer,
+            heads_observer,
             discovery_id: self.discovery_id,
             default_roundtrip_timeout: self.default_roundtrip_timeout,
             depth_metric: self.depth_metric,
