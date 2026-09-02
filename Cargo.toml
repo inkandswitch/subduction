@@ -31,24 +31,24 @@ authors = [
 
 [workspace.dependencies]
 # Internal crates
-automerge_subduction_wasm = { version = "0.16.0", path = "automerge_subduction_wasm", default-features = false }
-sedimentree_core = { version = "0.13.0", path = "sedimentree_core", default-features = false }
-sedimentree_fs_storage = { version = "0.11.0", path = "sedimentree_fs_storage" }
-sedimentree_wasm = { version = "0.16.0", path = "sedimentree_wasm" }
+automerge_subduction_wasm = { version = "0.17.0", path = "automerge_subduction_wasm", default-features = false }
+sedimentree_core = { version = "0.14.0", path = "sedimentree_core", default-features = false }
+sedimentree_fs_storage = { version = "0.12.0", path = "sedimentree_fs_storage" }
+sedimentree_wasm = { version = "0.17.0", path = "sedimentree_wasm" }
 # 0.17.0: breaking — `PeerCounter::{clear_peer, clear_all}` removed (counters
 # are never reset; see `peer::counter` docs), and `metrics::connection_opened/
 # closed` no longer maintain the `connections_active` gauge (use
 # `set_connections_active`).
-subduction_core = { version = "0.17.0", path = "subduction_core", default-features = false }
-subduction_crypto = { version = "0.8.0", path = "subduction_crypto", default-features = false }
-subduction_ephemeral = { version = "0.7.0", path = "subduction_ephemeral", default-features = false }
-subduction_http_longpoll = { version = "0.10.0", path = "subduction_http_longpoll", default-features = false }
-subduction_iroh = { version = "0.9.0", path = "subduction_iroh" }
-subduction_keyhive = { version = "0.7.0", path = "subduction_keyhive" }
-subduction_redb_storage = { version = "0.1.0", path = "subduction_redb_storage" }
-subduction_wasm = { version = "0.20.0", path = "subduction_wasm" }
-subduction_wasm_bootstrap = { version = "0.2.0", path = "subduction_wasm_bootstrap" }
-subduction_websocket = { version = "0.11.0", path = "subduction_websocket", default-features = false }
+subduction_core = { version = "0.18.0", path = "subduction_core", default-features = false }
+subduction_crypto = { version = "0.9.0", path = "subduction_crypto", default-features = false }
+subduction_ephemeral = { version = "0.8.0", path = "subduction_ephemeral", default-features = false }
+subduction_http_longpoll = { version = "0.11.0", path = "subduction_http_longpoll", default-features = false }
+subduction_iroh = { version = "0.10.0", path = "subduction_iroh" }
+subduction_keyhive = { version = "0.8.0", path = "subduction_keyhive" }
+subduction_redb_storage = { version = "0.2.0", path = "subduction_redb_storage" }
+subduction_wasm = { version = "0.21.0", path = "subduction_wasm" }
+subduction_wasm_bootstrap = { version = "0.3.0", path = "subduction_wasm_bootstrap" }
+subduction_websocket = { version = "0.12.0", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"
