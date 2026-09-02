@@ -43,7 +43,7 @@ async fn manager_survives_closure_burst_without_listener_drain() -> TestResult {
     const BURST: usize = subduction_core::subduction::CONNECTION_CLOSED_CHANNEL_CAPACITY + 8;
 
     let (subduction, _handler, _listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)

@@ -5,7 +5,7 @@
 //!
 //! # Required Fields
 //!
-//! Three fields must be set before calling [`build`] or
+//! Four fields must be set before calling [`build`] or
 //! [`build_with_handler`]. These are tracked at the type level —
 //! calling `build` on a builder with missing fields is a compile error.
 //!
@@ -14,6 +14,7 @@
 //! | `signer` | [`.signer()`] | Peer identity and handshake signing |
 //! | `spawner` | [`.spawner()`] | Platform-specific task spawning |
 //! | `storage` | [`.storage()`] | Storage backend + authorization policy |
+//! | `timer` | [`.timer()`] | Timeout strategy for roundtrip calls |
 //!
 //! # Optional Fields
 //!
@@ -21,6 +22,7 @@
 //! |-------|--------|---------|
 //! | `discovery_id` | [`.discovery_id()`] | `None` |
 //! | `depth_metric` | [`.depth_metric()`] | [`CountLeadingZeroBytes`] |
+//! | `heads_observer` | [`.heads_observer()`] | [`NoRemoteHeadsObserver`] (discards updates) |
 //! | `nonce_cache` | [`.nonce_cache()`] | [`NonceCache::default()`] |
 //! | `sedimentrees` | [`.sedimentrees()`] | Empty [`BoundedShardedMap::new()`] |
 //!
@@ -45,6 +47,9 @@
 //! [`.signer()`]: SubductionBuilder::signer
 //! [`.spawner()`]: SubductionBuilder::spawner
 //! [`.storage()`]: SubductionBuilder::storage
+//! [`.timer()`]: SubductionBuilder::timer
+//! [`.heads_observer()`]: SubductionBuilder::heads_observer
+//! [`NoRemoteHeadsObserver`]: crate::remote_heads::NoRemoteHeadsObserver
 //! [`.discovery_id()`]: SubductionBuilder::discovery_id
 //! [`.depth_metric()`]: SubductionBuilder::depth_metric
 //! [`.nonce_cache()`]: SubductionBuilder::nonce_cache
@@ -77,7 +82,7 @@ use crate::{
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    remote_heads::RemoteHeadsNotifier,
+    remote_heads::{NoRemoteHeadsObserver, RemoteHeadsNotifier, RemoteHeadsObserver},
     spawn::Spawn,
     storage::{powerbox::StoragePowerbox, traits::Storage},
     timeout::Timeout,
@@ -101,8 +106,8 @@ pub struct Unset;
 /// Type-safe builder for [`Subduction`] instances.
 ///
 /// Required fields are tracked at the type level via [`Unset`]: the
-/// [`build`](Self::build) method is only available once `Sig`, `Sp`,
-/// and `Sto` have all been replaced with concrete types.
+/// [`build`](Self::build) method is only available once `Sign`, `Sp`,
+/// `Store`, and `Timer` have all been replaced with concrete types.
 ///
 /// Optional fields can be set in any order and have sensible defaults.
 ///
@@ -114,12 +119,14 @@ pub struct SubductionBuilder<
     Store = Unset,
     Timer = Unset,
     Metric = CountLeadingZeroBytes,
+    HeadsObserver = NoRemoteHeadsObserver,
     const SHARDS: usize = 256,
 > {
     signer: Sign,
     spawner: Sp,
     storage: Store,
     timer: Timer,
+    heads_observer: HeadsObserver,
 
     discovery_id: Option<DiscoveryId>,
     default_roundtrip_timeout: Option<Duration>,
@@ -150,7 +157,15 @@ impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
 // -----------------------------------------------------------------------
 
 impl<const SHARDS: usize>
-    SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS>
+    SubductionBuilder<
+        Unset,
+        Unset,
+        Unset,
+        Unset,
+        CountLeadingZeroBytes,
+        NoRemoteHeadsObserver,
+        SHARDS,
+    >
 {
     /// Create a new builder with all defaults.
     ///
@@ -167,6 +182,7 @@ impl<const SHARDS: usize>
             spawner: Unset,
             storage: Unset,
             timer: Unset,
+            heads_observer: NoRemoteHeadsObserver,
             discovery_id: None,
             default_roundtrip_timeout: None,
             depth_metric: CountLeadingZeroBytes,
@@ -179,15 +195,23 @@ impl<const SHARDS: usize>
 }
 
 impl<const SHARDS: usize> Default
-    for SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, SHARDS>
+    for SubductionBuilder<
+        Unset,
+        Unset,
+        Unset,
+        Unset,
+        CountLeadingZeroBytes,
+        NoRemoteHeadsObserver,
+        SHARDS,
+    >
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Sp, Store, Timer, Metric, const SHARDS: usize>
-    SubductionBuilder<Unset, Sp, Store, Timer, Metric, SHARDS>
+impl<Sp, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Unset, Sp, Store, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Set the signer for peer identity and handshake authentication.
     ///
@@ -195,25 +219,41 @@ impl<Sp, Store, Timer, Metric, const SHARDS: usize>
     pub fn signer<Sign>(
         self,
         signer: Sign,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
+        let Self {
+            signer: Unset,
+            spawner,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
+        } = self;
+
         SubductionBuilder {
             signer,
-            spawner: self.spawner,
-            storage: self.storage,
-            timer: self.timer,
-            discovery_id: self.discovery_id,
-            default_roundtrip_timeout: self.default_roundtrip_timeout,
-            depth_metric: self.depth_metric,
-            nonce_cache: self.nonce_cache,
-            send_counter: self.send_counter,
-            max_resident_trees: self.max_resident_trees,
-            sedimentrees: self.sedimentrees,
+            spawner,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
         }
     }
 }
 
-impl<Sign, Store, Timer, Metric, const SHARDS: usize>
-    SubductionBuilder<Sign, Unset, Store, Timer, Metric, SHARDS>
+impl<Sign, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Unset, Store, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Set the task spawner for background work.
     ///
@@ -223,25 +263,41 @@ impl<Sign, Store, Timer, Metric, const SHARDS: usize>
     pub fn spawner<Sp>(
         self,
         spawner: Sp,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
+        let Self {
+            signer,
+            spawner: Unset,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
+        } = self;
+
         SubductionBuilder {
-            signer: self.signer,
+            signer,
             spawner,
-            storage: self.storage,
-            timer: self.timer,
-            discovery_id: self.discovery_id,
-            default_roundtrip_timeout: self.default_roundtrip_timeout,
-            depth_metric: self.depth_metric,
-            nonce_cache: self.nonce_cache,
-            send_counter: self.send_counter,
-            max_resident_trees: self.max_resident_trees,
-            sedimentrees: self.sedimentrees,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
         }
     }
 }
 
-impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, SHARDS>
+impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Set the storage backend and authorization policy.
     ///
@@ -251,50 +307,148 @@ impl<Sign, Sp, Timer, Metric, const SHARDS: usize>
         self,
         storage: Store,
         policy: Arc<Auth>,
-    ) -> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<
+        Sign,
+        Sp,
+        StoragePowerbox<Store, Auth>,
+        Timer,
+        Metric,
+        HeadsObserver,
+        SHARDS,
+    > {
+        let Self {
+            signer,
+            spawner,
+            storage: Unset,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
+        } = self;
+
         SubductionBuilder {
-            signer: self.signer,
-            spawner: self.spawner,
+            signer,
+            spawner,
             storage: StoragePowerbox::new(storage, policy),
-            timer: self.timer,
-            discovery_id: self.discovery_id,
-            default_roundtrip_timeout: self.default_roundtrip_timeout,
-            depth_metric: self.depth_metric,
-            nonce_cache: self.nonce_cache,
-            send_counter: self.send_counter,
-            max_resident_trees: self.max_resident_trees,
-            sedimentrees: self.sedimentrees,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
         }
     }
 }
 
-impl<Sign, Sp, Store, Metric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Unset, Metric, SHARDS>
+impl<Sign, Sp, Store, Metric, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Unset, Metric, HeadsObserver, SHARDS>
 {
     /// Set the timeout strategy for roundtrip calls.
     ///
     /// This is a required field. Common implementations:
     /// - `TokioTimeout` for native async
     /// - `JsTimeout` for browser environments
-    pub fn timer<O>(self, timer: O) -> SubductionBuilder<Sign, Sp, Store, O, Metric, SHARDS> {
+    pub fn timer<O>(
+        self,
+        timer: O,
+    ) -> SubductionBuilder<Sign, Sp, Store, O, Metric, HeadsObserver, SHARDS> {
+        let Self {
+            signer,
+            spawner,
+            storage,
+            timer: Unset,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
+        } = self;
+
         SubductionBuilder {
-            signer: self.signer,
-            spawner: self.spawner,
-            storage: self.storage,
+            signer,
+            spawner,
+            storage,
             timer,
-            discovery_id: self.discovery_id,
-            default_roundtrip_timeout: self.default_roundtrip_timeout,
-            depth_metric: self.depth_metric,
-            nonce_cache: self.nonce_cache,
-            send_counter: self.send_counter,
-            max_resident_trees: self.max_resident_trees,
-            sedimentrees: self.sedimentrees,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
         }
     }
 }
 
-impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Timer, Met, SHARDS>
+impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, SHARDS>
+{
+    /// Set the [`RemoteHeadsObserver`] invoked whenever a remote peer
+    /// reports its heads for a sedimentree — via a `HeadsUpdate` message,
+    /// `sender_heads` on subscription pushes, or `responder_heads` in a
+    /// sync response. Updates pass through a per-peer staleness filter
+    /// (monotonic counter) before reaching the observer.
+    ///
+    /// Defaults to [`NoRemoteHeadsObserver`], which discards all
+    /// notifications.
+    ///
+    /// Only consumed by [`build`](Self::build) and
+    /// [`build_composed`](Self::build_composed), which construct the
+    /// [`SyncHandler`] internally.
+    /// [`build_with_handler`](Self::build_with_handler) takes a pre-built
+    /// handler, so it is only available while the observer is unset;
+    /// attach an observer to the handler directly (e.g. via
+    /// [`SyncHandler::with_remote_heads_observer`]).
+    pub fn heads_observer<NewHeadsObserver>(
+        self,
+        heads_observer: NewHeadsObserver,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, NewHeadsObserver, SHARDS> {
+        let Self {
+            signer,
+            spawner,
+            storage,
+            timer,
+            heads_observer: _replaced,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
+        } = self;
+
+        SubductionBuilder {
+            signer,
+            spawner,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
+        }
+    }
+}
+
+impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, Store, Timer, Met, HeadsObserver, SHARDS>
 {
     /// Set the discovery ID for discovery-mode connections.
     ///
@@ -317,8 +471,7 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     /// on transports (e.g. HTTP long-poll) that don't guarantee an eventual
     /// disconnect on a byte-alive but protocol-silent peer.
     ///
-    /// Defaults to [`DEFAULT_ROUNDTRIP_TIMEOUT`](crate::multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT)
-    /// (30 s) if not set. Individual calls can override this per-request via
+    /// Defaults to [`DEFAULT_ROUNDTRIP_TIMEOUT`] (30 s) if not set. Individual calls can override this per-request via
     /// [`CallTimeout`](crate::timeout::call::CallTimeout).
     #[must_use]
     pub const fn roundtrip_timeout(mut self, timeout: Duration) -> Self {
@@ -332,19 +485,35 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
     pub fn depth_metric<Metric: DepthMetric>(
         self,
         metric: Metric,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
+        let Self {
+            signer,
+            spawner,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric: _replaced,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
+        } = self;
+
         SubductionBuilder {
-            signer: self.signer,
-            spawner: self.spawner,
-            storage: self.storage,
-            timer: self.timer,
-            discovery_id: self.discovery_id,
-            default_roundtrip_timeout: self.default_roundtrip_timeout,
+            signer,
+            spawner,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
             depth_metric: metric,
-            nonce_cache: self.nonce_cache,
-            send_counter: self.send_counter,
-            max_resident_trees: self.max_resident_trees,
-            sedimentrees: self.sedimentrees,
+            nonce_cache,
+            send_counter,
+            max_resident_trees,
+            sedimentrees,
         }
     }
 
@@ -417,8 +586,16 @@ impl<Sign, Sp, Store, Timer, Met, const SHARDS: usize>
 // Build methods (only available when all required fields are set)
 // -----------------------------------------------------------------------
 
-impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, SHARDS>
+impl<
+    Sign,
+    Sp,
+    Store,
+    Auth,
+    Timer,
+    Metric: DepthMetric,
+    HeadsObserver: RemoteHeadsObserver,
+    const SHARDS: usize,
+> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -449,14 +626,51 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     pub fn build<'a, Async, Conn>(
         self,
     ) -> (
-        Arc<Subduction<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
-        Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>>,
-        ListenerFuture<'a, Async, Store, Conn, SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        Arc<
+            Subduction<
+                'a,
+                Async,
+                Store,
+                Conn,
+                SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>,
+                Auth,
+                Sign,
+                Timer,
+                Sp,
+                Metric,
+                SHARDS,
+            >,
+        >,
+        Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>>,
+        ListenerFuture<
+            'a,
+            Async,
+            Store,
+            Conn,
+            SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>,
+            Auth,
+            Sign,
+            Timer,
+            Sp,
+            Metric,
+            SHARDS,
+        >,
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS> + 'static,
-        Async: StartListener<'a, Store, Conn, SyncMessage, SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>, Auth, Sign, Metric, SHARDS>,
+        Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS>
+            + 'static,
+        Async: StartListener<
+                'a,
+                Store,
+                Conn,
+                SyncMessage,
+                SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>,
+                Auth,
+                Sign,
+                Metric,
+                SHARDS,
+            >,
         Store: Storage<Async>,
         Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'a,
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
@@ -465,15 +679,18 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         'a: 'static,
         Metric: Clone,
-        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
-        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS> as Handler<Async, Conn>>::HandlerError:
-            Into<ListenError<Async, Store, Conn, SyncMessage>>,
+        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>:
+            Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver> as Handler<
+            Async,
+            Conn,
+        >>::HandlerError: Into<ListenError<Async, Store, Conn, SyncMessage>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
                 Async,
                 SyncMessage,
                 SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
             >,
-{
+    {
         let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
             let map = BoundedShardedMap::new();
             let map = match self.max_resident_trees {
@@ -489,12 +706,13 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
-        let mut handler = SyncHandler::new(
+        let mut handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
+            self.heads_observer,
             self.spawner.clone(),
         );
         if let Some(counter) = self.send_counter {
@@ -523,7 +741,19 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
 
         (sd, handler, listener, manager)
     }
+}
 
+impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
+    SubductionBuilder<
+        Sign,
+        Sp,
+        StoragePowerbox<Store, Auth>,
+        Timer,
+        Metric,
+        NoRemoteHeadsObserver,
+        SHARDS,
+    >
+{
     /// Build a [`Subduction`] instance with a custom [`Handler`].
     ///
     /// Use this when replacing the default [`SyncHandler`] with a
@@ -531,11 +761,17 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     ///
     /// Returns `(subduction, listener_future, manager_future)`.
     ///
+    /// Only available while no [`heads_observer`](Self::heads_observer)
+    /// has been set: this method takes a pre-built handler, so a
+    /// builder-held observer would be silently discarded. Attach an
+    /// observer to the handler itself instead (e.g. via
+    /// [`SyncHandler::with_remote_heads_observer`]).
+    ///
     /// The [`PeerCounter`] passed via [`send_counter`](Self::send_counter)
     /// (or a fresh default) is used for `Subduction`. If your custom
     /// handler also stamps outgoing messages with counters (e.g., wraps a
     /// [`SyncHandler`]), you must share the same `PeerCounter` between
-    /// the handler and `Subduction` — use [`build`] or [`build_composed`]
+    /// the handler and `Subduction` — use [`build`](Self::build) or [`build_composed`](Self::build_composed)
     /// instead, which handle this automatically.
     ///
     /// [`PeerCounter`]: crate::peer::counter::PeerCounter
@@ -614,7 +850,19 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             self.spawner,
         )
     }
+}
 
+impl<
+    Sign,
+    Sp,
+    Store,
+    Auth,
+    Timer,
+    Metric: DepthMetric,
+    HeadsObserver: RemoteHeadsObserver,
+    const SHARDS: usize,
+> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, HeadsObserver, SHARDS>
+{
     /// Build a [`Subduction`] instance with a composed [`Handler`].
     ///
     /// Like [`build_with_handler`](Self::build_with_handler), but
@@ -641,7 +889,9 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     #[allow(clippy::type_complexity)]
     pub fn build_composed<'a, Async, Conn, Hdl, X>(
         self,
-        compose: impl FnOnce(Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>>) -> (Arc<Hdl>, X),
+        compose: impl FnOnce(
+            Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>>,
+        ) -> (Arc<Hdl>, X),
     ) -> (
         Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
         ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
@@ -649,10 +899,15 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         X,
     )
     where
-        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
+        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
+            + 'static,
         Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Store: Storage<Async>,
-        Conn: Connection<Async, Hdl::Message> + Connection<Async, SyncMessage> + PartialEq + Clone + 'a,
+        Conn: Connection<Async, Hdl::Message>
+            + Connection<Async, SyncMessage>
+            + PartialEq
+            + Clone
+            + 'a,
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
@@ -662,15 +917,18 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         Metric: Clone,
-        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS>: Handler<Async, Conn, Message = SyncMessage>,
-        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS> as Handler<Async, Conn>>::HandlerError:
-            Into<ListenError<Async, Store, Conn, SyncMessage>>,
+        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>:
+            Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver> as Handler<
+            Async,
+            Conn,
+        >>::HandlerError: Into<ListenError<Async, Store, Conn, SyncMessage>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
                 Async,
                 Hdl::Message,
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
-{
+    {
         let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
             let map = BoundedShardedMap::new();
             let map = match self.max_resident_trees {
@@ -686,12 +944,13 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
-        let mut sync_handler = SyncHandler::new(
+        let mut sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
+            self.heads_observer,
             self.spawner.clone(),
         );
         if let Some(counter) = self.send_counter {
