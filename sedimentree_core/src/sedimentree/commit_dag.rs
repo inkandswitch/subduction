@@ -268,10 +268,12 @@ impl CommitDag {
         ReverseTopo::new(self, start)
     }
 
+    #[cfg(test)]
     pub(crate) fn contains_commit(&self, id: &CommitId) -> bool {
         self.node_map.contains_key(id)
     }
 
+    #[cfg(test)]
     pub(crate) fn heads(&self) -> impl Iterator<Item = CommitId> + '_ {
         self.nodes.iter().filter_map(|node| {
             if node.children.is_none() {

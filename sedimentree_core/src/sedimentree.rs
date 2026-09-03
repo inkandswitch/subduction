@@ -946,29 +946,40 @@ impl Sedimentree {
     /// [`heads`](Self::heads) when minimality isn't guaranteed.
     #[must_use]
     pub fn heads_assuming_minimal(&self) -> Vec<CommitId> {
-        let dag = commit_dag::CommitDag::from_commits(self.commits.values());
+        // The heads of the sedimentree are
+        // - Loose commit IDs which are not referenced by another commit or fragment
+        // - Fragment head IDs which are not referenced by another commit or fragment
+        //
+        // "referenced by another commit or fragment" means that the ID is
+        // either in the parent set of a commit, in the boundary set of a
+        // fragment, or in the checkpoint set of a fragment.
+        //
+        // We compute this set by first collecting all referenced IDs, then iterating
+        // over the fragment heads and loose commits to find those which are not in the
+        // referenced set.
 
-        // Precompute boundary union once: O(F) instead of an O(F²)
-        // `any()` scan inside the fragment loop.
-        let all_fragment_boundaries: Set<CommitId> = self
-            .fragments
+        let mut referenced_ids: Set<CommitId> = self
+            .commits
             .values()
-            .flat_map(|f| f.boundary().iter().copied())
+            .flat_map(|commit| commit.parents().iter().copied())
             .collect();
-
-        let mut heads = Vec::<CommitId>::new();
+        let mut referenced_checkpoints: Set<Checkpoint> = Set::new();
         for fragment in self.fragments.values() {
-            if !all_fragment_boundaries.contains(&fragment.head())
-                && fragment
-                    .boundary()
-                    .iter()
-                    .all(|end| !dag.contains_commit(end))
-            {
-                heads.extend(fragment.boundary().iter().copied());
-            }
+            referenced_ids.extend(fragment.boundary().iter().copied());
+            referenced_checkpoints.extend(fragment.checkpoints().iter().copied());
         }
-        heads.extend(dag.heads());
-        heads
+
+        let heads: Set<CommitId> = self
+            .fragments
+            .keys()
+            .copied()
+            .chain(self.commits.keys().copied())
+            .filter(|id| {
+                !referenced_ids.contains(id)
+                    && !referenced_checkpoints.contains(&Checkpoint::new(*id))
+            })
+            .collect();
+        heads.into_iter().collect()
     }
 
     /// Consume this [`Sedimentree`] and return an iterator over all its items.
