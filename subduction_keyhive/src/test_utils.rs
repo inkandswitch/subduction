@@ -4,7 +4,6 @@ use alloc::{sync::Arc, vec, vec::Vec};
 use core::convert::Infallible;
 
 use async_channel::{Receiver, Sender};
-use async_lock::Mutex;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use keyhive_core::{
@@ -141,23 +140,18 @@ pub type TestProtocol = KeyhiveProtocol<
 /// Create a test protocol with a shared keyhive reference.
 ///
 /// Unlike `make_protocol()` in the protocol tests, this does NOT clone the
-/// keyhive. The returned `Arc<Mutex<SimpleKeyhive>>` is the same one the
-/// protocol uses, so mutations made through the Arc are visible to the
-/// protocol.
+/// keyhive. The returned `Arc<SimpleKeyhive>` is the same one the protocol
+/// uses, so mutations made through the Arc are visible to the protocol.
 pub async fn make_protocol_with_shared_keyhive(
     keyhive: SimpleKeyhive,
-) -> (
-    TestProtocol,
-    Arc<Mutex<SimpleKeyhive>>,
-    MemoryKeyhiveStorage,
-) {
+) -> (TestProtocol, Arc<SimpleKeyhive>, MemoryKeyhiveStorage) {
     let peer_id = keyhive_peer_id(&keyhive);
     let cc = keyhive
         .contact_card()
         .await
         .expect("failed to get contact card");
     let storage = MemoryKeyhiveStorage::new();
-    let shared = Arc::new(Mutex::new(keyhive));
+    let shared = Arc::new(keyhive);
     let protocol = TestProtocol::new(shared.clone(), storage.clone(), peer_id, cc);
     (protocol, shared, storage)
 }
@@ -258,9 +252,9 @@ pub struct TwoPeerHarness {
     /// Bob's protocol handler.
     pub bob_proto: TestProtocol,
     /// Shared reference to Alice's keyhive.
-    pub alice_kh: Arc<Mutex<SimpleKeyhive>>,
+    pub alice_kh: Arc<SimpleKeyhive>,
     /// Shared reference to Bob's keyhive.
-    pub bob_kh: Arc<Mutex<SimpleKeyhive>>,
+    pub bob_kh: Arc<SimpleKeyhive>,
     /// Alice's peer ID.
     pub alice_id: KeyhivePeerId,
     /// Bob's peer ID.
@@ -354,4 +348,126 @@ pub async fn create_group_with_read_members(
         .expect("add_member");
     }
     group_id
+}
+
+#[cfg(test)]
+mod nested_chain_sync_repro {
+    //! Repro for the flaky "receiver never learns the document through a
+    //! nested group chain" convergence failure observed under load in
+    //! townframe's runtime2 tests, plus a no-change-signal variant proving
+    //! cache freshness now derives from Keyhive::state_generation.
+
+    use super::*;
+    use keyhive_core::principal::agent::Agent;
+
+    async fn run_chain() {
+        drop(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::WARN)
+                .with_test_writer()
+                .try_init(),
+        );
+        for iteration in 0..25 {
+            let harness = exchange_contact_cards_and_setup().await;
+
+            let round_fut = async {
+                for _ in 0..8 {
+                    sync_pair_rounds(
+                        &harness.alice_proto,
+                        &harness.bob_proto,
+                        &harness.alice_id,
+                        &harness.bob_id,
+                        &harness.alice_conn,
+                        &harness.bob_conn,
+                        1,
+                    )
+                    .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            };
+            let grant_fut = async {
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                let doc = harness
+                    .alice_kh
+                    .generate_doc(vec![], nonempty::nonempty![[1u8; 32]])
+                    .await
+                    .expect("generate doc");
+                let doc_id = doc.lock().await.doc_id();
+                let g1 = harness.alice_kh.generate_group(vec![]).await.expect("g1");
+                let g1_id = g1.lock().await.group_id();
+                let g2 = harness.alice_kh.generate_group(vec![]).await.expect("g2");
+                let g2_id = g2.lock().await.group_id();
+                harness
+                    .alice_kh
+                    .add_member(
+                        Agent::Group(g1_id, g1.clone()),
+                        &Membered::Document(doc_id, doc.clone()),
+                        Access::Read,
+                        &[],
+                    )
+                    .await
+                    .expect("grant doc to g1");
+                harness
+                    .alice_kh
+                    .add_member(
+                        Agent::Group(g2_id, g2.clone()),
+                        &Membered::Group(g1_id, g1.clone()),
+                        Access::Read,
+                        &[],
+                    )
+                    .await
+                    .expect("nest g2 into g1");
+                let bob_identifier = harness.bob_id.to_identifier().expect("bob identifier");
+                let bob_agent = harness
+                    .alice_kh
+                    .get_agent(bob_identifier)
+                    .await
+                    .expect("alice knows bob's agent");
+                harness
+                    .alice_kh
+                    .add_member(bob_agent, &Membered::Group(g2_id, g2.clone()), Access::Read, &[])
+                    .await
+                    .expect("add bob to g2");
+                doc_id
+            };
+            let ((), doc_id) = futures::join!(round_fut, grant_fut);
+
+            // No embedder signal: convergence comes from the hive's own state
+            // generation via ensure_cache_current.
+
+            sync_pair_rounds(
+                &harness.alice_proto,
+                &harness.bob_proto,
+                &harness.alice_id,
+                &harness.bob_id,
+                &harness.alice_conn,
+                &harness.bob_conn,
+                5,
+            )
+            .await;
+
+            let bob_has_doc = harness.bob_kh.get_document(doc_id).await.is_some();
+            let bob_pending = harness
+                .bob_proto
+                .get_pending_hashes()
+                .await
+                .expect("bob pending hashes");
+            assert!(
+                bob_has_doc,
+                "iteration {iteration}: bob's hive does not know the document; pending={bob_pending:?}"
+            );
+            assert!(
+                bob_pending.is_empty(),
+                "iteration {iteration}: bob still has {} pending hashes",
+                bob_pending.len()
+            );
+        }
+    }
+
+    /// Raw embedder-side Keyhive mutations with no change signal: cache
+    /// freshness derives from Keyhive::state_generation alone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn nested_group_chain_propagates_via_sync_rounds() {
+        run_chain().await;
+    }
 }

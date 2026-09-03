@@ -15,7 +15,6 @@ use alloc::{
 
 use dupe::Dupe;
 use keyhive_core::{
-    keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::public::Public,
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
@@ -128,6 +127,50 @@ impl PeriodicEventCache {
         Arc::new(out)
     }
 
+    /// Classify a batch of changed event hashes against the connected peer
+    /// set.
+    ///
+    /// A peer is selected when any changed hash is public (visible to every
+    /// peer) or is in that peer's cached visible set. Hashes absent from the
+    /// visible projection — not public and not visible to the local agent —
+    /// are pending (awaiting dependencies) or lagged; they are returned for
+    /// conservative handling by the caller.
+    pub(crate) fn notification_targets(
+        &self,
+        local: &KeyhivePeerId,
+        connected: &BTreeSet<KeyhivePeerId>,
+        changed: &BTreeSet<EventHash>,
+    ) -> (BTreeSet<KeyhivePeerId>, BTreeSet<EventHash>) {
+        let public_hit = self.public_hashes.intersection(changed).next().is_some();
+        let mut peers = BTreeSet::new();
+        let mut unclassified = BTreeSet::new();
+        let local_visible = self.agent_hashes.get(local);
+        if public_hit {
+            // Public events select every connected peer.
+            peers.extend(connected.iter().cloned());
+        } else {
+            for peer in connected {
+                if self
+                    .agent_hashes
+                    .get(peer)
+                    .is_some_and(|visible| visible.intersection(changed).next().is_some())
+                {
+                    peers.insert(peer.clone());
+                }
+            }
+        }
+        // Hashes absent from the visible projection — not public and not visible
+        // to the local agent — are unclassified (pending or lagged).
+        for hash in changed {
+            let is_public = self.public_hashes.contains(hash);
+            let is_local = local_visible.is_some_and(|visible| visible.contains(hash));
+            if !is_public && !is_local {
+                unclassified.insert(*hash);
+            }
+        }
+        (peers, unclassified)
+    }
+
     /// Build the public set as an `AgentHashMap`.
     fn build_public_map(&self) -> AgentHashMap {
         self.public_hashes
@@ -138,8 +181,14 @@ impl PeriodicEventCache {
 
     /// Refresh the cache from the protocol's keyhive view.
     ///
-    /// Returns `Ok(true)` if the cache was rebuilt, `Ok(false)` if the
-    /// total op count was unchanged since the last refresh.
+    /// Always performs a full walk of the keyhive's per-agent visible event
+    /// sets. Callers gate on cache-generation currency
+    /// ([`crate::protocol`]'s `ensure_cache_current`), which only requests a
+    /// rebuild after an explicit change signal; a rebuild must never be
+    /// skipped here based on indirect heuristics. `total_ops` is not a sound
+    /// change detector: pending-to-resolved incorporations and offsetting
+    /// membership changes alter the projection without changing the count,
+    /// and skipping their walk republishes a stale snapshot as current.
     ///
     /// # Errors
     ///
@@ -167,7 +216,7 @@ impl PeriodicEventCache {
             Store,
             Async,
         >,
-    ) -> Result<bool, ProtocolError<Conn::SendError>>
+    ) -> Result<(), ProtocolError<Conn::SendError>>
     where
         Signer: AsyncSigner<Async> + Clone,
         CRef: ContentRef + serde::de::DeserializeOwned,
@@ -182,13 +231,7 @@ impl PeriodicEventCache {
         Conn::DisconnectError: 'static,
         Store: KeyhiveStorage<Async>,
         Async: future_form::FutureForm,
-        Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>: Dupe,
     {
-        let total = protocol.total_ops().await;
-        if self.last_total_ops == Some(total) {
-            return Ok(false);
-        }
-
         let known: alloc::collections::BTreeSet<_> = self.event_data.keys().copied().collect();
         let all_agent_events = protocol.all_agent_events(&known).await?;
 
@@ -207,8 +250,8 @@ impl PeriodicEventCache {
         // Materialize the public set once per refresh so per-request serving
         // can share it by `Arc` instead of rebuilding it.
         self.public_map = Arc::new(self.build_public_map());
-        self.last_total_ops = Some(total);
-        Ok(true)
+        self.last_total_ops = Some(protocol.total_ops().await);
+        Ok(())
     }
 }
 
@@ -227,6 +270,101 @@ mod tests {
     fn peer(seed: u8) -> KeyhivePeerId {
         KeyhivePeerId::from_bytes([seed; 32])
     }
+    fn local(seed: u8) -> KeyhivePeerId {
+        peer(seed)
+    }
+
+    fn connected(seeds: &[u8]) -> BTreeSet<KeyhivePeerId> {
+        seeds.iter().copied().map(peer).collect()
+    }
+
+    fn changed(seeds: &[u8]) -> BTreeSet<EventHash> {
+        seeds.iter().copied().map(|s| [s; 32]).collect()
+    }
+
+    #[test]
+    fn notification_targets_public_event_selects_every_connected_peer() {
+        let mut cache = PeriodicEventCache::new();
+        let public_h: EventHash = [9; 32];
+        cache.public_hashes.insert(public_h);
+        let conn = connected(&[1, 2, 3]);
+        let (peers, unclassified) =
+            cache.notification_targets(&local(0), &conn, &changed(&[9]));
+        assert_eq!(peers, conn);
+        assert!(unclassified.is_empty());
+    }
+
+    #[test]
+    fn notification_targets_private_event_selects_only_visible_peers() {
+        let mut cache = PeriodicEventCache::new();
+        cache.agent_hashes.insert(peer(0), changed(&[1])); // local
+        cache.agent_hashes.insert(peer(1), changed(&[1])); // alice sees it
+        cache.agent_hashes.insert(peer(2), changed(&[2])); // bob does not
+        let (peers, unclassified) =
+            cache.notification_targets(&local(0), &connected(&[1, 2]), &changed(&[1]));
+        assert_eq!(peers, connected(&[1]));
+        assert!(unclassified.is_empty());
+    }
+
+    #[test]
+    fn notification_targets_grant_then_revoke_changes_selection() {
+        let mut cache = PeriodicEventCache::new();
+        cache.agent_hashes.insert(peer(0), changed(&[1])); // local
+        // Grant: alice gains visibility.
+        cache.agent_hashes.insert(peer(1), changed(&[1]));
+        let (peers, _) = cache.notification_targets(&local(0), &connected(&[1]), &changed(&[1]));
+        assert_eq!(peers, connected(&[1]));
+        // Revoke: alice loses visibility.
+        cache.agent_hashes.remove(&peer(1));
+        let (peers, _) = cache.notification_targets(&local(0), &connected(&[1]), &changed(&[1]));
+        assert!(peers.is_empty());
+    }
+
+    #[test]
+    fn notification_targets_unknown_peer_is_not_selected() {
+        let mut cache = PeriodicEventCache::new();
+        cache.agent_hashes.insert(peer(0), changed(&[1])); // local
+        cache.agent_hashes.insert(peer(1), changed(&[1]));
+        // Carol is connected but unknown to the cache.
+        let (peers, _) =
+            cache.notification_targets(&local(0), &connected(&[1, 3]), &changed(&[1]));
+        assert_eq!(peers, connected(&[1]));
+    }
+
+    #[test]
+    fn notification_targets_pending_hash_is_unclassified() {
+        let cache = PeriodicEventCache::new();
+        // The pending hash is in nobody's projection (not even local).
+        let (peers, unclassified) =
+            cache.notification_targets(&local(0), &connected(&[1]), &changed(&[5]));
+        assert!(peers.is_empty());
+        assert_eq!(unclassified, changed(&[5]));
+    }
+
+    #[test]
+    fn notification_targets_local_only_event_is_classified_not_unclassified() {
+        let mut cache = PeriodicEventCache::new();
+        cache.agent_hashes.insert(peer(0), changed(&[6])); // local only
+        let (peers, unclassified) =
+            cache.notification_targets(&local(0), &connected(&[1]), &changed(&[6]));
+        assert!(peers.is_empty());
+        assert!(unclassified.is_empty(), "incorporated local-only event is classified");
+    }
+
+    #[test]
+    fn notification_targets_mixed_public_and_private_events() {
+        let mut cache = PeriodicEventCache::new();
+        let public_h: EventHash = [9; 32];
+        cache.public_hashes.insert(public_h);
+        cache.agent_hashes.insert(peer(0), changed(&[6])); // local only private
+        let conn = connected(&[1, 2]);
+        let mut batch = changed(&[6]);
+        batch.insert(public_h);
+        let (peers, unclassified) = cache.notification_targets(&local(0), &conn, &batch);
+        assert_eq!(peers, conn);
+        assert!(unclassified.is_empty(), "known local private hash must not be marked unclassified");
+    }
+
     #[test]
     fn events_for_peer_pair_returns_only_public_when_peers_unknown() {
         let mut cache = PeriodicEventCache::new();

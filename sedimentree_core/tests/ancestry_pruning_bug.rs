@@ -262,6 +262,70 @@ fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
     );
 }
 
+/// Exact shape of the persisted stress failure: the compact peer has the
+/// complete loose chain A → B → H in durable history before minimization,
+/// while the other peer has A and H but is missing the intermediate B. Both
+/// hold the same root fragment headed at H.
+///
+/// Minimization cannot reconstruct B from the fragment, and retaining H as a
+/// loose "companion" would not help because the incomplete peer already had
+/// H. The only sound fingerprint diff with the current metadata is for A to
+/// spill to the compact peer; both then settle on the same non-logical
+/// frontier {A, H} without recovering B.
+#[test]
+fn missing_fragment_internal_bridge_converges_by_spilling_residue() {
+    let root = loose(b'A', &[]);
+    let bridge = loose(b'B', &[b'A']);
+    let head = loose(0, &[b'B']);
+    let frag = fragment(0, &[], &[0], 9);
+    let metric = sedimentree_core::depth::CountLeadingZeroBytes;
+
+    let mut compact =
+        Sedimentree::new(vec![frag.clone()], vec![root.clone(), bridge, head.clone()])
+            .minimize(&metric);
+    let mut incomplete = Sedimentree::new(vec![frag], vec![root.clone(), head]).minimize(&metric);
+
+    assert_eq!(compact.loose_commits().count(), 0);
+    let incomplete_commits: BTreeSet<_> =
+        incomplete.loose_commits().map(LooseCommit::head).collect();
+    assert_eq!(incomplete_commits, BTreeSet::from([root.head()]));
+
+    let compact_summary = compact.fingerprint_summarize(&seed());
+    let incomplete_summary = incomplete.fingerprint_summarize(&seed());
+    let to_compact: Vec<LooseCommit> = incomplete
+        .diff_remote_fingerprints(&compact_summary)
+        .local_only_commits
+        .into_iter()
+        .map(|(_, commit)| commit.clone())
+        .collect();
+    let to_incomplete: Vec<LooseCommit> = compact
+        .diff_remote_fingerprints(&incomplete_summary)
+        .local_only_commits
+        .into_iter()
+        .map(|(_, commit)| commit.clone())
+        .collect();
+
+    assert_eq!(to_compact.len(), 1);
+    assert_eq!(to_compact[0].head(), root.head());
+    assert!(to_incomplete.is_empty());
+    for commit in to_compact {
+        compact.add_commit(commit);
+    }
+    compact = compact.minimize(&metric);
+    incomplete = incomplete.minimize(&metric);
+
+    assert_eq!(
+        compact.fingerprint_summarize(&seed()),
+        incomplete.fingerprint_summarize(&seed())
+    );
+    let mut expected_heads = vec![commit_id(0), root.head()];
+    expected_heads.sort_unstable();
+    let mut actual_heads = compact.heads(&metric);
+    actual_heads.sort_unstable();
+    assert_eq!(actual_heads, expected_heads);
+    assert_eq!(incomplete.heads(&metric), compact.heads(&metric));
+}
+
 /// **Critical correctness case**: server has loose P → B → H (P is
 /// older, H is newer) AND fragment F(head=H, boundary={B}). Remote
 /// has fragment F + loose B. P is older than the fragment boundary
@@ -298,6 +362,9 @@ fn does_not_prune_commit_past_fragment_boundary() {
 /// (which is the remote's fragment boundary, in
 /// `remote.commit_fingerprints`). Optimization preserved without
 /// requiring the local to hold the fragment metadata.
+///
+/// This is a non-root fragment, so its boundary preserves the covered
+/// range and permits the optimization without inventing extra retention.
 #[test]
 fn asymmetric_fragment_optimization_via_matching_local_head() {
     let a = loose(b'A', &[]);
@@ -314,12 +381,7 @@ fn asymmetric_fragment_optimization_via_matching_local_head() {
     let remote_summary = remote.fingerprint_summarize(&seed());
     let diff = local.diff_remote_fingerprints(&remote_summary);
 
-    assert_eq!(
-        diff.local_only_commits.len(),
-        0,
-        "local's loose D matches the remote's fragment head; the walk \
-         covers B and C en route to boundary A — no duplicate sends"
-    );
+    assert_eq!(diff.local_only_commits.len(), 0);
 }
 
 /// True asymmetric case: local has loose A, B, C only (no D, no

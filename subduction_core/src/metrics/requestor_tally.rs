@@ -66,7 +66,7 @@ impl RequestorTally {
     pub async fn take_window(&self) -> Vec<(PeerId, u64)> {
         let counts = core::mem::take(&mut *self.counts.lock().await);
         let mut ranked: Vec<(PeerId, u64)> = counts.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_by_key(|b| std::cmp::Reverse(b.1));
         ranked
     }
 }

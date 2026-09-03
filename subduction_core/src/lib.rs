@@ -104,6 +104,7 @@ pub mod remote_heads;
 pub mod spawn;
 pub mod storage;
 pub mod subduction;
+pub mod sync_session;
 pub mod timeout;
 pub mod timestamp;
 pub mod transport;
