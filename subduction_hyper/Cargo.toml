@@ -1,0 +1,60 @@
+[package]
+name = "subduction_hyper"
+version = "0.1.0"
+description = "Accept Subduction WebSocket connections from hyper-based HTTP servers (axum, poem, salvo, raw hyper)"
+
+categories = ["web-programming", "web-programming::websocket"]
+keywords = ["axum", "hyper", "subduction", "sync", "websocket"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-tungstenite = { workspace = true, features = ["tokio-runtime"] }
+axum = { workspace = true, optional = true }
+http = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["tokio"] }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true, features = ["std"] }
+tungstenite = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+future_form = { workspace = true }
+futures-util = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["http1", "server", "tokio"] }
+subduction_core = { workspace = true, features = ["std", "system_time"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_websocket = { workspace = true, features = [
+  "tokio_client",
+  "tokio_server",
+] }
+tokio = { workspace = true, features = [
+  "io-util",
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "time",
+] }
+
+[[test]]
+name = "axum"
+required-features = ["axum"]
+
+[features]
+default = []
+# `TungsteniteUpgrade`: an axum extractor that replaces
+# `axum::extract::ws::WebSocketUpgrade` and yields an
+# `async_tungstenite::WebSocketStream` instead of axum's sealed `WebSocket`.
+axum = ["dep:axum"]
+
+[lints]
+workspace = true

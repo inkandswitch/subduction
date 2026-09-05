@@ -119,6 +119,7 @@ jobs:
             [subduction_crypto]="arbitrary"
             [subduction_ephemeral]=""
             [subduction_http_longpoll]=""
+            [subduction_hyper]="axum"
             [subduction_iroh]=""
             [subduction_keyhive]=""
             [subduction_websocket]=""
@@ -225,6 +226,8 @@ jobs:
             features: ""
           - crate: subduction_http_longpoll
             features: ""
+          - crate: subduction_hyper
+            features: axum
           - crate: subduction_iroh
             features: ""
           - crate: subduction_keyhive

@@ -40,6 +40,7 @@ graph TD
 
     subgraph Transport
         subduction_http_longpoll
+        subduction_hyper
         subduction_iroh
         subduction_websocket
     end
@@ -64,6 +65,7 @@ graph TD
     subduction_core --> subduction_http_longpoll
     subduction_core --> subduction_iroh
     subduction_core --> subduction_websocket
+    subduction_websocket --> subduction_hyper
     subduction_core --> subduction_keyhive_policy
 
     subduction_core --> sedimentree_wasm
@@ -86,6 +88,7 @@ graph TD
 | `subduction_crypto`        | Cryptographic types: signed payloads and verification witnesses                        |
 | `subduction_core`          | The main synchronization protocol implementation                                       |
 | `subduction_http_longpoll` | HTTP long-poll transport for restricted network environments                           |
+| `subduction_hyper`         | Accept WebSocket upgrades from hyper-based servers (axum, poem, salvo, raw hyper)       |
 | `subduction_iroh`          | Iroh (QUIC) transport for direct peer-to-peer connections                              |
 | `subduction_websocket`     | WebSocket transport layer for peer-to-peer connections                                 |
 
@@ -253,6 +256,7 @@ subduction/
 ├── subduction_crypto/          # Signed payloads and verification witnesses
 ├── subduction_core/            # Sync protocol implementation
 ├── subduction_http_longpoll/   # HTTP long-poll transport
+├── subduction_hyper/           # WebSocket upgrades from hyper-based servers (axum, …)
 ├── subduction_iroh/            # Iroh (QUIC) transport
 ├── subduction_websocket/       # WebSocket transport
 ├── subduction_wasm/            # Wasm bindings for Subduction

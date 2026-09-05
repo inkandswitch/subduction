@@ -5513,6 +5513,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "subduction_hyper"
+version = "0.1.0"
+dependencies = [
+ "async-tungstenite",
+ "axum",
+ "future_form",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "subduction_core",
+ "subduction_crypto",
+ "subduction_websocket",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tungstenite",
+]
+
+[[package]]
 name = "subduction_iroh"
 version = "0.10.0"
 dependencies = [
