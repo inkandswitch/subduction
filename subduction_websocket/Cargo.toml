@@ -41,7 +41,11 @@ criterion_pprof = { workspace = true }
 eyre = { workspace = true }
 nonempty = { workspace = true, features = ["std"] }
 rand = { workspace = true, features = ["std_rng"] }
-sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
+sedimentree_core = { workspace = true, features = [
+  "arbitrary",
+  "serde",
+  "std",
+] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["test_utils"] }
 subduction_crypto = { workspace = true }
@@ -50,7 +54,11 @@ tempfile = { workspace = true }
 testresult = { workspace = true }
 tokio = { workspace = true }
 tokio-test = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"] }
+tracing-subscriber = { workspace = true, features = [
+  "fmt",
+  "env-filter",
+  "std",
+] }
 
 [[bench]]
 name = "e2e"
@@ -103,18 +111,19 @@ std = [
   "thiserror/std",
   "tracing/std",
 ]
-tokio_base = [
-  "dep:tokio",
-  "dep:tokio-util",
-  "futures-timer",
-  "std"
-]
+tokio_base = ["dep:tokio", "dep:tokio-util", "futures-timer", "std"]
 tokio_client_any = ["tokio_base"]
 tokio_server_any = ["tokio_base"]
 tokio_client = ["tokio_client_any", "async-tungstenite/tokio-native-tls"]
 tokio_server = ["tokio_server_any", "async-tungstenite/tokio-native-tls"]
-tokio_client_rustls = ["tokio_client_any", "async-tungstenite/tokio-rustls-native-certs"]
-tokio_server_rustls = ["tokio_server_any", "async-tungstenite/tokio-rustls-native-certs"]
+tokio_client_rustls = [
+  "tokio_client_any",
+  "async-tungstenite/tokio-rustls-native-certs",
+]
+tokio_server_rustls = [
+  "tokio_server_any",
+  "async-tungstenite/tokio-rustls-native-certs",
+]
 
 [lints]
 workspace = true

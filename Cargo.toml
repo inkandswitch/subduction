@@ -11,6 +11,7 @@ members = [
   "subduction_crypto",
   "subduction_ephemeral",
   "subduction_http_longpoll",
+  "subduction_hyper",
   "subduction_iroh",
   "subduction_keyhive",
   "subduction_redb_storage",
@@ -43,6 +44,7 @@ subduction_core = { version = "0.18.0", path = "subduction_core", default-featur
 subduction_crypto = { version = "0.9.0", path = "subduction_crypto", default-features = false }
 subduction_ephemeral = { version = "0.8.0", path = "subduction_ephemeral", default-features = false }
 subduction_http_longpoll = { version = "0.11.0", path = "subduction_http_longpoll", default-features = false }
+subduction_hyper = { version = "0.1.0", path = "subduction_hyper", default-features = false }
 subduction_iroh = { version = "0.10.0", path = "subduction_iroh" }
 subduction_keyhive = { version = "0.8.0", path = "subduction_keyhive" }
 subduction_redb_storage = { version = "0.2.0", path = "subduction_redb_storage" }
@@ -90,6 +92,7 @@ futures-util = { version = "0.3.31", default-features = false, features = [
 ] }
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4.3"
+http = "1.0"
 http-body-util = "0.1.4"
 iroh = "1.0"
 hyper = { version = "1.6", default-features = false }
