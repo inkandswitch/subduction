@@ -7,7 +7,7 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 
 use ed25519_dalek::VerifyingKey;
 use future_form::{FutureForm, Local, Sendable};
@@ -31,6 +31,7 @@ use serde::Deserialize;
 use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+    sync_session::SyncPolicyRejectionKind,
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
 
@@ -92,7 +93,7 @@ pub struct SubductionKeyhive<
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, S, T>,
     R: rand::CryptoRng + rand::RngCore,
->(Keyhive<F, S, T, P, C, L, R>);
+>(Arc<Keyhive<F, S, T, P, C, L, R>>);
 
 impl<
     F: FutureForm,
@@ -106,14 +107,14 @@ impl<
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
     #[must_use]
-    pub const fn new(keyhive: Keyhive<F, S, T, P, C, L, R>) -> Self {
+    pub const fn new(keyhive: Arc<Keyhive<F, S, T, P, C, L, R>>) -> Self {
         Self(keyhive)
     }
 
     /// Get a reference to the inner [`Keyhive`].
     #[must_use]
-    pub const fn keyhive(&self) -> &Keyhive<F, S, T, P, C, L, R> {
-        &self.0
+    pub fn keyhive(&self) -> &Keyhive<F, S, T, P, C, L, R> {
+        self.0.as_ref()
     }
 }
 
@@ -172,6 +173,14 @@ impl<
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
         filter_authorized_fetch_with(&self.0, peer, ids).boxed()
     }
+
+    fn classify_put_rejection(&self, error: &Self::PutDisallowed) -> SyncPolicyRejectionKind {
+        match error {
+            PutDisallowedError::DocumentNotFound => SyncPolicyRejectionKind::DocumentNotFound,
+            PutDisallowedError::InsufficientAccess => SyncPolicyRejectionKind::InsufficientAccess,
+            PutDisallowedError::InvalidSedimentreeId => SyncPolicyRejectionKind::InvalidIdentifier,
+        }
+    }
 }
 
 impl<
@@ -182,9 +191,9 @@ impl<
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, S, T>,
     R: rand::CryptoRng + rand::RngCore,
-> From<Keyhive<F, S, T, P, C, L, R>> for SubductionKeyhive<F, S, T, P, C, L, R>
+> From<Arc<Keyhive<F, S, T, P, C, L, R>>> for SubductionKeyhive<F, S, T, P, C, L, R>
 {
-    fn from(keyhive: Keyhive<F, S, T, P, C, L, R>) -> Self {
+    fn from(keyhive: Arc<Keyhive<F, S, T, P, C, L, R>>) -> Self {
         SubductionKeyhive(keyhive)
     }
 }
@@ -197,7 +206,7 @@ impl<
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, S, T>,
     R: rand::CryptoRng + rand::RngCore,
-> From<SubductionKeyhive<F, S, T, P, C, L, R>> for Keyhive<F, S, T, P, C, L, R>
+> From<SubductionKeyhive<F, S, T, P, C, L, R>> for Arc<Keyhive<F, S, T, P, C, L, R>>
 {
     fn from(subduction_keyhive: SubductionKeyhive<F, S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0
@@ -263,6 +272,14 @@ impl<
         ids: Vec<SedimentreeId>,
     ) -> LocalBoxFuture<'_, Vec<SedimentreeId>> {
         filter_authorized_fetch_with(&self.0, peer, ids).boxed_local()
+    }
+
+    fn classify_put_rejection(&self, error: &Self::PutDisallowed) -> SyncPolicyRejectionKind {
+        match error {
+            PutDisallowedError::DocumentNotFound => SyncPolicyRejectionKind::DocumentNotFound,
+            PutDisallowedError::InsufficientAccess => SyncPolicyRejectionKind::InsufficientAccess,
+            PutDisallowedError::InvalidSedimentreeId => SyncPolicyRejectionKind::InvalidIdentifier,
+        }
     }
 }
 

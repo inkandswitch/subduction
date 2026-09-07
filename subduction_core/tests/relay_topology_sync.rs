@@ -176,7 +176,7 @@ async fn setup_relay_topology() -> TestResult<(
 
 #[tokio::test]
 async fn relay_topology_converges_on_initial_sync() -> TestResult {
-    let (a, r, b, _a_signer, _r_signer, _b_signer) = setup_relay_topology().await?;
+    let (a, r, b, a_signer, r_signer, _b_signer) = setup_relay_topology().await?;
 
     let sed_id = SedimentreeId::new([7u8; 32]);
 
@@ -184,16 +184,24 @@ async fn relay_topology_converges_on_initial_sync() -> TestResult {
         .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
-    // `add_commit`'s broadcast fallback (no subscribers → broadcast to all
-    // connections) reaches R immediately.
+    // With no subscribers, publication remains local. R must explicitly
+    // subscribe and pull before it can relay this sedimentree.
     assert_eq!(a.get_commits(sed_id).await.map(|c| c.len()), Some(1));
+    assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), None);
+    r.sync_with_peer(
+        &PeerId::from(a_signer.verifying_key()),
+        sed_id,
+        true,
+        SYNC_TIMEOUT,
+    )
+    .await?;
     assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), Some(1));
 
     // B has no sedimentree yet, so `full_sync_with_all_peers` (which
     // iterates B's known sedimentrees) is a no-op for this id. Force a
     // per-id sync to subscribe B and pull the data.
     b.sync_with_peer(
-        &PeerId::from(make_signer(20).verifying_key()),
+        &PeerId::from(r_signer.verifying_key()),
         sed_id,
         true,
         SYNC_TIMEOUT,

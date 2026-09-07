@@ -28,6 +28,7 @@ use alloc::vec::Vec;
 use core::ops::Deref;
 
 use crate::{
+    collections::Set,
     depth::DepthMetric,
     fragment::Fragment,
     loose_commit::{LooseCommit, id::CommitId},
@@ -102,9 +103,21 @@ impl MinimizedSedimentree {
     ///
     /// No-op (and no allocation / no traversal) when already clean.
     pub fn ensure_minimized<M: DepthMetric>(&mut self, depth_metric: &M) {
+        drop(self.ensure_minimized_with_delta(depth_metric));
+    }
+
+    /// Ensure the tree is minimal and return the item IDs discarded by this
+    /// call. A clean tree returns two empty sets without traversing it.
+    pub fn ensure_minimized_with_delta<M: DepthMetric>(
+        &mut self,
+        depth_metric: &M,
+    ) -> (Set<CommitId>, Set<CommitId>) {
         if self.dirty {
-            self.tree.minimize_in_place(depth_metric);
+            let removed = self.tree.minimize_in_place_with_delta(depth_metric);
             self.dirty = false;
+            removed
+        } else {
+            (Set::new(), Set::new())
         }
     }
 

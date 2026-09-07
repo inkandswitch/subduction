@@ -120,6 +120,22 @@ pub struct FingerprintDiff<'a> {
     pub remote_only_fragment_fingerprints: Vec<Fingerprint<CommitId>>,
 }
 
+/// The canonical tree and the durable items discarded while producing it.
+///
+/// Storage backends use this result to persist minimization atomically: save
+/// incoming items, calculate this plan from the transaction's complete tree,
+/// delete `removed_*`, and commit the returned [`tree`](Self::tree) as their
+/// resident projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Minimization {
+    /// The minimal equivalent tree.
+    pub tree: Sedimentree,
+    /// Loose commits present in the input but covered in `tree`.
+    pub removed_commits: Set<CommitId>,
+    /// Fragments present in the input but dominated in `tree`.
+    pub removed_fragments: Set<CommitId>,
+}
+
 /// A pre-captured reverse-lookup table for resolving fingerprints back to digests.
 ///
 /// Created by [`Sedimentree::fingerprint_resolver`], this type captures
@@ -552,10 +568,33 @@ impl Sedimentree {
     /// the metric) and the deepest-first sweep prunes early.
     #[must_use]
     pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
+        self.minimize_with_delta(depth_metric).tree
+    }
+
+    /// Minimize this tree and report the exact durable items made redundant.
+    ///
+    /// Unlike comparing blobs or reconstructing graph semantics in a storage
+    /// backend, this uses the same keep-set calculation as [`minimize`](Self::minimize)
+    /// and [`minimize_in_place`](Self::minimize_in_place).
+    #[must_use]
+    pub fn minimize_with_delta<M: DepthMetric>(&self, depth_metric: &M) -> Minimization {
         let KeepSets {
             fragment_heads,
             commit_heads,
         } = self.keep_sets(depth_metric);
+
+        let removed_fragments = self
+            .fragments
+            .keys()
+            .filter(|head| !fragment_heads.contains(head))
+            .copied()
+            .collect();
+        let removed_commits = self
+            .commits
+            .keys()
+            .filter(|head| !commit_heads.contains(head))
+            .copied()
+            .collect();
 
         let minimized_fragments: Vec<Fragment> = self
             .fragments
@@ -571,7 +610,11 @@ impl Sedimentree {
             .cloned()
             .collect();
 
-        Sedimentree::new(minimized_fragments, commits)
+        Minimization {
+            tree: Sedimentree::new(minimized_fragments, commits),
+            removed_commits,
+            removed_fragments,
+        }
     }
 
     /// Minimize this [`Sedimentree`] **in place**, dropping dominated
@@ -587,14 +630,40 @@ impl Sedimentree {
     /// Avoids cloning every retained fragment/commit and rebuilding the maps,
     /// which [`minimize`](Self::minimize) must do to leave `self` intact.
     pub fn minimize_in_place<M: DepthMetric>(&mut self, depth_metric: &M) {
+        drop(self.minimize_in_place_with_delta(depth_metric));
+    }
+
+    /// Minimize this tree in place and return the exact items removed.
+    ///
+    /// This is the allocation-conscious storage seam: unlike
+    /// [`minimize_with_delta`](Self::minimize_with_delta), retained items are
+    /// not cloned into a second tree.
+    pub fn minimize_in_place_with_delta<M: DepthMetric>(
+        &mut self,
+        depth_metric: &M,
+    ) -> (Set<CommitId>, Set<CommitId>) {
         let KeepSets {
             fragment_heads,
             commit_heads,
         } = self.keep_sets(depth_metric);
 
+        let removed_commits = self
+            .commits
+            .keys()
+            .filter(|head| !commit_heads.contains(head))
+            .copied()
+            .collect();
+        let removed_fragments = self
+            .fragments
+            .keys()
+            .filter(|head| !fragment_heads.contains(head))
+            .copied()
+            .collect();
+
         self.fragments
             .retain(|head, _| fragment_heads.contains(head));
         self.commits.retain(|head, _| commit_heads.contains(head));
+        (removed_commits, removed_fragments)
     }
 
     /// Compute the set of fragment heads and commit heads that survive
@@ -764,7 +833,8 @@ impl Sedimentree {
 
         // Include fragment heads and boundaries in the commit fingerprint set
         // for coverage (prevents remote from re-sending these as loose commits).
-        // NOT added to commit_fp_to_id — they're not resolvable as standalone items.
+        // Coverage-only entries are not added to commit_fp_to_id because they
+        // are not resolvable as standalone items.
         for fragment in self.fragments.values() {
             commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
             for boundary in fragment.boundary() {
@@ -790,6 +860,7 @@ impl Sedimentree {
     /// items the requestor is missing, and echoed fingerprints for items
     /// the responder is missing.
     #[must_use]
+    #[expect(clippy::too_many_lines)]
     pub fn diff_remote_fingerprints<'a>(
         &'a self,
         remote: &FingerprintSummary,
@@ -816,6 +887,10 @@ impl Sedimentree {
         // orientation varies). Horizon: any non-root commit whose FP is
         // in `remote.commit_fingerprints` — either a fragment boundary or
         // a loose-commit head we can't extend through.
+        //
+        // When the matching local fragment is available, narrow that walk to
+        // commits on a head-to-boundary path. Traversing every child of a
+        // fragment head would incorrectly cover newer descendants.
 
         let fragment_roots: Set<CommitId> = self
             .commits
@@ -829,7 +904,53 @@ impl Sedimentree {
             })
             .collect();
 
+        let matched_fragment_boundaries: Map<CommitId, Set<CommitId>> = self
+            .fragments
+            .iter()
+            .filter(|(head, _)| {
+                remote
+                    .fragment_fingerprints
+                    .contains(&Fingerprint::new(seed, head))
+            })
+            .map(|(head, fragment)| (*head, fragment.boundary().iter().copied().collect()))
+            .collect();
         if !fragment_roots.is_empty() {
+            fn walk_parents(
+                starts: impl IntoIterator<Item = CommitId>,
+                commits: &Map<CommitId, LooseCommit>,
+            ) -> Set<CommitId> {
+                let mut visited = Set::new();
+                let mut stack: Vec<CommitId> = starts.into_iter().collect();
+                while let Some(id) = stack.pop() {
+                    if !visited.insert(id) {
+                        continue;
+                    }
+                    if let Some(commit) = commits.get(&id) {
+                        for parent in commit.parents() {
+                            stack.push(*parent);
+                        }
+                    }
+                }
+                visited
+            }
+
+            fn walk_children(
+                starts: impl IntoIterator<Item = CommitId>,
+                children_of: &Map<CommitId, Vec<CommitId>>,
+            ) -> Set<CommitId> {
+                let mut visited = Set::new();
+                let mut stack: Vec<CommitId> = starts.into_iter().collect();
+                while let Some(id) = stack.pop() {
+                    if !visited.insert(id) {
+                        continue;
+                    }
+                    if let Some(children) = children_of.get(&id) {
+                        stack.extend(children.iter().copied());
+                    }
+                }
+                visited
+            }
+
             // Build a children index over local loose commits so we can
             // walk in both DAG directions from each root.
             let mut children_of: Map<CommitId, Vec<CommitId>> = Map::new();
@@ -840,7 +961,29 @@ impl Sedimentree {
             }
 
             let mut covered: Set<CommitId> = Set::new();
-            let mut stack: Vec<CommitId> = fragment_roots.iter().copied().collect();
+            for (&head, boundaries) in &matched_fragment_boundaries {
+                covered.insert(head);
+                if boundaries.is_empty() {
+                    continue;
+                }
+
+                let head_parents = walk_parents([head], &self.commits);
+                let head_children = walk_children([head], &children_of);
+                let boundary_parents = walk_parents(boundaries.iter().copied(), &self.commits);
+                let boundary_children = walk_children(boundaries.iter().copied(), &children_of);
+
+                for id in head_parents.intersection(&boundary_children) {
+                    covered.insert(*id);
+                }
+                for id in head_children.intersection(&boundary_parents) {
+                    covered.insert(*id);
+                }
+            }
+            let mut stack: Vec<CommitId> = fragment_roots
+                .iter()
+                .filter(|root| !matched_fragment_boundaries.contains_key(root))
+                .copied()
+                .collect();
             while let Some(id) = stack.pop() {
                 if !covered.insert(id) {
                     continue;
@@ -880,8 +1023,8 @@ impl Sedimentree {
             .collect();
 
         // Find requestor fingerprints we don't have locally (echo back).
-        // Include fragment head/boundary coverage in local commit fps
-        // so the remote doesn't ask us to send them as standalone items.
+        // Include fragment head/boundary coverage in local commit fps so the
+        // remote doesn't ask us to send them as standalone items.
         let mut local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
             .commits
             .values()
@@ -958,11 +1101,30 @@ impl Sedimentree {
 
         let mut heads = Vec::<CommitId>::new();
         for fragment in self.fragments.values() {
-            if !all_fragment_boundaries.contains(&fragment.head())
-                && fragment
-                    .boundary()
-                    .iter()
-                    .all(|end| !dag.contains_commit(end))
+            if all_fragment_boundaries.contains(&fragment.head()) {
+                continue;
+            }
+            if fragment.boundary().is_empty() {
+                // A root fragment's head is a frontier commit only when no
+                // loose commit descends from it. A loose commit that lists the
+                // fragment head as a parent is the fragment's only possible
+                // loose child, and nothing else can reach through the head in
+                // the loose dag — so a single linear scan decides coverage.
+                // Resurfacing a covered head (the pre-fix behavior) made the
+                // frontier depend on each node's fragment layout
+                let covered_by_loose = self
+                    .commits
+                    .values()
+                    .any(|c| c.parents().contains(&fragment.head()));
+                // A loose commit with the same identity contributes this head
+                // through the DAG; do not emit the fragment identity twice.
+                if !dag.contains_commit(&fragment.head()) && !covered_by_loose {
+                    heads.push(fragment.head());
+                }
+            } else if fragment
+                .boundary()
+                .iter()
+                .all(|end| !dag.contains_commit(end))
             {
                 heads.extend(fragment.boundary().iter().copied());
             }
@@ -1675,6 +1837,48 @@ mod tests {
         }
 
         #[test]
+        fn minimize_with_delta_partitions_every_input_item() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let result = tree.minimize_with_delta(&CountLeadingZeroBytes);
+
+                    let kept_commits: Set<_> =
+                        result.tree.loose_commits().map(LooseCommit::head).collect();
+                    let kept_fragments: Set<_> =
+                        result.tree.fragments().map(Fragment::head).collect();
+                    let input_commits: Set<_> =
+                        tree.loose_commits().map(LooseCommit::head).collect();
+                    let input_fragments: Set<_> = tree.fragments().map(Fragment::head).collect();
+
+                    assert!(kept_commits.is_disjoint(&result.removed_commits));
+                    assert!(kept_fragments.is_disjoint(&result.removed_fragments));
+                    assert_eq!(
+                        kept_commits
+                            .union(&result.removed_commits)
+                            .copied()
+                            .collect::<Set<_>>(),
+                        input_commits,
+                    );
+                    assert_eq!(
+                        kept_fragments
+                            .union(&result.removed_fragments)
+                            .copied()
+                            .collect::<Set<_>>(),
+                        input_fragments,
+                    );
+                    assert_eq!(result.tree, tree.minimize(&CountLeadingZeroBytes));
+
+                    let mut in_place = tree.clone();
+                    let (removed_commits, removed_fragments) =
+                        in_place.minimize_in_place_with_delta(&CountLeadingZeroBytes);
+                    assert_eq!(in_place, result.tree);
+                    assert_eq!(removed_commits, result.removed_commits);
+                    assert_eq!(removed_fragments, result.removed_fragments);
+                });
+        }
+
+        #[test]
         fn minimize_no_mutual_support() {
             bolero::check!()
                 .with_arbitrary::<Sedimentree>()
@@ -1944,6 +2148,37 @@ mod tests {
                     });
             }
 
+            #[test]
+            fn root_fragment_head_is_the_frontier() {
+                let fragment =
+                    crate::test_utils::make_fragment_at_depth(2, 1, BTreeSet::new(), &[]);
+                let expected = fragment.head();
+                let tree = Sedimentree::new(vec![fragment], vec![]);
+
+                assert_eq!(tree.heads(&CountLeadingZeroBytes), vec![expected]);
+            }
+            #[test]
+            fn covered_root_fragment_commit_must_not_resurface_as_head() {
+                // parity-flake shape: a ROOT fragment covers commit A
+                // and a loose commit C's parent A lives inside that fragment.
+                // The frontier must be [C] — A is covered by the fragment, not
+                // an open head. If the fragment head resurfaced as a frontier
+                // commit, nodes with different fragment layouts would report
+                // divergent frontiers.
+                let sid = make_sedimentree_id(0);
+                let blob_meta = make_blob_meta(0);
+                let a = CommitId::new([0x0a; 32]);
+                let c = CommitId::new([0x0c; 32]);
+                let frag = Fragment::new(sid, a, BTreeSet::new(), &[], blob_meta);
+                let loose = LooseCommit::new(sid, c, BTreeSet::from([a]), blob_meta);
+                let tree = Sedimentree::new(vec![frag], vec![loose]);
+                let heads = tree.heads(&CountLeadingZeroBytes);
+                assert_eq!(
+                    heads,
+                    vec![c],
+                    "covered root-fragment commit resurfaced as a head: {heads:?}"
+                );
+            }
             #[test]
             fn heads_empty_iff_tree_empty() {
                 bolero::check!()
@@ -3372,7 +3607,6 @@ mod tests {
                 "local should send exactly the fragment"
             );
 
-            // Local should NOT send covered commits (they were pruned by minimize)
             assert_eq!(
                 diff.local_only_commits.len(),
                 0,
@@ -3432,6 +3666,57 @@ mod tests {
                 diff_at_local.local_only_commits.is_empty(),
                 "fragment-aware walk should cover all loose commits inside \
                  the remote's fragment range"
+            );
+        }
+
+        /// A remote fragment must not be treated as covering loose commits
+        /// that are newer descendants of the fragment boundary. Those commits
+        /// are outside the fragment's covered range and must still be sent.
+        #[test]
+        fn diff_remote_fragment_does_not_cover_new_descendants() {
+            let mut rng = seeded_rng(205);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[("a", 2), ("b", 0), ("c", 0)],
+                &[("a", "b"), ("b", "c")],
+            );
+            let fragment = graph.make_fragment("a", &["b"], &[]);
+            let remote =
+                Sedimentree::new(vec![fragment.clone()], vec![]).minimize(graph.depth_metric());
+            let local = graph
+                .to_sedimentree_with_fragments(vec![fragment])
+                .minimize(graph.depth_metric());
+            let remote_summary = remote.fingerprint_summarize(&FingerprintSeed::new(42, 99));
+            let diff = local.diff_remote_fingerprints(&remote_summary);
+            assert_eq!(
+                diff.local_only_commits.len(),
+                1,
+                "the descendant after the fragment boundary must be sent",
+            );
+        }
+
+        /// The same descendant must remain visible when the fragment boundary
+        /// is on the ancestry side of the fragment head.
+        #[test]
+        fn diff_remote_fragment_does_not_cover_descendants_past_parent_boundary() {
+            let mut rng = seeded_rng(206);
+            let graph = TestGraph::new(
+                &mut rng,
+                &[("a", 2), ("b", 0), ("c", 0)],
+                &[("a", "b"), ("b", "c")],
+            );
+            let fragment = graph.make_fragment("b", &["a"], &[]);
+            let remote =
+                Sedimentree::new(vec![fragment.clone()], vec![]).minimize(graph.depth_metric());
+            let local = graph
+                .to_sedimentree_with_fragments(vec![fragment])
+                .minimize(graph.depth_metric());
+            let remote_summary = remote.fingerprint_summarize(&FingerprintSeed::new(42, 99));
+            let diff = local.diff_remote_fingerprints(&remote_summary);
+            assert_eq!(
+                diff.local_only_commits.len(),
+                1,
+                "the descendant past the parent boundary must be sent",
             );
         }
 

@@ -455,6 +455,12 @@ async fn send_counter_survives_disconnects() -> TestResult {
     // Removing a non-last connection returns `Some(false)`; the counter is
     // untouched.
     assert_eq!(a.remove_connection_for_test(&conn1).await, Some(false));
+    assert_eq!(a.connection_count(&b_peer).await, 1);
+    assert_eq!(a.mux_count(&b_peer).await, 1);
+    assert!(
+        a.conn_mux_invariant_holds(&b_peer).await,
+        "removing a connection must remove its paired multiplexer",
+    );
     assert_eq!(
         a.send_counter_value(&b_peer).await,
         Some(stamped),

@@ -9,10 +9,12 @@
 use alloc::{format, string::ToString, sync::Arc, vec::Vec};
 use core::time::Duration;
 
-use async_lock::Mutex as AsyncMutex;
 use keyhive_core::{
-    contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
-    principal::identifier::Identifier, store::ciphertext::memory::MemoryCiphertextStore,
+    contact_card::ContactCard,
+    keyhive::Keyhive,
+    listener::{membership::MembershipListener, no_listener::NoListener},
+    principal::identifier::Identifier,
+    store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use rand::rngs::OsRng;
@@ -140,7 +142,7 @@ where
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<future_form::Local> + Send + 'static,
     ConnAdapter: Fn(KeyhivePeerId, C) -> Conn + Send + 'static,
-    PolicySetup: FnOnce(Arc<AsyncMutex<LocalRuntimeKeyhive>>) + Send + 'static,
+    PolicySetup: FnOnce(Arc<LocalRuntimeKeyhive>) + Send + 'static,
 {
     let (init_tx, init_rx) = oneshot::channel::<Result<(), std::string::String>>();
 
@@ -197,7 +199,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<future_form::Local> + 'static,
     ConnAdapter: Fn(KeyhivePeerId, C) -> Conn + 'static,
-    PolicySetup: FnOnce(Arc<AsyncMutex<LocalRuntimeKeyhive>>),
+    PolicySetup: FnOnce(Arc<LocalRuntimeKeyhive>),
 {
     let keyhive = match Keyhive::generate(
         signer,
@@ -229,11 +231,11 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     let kh_id: Identifier = keyhive.id().into();
     let peer_id = KeyhivePeerId::from_bytes(kh_id.to_bytes());
 
-    let shared = Arc::new(AsyncMutex::new(keyhive));
+    let shared = Arc::new(keyhive);
     let policy_keyhive = Arc::clone(&shared);
     let mut protocol =
         KeyhiveProtocol::<_, Vec<u8>, Vec<u8>, _, _, _, Conn, Store, future_form::Local>::new(
-            shared,
+            Arc::clone(&shared),
             storage,
             peer_id,
             contact_card,
@@ -262,6 +264,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
                 proto
                     .handle_message(&keyhive_peer, msg, Some(conn))
                     .await
+                    .map(|_| ())
                     .map_err(|e| e.to_string())
             }
         },
@@ -308,18 +311,40 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     tracing::debug!("keyhive actors shutting down");
 }
 
-/// Initialize a `Sendable` keyhive instance.
+/// Initialize a `Sendable` keyhive instance with a custom listener.
+///
+/// The listener is consumed by the returned [`Keyhive`]. For a default
+/// [`NoListener`] see [`SendableRuntimeKeyhive`] and the original
+/// parameterless version.
 ///
 /// # Errors
 ///
 /// Returns an error if keyhive generation fails.
-pub async fn init_sendable_keyhive(
+pub async fn init_sendable_keyhive<
+    L: MembershipListener<future_form::Sendable, MemorySigner, Vec<u8>>,
+>(
     signer: MemorySigner,
-) -> Result<(SendableRuntimeKeyhive, KeyhivePeerId, ContactCard), alloc::string::String> {
+    listener: L,
+) -> Result<
+    (
+        Keyhive<
+            future_form::Sendable,
+            MemorySigner,
+            Vec<u8>,
+            Vec<u8>,
+            MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
+            L,
+            OsRng,
+        >,
+        KeyhivePeerId,
+        ContactCard,
+    ),
+    alloc::string::String,
+> {
     let keyhive = Keyhive::generate(
         signer,
         MemoryCiphertextStore::<Vec<u8>, Vec<u8>>::new(),
-        NoListener,
+        listener,
         OsRng,
     )
     .await

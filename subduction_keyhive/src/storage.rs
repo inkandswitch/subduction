@@ -102,12 +102,27 @@ pub trait KeyhiveStorage<Async: FutureForm> {
     /// Save an event to storage.
     ///
     /// Events are individual keyhive operations. The hash should be the BLAKE3
-    /// hash of the event bytes.
+    /// hash of the event bytes. Returns `true` only when the hash was newly
+    /// inserted; duplicate hashes leave storage unchanged and return `false`.
     fn save_event(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> Async::Future<'_, Result<(), Self::Error>>;
+    ) -> Async::Future<'_, Result<bool, Self::Error>>;
+
+    /// Save an event to storage, recording the peer it was learned from.
+    ///
+    /// The default implementation ignores the source; stores that keep a
+    /// per-event source log override this. `source` is `None` for locally
+    /// created events.
+    fn save_event_with_source(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+        _source: Option<crate::peer_id::KeyhivePeerId>,
+    ) -> Async::Future<'_, Result<bool, Self::Error>> {
+        self.save_event(hash, data)
+    }
 
     /// Load all events from storage.
     ///
@@ -115,8 +130,44 @@ pub trait KeyhiveStorage<Async: FutureForm> {
     #[allow(clippy::type_complexity)]
     fn load_events(&self) -> Async::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
 
+    /// Load events with the peer each event was learned from.
+    ///
+    /// Stores that do not retain source attribution may use the default, which
+    /// reports every event as local/unknown. Durable admission consumers that
+    /// require attribution should override this method.
+    #[allow(clippy::type_complexity)]
+    fn load_events_with_source(
+        &self,
+    ) -> Async::Future<
+        '_,
+        Result<
+            Vec<(
+                StorageHash,
+                Vec<u8>,
+                Option<crate::peer_id::KeyhivePeerId>,
+            )>,
+            Self::Error,
+        >,
+    >;
+
     /// Delete an event from storage.
     fn delete_event(&self, hash: StorageHash) -> Async::Future<'_, Result<(), Self::Error>>;
+
+    /// Persist a local-only private CGKA secret delta. These records must never
+    /// be exposed through peer synchronization.
+    fn save_local_secret(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> Async::Future<'_, Result<bool, Self::Error>>;
+
+    /// Load all local-only private CGKA secret deltas.
+    fn load_local_secrets(
+        &self,
+    ) -> Async::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
+
+    /// Delete a private delta after a successfully persisted archive includes it.
+    fn delete_local_secret(&self, hash: StorageHash) -> Async::Future<'_, Result<(), Self::Error>>;
 }
 
 /// An in-memory storage backend for testing.
@@ -124,6 +175,7 @@ pub trait KeyhiveStorage<Async: FutureForm> {
 pub struct MemoryKeyhiveStorage {
     archives: Arc<Mutex<Map<StorageHash, Vec<u8>>>>,
     events: Arc<Mutex<Map<StorageHash, Vec<u8>>>>,
+    local_secrets: Arc<Mutex<Map<StorageHash, Vec<u8>>>>,
 }
 
 impl MemoryKeyhiveStorage {
@@ -133,6 +185,7 @@ impl MemoryKeyhiveStorage {
         Self {
             archives: Arc::new(Mutex::new(Map::new())),
             events: Arc::new(Mutex::new(Map::new())),
+            local_secrets: Arc::new(Mutex::new(Map::new())),
         }
     }
 }
@@ -174,10 +227,10 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<bool, Self::Error>> {
         async move {
-            self.events.lock().await.insert(hash, data);
-            Ok(())
+            let inserted = self.events.lock().await.insert(hash, data).is_none();
+            Ok(inserted)
         }
         .boxed_local()
     }
@@ -190,9 +243,58 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         .boxed_local()
     }
 
+    fn load_events_with_source(
+        &self,
+    ) -> LocalBoxFuture<
+        '_,
+        Result<Vec<(StorageHash, Vec<u8>, Option<crate::peer_id::KeyhivePeerId>)>, Self::Error>,
+    > {
+        async move {
+            let events = self.events.lock().await;
+            Ok(events
+                .iter()
+                .map(|(hash, bytes)| (*hash, bytes.clone(), None))
+                .collect())
+        }
+        .boxed_local()
+    }
+
     fn delete_event(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
             self.events.lock().await.remove(&hash);
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn save_local_secret(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> LocalBoxFuture<'_, Result<bool, Self::Error>> {
+        async move { Ok(self.local_secrets.lock().await.insert(hash, data).is_none()) }
+            .boxed_local()
+    }
+
+    fn load_local_secrets(
+        &self,
+    ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+        async move {
+            let secrets = self.local_secrets.lock().await;
+            Ok(secrets
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect())
+        }
+        .boxed_local()
+    }
+
+    fn delete_local_secret(
+        &self,
+        hash: StorageHash,
+    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            self.local_secrets.lock().await.remove(&hash);
             Ok(())
         }
         .boxed_local()
@@ -234,10 +336,10 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+    ) -> BoxFuture<'_, Result<bool, Self::Error>> {
         async move {
-            self.events.lock().await.insert(hash, data);
-            Ok(())
+            let inserted = self.events.lock().await.insert(hash, data).is_none();
+            Ok(inserted)
         }
         .boxed()
     }
@@ -250,9 +352,54 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         .boxed()
     }
 
+    fn load_events_with_source(
+        &self,
+    ) -> BoxFuture<
+        '_,
+        Result<Vec<(StorageHash, Vec<u8>, Option<crate::peer_id::KeyhivePeerId>)>, Self::Error>,
+    > {
+        async move {
+            let events = self.events.lock().await;
+            Ok(events
+                .iter()
+                .map(|(hash, bytes)| (*hash, bytes.clone(), None))
+                .collect())
+        }
+        .boxed()
+    }
+
     fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
         async move {
             self.events.lock().await.remove(&hash);
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn save_local_secret(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> BoxFuture<'_, Result<bool, Self::Error>> {
+        async move { Ok(self.local_secrets.lock().await.insert(hash, data).is_none()) }.boxed()
+    }
+
+    fn load_local_secrets(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+        async move {
+            let secrets = self.local_secrets.lock().await;
+            Ok(secrets
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect())
+        }
+        .boxed()
+    }
+
+    fn delete_local_secret(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            self.local_secrets.lock().await.remove(&hash);
             Ok(())
         }
         .boxed()

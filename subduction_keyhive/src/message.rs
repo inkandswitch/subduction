@@ -20,6 +20,16 @@ pub type EventBytes = Vec<u8>;
 /// copy of every event.
 pub type AgentHashMap = BTreeMap<EventHash, Arc<[u8]>>;
 
+/// A unique identifier for one Keyhive synchronization exchange.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RequestId {
+    /// The peer that initiated the exchange.
+    pub requestor: KeyhivePeerId,
+    /// A nonce unique to that peer.
+    pub nonce: u64,
+}
+
 /// The keyhive sync protocol messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -34,6 +44,9 @@ pub enum Message {
 
         /// The peer ID of the target (responder).
         target_id: KeyhivePeerId,
+
+        /// The exchange identifier, echoed by every later message.
+        request_id: RequestId,
 
         /// Operation hashes that the initiator has for the target peer.
         ///
@@ -64,6 +77,9 @@ pub enum Message {
 
         /// The peer ID of the target (original initiator).
         target_id: KeyhivePeerId,
+
+        /// The exchange identifier from the request.
+        request_id: RequestId,
 
         /// Hashes of operations we want to request from the initiator.
         ///
@@ -102,6 +118,9 @@ pub enum Message {
         /// The peer ID of the target.
         target_id: KeyhivePeerId,
 
+        /// The exchange identifier from the request.
+        request_id: RequestId,
+
         /// The serialized operations being sent.
         #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
         ops: Vec<Arc<[u8]>>,
@@ -127,6 +146,9 @@ pub enum Message {
 
         /// The peer ID of the target (whose contact card we need).
         target_id: KeyhivePeerId,
+
+        /// The exchange identifier being bootstrapped.
+        request_id: RequestId,
     },
 
     /// Send a contact card that was requested.
@@ -139,6 +161,9 @@ pub enum Message {
 
         /// The peer ID of the target.
         target_id: KeyhivePeerId,
+
+        /// The exchange identifier being resumed.
+        request_id: RequestId,
     },
 
     /// Lightweight sync check.
@@ -154,6 +179,9 @@ pub enum Message {
 
         /// The peer ID of the target.
         target_id: KeyhivePeerId,
+
+        /// The exchange identifier.
+        request_id: RequestId,
 
         /// The sender's total operation count for this peer pair.
         sender_total: u64,
@@ -177,6 +205,9 @@ pub enum Message {
 
         /// The peer ID of the target.
         target_id: KeyhivePeerId,
+
+        /// The exchange identifier being confirmed.
+        request_id: RequestId,
 
         /// The confirmer's total operation count for this peer pair.
         confirmer_total: u64,
@@ -268,6 +299,13 @@ mod wire_format_tests {
         KeyhivePeerId::from_bytes([byte; 32])
     }
 
+    fn request_id(nonce: u64) -> RequestId {
+        RequestId {
+            requestor: peer(1),
+            nonce,
+        }
+    }
+
     fn assert_peer_id_uses_byte_string(payload: &ciborium::Value, key: &str) {
         let pid = field(payload, key);
         let pid_map = pid.as_map().expect("peer id map");
@@ -286,6 +324,7 @@ mod wire_format_tests {
         let msg = Message::SyncRequest {
             sender_id: peer(1),
             target_id: peer(2),
+            request_id: request_id(1),
             found: vec![[3u8; 32], [4u8; 32]],
             pending: vec![[5u8; 32]],
         };
@@ -306,6 +345,7 @@ mod wire_format_tests {
         let msg = Message::SyncResponse {
             sender_id: peer(1),
             target_id: peer(2),
+            request_id: request_id(2),
             requested: vec![[3u8; 32]],
             found: vec![vec![10, 11, 12].into(), vec![20, 21].into()],
             sync_responder_total: 5,
@@ -326,6 +366,7 @@ mod wire_format_tests {
         let msg = Message::SyncOps {
             sender_id: peer(1),
             target_id: peer(2),
+            request_id: request_id(3),
             ops: vec![vec![1, 2, 3].into(), vec![4, 5].into()],
             sync_responder_total: 1,
             sync_requester_total: 1,
@@ -343,6 +384,7 @@ mod wire_format_tests {
         let original = Message::SyncRequest {
             sender_id: peer(1),
             target_id: peer(2),
+            request_id: request_id(4),
             found: vec![[7u8; 32], [9u8; 32]],
             pending: vec![[11u8; 32]],
         };
@@ -359,6 +401,7 @@ mod wire_format_tests {
         let original = Message::SyncResponse {
             sender_id: peer(1),
             target_id: peer(2),
+            request_id: request_id(5),
             requested: vec![[7u8; 32]],
             found: vec![
                 vec![0xDE, 0xAD, 0xBE, 0xEF].into(),
@@ -380,6 +423,7 @@ mod wire_format_tests {
         let original = Message::SyncOps {
             sender_id: peer(1),
             target_id: peer(2),
+            request_id: request_id(6),
             ops: vec![
                 vec![1, 2, 3].into(),
                 vec![4, 5, 6, 7].into(),
@@ -401,6 +445,7 @@ mod wire_format_tests {
         let original = Message::SyncCheck {
             sender_id: peer(1),
             target_id: peer(2),
+            request_id: request_id(7),
             sender_total: 35,
             sender_syncpoint: 28,
             sender_digest: [

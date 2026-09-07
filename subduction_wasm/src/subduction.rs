@@ -1266,6 +1266,7 @@ impl WasmSubduction {
                 id.clone().into(),
                 subscribe,
                 timeout,
+                None,
             )
             .await
             .map_err(WasmIoError::from)?;

@@ -906,7 +906,7 @@ impl InflightGuard {
     /// Returns `None` when the peer is at its cap.
     fn admit(counter: &Arc<AtomicUsize>) -> Option<Self> {
         counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 (n < MAX_INFLIGHT_EPHEMERAL_SENDS_PER_PEER).then_some(n + 1)
             })
             .ok()
