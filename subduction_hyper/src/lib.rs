@@ -18,14 +18,20 @@
 //! ```
 //!
 //! The [`upgrade`] module is framework-neutral. With the `axum` feature, the
-//! [`axum::TungsteniteUpgrade`] extractor packages those steps into a drop-in
+//! `axum::TungsteniteUpgrade` extractor packages those steps into a drop-in
 //! replacement for `axum::extract::ws::WebSocketUpgrade`.
 //!
-//! Only HTTP/1.1 `Upgrade:` is supported; RFC 8441 (HTTP/2 extended `CONNECT`)
-//! is rejected.
+//! The result is an `async_tungstenite::WebSocketStream<HyperIo>`, which
+//! `subduction_websocket::websocket::WebSocket::new_with_keepalive` accepts
+//! directly. It is *not* a `TokioWebSocketServer` connection: that server's
+//! accepted type is fixed to plain TCP, so embedders own the listen / sender /
+//! keepalive task spawning and `Subduction::add_connection` themselves, as the
+//! CLI does in `subduction_cli/src/server.rs`.
+//!
+//! See [`upgrade`] for limitations (HTTP/1.1 only, no subprotocol negotiation,
+//! no `Origin` policy).
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(clippy::multiple_crate_versions)]
 
 #[cfg(feature = "axum")]
 #[cfg_attr(docsrs, doc(cfg(feature = "axum")))]

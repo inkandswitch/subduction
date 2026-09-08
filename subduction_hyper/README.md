@@ -7,7 +7,9 @@ Accept [Subduction](https://github.com/inkandswitch/subduction) WebSocket connec
 
 ## Why
 
-Framework WebSocket modules (`axum::extract::ws`, `warp::ws`, …) wrap their own copy of tungstenite and seal the stream. Nothing from them can reach `WebSocket::new_with_keepalive`. This crate goes one layer down: hyper exposes the raw post-`101` connection through `hyper::upgrade::OnUpgrade`, and that is all a WebSocket framer needs. One framer, no message conversion, and the existing keepalive / close-code / error-classification logic in `subduction_websocket` runs unchanged.
+Framework WebSocket modules (`axum::extract::ws`, `warp::ws`, …) wrap their own copy of tungstenite and seal the stream, so nothing from them can reach `WebSocket::new_with_keepalive`. The existing `hyper-tungstenite` crate has the same problem from the other side: it yields a `tokio_tungstenite::WebSocketStream`, and `subduction_websocket` is built on `async-tungstenite`.
+
+This crate goes one layer down. hyper exposes the raw post-`101` connection through `hyper::upgrade::OnUpgrade`, and that is all a WebSocket framer needs. One framer, no message conversion, and the keepalive / close-code / error-classification logic in `subduction_websocket` runs unchanged.
 
 ```
 HTTP request ─▶ upgrade::validate(parts)        ─▶ AcceptKey     (http types only)
@@ -25,7 +27,12 @@ HTTP request ─▶ upgrade::validate(parts)        ─▶ AcceptKey     (http t
 | rocket | Not needed: rocket's `IoHandler` yields raw I/O; use `WebSocketStream::from_raw_socket` directly |
 | actix-web | Not supported: `actix-ws` only exposes frames, never the connection |
 
-Only HTTP/1.1 `Upgrade:` is supported; RFC 8441 (HTTP/2 extended `CONNECT`) is rejected.
+## Limitations
+
+- HTTP/1.1 only. RFC 8441 (WebSocket over HTTP/2 extended `CONNECT`) is rejected with `400`.
+- No `Sec-WebSocket-Protocol` negotiation. Subduction clients do not offer a subprotocol; a client that does will fail its own handshake.
+- No `Origin` policy. Enforce it in middleware if browsers can reach the endpoint.
+- The result is a `WebSocketStream`, not a `TokioWebSocketServer` connection. That server's accepted type is fixed to plain TCP, so embedders spawn the listen / sender / keepalive tasks and call `Subduction::add_connection` themselves, as `subduction_cli/src/server.rs` does.
 
 ## axum
 
@@ -42,25 +49,33 @@ async fn ws(upgrade: TungsteniteUpgrade, State(app): State<App>) -> Response {
 }
 ```
 
+To control task spawning (e.g. a `TaskTracker` for graceful shutdown), use `upgrade.into_parts()` with `upgrade::upgrade` instead of `on_upgrade`.
+
 ## Raw hyper
 
-```rust
-use subduction_hyper::upgrade::{self, Rejection};
+A hyper service must return `Ok(response)` for a rejection. Returning `Err` makes hyper drop the connection without sending anything.
 
-async fn handle(mut req: Request<Incoming>) -> Result<Response<Empty<Bytes>>, Rejection> {
-    let key = upgrade::validate(&req)?;
+```rust
+use std::convert::Infallible;
+use subduction_hyper::upgrade;
+
+async fn handle(mut req: Request<Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
+    let key = match upgrade::validate(&req) {
+        Ok(key) => key,
+        Err(rejection) => return Ok(rejection.response().map(|s| Full::new(Bytes::from(s)))),
+    };
     let on_upgrade = hyper::upgrade::on(&mut req);
 
     upgrade::spawn_upgrade(on_upgrade, WebSocketConfig::default(), |ws| async move {
         // same as above
     });
 
-    Ok(upgrade::accept_response(&key).map(|()| Empty::new()))
+    Ok(upgrade::accept_response(&key).map(|()| Full::new(Bytes::new())))
 }
 ```
 
-Remember `.with_upgrades()` on the hyper connection builder, or `OnUpgrade` is never populated.
+Serve the connection with upgrades enabled: `http1::Builder::serve_connection(..).with_upgrades()`, or `auto::Builder::serve_connection_with_upgrades(..)` from `hyper-util`. Otherwise `OnUpgrade` is never populated.
 
 ## License
 
-See the workspace [`LICENSE`](../LICENSE) file.
+Dual-licensed under [MIT](../LICENSE-MIT) or [Apache-2.0](../LICENSE-APACHE), at your option.

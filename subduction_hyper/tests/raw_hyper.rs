@@ -2,7 +2,6 @@
 //! no axum anywhere. This is the path poem / salvo / tower users take.
 
 #![allow(clippy::expect_used, reason = "test-only assertions")]
-#![allow(clippy::unwrap_used, reason = "test-only assertions")]
 
 use std::{convert::Infallible, net::SocketAddr};
 
@@ -93,4 +92,41 @@ async fn upgrade_from_bare_hyper_service() {
         .expect("server send");
     let got = client.next().await.expect("client recv").expect("frame");
     assert_eq!(got, Message::Binary(b"hyper".as_slice().into()));
+}
+
+/// A rejection travels back through the bare service as a real HTTP response
+/// (the service maps it to `Ok(response)`; returning `Err` would make hyper
+/// drop the connection with nothing on the wire).
+#[tokio::test]
+async fn rejection_is_an_http_response_not_a_dropped_connection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (addr, _accepted) = serve().await;
+    let mut tcp = tokio::net::TcpStream::connect(addr).await.expect("connect");
+
+    // `Connection: close` so hyper ends the connection after the response and
+    // `read_to_end` terminates. (A client half-close would instead make hyper
+    // drop the connection: `http1::Builder::half_close` defaults to `false`.)
+    tcp.write_all(
+        format!(
+            "POST /ws HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .expect("write");
+
+    let mut raw = Vec::new();
+    tcp.read_to_end(&mut raw).await.expect("read");
+    let text = std::str::from_utf8(&raw).expect("utf8");
+
+    assert!(
+        text.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"),
+        "got {text:?}"
+    );
+    assert!(
+        text.contains("content-type: text/plain; charset=utf-8"),
+        "got {text:?}"
+    );
+    assert!(text.ends_with("request method must be GET"), "got {text:?}");
 }

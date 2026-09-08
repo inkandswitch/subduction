@@ -22,6 +22,11 @@
 //!
 //! Extracting removes hyper's [`OnUpgrade`] from the request, so this cannot be
 //! combined with `axum::extract::ws::WebSocketUpgrade` on the same request.
+//! For request headers (e.g. `X-Forwarded-For`) or the peer address, add
+//! axum's `HeaderMap` / `ConnectInfo` extractors alongside this one.
+//!
+//! See the [`crate::upgrade`] module docs for limitations
+//! (HTTP/1.1 only, no subprotocol negotiation, no `Origin` policy).
 
 use core::future::Future;
 
@@ -29,7 +34,7 @@ use async_tungstenite::WebSocketStream;
 use axum::{
     body::Body,
     extract::FromRequestParts,
-    http::{request::Parts, HeaderMap},
+    http::request::Parts,
     response::{IntoResponse, Response},
 };
 use hyper::upgrade::OnUpgrade;
@@ -45,29 +50,39 @@ use crate::upgrade::{self, AcceptKey, HyperIo, Rejection};
 pub struct TungsteniteUpgrade {
     key: AcceptKey,
     on_upgrade: OnUpgrade,
-    headers: HeaderMap,
 }
 
 impl TungsteniteUpgrade {
-    /// The upgrade request's headers, e.g. for reading `X-Forwarded-For`.
-    #[must_use]
-    pub const fn headers(&self) -> &HeaderMap {
-        &self.headers
-    }
-
     /// Finish the upgrade.
     ///
     /// Returns the `101 Switching Protocols` response, which the handler must
     /// return for the upgrade to complete. Once hyper has written it, the
     /// connection is wrapped with `config` and passed to `f` on a spawned task.
+    /// A client that vanishes before then is logged and `f` never runs.
+    ///
+    /// To control spawning (e.g. a `TaskTracker`), use [`into_parts`](Self::into_parts)
+    /// with [`upgrade::upgrade`] instead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a tokio runtime.
     #[must_use = "this response must be returned from the handler"]
     pub fn on_upgrade<F, Fut>(self, config: WebSocketConfig, f: F) -> Response
     where
         F: FnOnce(WebSocketStream<HyperIo>) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        upgrade::spawn_upgrade(self.on_upgrade, config, f);
+        drop(upgrade::spawn_upgrade(self.on_upgrade, config, f));
         upgrade::accept_response(&self.key).map(|()| Body::empty())
+    }
+
+    /// Take the pieces apart to drive the upgrade yourself.
+    ///
+    /// Return `accept_response(&key)` from the handler and pass `on_upgrade`
+    /// to [`upgrade::upgrade`] on a task of your choosing.
+    #[must_use]
+    pub fn into_parts(self) -> (AcceptKey, OnUpgrade) {
+        (self.key, self.on_upgrade)
     }
 }
 
@@ -82,11 +97,7 @@ impl<S: Send + Sync> FromRequestParts<S> for TungsteniteUpgrade {
             .remove::<OnUpgrade>()
             .ok_or(Rejection::NotUpgradable)?;
 
-        Ok(Self {
-            key,
-            on_upgrade,
-            headers: parts.headers.clone(),
-        })
+        Ok(Self { key, on_upgrade })
     }
 }
 

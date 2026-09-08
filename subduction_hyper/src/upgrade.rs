@@ -10,19 +10,28 @@
 //!
 //! The `OnUpgrade` future only resolves *after* the `101` has been written, so
 //! step 3 must run on a separate task from the handler that returns step 2.
-//! See [`spawn_upgrade`] for the common case.
+//! [`upgrade`] is the awaitable primitive; [`spawn_upgrade`] wraps it in
+//! `tokio::spawn` for the common case.
 //!
 //! # Example (raw hyper)
 //!
+//! A hyper service must return `Ok(response)` for a rejection — returning
+//! `Err` makes hyper drop the connection without sending anything.
+//!
 //! ```no_run
+//! use std::convert::Infallible;
+//!
 //! use http::{Request, Response};
-//! use http_body_util::{Empty, Full};
+//! use http_body_util::Full;
 //! use hyper::body::{Bytes, Incoming};
-//! use subduction_hyper::upgrade::{self, Rejection};
+//! use subduction_hyper::upgrade;
 //! use tungstenite::protocol::WebSocketConfig;
 //!
-//! async fn handle(mut req: Request<Incoming>) -> Result<Response<Empty<Bytes>>, Rejection> {
-//!     let key = upgrade::validate(&req)?;
+//! async fn handle(mut req: Request<Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
+//!     let key = match upgrade::validate(&req) {
+//!         Ok(key) => key,
+//!         Err(rejection) => return Ok(rejection.response().map(|s| Full::new(Bytes::from(s)))),
+//!     };
 //!     let on_upgrade = hyper::upgrade::on(&mut req);
 //!
 //!     upgrade::spawn_upgrade(on_upgrade, WebSocketConfig::default(), |ws| async move {
@@ -31,9 +40,24 @@
 //!         let _ = ws;
 //!     });
 //!
-//!     Ok(upgrade::accept_response(&key).map(|()| Empty::new()))
+//!     Ok(upgrade::accept_response(&key).map(|()| Full::new(Bytes::new())))
 //! }
 //! ```
+//!
+//! The hyper connection must be served with upgrades enabled:
+//! `http1::Builder::serve_connection(..).with_upgrades()`, or
+//! `auto::Builder::serve_connection_with_upgrades(..)` from `hyper-util`.
+//!
+//! # Limitations
+//!
+//! - HTTP/1.1 only. RFC 8441 (WebSocket over HTTP/2 extended `CONNECT`) is
+//!   rejected with [`Rejection::HttpVersion`].
+//! - No `Sec-WebSocket-Protocol` negotiation. Subduction clients do not offer a
+//!   subprotocol; a client that does will fail its own handshake when the `101`
+//!   omits the header.
+//! - No `Origin` policy. Enforce it in middleware if browsers can reach the
+//!   endpoint (the Subduction handshake authenticates peers, but does not stop a
+//!   hostile page from opening a connection).
 
 use core::future::Future;
 
@@ -70,7 +94,9 @@ pub struct AcceptKey(HeaderValue);
 /// HTTP version, method, `Connection`, `Upgrade`, `Sec-WebSocket-Version`,
 /// `Sec-WebSocket-Key`.
 pub fn validate<R: RequestHead + ?Sized>(req: &R) -> Result<AcceptKey, Rejection> {
-    if req.version() > Version::HTTP_11 {
+    // Exactly 1.1: RFC 6455 §4.1 requires at least 1.1, and hyper only
+    // populates `OnUpgrade` for 1.1, so a 1.0 request could never complete.
+    if req.version() != Version::HTTP_11 {
         return Err(Rejection::HttpVersion);
     }
 
@@ -84,7 +110,7 @@ pub fn validate<R: RequestHead + ?Sized>(req: &R) -> Result<AcceptKey, Rejection
         return Err(Rejection::ConnectionNotUpgrade);
     }
 
-    if !header_eq(headers, header::UPGRADE, "websocket") {
+    if !header_contains_token(headers, header::UPGRADE, "websocket") {
         return Err(Rejection::UpgradeNotWebSocket);
     }
 
@@ -96,10 +122,10 @@ pub fn validate<R: RequestHead + ?Sized>(req: &R) -> Result<AcceptKey, Rejection
         .get(header::SEC_WEBSOCKET_KEY)
         .ok_or(Rejection::MissingKey)?;
 
-    let accept = derive_accept_key(key.as_bytes());
-    HeaderValue::from_str(&accept)
-        .map(AcceptKey)
-        .map_err(|_| Rejection::MissingKey)
+    let accept = HeaderValue::from_str(&derive_accept_key(key.as_bytes()))
+        .unwrap_or_else(|_| unreachable!("base64 of a SHA-1 digest is visible ASCII"));
+
+    Ok(AcceptKey(accept))
 }
 
 /// The `101 Switching Protocols` response for a validated upgrade.
@@ -132,23 +158,49 @@ pub async fn from_upgraded(
     WebSocketStream::from_raw_socket(io, Role::Server, Some(config)).await
 }
 
-/// Spawn a task that waits for `on_upgrade`, wraps the connection with
-/// [`from_upgraded`], and runs `f` on the result.
+/// Wait for hyper to hand over the connection, then wrap it as a WebSocket.
 ///
-/// Call this *before* returning the `101`; the task blocks until hyper has
-/// written it. If hyper fails to hand over the connection (client vanished
-/// between request and response), the failure is logged and `f` never runs.
-pub fn spawn_upgrade<F, Fut>(on_upgrade: OnUpgrade, config: WebSocketConfig, f: F)
+/// This only resolves after the `101` has been written, so it must not be
+/// awaited inside the handler that returns that response — drive it from a
+/// separate task. Use this rather than [`spawn_upgrade`] when you want to
+/// choose the spawner (e.g. a `TaskTracker` for graceful shutdown).
+///
+/// # Errors
+///
+/// Returns hyper's error if the connection went away before the upgrade
+/// completed (typically the client disconnected between request and `101`).
+pub async fn upgrade(
+    on_upgrade: OnUpgrade,
+    config: WebSocketConfig,
+) -> Result<WebSocketStream<HyperIo>, hyper::Error> {
+    let upgraded = on_upgrade.await?;
+    Ok(from_upgraded(upgraded, config).await)
+}
+
+/// [`upgrade`] on a `tokio::spawn`ed task, running `f` on success.
+///
+/// Call this *before* returning the `101`. A client that vanishes before the
+/// upgrade completes is logged at `debug` and `f` never runs. The returned
+/// handle can be awaited or aborted; dropping it detaches the task.
+///
+/// # Panics
+///
+/// Panics if called outside a tokio runtime.
+pub fn spawn_upgrade<F, Fut>(
+    on_upgrade: OnUpgrade,
+    config: WebSocketConfig,
+    f: F,
+) -> tokio::task::JoinHandle<()>
 where
     F: FnOnce(WebSocketStream<HyperIo>) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(async move {
-        match on_upgrade.await {
-            Ok(upgraded) => f(from_upgraded(upgraded, config).await).await,
-            Err(e) => tracing::warn!(error = %e, "WebSocket upgrade failed after 101"),
+        match upgrade(on_upgrade, config).await {
+            Ok(ws) => f(ws).await,
+            Err(e) => tracing::debug!(error = %e, "client left before WebSocket upgrade completed"),
         }
-    });
+    })
 }
 
 /// Why a request could not be upgraded to a WebSocket.
@@ -158,7 +210,7 @@ pub enum Rejection {
     #[error("`Connection` header must include `upgrade`")]
     ConnectionNotUpgrade,
 
-    /// Only HTTP/1.x `Upgrade:` is supported; RFC 8441 (HTTP/2) is not.
+    /// Not HTTP/1.1. HTTP/1.0 cannot upgrade; RFC 8441 (HTTP/2) is unsupported.
     #[error("WebSocket upgrade requires HTTP/1.1")]
     HttpVersion,
 
@@ -166,16 +218,18 @@ pub enum Rejection {
     #[error("request method must be GET")]
     MethodNotGet,
 
-    /// `Sec-WebSocket-Key` header absent or malformed.
-    #[error("`Sec-WebSocket-Key` header missing or invalid")]
+    /// `Sec-WebSocket-Key` header absent.
+    #[error("`Sec-WebSocket-Key` header missing")]
     MissingKey,
 
-    /// hyper did not mark the connection as upgradable.
+    /// hyper did not mark the connection as upgradable. On a validated
+    /// HTTP/1.1 request this means the server was not built with upgrades
+    /// enabled (see the module docs), hence `500` rather than a client error.
     #[error("connection is not upgradable")]
     NotUpgradable,
 
-    /// `Upgrade` header is not `websocket`.
-    #[error("`Upgrade` header must be `websocket`")]
+    /// `Upgrade` header does not list `websocket`.
+    #[error("`Upgrade` header must include `websocket`")]
     UpgradeNotWebSocket,
 
     /// `Sec-WebSocket-Version` is not `13`.
@@ -206,6 +260,10 @@ impl Rejection {
     pub fn response(self) -> Response<String> {
         let mut response = Response::new(self.to_string());
         *response.status_mut() = self.status();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        );
 
         if self == Self::Version {
             response.headers_mut().insert(
@@ -265,12 +323,16 @@ fn header_eq(headers: &HeaderMap, name: HeaderName, value: &str) -> bool {
         .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(value.as_bytes()))
 }
 
-/// `Connection` is a comma-separated token list (e.g. `keep-alive, Upgrade`).
+/// `Connection` and `Upgrade` are comma-separated token lists that may also
+/// be split across repeated header lines (RFC 7230 §3.2.2), e.g.
+/// `Connection: keep-alive, Upgrade` or two separate `Connection:` lines.
 fn header_contains_token(headers: &HeaderMap, name: HeaderName, token: &str) -> bool {
     headers
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case(token)))
+        .get_all(name)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .any(|t| t.trim().eq_ignore_ascii_case(token))
 }
 
 #[cfg(test)]
@@ -335,6 +397,35 @@ mod tests {
         assert_eq!(validate(&req).err(), Some(Rejection::HttpVersion));
     }
 
+    /// hyper never populates `OnUpgrade` for HTTP/1.0, so accepting it here
+    /// would surface as a misleading `NotUpgradable` (500) downstream.
+    #[test]
+    fn rejects_http10() {
+        let req = with(|r| *r.version_mut() = Version::HTTP_10);
+        assert_eq!(validate(&req).err(), Some(Rejection::HttpVersion));
+    }
+
+    /// RFC 7230 §3.2.2: list headers may be split across repeated lines.
+    #[test]
+    fn accepts_connection_tokens_split_across_header_lines() {
+        let req = with(|r| {
+            let headers = r.headers_mut();
+            headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+            headers.append(header::CONNECTION, HeaderValue::from_static("Upgrade"));
+        });
+        assert!(validate(&req).is_ok());
+    }
+
+    /// `Upgrade` is a token list too (RFC 6455 §4.1: "MUST include").
+    #[test]
+    fn accepts_upgrade_token_list_containing_websocket() {
+        let req = with(|r| {
+            r.headers_mut()
+                .insert(header::UPGRADE, HeaderValue::from_static("h2c, websocket"));
+        });
+        assert!(validate(&req).is_ok());
+    }
+
     #[test]
     fn rejects_missing_connection_upgrade() {
         let req = with(|r| {
@@ -378,6 +469,81 @@ mod tests {
             resp.headers().get(header::SEC_WEBSOCKET_VERSION),
             Some(&HeaderValue::from_static("13"))
         );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/plain; charset=utf-8"))
+        );
+    }
+
+    /// Token matching is invariant under case, surrounding whitespace, list
+    /// position, and splitting across header lines; and a token that merely
+    /// *contains* the target (`upgrade-insecure`) never matches.
+    #[test]
+    #[allow(clippy::indexing_slicing, reason = "indices are reduced modulo len")]
+    fn token_matching_properties() {
+        const DECOYS: &[&str] = &["keep-alive", "close", "upgrade-insecure", "h2c", "x"];
+        const PADS: &[&str] = &["", " ", "\t", "  "];
+
+        // (decoy indices before, decoy indices after, case mask, split lines?, pad index)
+        type Case = (Vec<u8>, Vec<u8>, u8, bool, u8);
+
+        bolero::check!()
+            .with_type::<Case>()
+            .for_each(|(before, after, mask, split, pad_ix)| {
+                let decoy = |i: &u8| DECOYS[usize::from(*i) % DECOYS.len()].to_owned();
+                let pad = PADS[usize::from(*pad_ix) % PADS.len()];
+                let target: String = "upgrade"
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        if (mask >> (i % 8)) & 1 == 1 {
+                            c.to_ascii_uppercase()
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
+
+                let push = |headers: &mut HeaderMap, tokens: &[String]| {
+                    if tokens.is_empty() {
+                        return;
+                    }
+                    let line = tokens.join(&format!(",{pad}"));
+                    headers.append(
+                        header::CONNECTION,
+                        HeaderValue::from_str(&line).expect("tokens are ASCII"),
+                    );
+                };
+
+                let befores: Vec<String> = before.iter().take(3).map(decoy).collect();
+                let afters: Vec<String> = after.iter().take(3).map(decoy).collect();
+                let padded = vec![format!("{pad}{target}{pad}")];
+
+                // Decoys alone never match.
+                let mut headers = HeaderMap::new();
+                push(&mut headers, &[befores.clone(), afters.clone()].concat());
+                assert!(!header_contains_token(
+                    &headers,
+                    header::CONNECTION,
+                    "upgrade"
+                ));
+
+                // The target anywhere, in any case, padded, possibly on its own
+                // line, always matches.
+                headers.clear();
+                if *split {
+                    push(&mut headers, &befores);
+                    push(&mut headers, &padded);
+                    push(&mut headers, &afters);
+                } else {
+                    push(&mut headers, &[befores, padded, afters].concat());
+                }
+                assert!(header_contains_token(
+                    &headers,
+                    header::CONNECTION,
+                    "upgrade"
+                ));
+            });
     }
 
     #[test]

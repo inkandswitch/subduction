@@ -3,12 +3,15 @@
 //! driven through the real Subduction handshake and [`WebSocket`] transport.
 
 #![allow(clippy::expect_used, reason = "test-only assertions")]
-#![allow(clippy::unwrap_used, reason = "test-only assertions")]
-#![allow(clippy::panic, reason = "an intentional assertion failure in a test")]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "hand-built frame with a 5-byte payload"
+)]
 
 use std::{net::SocketAddr, time::Duration};
 
 use axum::{
+    body::Body,
     extract::{Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
@@ -29,6 +32,7 @@ use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_hyper::{axum::TungsteniteUpgrade, upgrade::HyperIo};
 use subduction_websocket::{handshake::WebSocketHandshake, websocket::WebSocket};
 use tokio::{net::TcpListener, sync::mpsc};
+use tower::ServiceExt as _;
 use tungstenite::{error::CapacityError, protocol::WebSocketConfig, Message};
 
 const MAX_DRIFT: Duration = Duration::from_secs(60);
@@ -47,11 +51,13 @@ fn peer_id(seed: u8) -> PeerId {
     PeerId::from(signer(seed).verifying_key())
 }
 
+type Accepted = mpsc::UnboundedSender<async_tungstenite::WebSocketStream<HyperIo>>;
+
 #[derive(Clone)]
 struct AppState {
     config: WebSocketConfig,
     /// Every accepted stream is sent here so the test can drive the server side.
-    accepted: mpsc::UnboundedSender<async_tungstenite::WebSocketStream<HyperIo>>,
+    accepted: Accepted,
 }
 
 async fn ws_route(upgrade: TungsteniteUpgrade, State(state): State<AppState>) -> Response {
@@ -68,7 +74,16 @@ async fn gate(req: Request, next: Next) -> Result<Response, StatusCode> {
     }
 }
 
-/// Start an axum server with `/ws` behind the gate middleware.
+/// `/ws` and `/health`, both behind the gate middleware.
+fn router(config: WebSocketConfig, accepted: Accepted) -> Router {
+    Router::new()
+        .route("/ws", get(ws_route))
+        .route("/health", get(|| async { "ok" }))
+        .layer(middleware::from_fn(gate))
+        .with_state(AppState { config, accepted })
+}
+
+/// Serve [`router`] on a loopback port.
 async fn serve(
     config: WebSocketConfig,
 ) -> (
@@ -76,12 +91,7 @@ async fn serve(
     mpsc::UnboundedReceiver<async_tungstenite::WebSocketStream<HyperIo>>,
 ) {
     let (accepted, rx) = mpsc::unbounded_channel();
-
-    let app = Router::new()
-        .route("/ws", get(ws_route))
-        .route("/health", get(|| async { "ok" }))
-        .layer(middleware::from_fn(gate))
-        .with_state(AppState { config, accepted });
+    let app = router(config, accepted);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr");
@@ -225,93 +235,152 @@ async fn config_caps_are_applied() {
     );
 }
 
-/// Ordinary HTTP requests to the route are rejected with a status, not hung.
+/// Ordinary HTTP requests are rejected with a status (never hung), the
+/// rejection carries the RFC-required advisory header, and unrelated routes
+/// are untouched. Driven through `tower::ServiceExt::oneshot`, so no TCP.
 #[tokio::test]
 async fn plain_http_requests_are_rejected() {
-    let (addr, _accepted) = serve(WebSocketConfig::default()).await;
-    let client = reqwest_lite::Client::new(addr);
+    let (accepted, _rx) = mpsc::unbounded_channel();
+    let app = router(WebSocketConfig::default(), accepted);
+
+    let get = |path: &str, headers: &[(&str, &str)]| {
+        let mut builder = axum::http::Request::get(path);
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        builder.body(Body::empty()).expect("valid request")
+    };
 
     // Gate middleware runs first.
-    assert_eq!(client.get("/ws", &[]).await, StatusCode::UNAUTHORIZED);
+    let resp = app
+        .clone()
+        .oneshot(get("/ws", &[]))
+        .await
+        .expect("infallible");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
     // Past the gate, a non-upgrade GET is a bad request…
+    let resp = app
+        .clone()
+        .oneshot(get("/ws", &[(GATE_HEADER, "1")]))
+        .await
+        .expect("infallible");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // …an unsupported version is 426 and advertises what we speak…
+    let resp = app
+        .clone()
+        .oneshot(get(
+            "/ws",
+            &[
+                (GATE_HEADER, "1"),
+                (header::CONNECTION.as_str(), "upgrade"),
+                (header::UPGRADE.as_str(), "websocket"),
+                (header::SEC_WEBSOCKET_VERSION.as_str(), "8"),
+            ],
+        ))
+        .await
+        .expect("infallible");
+    assert_eq!(resp.status(), StatusCode::UPGRADE_REQUIRED);
     assert_eq!(
-        client.get("/ws", &[(GATE_HEADER, "1")]).await,
-        StatusCode::BAD_REQUEST
+        resp.headers().get(header::SEC_WEBSOCKET_VERSION),
+        Some(&HeaderValue::from_static("13"))
     );
 
-    // …an unsupported version is 426…
-    assert_eq!(
-        client
-            .get(
-                "/ws",
-                &[
-                    (GATE_HEADER, "1"),
-                    (header::CONNECTION.as_str(), "upgrade"),
-                    (header::UPGRADE.as_str(), "websocket"),
-                    (header::SEC_WEBSOCKET_VERSION.as_str(), "8"),
-                ],
-            )
-            .await,
-        StatusCode::UPGRADE_REQUIRED
-    );
+    // …a fully-formed upgrade with no hyper connection behind it is a server
+    // error, not a client one…
+    let resp = app
+        .clone()
+        .oneshot(get(
+            "/ws",
+            &[
+                (GATE_HEADER, "1"),
+                (header::CONNECTION.as_str(), "upgrade"),
+                (header::UPGRADE.as_str(), "websocket"),
+                (header::SEC_WEBSOCKET_VERSION.as_str(), "13"),
+                (
+                    header::SEC_WEBSOCKET_KEY.as_str(),
+                    "dGhlIHNhbXBsZSBub25jZQ==",
+                ),
+            ],
+        ))
+        .await
+        .expect("infallible");
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     // …and unrelated routes are untouched.
-    assert_eq!(
-        client.get("/health", &[(GATE_HEADER, "1")]).await,
-        StatusCode::OK
+    let resp = app
+        .oneshot(get("/health", &[(GATE_HEADER, "1")]))
+        .await
+        .expect("infallible");
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// An HTTP/1.0 upgrade attempt over a real socket is a `400`, not a `500`:
+/// hyper never arms `OnUpgrade` for 1.0, so the version check must catch it
+/// before the extension lookup does.
+#[tokio::test]
+async fn http10_upgrade_is_a_client_error_on_the_wire() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (addr, _accepted) = serve(WebSocketConfig::default()).await;
+    let mut tcp = tokio::net::TcpStream::connect(addr).await.expect("connect");
+
+    let req = format!(
+        "GET /ws HTTP/1.0\r\nHost: {addr}\r\n{GATE_HEADER}: 1\r\n\
+         Connection: Upgrade\r\nUpgrade: websocket\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    );
+    tcp.write_all(req.as_bytes()).await.expect("write");
+
+    let mut head = Vec::new();
+    tcp.read_to_end(&mut head).await.expect("read");
+    let status_line = std::str::from_utf8(&head)
+        .expect("utf8")
+        .lines()
+        .next()
+        .expect("status line");
+    assert!(
+        status_line.ends_with("400 Bad Request"),
+        "got {status_line:?}"
     );
 }
 
-/// Minimal HTTP/1.1 GET over raw TCP so the test doesn't need an HTTP client
-/// dependency. Returns only the status code.
-mod reqwest_lite {
-    use std::{fmt::Write as _, net::SocketAddr};
+/// A client that pipelines its first frame into the same TCP segment as the
+/// upgrade request must not lose it: hyper's leftover read buffer is replayed
+/// ahead of the socket when the connection is handed over.
+#[tokio::test]
+async fn first_frame_pipelined_with_request_is_not_lost() {
+    use tokio::io::AsyncWriteExt;
 
-    use axum::http::StatusCode;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpStream,
-    };
+    let (addr, mut accepted) = serve(WebSocketConfig::default()).await;
+    let mut tcp = tokio::net::TcpStream::connect(addr).await.expect("connect");
 
-    pub(crate) struct Client {
-        addr: SocketAddr,
-    }
+    let req = format!(
+        "GET /ws HTTP/1.1\r\nHost: {addr}\r\n{GATE_HEADER}: 1\r\n\
+         Connection: Upgrade\r\nUpgrade: websocket\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    );
 
-    impl Client {
-        pub(crate) const fn new(addr: SocketAddr) -> Self {
-            Self { addr }
-        }
+    // A masked binary frame (clients must mask) carrying `b"early"`.
+    // FIN + opcode 0x2; MASK bit + len 5; mask key; payload XOR key.
+    let mask = [0x11, 0x22, 0x33, 0x44];
+    let payload = b"early";
+    let mut frame = vec![0x82, 0x80 | payload.len() as u8];
+    frame.extend_from_slice(&mask);
+    frame.extend(payload.iter().zip(mask.iter().cycle()).map(|(b, m)| b ^ m));
 
-        pub(crate) async fn get(&self, path: &str, headers: &[(&str, &str)]) -> StatusCode {
-            let mut tcp = TcpStream::connect(self.addr).await.expect("connect");
+    let mut segment = req.into_bytes();
+    segment.extend_from_slice(&frame);
+    tcp.write_all(&segment)
+        .await
+        .expect("write request + frame together");
 
-            let mut req = format!("GET {path} HTTP/1.1\r\nHost: {}\r\n", self.addr);
-            for (k, v) in headers {
-                write!(req, "{k}: {v}\r\n").expect("String is infallible");
-            }
-            req.push_str("\r\n");
-            tcp.write_all(req.as_bytes()).await.expect("write");
-
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 1024];
-            loop {
-                let n = tcp.read(&mut chunk).await.expect("read");
-                if n == 0 {
-                    break;
-                }
-                buf.extend_from_slice(chunk.get(..n).expect("n <= chunk.len()"));
-                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-
-            let head = std::str::from_utf8(&buf).expect("utf8 status line");
-            let code = head
-                .split_whitespace()
-                .nth(1)
-                .expect("status code in status line");
-            StatusCode::from_bytes(code.as_bytes()).expect("valid status")
-        }
-    }
+    let mut server = accepted.recv().await.expect("server side of the upgrade");
+    let got = tokio::time::timeout(Duration::from_secs(5), server.next())
+        .await
+        .expect("timely")
+        .expect("server recv")
+        .expect("frame");
+    assert_eq!(got, Message::Binary(payload.as_slice().into()));
 }

@@ -65,7 +65,7 @@ graph TD
     subduction_core --> subduction_http_longpoll
     subduction_core --> subduction_iroh
     subduction_core --> subduction_websocket
-    subduction_websocket --> subduction_hyper
+    subduction_hyper -.->|WebSocketStream| subduction_websocket
     subduction_core --> subduction_keyhive_policy
 
     subduction_core --> sedimentree_wasm

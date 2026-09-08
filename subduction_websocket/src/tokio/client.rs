@@ -3,20 +3,20 @@
 use alloc::vec::Vec;
 
 use crate::{
+    DEFAULT_MAX_MESSAGE_SIZE,
     error::{DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     sleep::TokioSleeper,
     websocket::{KeepAlive, KeepAliveTask, ListenerTask, SenderTask, WebSocket},
-    DEFAULT_MAX_MESSAGE_SIZE,
 };
-use async_tungstenite::tokio::{connect_async_with_config, ConnectStream};
+use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
 use future_form::{FutureForm, Sendable};
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 
 use subduction_core::{
     authenticated::Authenticated,
-    connection::{message::SyncMessage, Connection, Reconnect},
-    handshake::{self, audience::Audience, AuthenticateError},
+    connection::{Connection, Reconnect, message::SyncMessage},
+    handshake::{self, AuthenticateError, audience::Audience},
     timestamp::TimestampSeconds,
     transport::Transport,
 };
