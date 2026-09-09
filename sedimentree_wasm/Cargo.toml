@@ -1,6 +1,6 @@
 [package]
 name = "sedimentree_wasm"
-version = "0.17.0"
+version = "0.17.1"
 description = "Wasm/JavaScript bindings for Sedimentree (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["sedimentree", "wasm"]
@@ -59,7 +59,7 @@ idb = [
   "web-sys/IdbRequest",
   "web-sys/IdbTransaction",
   "web-sys/IdbTransactionMode",
-  "web-sys/IdbVersionChangeEvent"
+  "web-sys/IdbVersionChangeEvent",
 ]
 std = [
   "async-lock/std",
@@ -70,11 +70,20 @@ std = [
   "subduction_crypto/std",
   "thiserror/std",
   "wasm-bindgen/std",
-  "wasm-bindgen-futures/std"
+  "wasm-bindgen-futures/std",
 ]
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-multivalue", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-reference-types", "--enable-sign-ext", "--enable-simd"]
+wasm-opt = [
+  "-Oz",
+  "--enable-bulk-memory",
+  "--enable-multivalue",
+  "--enable-mutable-globals",
+  "--enable-nontrapping-float-to-int",
+  "--enable-reference-types",
+  "--enable-sign-ext",
+  "--enable-simd",
+]
 
 [lints]
 workspace = true
