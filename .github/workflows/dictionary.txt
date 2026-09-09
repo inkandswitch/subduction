@@ -195,6 +195,7 @@ WebSocket
 Webpack
 XChaCha
 Zelenka
+actix
 acyclic
 al
 assignees
@@ -208,6 +209,7 @@ authz
 auto-init
 automerge
 automerge-repo
+axum
 backend
 backend's
 backoff
@@ -266,6 +268,7 @@ faq
 fetchable
 filesystem
 flamegraphs
+framer
 fs
 fsync
 fsynced
@@ -280,6 +283,7 @@ html
 http
 http-server
 https
+hyper
 iai-callgrind
 img
 impl
@@ -295,6 +299,7 @@ iroh's
 jitter
 journaling
 js
+keepalive
 keyhive
 launchd
 leb
@@ -339,6 +344,7 @@ petnames
 plaintext
 pluggable
 pnpm
+poem
 pprof
 pre-allocation
 pre-alpha
@@ -370,6 +376,7 @@ responder's
 resumable
 revoker
 runtimes
+salvo
 sedimentree
 sedimentree's
 sedimentrees
@@ -389,6 +396,7 @@ subduction
 subgraph
 submodules
 subpath
+subprotocol
 subsumptions
 subtype
 subtyping
@@ -403,12 +411,14 @@ tombstoned
 topologies
 tradeoff
 tradeoffs
+tungstenite
 unforgeable
 unlinked
 unrepresentable
 unresolvable
 unreviewed
 unwieldly
+upgradable
 varint
 varints
 varu
