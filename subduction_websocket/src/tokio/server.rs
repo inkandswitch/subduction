@@ -64,7 +64,7 @@ pub struct TokioWebSocketServer<
     address: SocketAddr,
     cancellation_token: CancellationToken,
     /// Set by [`Self::stop`] (or the first supervisor to fire) before any
-    /// teardown. `stop()` runs `shutdown()` then `cancel()` with a window
+    /// teardown. `stop()` runs `request_stop()` then `cancel()` with a window
     /// between them in which a supervised future can observe an uncancelled
     /// token; gating supervision on a swap of this flag prevents a spurious
     /// ERROR on graceful stop and a double report on failure.
@@ -516,13 +516,13 @@ where
         // Spawned directly (no `select!`-against-token wrapper): the
         // token race always loses to `cancel()`, dropping `manager_fut`
         // before its `connection_loop`-abort cleanup can run.
-        // `stop_and_drain` instead calls `subduction.shutdown()` first
+        // `stop_and_drain` instead calls `subduction.request_stop()` first
         // so both futures exit via their channel-close paths.
         //
         // Both are supervised: a server that outlives either future keeps
         // completing handshakes it can never service. An exit outside an
         // orderly shutdown stops the whole server, in `stop()`'s order
-        // (`shutdown()` before `cancel()`). The `stopping` swap elects one
+        // (`request_stop()` before `cancel()`). The `stopping` swap elects one
         // reporter; see the field docs.
         let manager_token = server.cancellation_token.clone();
         let manager_subduction = server.subduction.clone();
@@ -537,7 +537,7 @@ where
                         "Subduction connection manager exited outside shutdown; stopping server"
                     );
                 }
-                manager_subduction.shutdown();
+                manager_subduction.request_stop();
                 manager_token.cancel();
             }
         });
@@ -550,7 +550,7 @@ where
                 if !listener_token.is_cancelled() {
                     tracing::error!("Subduction listener exited outside shutdown; stopping server");
                 }
-                listener_subduction.shutdown();
+                listener_subduction.request_stop();
                 listener_token.cancel();
             }
         });
@@ -856,7 +856,7 @@ where
     /// can `wait` afterwards). For deterministic teardown that releases
     /// every `Arc<Subduction>` before returning, use `stop_and_drain`.
     ///
-    /// Order is load-bearing: `subduction.shutdown()` must run before
+    /// Order is load-bearing: `subduction.request_stop()` must run before
     /// `cancel()`, otherwise `manager_fut` is dropped mid-execution
     /// (before its `connection_loop`-abort cleanup runs) and any
     /// later `tracker.wait()` deadlocks on parked `connection_loop`s.
@@ -866,7 +866,7 @@ where
         // Mark the stop as orderly before waking anything, so the
         // supervision tasks stay quiet; see the `stopping` field docs.
         self.stopping.store(true, Ordering::Release);
-        self.subduction.shutdown();
+        self.subduction.request_stop();
         self.cancellation_token.cancel();
         self.tasks.close();
     }

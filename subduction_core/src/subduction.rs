@@ -1,4 +1,18 @@
-//! The main synchronization logic and bookkeeping for [`Sedimentree`].
+//! | [`disconnect_from_peer`] | Disconnect all connections from a peer |
+//!
+//! ## Lifecycle
+//!
+//! *`stop` ends the runtime; dropping the last `Arc<Subduction>` ends the
+//! resources.* See the [`Subduction`] type docs for the ownership model.
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | [`stop`] | Stop the manager and listener loops and wait for them to exit |
+//! | [`request_stop`] | Signal the loops to exit without waiting (sync; usable from `Drop`) |
+//! | [`stopped`] | Resolve once the loops are gone (observe only) |
+//! | [`is_stopped`] | Whether the loops are gone |
+//!
+//! ## Naming `ConventionsThe` main synchronization logic and bookkeeping for [`Sedimentree`].
 //!
 //! # API Guide
 //!
@@ -40,6 +54,10 @@
 //! [`disconnect_all`]: Subduction::disconnect_all
 //! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
 //! [`add_connection`]: Subduction::add_connection
+//! [`stop`]: Subduction::stop
+//! [`request_stop`]: Subduction::request_stop
+//! [`stopped`]: Subduction::stopped
+//! [`is_stopped`]: Subduction::is_stopped
 //! [`get_blob`]: Subduction::get_blob
 //! [`get_blobs`]: Subduction::get_blobs
 //! [`get_commits`]: Subduction::get_commits
@@ -94,7 +112,7 @@ use crate::{
 use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::{Mutex, SemaphoreGuardArc};
-use core::{marker::PhantomData, time::Duration};
+use core::{convert::Infallible, marker::PhantomData, time::Duration};
 use dispatch_completion::{DispatchCompletion, DispatchOutcome};
 use error::{
     AddConnectionError, IoError, ListenError, SendRequestedDataError, Unauthorized, WriteError,
@@ -135,7 +153,55 @@ use subduction_crypto::{
 pub const CONNECTION_CLOSED_CHANNEL_CAPACITY: usize = 32;
 
 /// The main synchronization manager for sedimentrees.
-#[derive(Debug, Clone)]
+///
+/// Constructed behind an `Arc` (see [`new`](Self::new) and
+/// [`SubductionBuilder`](builder::SubductionBuilder)): the listener holds one
+/// reference while it runs, and every spawned dispatch task holds one for the
+/// duration of its work. Share the node by cloning the `Arc`.
+///
+/// # Lifecycle
+///
+/// *`stop` ends the runtime; dropping the last `Arc` ends the resources.*
+///
+/// ```text
+///  stop().await                                   drop last Arc<Subduction>
+///     │                                                 │
+///     ├─ request_stop(): close loop channels            ▼
+///     └─ stopped():      loops exit,           shared state dropped:
+///                        dispatch drained,     storage handle, connection
+///                        writes committed      map, abort backstop
+/// ```
+///
+/// [`stop`](Self::stop) takes the node offline: the connection manager and
+/// listener loops exit and every connection goes with them. It does *not*
+/// release storage or any other shared state; those live until the last
+/// `Arc<Subduction>` is dropped. After `stop` the node cannot be restarted,
+/// but `store_*` / `get_*` still work against storage. To reopen a
+/// file-locked storage backend at the same path, `stop().await` *and then*
+/// drop every `Arc`.
+///
+/// # Owning references
+///
+/// Anything you spawn that holds an `Arc<Subduction>` keeps the node — and
+/// its storage — alive. Two patterns keep that under control:
+///
+/// - **Own your tasks.** Spawn through something you can cancel and join
+///   (`tokio_util::task::TaskTracker` + `CancellationToken`, a `JoinSet`).
+///   Teardown is then *cancel → join → `stop().await` → drop*, and no task
+///   can outlive the node by accident. Strong clones inside those tasks are
+///   fine.
+/// - **`Arc::downgrade` for what you can't own.** Long-lived observers and
+///   callbacks held by other subsystems should hold a `Weak<Subduction>` and
+///   treat `upgrade() == None` as "the node is gone".
+///
+/// Scope strong clones to the work they do; don't stash them in fields that
+/// outlive the node's owner.
+///
+/// The `Drop` impl aborts the loops as a last resort. Because the listener
+/// holds an `Arc` while it runs, `Drop` can only observe a listener that has
+/// already exited — in practice it aborts at most the manager. Orderly
+/// teardown is `stop().await`.
+#[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct Subduction<
     'a,
@@ -146,10 +212,9 @@ pub struct Subduction<
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
-    // `Clone` is required transitively (the struct derives `Clone` and stores
-    // `spawner: Sp`); stating it here keeps the struct signature consistent
-    // with the `Sp: Clone` bounds on `new()` / `SubductionBuilder::build()`
-    // and improves error messages.
+    // `new()` clones the spawner into both the manager and this struct;
+    // stating the bound here keeps the signature consistent with
+    // `new()` / `SubductionBuilder::build()` and improves error messages.
     Sp: Spawn<Async> + Clone,
     Metric: DepthMetric = CountLeadingZeroBytes,
     const SHARDS: usize = 256,
@@ -222,6 +287,14 @@ pub struct Subduction<
 
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
+
+    /// Closes once both loop futures are gone. The matching senders live in
+    /// the [`ListenerFuture`] and [`ManagerFuture`] handed out by `new()`, so
+    /// this observes the futures' *lifetimes* — completed or discarded — not
+    /// merely a stop request. Backs [`stopped`](Self::stopped).
+    ///
+    /// [`ManagerFuture`]: crate::connection::manager::ManagerFuture
+    loops_gone: async_channel::Receiver<Infallible>,
 
     /// Runtime spawner, retained so post-construction operations (the
     /// per-document cold-start fan-out) can spawn onto the worker pool.
@@ -338,6 +411,11 @@ where
         let (abort_manager_handle, abort_manager_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
 
+        // Never carries a message; it closes when both loop futures have been
+        // dropped, which is what `stopped()` waits for.
+        let (listener_liveness, loops_gone) = async_channel::bounded::<Infallible>(1);
+        let manager_liveness = listener_liveness.clone();
+
         let sd = Arc::new(Self {
             handler,
             discovery_id,
@@ -360,6 +438,7 @@ where
             connection_closed: closed_receiver,
             abort_manager_handle,
             abort_listener_handle,
+            loops_gone,
             spawner: stored_spawner,
             _phantom: PhantomData,
         });
@@ -371,8 +450,9 @@ where
             sd.clone(),
             ListenerFuture::<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>::new(
                 Async::start_listener(sd, abort_listener_reg),
+                listener_liveness,
             ),
-            crate::connection::manager::ManagerFuture::new(abortable_manager),
+            crate::connection::manager::ManagerFuture::new(abortable_manager, manager_liveness),
         )
     }
 
@@ -550,13 +630,66 @@ where
      * CONNECTIONS *
      ***************/
 
-    /// Gracefully shut down the manager and listener loops by closing
-    /// the channels they read from. Unlike [`Drop`] (which aborts mid-
-    /// await), the listener drains its outstanding spawned `Handler::handle`
-    /// dispatch tasks before exiting. Idempotent.
-    pub fn shutdown(&self) {
+    /// Stop the node's runtime and wait for it to exit.
+    ///
+    /// Equivalent to [`request_stop`](Self::request_stop) followed by
+    /// [`stopped`](Self::stopped). After this returns, the connection manager
+    /// and listener loops have exited, every connection reader is gone, and
+    /// every in-flight dispatch task has finished — so every write those
+    /// tasks made has been committed to storage.
+    ///
+    /// # What this does *not* do
+    ///
+    /// It does not release storage or any other shared state. Those live
+    /// until the last `Arc<Subduction>` is dropped. After `stop` the node is
+    /// offline but `store_*` / `get_*` still work against storage; it cannot
+    /// be restarted. To reopen a file-locked storage backend at the same
+    /// path, `stop().await` *and then* drop every `Arc`.
+    ///
+    /// # Precondition
+    ///
+    /// The `ListenerFuture` and `ManagerFuture` returned from construction
+    /// must be driven by someone other than the caller — spawned, or polled
+    /// on another task. If you hold them un-spawned, awaiting this from the
+    /// same task deadlocks: call [`request_stop`](Self::request_stop) and
+    /// await the futures yourself instead.
+    ///
+    /// Idempotent.
+    pub async fn stop(&self) {
+        self.request_stop();
+        self.stopped().await;
+    }
+
+    /// Signal the manager and listener loops to exit, without waiting.
+    ///
+    /// Closes the channels the loops read from; each exits on its next poll.
+    /// The listener drains its outstanding spawned `Handler::handle` dispatch
+    /// tasks before returning, unlike the [`Drop`] abort backstop. Safe to
+    /// call from `Drop` impls and other non-async contexts. Idempotent.
+    pub fn request_stop(&self) {
         self.manager_channel.close();
         self.msg_queue.close();
+    }
+
+    /// Resolve once both the manager and listener loop futures are gone —
+    /// completed, aborted, or dropped unpolled.
+    ///
+    /// Does not itself request a stop; pair with
+    /// [`request_stop`](Self::request_stop), or use [`stop`](Self::stop).
+    /// Resolves immediately if the loops have already exited.
+    pub async fn stopped(&self) {
+        // The channel never carries a message; `recv` returns `Err` exactly
+        // when every sender (one per loop future) has been dropped.
+        let _ = self.loops_gone.recv().await;
+    }
+
+    /// Whether both loop futures are gone (see [`stopped`](Self::stopped)).
+    ///
+    /// Note this is "stopped", not "stop requested": it becomes `true` only
+    /// once the loops have actually exited.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.loops_gone.is_closed()
     }
 
     /// Gracefully shut down a specific connection.
@@ -3565,6 +3698,10 @@ impl<
     }
 }
 
+/// Abort backstop for the loops. This runs when the last `Arc<Subduction>`
+/// is dropped; because the running listener holds one, it can only ever see
+/// a listener that has already exited, so in practice it aborts at most the
+/// manager. Orderly teardown is [`Subduction::stop`].
 impl<
     'a,
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
