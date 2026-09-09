@@ -150,7 +150,7 @@ async fn batch_sync() -> TestResult {
 
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let server_subduction_node = TokioSubduction::start(|spawner| {
+    let server_subduction_node = TokioSubduction::start(|spawner, _cancel| {
         let (sd, _handler, listener, manager) = SubductionBuilder::new()
             .signer(server_signer)
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
@@ -299,7 +299,7 @@ async fn second_sync_round_is_empty() -> TestResult {
 
     // --- Server setup ---
 
-    let server_node = TokioSubduction::start(|spawner| {
+    let server_node = TokioSubduction::start(|spawner, _cancel| {
         let (sd, _handler, listener, manager) = SubductionBuilder::new()
             .signer(server_signer)
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
@@ -440,7 +440,7 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
     };
 
-    let server_subduction_node = TokioSubduction::start(|spawner| {
+    let server_subduction_node = TokioSubduction::start(|spawner, _cancel| {
         let (sd, _handler, listener, manager) = SubductionBuilder::new()
             .signer(server_signer)
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
@@ -541,7 +541,7 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
     };
     let detection_budget = Duration::from_secs(1);
 
-    let server_subduction_node = TokioSubduction::start(|spawner| {
+    let server_subduction_node = TokioSubduction::start(|spawner, _cancel| {
         let (sd, _handler, listener, manager) = SubductionBuilder::new()
             .signer(server_signer)
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))

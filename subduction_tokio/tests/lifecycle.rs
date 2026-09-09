@@ -60,7 +60,7 @@ type Handler = SyncHandler<
 >;
 type MemoryParts = Parts<MemoryStorage, Conn, Handler, OpenPolicy, MemorySigner>;
 
-fn build_memory(spawner: TrackedTokioSpawn) -> MemoryParts {
+fn build_memory(spawner: TrackedTokioSpawn, _cancel: CancellationToken) -> MemoryParts {
     let (sd, _handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
@@ -202,13 +202,32 @@ async fn orderly_stop_is_not_a_failure() -> TestResult {
     Ok(())
 }
 
+/// The build closure's token exists so handler-side loops that never end on
+/// their own can still be torn down: tracked via the spawner, cancelled by
+/// `stop`. Without it, `stop` would wait on this task forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn build_closure_token_cancels_tracked_loops_on_stop() -> TestResult {
+    let node = TokioSubduction::start(|spawner, cancel| {
+        spawner
+            .tracker()
+            .spawn(cancel.run_until_cancelled_owned(std::future::pending::<()>()));
+        build_memory(spawner, CancellationToken::new())
+    });
+
+    tokio::time::timeout(BUDGET, node.stop()).await?;
+    Ok(())
+}
+
 /// With `start_with`, the shared token is a two-way street: cancelling it
 /// from outside stops the node, quietly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelling_shared_token_stops_node() -> TestResult {
     let root = CancellationToken::new();
     let tracker = TaskTracker::new();
-    let node = TokioSubduction::start_with(tracker.clone(), root.clone(), build_memory);
+    let (node, ()) =
+        TokioSubduction::start_with(tracker.clone(), root.clone(), |spawner, cancel| {
+            (build_memory(spawner, cancel), ())
+        });
     let weak = Arc::downgrade(node.subduction());
 
     root.cancel();
@@ -233,7 +252,10 @@ async fn cancelling_shared_token_stops_node() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stopping_node_cancels_shared_token() -> TestResult {
     let root = CancellationToken::new();
-    let node = TokioSubduction::start_with(TaskTracker::new(), root.clone(), build_memory);
+    let (node, ()) =
+        TokioSubduction::start_with(TaskTracker::new(), root.clone(), |spawner, cancel| {
+            (build_memory(spawner, cancel), ())
+        });
 
     tokio::time::timeout(BUDGET, node.stop()).await?;
     assert!(root.is_cancelled());
@@ -248,7 +270,7 @@ async fn redb_reopens_after_stop_and_drop() -> TestResult {
     let root = dir.path().to_path_buf();
     let storage = RedbStorage::new(&root)?;
 
-    let node = TokioSubduction::start(move |spawner| {
+    let node = TokioSubduction::start(move |spawner, _cancel| {
         let (sd, _handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(storage, Arc::new(OpenPolicy))

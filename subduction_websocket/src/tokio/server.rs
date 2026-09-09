@@ -389,7 +389,7 @@ where
         // The node owns the tracker; its `TrackedTokioSpawn` is handed to
         // the builder so connection readers and dispatch land on the same
         // tracker as the accept loop, and it supervises its own loops.
-        let node = TokioSubduction::start(move |spawner| {
+        let node = TokioSubduction::start(move |spawner, _cancel| {
             let mut builder = SubductionBuilder::new()
                 .signer(signer)
                 .storage(storage, Arc::new(policy))
