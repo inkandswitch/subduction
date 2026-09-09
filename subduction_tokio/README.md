@@ -16,13 +16,21 @@ supplies the Tokio side of that contract:
 ## Lifecycle
 
 ```text
-TokioSubduction::start(|spawner| build(spawner))
+TokioSubduction::start(|spawner, cancel| build(spawner, cancel))
     │
-    ├─ node.spawn(task)           tasks scoped to the node; cancelled on stop
+    ├─ spawner                    tasks the node waits for on stop (tracked)
+    ├─ cancel                     child token: run handler loops under it so
+    │                             stop can end them
+    ├─ node.spawn(task)           tasks scoped to the node; tracked + cancelled
     │
     └─ node.stop().await          cancel tasks → Subduction::stop → tracker.wait
        drop(node)                 last Arc<Subduction> gone → storage released
 ```
+
+`TokioSubduction::start_with(tracker, token, build)` folds the node into an
+existing lifecycle and returns `(node, extra)`, where `extra` is whatever the
+build closure hands back alongside the node (an ephemeral handler, a metrics
+tally) — no need to smuggle values out through captured `Option`s.
 
 Dropping a `TokioSubduction` without calling `stop` requests a stop and
 cancels its tasks as a backstop, but only `stop().await` guarantees the

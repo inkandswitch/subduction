@@ -149,7 +149,7 @@ type ServerNode = TokioWebSocketNode<
 >;
 
 fn setup_server_node(signer: MemorySigner) -> ServerNode {
-    TokioSubduction::start(|spawner| {
+    TokioSubduction::start(|spawner, _cancel| {
         let (sd, _handler, listener, manager) = SubductionBuilder::new()
             .signer(signer)
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))

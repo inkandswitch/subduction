@@ -12,7 +12,7 @@
 //! [`TokioSubduction`] is that code, once. It is the *owner* of a node:
 //!
 //! ```text
-//!  TokioSubduction::start(|spawner| build(spawner))
+//!  TokioSubduction::start(|spawner, cancel| build(spawner, cancel))
 //!     │
 //!     ├─ spawns listener + manager onto its TaskTracker, supervised
 //!     ├─ node.spawn(task)       your tasks, cancelled when the node stops
@@ -166,10 +166,16 @@ where
     /// fan-out lands on the same tracker `stop` waits on. Return the node and
     /// its two loop futures; they are spawned and supervised immediately.
     ///
+    /// It also receives a child of the node's [`CancellationToken`]. Tasks
+    /// spawned through the spawner are *tracked* — `stop` waits for them —
+    /// but not cancelled, so anything the handler starts that would not end
+    /// on its own (a relay loop, a periodic sweep) should run under this
+    /// token or it will hold `stop` open forever.
+    ///
     /// Must be called from within a Tokio runtime.
     ///
     /// ```ignore
-    /// let node = TokioSubduction::start(|spawner| {
+    /// let node = TokioSubduction::start(|spawner, _cancel| {
     ///     let (sd, _handler, listener, manager) = SubductionBuilder::new()
     ///         .signer(signer)
     ///         .storage(storage, policy)
@@ -181,13 +187,21 @@ where
     /// ```
     pub fn start<F>(build: F) -> Self
     where
-        F: FnOnce(TrackedTokioSpawn) -> Parts<Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+        F: FnOnce(
+            TrackedTokioSpawn,
+            CancellationToken,
+        ) -> Parts<Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
     {
-        Self::start_with(TaskTracker::new(), CancellationToken::new(), build)
+        Self::start_with(
+            TaskTracker::new(),
+            CancellationToken::new(),
+            |spawner, cancel| (build(spawner, cancel), ()),
+        )
+        .0
     }
 
     /// Like [`start`](Self::start) but under a caller-supplied tracker and
-    /// token.
+    /// token, and with a side channel out of the build closure.
     ///
     /// Use this to fold the node into a larger lifecycle: a server that also
     /// runs an accept loop on the same tracker, or a process whose root
@@ -195,12 +209,24 @@ where
     /// *directly*, not as a child: stopping the node cancels it, and
     /// cancelling it (from anywhere) stops the node.
     ///
+    /// The closure's second return value `T` is handed straight back. Builders
+    /// such as `build_composed` mint values alongside the node (an ephemeral
+    /// handler, a metrics tally) that the caller needs afterwards; returning
+    /// them here avoids smuggling them out through captured `Option`s.
+    ///
     /// Must be called from within a Tokio runtime.
-    pub fn start_with<F>(tasks: TaskTracker, cancel: CancellationToken, build: F) -> Self
+    pub fn start_with<F, T>(tasks: TaskTracker, cancel: CancellationToken, build: F) -> (Self, T)
     where
-        F: FnOnce(TrackedTokioSpawn) -> Parts<Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+        F: FnOnce(
+            TrackedTokioSpawn,
+            CancellationToken,
+        ) -> (
+            Parts<Store, Conn, Hdl, Auth, Sign, Timer, Metric, SHARDS>,
+            T,
+        ),
     {
-        let (subduction, listener, manager) = build(TrackedTokioSpawn::new(tasks.clone()));
+        let ((subduction, listener, manager), extra) =
+            build(TrackedTokioSpawn::new(tasks.clone()), cancel.child_token());
 
         let node = Self {
             subduction,
@@ -232,7 +258,7 @@ where
             tasks.close();
         });
 
-        node
+        (node, extra)
     }
 
     /// Spawn `fut` as a supervisor: when it completes, decide whether that
