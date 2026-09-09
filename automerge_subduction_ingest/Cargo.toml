@@ -28,6 +28,7 @@ hex = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 subduction_core = { workspace = true, features = ["system_time"] }
 subduction_crypto = { workspace = true }
+subduction_tokio = { workspace = true }
 subduction_websocket = { workspace = true, features = ["tokio_client"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true, default-features = true }
@@ -39,12 +40,8 @@ testresult = { workspace = true }
 
 [features]
 default = ["native-tls"]
-native-tls = [
-  "subduction_websocket/tokio_client",
-]
-rustls = [
-  "subduction_websocket/tokio_client_rustls",
-]
+native-tls = ["subduction_websocket/tokio_client"]
+rustls = ["subduction_websocket/tokio_client_rustls"]
 
 [lints]
 workspace = true
