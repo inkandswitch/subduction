@@ -1,6 +1,6 @@
 [package]
 name = "sedimentree_core"
-version = "0.14.0"
+version = "0.14.1"
 description = "Sedimentree: a hash-linked CRDT storage structure with fragments, commits, and content-addressed blobs"
 
 authors.workspace = true
@@ -26,7 +26,7 @@ nonempty = { workspace = true }
 num-bigint = { workspace = true }
 rayon = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-serde = { workspace = true, optional = true, features = ["derive"]}
+serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -37,7 +37,11 @@ bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 dhat = { workspace = true }
-sedimentree_core = { path = ".", features = ["bolero", "getrandom", "test_utils"] }
+sedimentree_core = { path = ".", features = [
+  "bolero",
+  "getrandom",
+  "test_utils",
+] }
 testresult = { workspace = true }
 tracing-subscriber = { workspace = true }
 
@@ -60,7 +64,7 @@ std = [
   "num-bigint/std",
   "serde/std",
   "thiserror/std",
-  "tracing/std"
+  "tracing/std",
 ]
 test_utils = ["std", "arbitrary", "dep:rand", "rand/small_rng"]
 

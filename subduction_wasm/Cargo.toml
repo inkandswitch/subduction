@@ -1,6 +1,6 @@
 [package]
 name = "subduction_wasm"
-version = "0.21.0"
+version = "0.21.1"
 description = "Wasm/JavaScript bindings for Subduction (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
@@ -78,7 +78,9 @@ features = [
 ]
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = [
+  "wasm_js",
+] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
@@ -99,11 +101,20 @@ std = [
   "subduction_core/std",
   "thiserror/std",
   "wasm-bindgen/std",
-  "wasm-bindgen-futures/std"
+  "wasm-bindgen-futures/std",
 ]
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-multivalue", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-reference-types", "--enable-sign-ext", "--enable-simd"]
+wasm-opt = [
+  "-Oz",
+  "--enable-bulk-memory",
+  "--enable-multivalue",
+  "--enable-mutable-globals",
+  "--enable-nontrapping-float-to-int",
+  "--enable-reference-types",
+  "--enable-sign-ext",
+  "--enable-simd",
+]
 
 [lints]
 workspace = true
