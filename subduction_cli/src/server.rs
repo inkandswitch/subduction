@@ -3,10 +3,7 @@
 use std::{
     net::SocketAddr,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -34,7 +31,10 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;
 use subduction_redb_storage::RedbStorage;
-use subduction_tokio::spawn::TokioSpawn;
+use subduction_tokio::{
+    node::TokioSubduction,
+    spawn::{TokioSpawn, TrackedTokioSpawn},
+};
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
@@ -44,7 +44,7 @@ use subduction_websocket::{
     websocket::{KeepAlive, WebSocket},
 };
 use tokio::{net::TcpListener, task::JoinSet, time};
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 use subduction_ephemeral::{
@@ -81,9 +81,20 @@ type CliSubduction<H> = Arc<
         CliKeyhivePolicyHandle,
         MemorySigner,
         FuturesTimerTimeout,
-        TokioSpawn,
+        TrackedTokioSpawn,
         CountLeadingZeroBytes,
     >,
+>;
+
+/// The owned, supervised node behind [`CliSubduction`].
+type CliNode<H> = TokioSubduction<
+    MetricsStorage<RedbStorage>,
+    CliConn,
+    H,
+    CliKeyhivePolicyHandle,
+    MemorySigner,
+    FuturesTimerTimeout,
+    CountLeadingZeroBytes,
 >;
 
 /// Arguments for the server command.
@@ -279,6 +290,9 @@ impl ServerArgs {
 
 /// Default interval for refreshing storage metrics (1 minute).
 const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
+
+/// How long shutdown waits for the node to drain before exiting anyway.
+const NODE_STOP_BUDGET: Duration = Duration::from_secs(10);
 
 /// Run the server with both WebSocket and HTTP long-poll transports.
 ///
@@ -555,7 +569,6 @@ where
     let builder = SubductionBuilder::new()
         .signer(signer.clone())
         .storage(storage, storage_policy)
-        .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout)
         // Seeded so sequences resume above previous values across restarts;
         // see `peer::counter`.
@@ -578,37 +591,50 @@ where
         builder
     };
 
+    // The node owns its loops and supervises them; it shares the process
+    // root `token`, so a loop dying cancels the whole server (for a
+    // supervised restart) and Ctrl-C stops the node. Everything the node
+    // spawns is on its tracker, which `stop()` drains before we exit.
     let mut requestor_tally = None;
-    let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction<H>, _, _, _) = builder
-        .build_composed(|sync_handler| {
-            requestor_tally = Some(sync_handler.requestor_tally());
-            let connections = sync_handler.connections();
+    let mut ephemeral_slot = None;
+    let node: CliNode<H> =
+        TokioSubduction::start_with(TaskTracker::new(), token.clone(), |spawner| {
+            let (subduction, listener_fut, manager_fut, ephemeral) =
+                builder.spawner(spawner).build_composed(|sync_handler| {
+                    requestor_tally = Some(sync_handler.requestor_tally());
+                    let connections = sync_handler.connections();
 
-            let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
-                connections,
-                OpenEphemeralPolicy,
-                EphemeralConfig::default(),
-                StdClock,
-                TokioSpawn,
-            );
-
-            // Drain ephemeral events — the server is a relay, not a consumer.
-            tokio::spawn(async move {
-                while let Ok(event) = ephemeral_rx.recv().await {
-                    tracing::debug!(
-                        sender = %event.sender,
-                        topic = %event.id,
-                        nonce = event.nonce,
-                        payload_size = event.payload.len(),
-                        "ephemeral event relayed"
+                    let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
+                        connections,
+                        OpenEphemeralPolicy,
+                        EphemeralConfig::default(),
+                        StdClock,
+                        TokioSpawn,
                     );
-                }
-            });
 
-            let handler = make_handler(sync_handler, ephemeral_handler.clone());
+                    // Drain ephemeral events — the server is a relay, not a
+                    // consumer.
+                    tokio::spawn(async move {
+                        while let Ok(event) = ephemeral_rx.recv().await {
+                            tracing::debug!(
+                                sender = %event.sender,
+                                topic = %event.id,
+                                nonce = event.nonce,
+                                payload_size = event.payload.len(),
+                                "ephemeral event relayed"
+                            );
+                        }
+                    });
 
-            (handler, ephemeral_handler)
+                    let handler = make_handler(sync_handler, ephemeral_handler.clone());
+
+                    (handler, ephemeral_handler)
+                });
+            ephemeral_slot = Some(ephemeral);
+            (subduction, listener_fut, manager_fut)
         });
+    let ephemeral = ephemeral_slot.ok_or_else(|| eyre::eyre!("build closure did not run"))?;
+    let subduction: CliSubduction<H> = Arc::clone(node.subduction());
 
     let server_peer_id = subduction.peer_id();
 
@@ -709,55 +735,6 @@ where
         "Server started"
     );
     tracing::info!(peer = %peer_id, "Peer ID");
-
-    // The manager and listener are supervised: a node that outlives either
-    // accepts handshakes it can never service. An exit outside an orderly
-    // shutdown cancels the root token so the process exits and the service
-    // manager restarts it; `supervised_failure` makes that exit nonzero
-    // (`Restart=on-failure` ignores clean exits).
-    //
-    // The flag store must precede `cancel()`: the final check is only
-    // reached by waking from `token.cancelled().await`, whose internal
-    // synchronization makes the store visible.
-    let supervised_failure = Arc::new(AtomicBool::new(false));
-    let actor_cancel = token.clone();
-    let listener_cancel = token.clone();
-
-    let manager_supervisor = actor_cancel.clone();
-    let manager_failed = Arc::clone(&supervised_failure);
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = manager_fut => {
-                if !manager_supervisor.is_cancelled() {
-                    tracing::error!(
-                        "connection manager exited unexpectedly; \
-                         shutting down for supervised restart"
-                    );
-                    manager_failed.store(true, Ordering::Release);
-                    manager_supervisor.cancel();
-                }
-            },
-            () = actor_cancel.cancelled() => {}
-        }
-    });
-
-    let listener_supervisor = listener_cancel.clone();
-    let listener_failed = Arc::clone(&supervised_failure);
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = listener_fut => {
-                if !listener_supervisor.is_cancelled() {
-                    tracing::error!(
-                        "dispatch listener exited unexpectedly; \
-                         shutting down for supervised restart"
-                    );
-                    listener_failed.store(true, Ordering::Release);
-                    listener_supervisor.cancel();
-                }
-            },
-            () = listener_cancel.cancelled() => {}
-        }
-    });
 
     // Spawn the accept loop
     let accept_cancel = token.child_token();
@@ -993,7 +970,9 @@ where
         tracing::info!(path = %ready_path.display(), "Ready file written");
     }
 
-    // Wait for cancellation signal
+    // Wait for cancellation signal. The node shares `token`, so this fires
+    // both for an external shutdown (Ctrl-C) and for a loop dying under
+    // supervision.
     token.cancelled().await;
     tracing::info!("Shutting down server...");
     accept_task.abort();
@@ -1001,9 +980,22 @@ where
         iroh_task.abort();
     }
 
+    // Drain the node: loops exit, connection readers are aborted, and every
+    // in-flight write commits before we return. Bounded so a wedged task
+    // cannot block process exit.
+    if tokio::time::timeout(NODE_STOP_BUDGET, node.stop())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            budget = ?NODE_STOP_BUDGET,
+            "node did not stop within budget; exiting anyway"
+        );
+    }
+
     // A supervision-initiated shutdown must exit nonzero so
     // `Restart=on-failure` restarts the process.
-    if supervised_failure.load(Ordering::Acquire) {
+    if node.exited_unexpectedly() {
         return Err(eyre::eyre!(
             "critical background task (connection manager or listener) exited unexpectedly"
         ));
