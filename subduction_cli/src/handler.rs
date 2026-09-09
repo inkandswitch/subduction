@@ -34,7 +34,7 @@ use subduction_ephemeral::{
 };
 use subduction_keyhive::handler::{SendableKeyhiveHandler, SendableRuntimeProtocol};
 use subduction_redb_storage::RedbStorage;
-use subduction_websocket::tokio::TokioSpawn;
+use subduction_tokio::spawn::TokioSpawn;
 
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;

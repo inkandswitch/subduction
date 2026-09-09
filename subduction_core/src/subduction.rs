@@ -630,68 +630,6 @@ where
      * CONNECTIONS *
      ***************/
 
-    /// Stop the node's runtime and wait for it to exit.
-    ///
-    /// Equivalent to [`request_stop`](Self::request_stop) followed by
-    /// [`stopped`](Self::stopped). After this returns, the connection manager
-    /// and listener loops have exited, every connection reader is gone, and
-    /// every in-flight dispatch task has finished — so every write those
-    /// tasks made has been committed to storage.
-    ///
-    /// # What this does *not* do
-    ///
-    /// It does not release storage or any other shared state. Those live
-    /// until the last `Arc<Subduction>` is dropped. After `stop` the node is
-    /// offline but `store_*` / `get_*` still work against storage; it cannot
-    /// be restarted. To reopen a file-locked storage backend at the same
-    /// path, `stop().await` *and then* drop every `Arc`.
-    ///
-    /// # Precondition
-    ///
-    /// The `ListenerFuture` and `ManagerFuture` returned from construction
-    /// must be driven by someone other than the caller — spawned, or polled
-    /// on another task. If you hold them un-spawned, awaiting this from the
-    /// same task deadlocks: call [`request_stop`](Self::request_stop) and
-    /// await the futures yourself instead.
-    ///
-    /// Idempotent.
-    pub async fn stop(&self) {
-        self.request_stop();
-        self.stopped().await;
-    }
-
-    /// Signal the manager and listener loops to exit, without waiting.
-    ///
-    /// Closes the channels the loops read from; each exits on its next poll.
-    /// The listener drains its outstanding spawned `Handler::handle` dispatch
-    /// tasks before returning, unlike the [`Drop`] abort backstop. Safe to
-    /// call from `Drop` impls and other non-async contexts. Idempotent.
-    pub fn request_stop(&self) {
-        self.manager_channel.close();
-        self.msg_queue.close();
-    }
-
-    /// Resolve once both the manager and listener loop futures are gone —
-    /// completed, aborted, or dropped unpolled.
-    ///
-    /// Does not itself request a stop; pair with
-    /// [`request_stop`](Self::request_stop), or use [`stop`](Self::stop).
-    /// Resolves immediately if the loops have already exited.
-    pub async fn stopped(&self) {
-        // The channel never carries a message; `recv` returns `Err` exactly
-        // when every sender (one per loop future) has been dropped.
-        let _ = self.loops_gone.recv().await;
-    }
-
-    /// Whether both loop futures are gone (see [`stopped`](Self::stopped)).
-    ///
-    /// Note this is "stopped", not "stop requested": it becomes `true` only
-    /// once the loops have actually exited.
-    #[must_use]
-    pub fn is_stopped(&self) -> bool {
-        self.loops_gone.is_closed()
-    }
-
     /// Gracefully shut down a specific connection.
     ///
     /// # Errors
@@ -3597,6 +3535,86 @@ where
 // Gated as one block so the test-introspection API stays in one place and
 // out of the production `impl`s. Reads internal state to assert invariants.
 // ---------------------------------------------------------------------------
+
+/// Lifecycle. Only the struct's own bounds are required here so that
+/// runtime wrappers (e.g. `subduction_tokio`) can stop a node without
+/// restating the handler / wire-message bounds the sync API needs.
+impl<
+    'a,
+    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
+    Store: Storage<Async>,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
+    Hdl: Handler<Async, Conn>,
+    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+    Sign: Signer<Async>,
+    Timer: Timeout<Async> + Clone,
+    Sp: Spawn<Async> + Clone,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+> Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
+{
+    /// Stop the node's runtime and wait for it to exit.
+    ///
+    /// Equivalent to [`request_stop`](Self::request_stop) followed by
+    /// [`stopped`](Self::stopped). After this returns, the connection manager
+    /// and listener loops have exited, every connection reader is gone, and
+    /// every in-flight dispatch task has finished — so every write those
+    /// tasks made has been committed to storage.
+    ///
+    /// # What this does *not* do
+    ///
+    /// It does not release storage or any other shared state. Those live
+    /// until the last `Arc<Subduction>` is dropped. After `stop` the node is
+    /// offline but `store_*` / `get_*` still work against storage; it cannot
+    /// be restarted. To reopen a file-locked storage backend at the same
+    /// path, `stop().await` *and then* drop every `Arc`.
+    ///
+    /// # Precondition
+    ///
+    /// The `ListenerFuture` and `ManagerFuture` returned from construction
+    /// must be driven by someone other than the caller — spawned, or polled
+    /// on another task. If you hold them un-spawned, awaiting this from the
+    /// same task deadlocks: call [`request_stop`](Self::request_stop) and
+    /// await the futures yourself instead.
+    ///
+    /// Idempotent.
+    pub async fn stop(&self) {
+        self.request_stop();
+        self.stopped().await;
+    }
+
+    /// Signal the manager and listener loops to exit, without waiting.
+    ///
+    /// Closes the channels the loops read from; each exits on its next poll.
+    /// The listener drains its outstanding spawned `Handler::handle` dispatch
+    /// tasks before returning, unlike the [`Drop`] abort backstop. Safe to
+    /// call from `Drop` impls and other non-async contexts. Idempotent.
+    pub fn request_stop(&self) {
+        self.manager_channel.close();
+        self.msg_queue.close();
+    }
+
+    /// Resolve once both the manager and listener loop futures are gone —
+    /// completed, aborted, or dropped unpolled.
+    ///
+    /// Does not itself request a stop; pair with
+    /// [`request_stop`](Self::request_stop), or use [`stop`](Self::stop).
+    /// Resolves immediately if the loops have already exited.
+    pub async fn stopped(&self) {
+        // The channel never carries a message; `recv` returns `Err` exactly
+        // when every sender (one per loop future) has been dropped.
+        let _ = self.loops_gone.recv().await;
+    }
+
+    /// Whether both loop futures are gone (see [`stopped`](Self::stopped)).
+    ///
+    /// Note this is "stopped", not "stop requested": it becomes `true` only
+    /// once the loops have actually exited.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.loops_gone.is_closed()
+    }
+}
 
 #[cfg(any(feature = "test_utils", test))]
 impl<
