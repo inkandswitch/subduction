@@ -1,0 +1,41 @@
+[package]
+name = "subduction_tokio"
+version = "0.1.0"
+description = "Tokio runtime integration for Subduction: spawners, timeouts, and node lifecycle"
+
+categories = ["asynchronous"]
+keywords = ["tokio", "sync", "subduction"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+future_form = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+futures = { workspace = true }
+subduction_core = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
+subduction_crypto = { workspace = true }
+subduction_redb_storage = { workspace = true }
+tempfile = { workspace = true }
+testresult = { workspace = true }
+tokio = { workspace = true, features = [
+  "macros",
+  "rt",
+  "rt-multi-thread",
+  "time",
+] }
+
+[lints]
+workspace = true

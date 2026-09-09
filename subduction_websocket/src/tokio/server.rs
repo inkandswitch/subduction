@@ -5,7 +5,7 @@ use subduction_core::timeout::Timeout;
 use crate::{
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     sleep::TokioSleeper,
-    tokio::{TrackedTokioSpawn, unified::UnifiedWebSocket},
+    tokio::unified::UnifiedWebSocket,
     websocket::{KeepAlive, WebSocket},
 };
 
@@ -37,6 +37,7 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
+use subduction_tokio::spawn::TrackedTokioSpawn;
 use tracing::Instrument;
 
 use tokio::{net::TcpListener, task::JoinSet};
@@ -483,7 +484,7 @@ where
         // `TrackedTokioSpawn`; the server's accept loop and per-WS tasks
         // spawn directly. `stop_and_drain` awaits all of them.
         let tasks = TaskTracker::new();
-        let spawner = crate::tokio::TrackedTokioSpawn::new(tasks.clone());
+        let spawner = TrackedTokioSpawn::new(tasks.clone());
 
         let mut builder = SubductionBuilder::new()
             .signer(signer)

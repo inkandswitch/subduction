@@ -11,10 +11,8 @@ use subduction_core::{
     nonce_cache::NonceCache, policy::open::OpenPolicy, storage::memory::MemoryStorage,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::{
-    DEFAULT_MAX_MESSAGE_SIZE,
-    tokio::{TimeoutTokio, server::TokioWebSocketServer},
-};
+use subduction_tokio::timeout::TimeoutTokio;
+use subduction_websocket::{DEFAULT_MAX_MESSAGE_SIZE, tokio::server::TokioWebSocketServer};
 use testresult::TestResult;
 
 /// If the core pipeline shuts down behind the server's back (standing in for
