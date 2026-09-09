@@ -488,13 +488,21 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode, Spawner: Spawn<Async>> c
 /// This allows the caller to monitor and control the lifecycle of the manager.
 pub struct ManagerFuture<Async: FutureForm> {
     fut: core::pin::Pin<alloc::boxed::Box<futures::stream::Abortable<Async::Future<'static, ()>>>>,
+    /// Liveness token for `Subduction::stopped`. Never sent on; dropping it
+    /// — with this future, whether it completed or was discarded unpolled —
+    /// is the signal that the manager is gone.
+    _liveness: async_channel::Sender<core::convert::Infallible>,
 }
 
 impl<Async: FutureForm> ManagerFuture<Async> {
     /// Create a new manager future from an abortable future.
-    pub fn new(fut: futures::stream::Abortable<Async::Future<'static, ()>>) -> Self {
+    pub(crate) fn new(
+        fut: futures::stream::Abortable<Async::Future<'static, ()>>,
+        liveness: async_channel::Sender<core::convert::Infallible>,
+    ) -> Self {
         Self {
             fut: alloc::boxed::Box::pin(fut),
+            _liveness: liveness,
         }
     }
 

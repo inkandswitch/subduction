@@ -308,7 +308,7 @@ impl Drop for ClientGuard {
         let client = self.client.clone();
         let tracker = self.tasks.clone();
 
-        client.shutdown();
+        client.request_stop();
 
         self.rt.block_on(async move {
             // WS tasks are parked on the tungstenite stream; abort to

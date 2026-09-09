@@ -7,6 +7,7 @@
 
 use alloc::boxed::Box;
 use core::{
+    convert::Infallible,
     future::Future,
     marker::PhantomData,
     ops::Deref,
@@ -14,6 +15,7 @@ use core::{
     task::{Context, Poll},
 };
 
+use async_channel::Sender;
 use futures::stream::{Abortable, Aborted};
 use sedimentree_core::depth::{CountLeadingZeroBytes, DepthMetric};
 use subduction_crypto::signer::Signer;
@@ -47,6 +49,10 @@ pub struct ListenerFuture<
     const SHARDS: usize = 256,
 > {
     fut: Pin<Box<Abortable<Async::Future<'a, ()>>>>,
+    /// Liveness token for [`Subduction::stopped`](super::Subduction::stopped).
+    /// Never sent on; dropping it — with this future, whether it completed or
+    /// was discarded unpolled — is the signal that the listener is gone.
+    _liveness: Sender<Infallible>,
     #[allow(clippy::type_complexity)]
     _phantom: PhantomData<(Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric)>,
 }
@@ -66,9 +72,10 @@ impl<
 > ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
-    pub(crate) fn new(fut: Abortable<Async::Future<'a, ()>>) -> Self {
+    pub(crate) fn new(fut: Abortable<Async::Future<'a, ()>>, liveness: Sender<Infallible>) -> Self {
         Self {
             fut: Box::pin(fut),
+            _liveness: liveness,
             _phantom: PhantomData,
         }
     }

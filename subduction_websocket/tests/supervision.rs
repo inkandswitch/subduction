@@ -43,7 +43,7 @@ async fn server_stops_accepting_when_core_pipeline_dies() -> TestResult {
     // Kill the core pipeline without going through `stop()`: the listener
     // and manager futures exit via their channel-close paths, as if they had
     // died unexpectedly.
-    server.subduction().shutdown();
+    server.subduction().request_stop();
 
     // The supervisor must cancel the accept loop; poll until connections
     // are refused. The deadline only bounds the failure case.
