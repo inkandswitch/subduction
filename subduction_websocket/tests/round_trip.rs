@@ -25,16 +25,12 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_tokio::{
-    spawn::{TokioSpawn, TrackedTokioSpawn},
-    timeout::TimeoutTokio,
-};
+use subduction_tokio::{node::TokioSubduction, spawn::TokioSpawn, timeout::TimeoutTokio};
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer},
     websocket::KeepAlive,
 };
-use tokio_util::task::TaskTracker;
 
 static TRACING: OnceLock<()> = OnceLock::new();
 
@@ -154,21 +150,16 @@ async fn batch_sync() -> TestResult {
 
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
-        .signer(server_signer)
-        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
-        .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
+    let server_subduction_node = TokioSubduction::start(|spawner| {
+        let (sd, _handler, listener, manager) = SubductionBuilder::new()
+            .signer(server_signer)
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .timer(TimeoutTokio)
+            .spawner(spawner)
+            .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        (sd, listener, manager)
     });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_subduction = Arc::clone(server_subduction_node.subduction());
 
     server_subduction
         .add_commit(sed_id, random_commit_id(), BTreeSet::new(), blob1)
@@ -184,7 +175,7 @@ async fn batch_sync() -> TestResult {
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server_subduction.clone(),
+        server_subduction_node,
     )
     .await?;
 
@@ -308,20 +299,16 @@ async fn second_sync_round_is_empty() -> TestResult {
 
     // --- Server setup ---
 
-    let (server, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
-        .signer(server_signer)
-        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
-        .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
+    let server_node = TokioSubduction::start(|spawner| {
+        let (sd, _handler, listener, manager) = SubductionBuilder::new()
+            .signer(server_signer)
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .timer(TimeoutTokio)
+            .spawner(spawner)
+            .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        (sd, listener, manager)
     });
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server = Arc::clone(server_node.subduction());
 
     // Server has 2 commits
     server
@@ -345,7 +332,7 @@ async fn second_sync_round_is_empty() -> TestResult {
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server.clone(),
+        server_node,
     )
     .await?;
     let bound = ws_server.address();
@@ -453,28 +440,23 @@ async fn keepalive_does_not_disconnect_idle_healthy_peer() -> TestResult {
         missed_pong_threshold: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
     };
 
-    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
-        .signer(server_signer)
-        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
-        .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
+    let server_subduction_node = TokioSubduction::start(|spawner| {
+        let (sd, _handler, listener, manager) = SubductionBuilder::new()
+            .signer(server_signer)
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .timer(TimeoutTokio)
+            .spawner(spawner)
+            .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        (sd, listener, manager)
     });
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_subduction = Arc::clone(server_subduction_node.subduction());
 
     let server = TokioWebSocketServer::new_with_keepalive(
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
         aggressive_keepalive,
-        server_subduction.clone(),
-        TaskTracker::new(),
+        server_subduction_node,
     )
     .await?;
     let bound = server.address();
@@ -559,28 +541,23 @@ async fn server_drops_peer_when_client_stops_responding_to_pings() -> TestResult
     };
     let detection_budget = Duration::from_secs(1);
 
-    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
-        .signer(server_signer)
-        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
-        .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
+    let server_subduction_node = TokioSubduction::start(|spawner| {
+        let (sd, _handler, listener, manager) = SubductionBuilder::new()
+            .signer(server_signer)
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .timer(TimeoutTokio)
+            .spawner(spawner)
+            .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        (sd, listener, manager)
     });
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_subduction = Arc::clone(server_subduction_node.subduction());
 
     let server = TokioWebSocketServer::new_with_keepalive(
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
         aggressive,
-        server_subduction.clone(),
-        TaskTracker::new(),
+        server_subduction_node,
     )
     .await?;
     let bound = server.address();

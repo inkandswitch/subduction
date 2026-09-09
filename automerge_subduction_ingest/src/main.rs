@@ -33,7 +33,8 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient};
+use subduction_tokio::{spawn::TokioSpawn, timeout::TimeoutTokio};
+use subduction_websocket::tokio::client::TokioWebSocketClient;
 
 /// Result of ingesting an Automerge document.
 struct IngestResult {

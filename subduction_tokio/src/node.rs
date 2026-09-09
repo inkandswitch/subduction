@@ -192,8 +192,8 @@ where
     /// Use this to fold the node into a larger lifecycle: a server that also
     /// runs an accept loop on the same tracker, or a process whose root
     /// token should be cancelled if the node's loops die. The token is used
-    /// *directly*, not as a child — cancelling the node cancels whatever you
-    /// passed in, and vice versa.
+    /// *directly*, not as a child: stopping the node cancels it, and
+    /// cancelling it (from anywhere) stops the node.
     ///
     /// Must be called from within a Tokio runtime.
     pub fn start_with<F>(tasks: TaskTracker, cancel: CancellationToken, build: F) -> Self
@@ -217,6 +217,21 @@ where
         // would never return.
         node.supervise("connection manager", manager);
         node.supervise("listener", listener);
+
+        // Make the shared token a valid way to stop the node, so a process
+        // root token (Ctrl-C, a failing sibling) brings the loops down too.
+        // `request_stop` itself cancels the token, so this task always ends.
+        let cancel = node.cancel.clone();
+        let subduction = Arc::clone(&node.subduction);
+        let stopping = Arc::clone(&node.stopping);
+        let tasks = node.tasks.clone();
+        node.tasks.spawn(async move {
+            cancel.cancelled().await;
+            stopping.store(true, Ordering::Release);
+            subduction.request_stop();
+            tasks.close();
+        });
+
         node
     }
 
