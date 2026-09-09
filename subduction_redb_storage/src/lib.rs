@@ -146,6 +146,19 @@ pub const DEFAULT_CACHE_SIZE: usize = 1024 * 1024 * 1024;
 /// Cheap to clone (the database handle and paths are shared). All
 /// operations run on the blocking pool; the [`Database`] itself is
 /// internally synchronized with MVCC (concurrent readers, single writer).
+///
+/// # Lifetime
+///
+/// The database — and its exclusive file lock — stays open until the *last*
+/// clone is dropped. That includes the clone held inside any `Arc<Subduction>`
+/// (and its handler) this storage was passed to: `Subduction::stop()` stops
+/// the node's loops but does not release storage. To reopen the same path
+/// you must stop the node *and* drop every `Arc<Subduction>` and `RedbStorage`
+/// handle. There is deliberately no `close()`: from a shared handle it could
+/// only flag the database unusable, not release the lock.
+///
+/// The background writer holds only a `Weak` reference, so it never keeps
+/// the database open on its own.
 #[derive(Debug, Clone)]
 pub struct RedbStorage {
     db: Arc<Database>,

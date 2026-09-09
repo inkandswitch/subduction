@@ -7,12 +7,14 @@
 
 use alloc::boxed::Box;
 use core::{
+    convert::Infallible,
     future::Future,
     ops::Deref,
     pin::Pin,
     task::{Context, Poll},
 };
 
+use async_channel::Sender;
 use future_form::FutureForm;
 use futures::stream::{Abortable, Aborted};
 
@@ -23,12 +25,19 @@ use futures::stream::{Abortable, Aborted};
 #[derive(Debug)]
 pub struct ListenerFuture<'a, Async: FutureForm> {
     fut: Pin<Box<Abortable<Async::Future<'a, ()>>>>,
+    /// Liveness token for [`Subduction::stopped`](super::Subduction::stopped).
+    /// Never sent on; dropping it — with this future, whether it completed or
+    /// was discarded unpolled — is the signal that the listener is gone.
+    _liveness: Sender<Infallible>,
 }
 
 impl<'a, Async: FutureForm> ListenerFuture<'a, Async> {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
-    pub(crate) fn new(fut: Abortable<Async::Future<'a, ()>>) -> Self {
-        Self { fut: Box::pin(fut) }
+    pub(crate) fn new(fut: Abortable<Async::Future<'a, ()>>, liveness: Sender<Infallible>) -> Self {
+        Self {
+            fut: Box::pin(fut),
+            _liveness: liveness,
+        }
     }
 
     /// Check if the listener future has been aborted.
