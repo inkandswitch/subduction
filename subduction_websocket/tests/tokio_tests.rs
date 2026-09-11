@@ -25,16 +25,16 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
+use subduction_tokio::{node::TokioSubduction, spawn::TokioSpawn, timeout::TimeoutTokio};
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
-        TimeoutTokio, TokioSpawn, TrackedTokioSpawn, client::TokioWebSocketClient,
-        server::TokioWebSocketServer,
+        client::TokioWebSocketClient,
+        server::{TokioWebSocketNode, TokioWebSocketServer},
     },
     websocket::KeepAlive,
 };
 use testresult::TestResult;
-use tokio_util::task::TaskTracker;
 use tungstenite::http::Uri;
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -103,38 +103,6 @@ type TestHandler = Arc<
     >,
 >;
 
-type ServerSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TrackedTokioSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TrackedTokioSpawn,
-    >,
->;
-
-type ServerHandler = Arc<
-    SyncHandler<
-        Sendable,
-        MemoryStorage,
-        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-        TrackedTokioSpawn,
-    >,
->;
-
 type ClientSyncHandler = SyncHandler<
     Sendable,
     MemoryStorage,
@@ -142,15 +110,6 @@ type ClientSyncHandler = SyncHandler<
     OpenPolicy,
     CountLeadingZeroBytes,
     TokioSpawn,
->;
-
-type ServerSyncHandler = SyncHandler<
-    Sendable,
-    MemoryStorage,
-    MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-    OpenPolicy,
-    CountLeadingZeroBytes,
-    TrackedTokioSpawn,
 >;
 
 #[allow(clippy::type_complexity)]
@@ -181,32 +140,24 @@ fn setup_client_subduction(
         .build::<Sendable, TokioWebSocketClient<MemorySigner>>()
 }
 
-#[allow(clippy::type_complexity)]
-fn setup_server_subduction(
-    signer: MemorySigner,
-) -> (
-    ServerSubduction,
-    ServerHandler,
-    ListenerFuture<
-        'static,
-        Sendable,
-        MemoryStorage,
-        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-        ServerSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TrackedTokioSpawn,
-        CountLeadingZeroBytes,
-    >,
-    subduction_core::connection::manager::ManagerFuture<Sendable>,
-) {
-    SubductionBuilder::new()
-        .signer(signer)
-        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
-        .timer(TimeoutTokio)
-        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>()
+type ServerNode = TokioWebSocketNode<
+    MemoryStorage,
+    OpenPolicy,
+    MemorySigner,
+    TimeoutTokio,
+    CountLeadingZeroBytes,
+>;
+
+fn setup_server_node(signer: MemorySigner) -> ServerNode {
+    TokioSubduction::start(|spawner, _cancel| {
+        let (sd, _handler, listener, manager) = SubductionBuilder::new()
+            .signer(signer)
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .spawner(spawner)
+            .timer(TimeoutTokio)
+            .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>>();
+        (sd, listener, manager)
+    })
 }
 
 #[tokio::test]
@@ -218,26 +169,13 @@ async fn client_reconnect() -> TestResult {
     let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
-        (sub, lfut, mfut)
-    };
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_node = setup_server_node(server_signer);
 
     let server = TokioWebSocketServer::new(
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server_subduction.clone(),
+        server_node,
     )
     .await?;
 
@@ -290,18 +228,8 @@ async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
     let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
-        (sub, lfut, mfut)
-    };
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_node = setup_server_node(server_signer);
+    let server_subduction = Arc::clone(server_node.subduction());
 
     // Aggressive: server pings every 80ms with a 40ms pong deadline and
     // tears connections down after 2 consecutive misses (~240ms).
@@ -316,8 +244,7 @@ async fn client_reconnect_keeps_keepalive_alive() -> TestResult {
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
         aggressive,
-        server_subduction.clone(),
-        TaskTracker::new(),
+        server_node,
     )
     .await?;
     let bound = server.address();
@@ -385,26 +312,13 @@ async fn server_graceful_shutdown() -> TestResult {
     let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
-        (sub, lfut, mfut)
-    };
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_node = setup_server_node(server_signer);
 
     let mut server = TokioWebSocketServer::new(
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server_subduction.clone(),
+        server_node,
     )
     .await?;
 
@@ -460,20 +374,8 @@ async fn multiple_concurrent_clients() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
-        (sub, lfut, mfut)
-    };
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_node = setup_server_node(server_signer);
+    let server_subduction = Arc::clone(server_node.subduction());
 
     // Add initial commit to server
     let (head1, parents1, blob1) = random_commit();
@@ -485,7 +387,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server_subduction.clone(),
+        server_node,
     )
     .await?;
 
@@ -628,26 +530,14 @@ async fn large_message_handling() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
-        (sub, lfut, mfut)
-    };
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_node = setup_server_node(server_signer);
+    let server_subduction = Arc::clone(server_node.subduction());
 
     let server = TokioWebSocketServer::new(
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server_subduction.clone(),
+        server_node,
     )
     .await?;
 
@@ -722,26 +612,14 @@ async fn message_ordering() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
-        (sub, lfut, mfut)
-    };
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_node = setup_server_node(server_signer);
+    let server_subduction = Arc::clone(server_node.subduction());
 
     let server = TokioWebSocketServer::new(
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server_subduction.clone(),
+        server_node,
     )
     .await?;
 
@@ -967,26 +845,14 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let sed_id = SedimentreeId::new([3u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) = {
-        let (sub, _handler, lfut, mfut) = setup_server_subduction(server_signer);
-        (sub, lfut, mfut)
-    };
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
+    let server_node = setup_server_node(server_signer);
+    let server_subduction = Arc::clone(server_node.subduction());
 
     let server = TokioWebSocketServer::new(
         addr,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
-        server_subduction.clone(),
+        server_node,
     )
     .await?;
 

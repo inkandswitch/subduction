@@ -3,10 +3,7 @@
 use std::{
     net::SocketAddr,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -34,16 +31,17 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;
 use subduction_redb_storage::RedbStorage;
+use subduction_tokio::{node::TokioSubduction, spawn::TrackedTokioSpawn};
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
     sleep::TokioSleeper,
     timeout::FuturesTimerTimeout,
-    tokio::{TokioSpawn, unified::UnifiedWebSocket},
+    tokio::unified::UnifiedWebSocket,
     websocket::{KeepAlive, WebSocket},
 };
 use tokio::{net::TcpListener, task::JoinSet, time};
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 use subduction_ephemeral::{
@@ -80,9 +78,20 @@ type CliSubduction<H> = Arc<
         CliKeyhivePolicyHandle,
         MemorySigner,
         FuturesTimerTimeout,
-        TokioSpawn,
+        TrackedTokioSpawn,
         CountLeadingZeroBytes,
     >,
+>;
+
+/// The owned, supervised node behind [`CliSubduction`].
+type CliNode<H> = TokioSubduction<
+    MetricsStorage<RedbStorage>,
+    CliConn,
+    H,
+    CliKeyhivePolicyHandle,
+    MemorySigner,
+    FuturesTimerTimeout,
+    CountLeadingZeroBytes,
 >;
 
 /// Arguments for the server command.
@@ -278,6 +287,9 @@ impl ServerArgs {
 
 /// Default interval for refreshing storage metrics (1 minute).
 const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
+
+/// How long shutdown waits for the node to drain before exiting anyway.
+const NODE_STOP_BUDGET: Duration = Duration::from_secs(10);
 
 /// Run the server with both WebSocket and HTTP long-poll transports.
 ///
@@ -554,7 +566,6 @@ where
     let builder = SubductionBuilder::new()
         .signer(signer.clone())
         .storage(storage, storage_policy)
-        .spawner(TokioSpawn)
         .timer(FuturesTimerTimeout)
         // Seeded so sequences resume above previous values across restarts;
         // see `peer::counter`.
@@ -577,37 +588,50 @@ where
         builder
     };
 
-    let mut requestor_tally = None;
-    let (subduction, listener_fut, manager_fut, ephemeral): (CliSubduction<H>, _, _, _) = builder
-        .build_composed(|sync_handler| {
-            requestor_tally = Some(sync_handler.requestor_tally());
-            let connections = sync_handler.connections();
+    // The node owns its loops and supervises them; it shares the process
+    // root `token`, so a loop dying cancels the whole server (for a
+    // supervised restart) and Ctrl-C stops the node. Everything the node
+    // spawns — including the ephemeral relay's fan-out, which shares the
+    // node's spawner — is on its tracker, which `stop()` drains before we
+    // exit.
+    let (node, (ephemeral, requestor_tally)): (CliNode<H>, _) =
+        TokioSubduction::start_with(TaskTracker::new(), token.clone(), |spawner, cancel| {
+            let (subduction, listener_fut, manager_fut, extra) = builder
+                .spawner(spawner.clone())
+                .build_composed(|sync_handler| {
+                    let requestor_tally = sync_handler.requestor_tally();
 
-            let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
-                connections,
-                OpenEphemeralPolicy,
-                EphemeralConfig::default(),
-                StdClock,
-                TokioSpawn,
-            );
-
-            // Drain ephemeral events — the server is a relay, not a consumer.
-            tokio::spawn(async move {
-                while let Ok(event) = ephemeral_rx.recv().await {
-                    tracing::debug!(
-                        sender = %event.sender,
-                        topic = %event.id,
-                        nonce = event.nonce,
-                        payload_size = event.payload.len(),
-                        "ephemeral event relayed"
+                    let (ephemeral, ephemeral_rx) = EphemeralHandler::new(
+                        sync_handler.connections(),
+                        OpenEphemeralPolicy,
+                        EphemeralConfig::default(),
+                        StdClock,
+                        spawner.clone(),
                     );
-                }
-            });
 
-            let handler = make_handler(sync_handler, ephemeral_handler.clone());
+                    // Drain ephemeral events — the server is a relay, not a
+                    // consumer. Tracked *and* cancelled: `ephemeral` clones
+                    // outlive `stop()`, so the channel never closes on its own.
+                    spawner
+                        .tracker()
+                        .spawn(cancel.run_until_cancelled_owned(async move {
+                            while let Ok(event) = ephemeral_rx.recv().await {
+                                tracing::debug!(
+                                    sender = %event.sender,
+                                    topic = %event.id,
+                                    nonce = event.nonce,
+                                    payload_size = event.payload.len(),
+                                    "ephemeral event relayed"
+                                );
+                            }
+                        }));
 
-            (handler, ephemeral_handler)
+                    let handler = make_handler(sync_handler, ephemeral.clone());
+                    (handler, (ephemeral, requestor_tally))
+                });
+            ((subduction, listener_fut, manager_fut), extra)
         });
+    let subduction: CliSubduction<H> = Arc::clone(node.subduction());
 
     let server_peer_id = subduction.peer_id();
 
@@ -621,50 +645,45 @@ where
     // the tally must be drained regardless — an undrained map sits at its cap
     // doing eviction scans forever — and the "top requestors" log line is
     // useful on its own.
+    //
+    // Scoped to the node: it holds an `Arc<Subduction>`, so it must be gone
+    // before `stop()` returns or the storage lock outlives the server.
     {
         let resident_subduction = subduction.clone();
-        let resident_token = token.clone();
         let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
-        tokio::spawn(async move {
+        node.spawn(async move {
             let mut interval = time::interval(refresh_interval);
             // Skip the immediate first tick: nothing to report at t=0.
             interval.tick().await;
             loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let resident = resident_subduction.resident_sedimentree_count().await;
-                        subduction_core::metrics::set_sedimentree_cache_resident(resident);
+                interval.tick().await;
+                let resident = resident_subduction.resident_sedimentree_count().await;
+                subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
-                        // Heals the connections gauge if an event-driven
-                        // refresh was missed.
-                        subduction_core::metrics::set_connections_active(
-                            resident_subduction.total_connection_count().await,
-                        );
+                // Heals the connections gauge if an event-driven refresh was
+                // missed.
+                subduction_core::metrics::set_connections_active(
+                    resident_subduction.total_connection_count().await,
+                );
 
-                        // Rank-shaped gauges carry the skew; the log line
-                        // carries the peer ids (see `requestor_tally` docs).
-                        if let Some(tally) = &requestor_tally {
-                            let ranked = tally.take_window().await;
-                            let counts: Vec<u64> =
-                                ranked.iter().map(|(_, count)| *count).collect();
-                            let total: u64 = counts.iter().sum();
-                            subduction_core::metrics::set_top_requestors(&counts, total);
-                            if !ranked.is_empty() {
-                                let top: Vec<String> = ranked
-                                    .iter()
-                                    .take(10)
-                                    .map(|(peer, count)| format!("{peer}={count}"))
-                                    .collect();
-                                tracing::info!(
-                                    window_secs = refresh_interval.as_secs(),
-                                    total_requestors = ranked.len(),
-                                    top = ?top,
-                                    "top requestors by batch-sync requests"
-                                );
-                            }
-                        }
-                    }
-                    () = resident_token.cancelled() => break,
+                // Rank-shaped gauges carry the skew; the log line carries the
+                // peer ids (see `requestor_tally` docs).
+                let ranked = requestor_tally.take_window().await;
+                let counts: Vec<u64> = ranked.iter().map(|(_, count)| *count).collect();
+                let total: u64 = counts.iter().sum();
+                subduction_core::metrics::set_top_requestors(&counts, total);
+                if !ranked.is_empty() {
+                    let top: Vec<String> = ranked
+                        .iter()
+                        .take(10)
+                        .map(|(peer, count)| format!("{peer}={count}"))
+                        .collect();
+                    tracing::info!(
+                        window_secs = refresh_interval.as_secs(),
+                        total_requestors = ranked.len(),
+                        top = ?top,
+                        "top requestors by batch-sync requests"
+                    );
                 }
             }
         });
@@ -708,55 +727,6 @@ where
         "Server started"
     );
     tracing::info!(peer = %peer_id, "Peer ID");
-
-    // The manager and listener are supervised: a node that outlives either
-    // accepts handshakes it can never service. An exit outside an orderly
-    // shutdown cancels the root token so the process exits and the service
-    // manager restarts it; `supervised_failure` makes that exit nonzero
-    // (`Restart=on-failure` ignores clean exits).
-    //
-    // The flag store must precede `cancel()`: the final check is only
-    // reached by waking from `token.cancelled().await`, whose internal
-    // synchronization makes the store visible.
-    let supervised_failure = Arc::new(AtomicBool::new(false));
-    let actor_cancel = token.clone();
-    let listener_cancel = token.clone();
-
-    let manager_supervisor = actor_cancel.clone();
-    let manager_failed = Arc::clone(&supervised_failure);
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = manager_fut => {
-                if !manager_supervisor.is_cancelled() {
-                    tracing::error!(
-                        "connection manager exited unexpectedly; \
-                         shutting down for supervised restart"
-                    );
-                    manager_failed.store(true, Ordering::Release);
-                    manager_supervisor.cancel();
-                }
-            },
-            () = actor_cancel.cancelled() => {}
-        }
-    });
-
-    let listener_supervisor = listener_cancel.clone();
-    let listener_failed = Arc::clone(&supervised_failure);
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = listener_fut => {
-                if !listener_supervisor.is_cancelled() {
-                    tracing::error!(
-                        "dispatch listener exited unexpectedly; \
-                         shutting down for supervised restart"
-                    );
-                    listener_failed.store(true, Ordering::Release);
-                    listener_supervisor.cancel();
-                }
-            },
-            () = listener_cancel.cancelled() => {}
-        }
-    });
 
     // Spawn the accept loop
     let accept_cancel = token.child_token();
@@ -992,7 +962,9 @@ where
         tracing::info!(path = %ready_path.display(), "Ready file written");
     }
 
-    // Wait for cancellation signal
+    // Wait for cancellation signal. The node shares `token`, so this fires
+    // both for an external shutdown (Ctrl-C) and for a loop dying under
+    // supervision.
     token.cancelled().await;
     tracing::info!("Shutting down server...");
     accept_task.abort();
@@ -1000,9 +972,22 @@ where
         iroh_task.abort();
     }
 
+    // Drain the node: loops exit, connection readers are aborted, and every
+    // in-flight write commits before we return. Bounded so a wedged task
+    // cannot block process exit.
+    if tokio::time::timeout(NODE_STOP_BUDGET, node.stop())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            budget = ?NODE_STOP_BUDGET,
+            "node did not stop within budget; exiting anyway"
+        );
+    }
+
     // A supervision-initiated shutdown must exit nonzero so
     // `Restart=on-failure` restarts the process.
-    if supervised_failure.load(Ordering::Acquire) {
+    if node.exited_unexpectedly() {
         return Err(eyre::eyre!(
             "critical background task (connection manager or listener) exited unexpectedly"
         ));

@@ -25,15 +25,14 @@ use subduction_ephemeral::{
     message::{EphemeralMessage, EphemeralPayload},
     topic::Topic,
 };
+use subduction_tokio::{node::TokioSubduction, timeout::TimeoutTokio};
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
-        TimeoutTokio, TrackedTokioSpawn, client::TokioWebSocketClient,
-        server::TokioWebSocketServer, unified::UnifiedWebSocket,
+        client::TokioWebSocketClient, server::TokioWebSocketServer, unified::UnifiedWebSocket,
     },
 };
 use testresult::TestResult;
-use tokio_util::task::TaskTracker;
 
 static TRACING: OnceLock<()> = OnceLock::new();
 
@@ -61,26 +60,22 @@ async fn ephemeral_message_survives_websocket_transport() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    let (sd, _, listener, manager) = SubductionBuilder::new()
-        .signer(server_signer)
-        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
-        .timer(TimeoutTokio)
-        .roundtrip_timeout(Duration::from_secs(5))
-        .build::<Sendable, ServerConn>();
-
-    tokio::spawn(async move {
-        listener.await.ok();
-    });
-    tokio::spawn(async move {
-        manager.await.ok();
+    let sd_node = TokioSubduction::start(|spawner, _cancel| {
+        let (sd, _handler, listener, manager) = SubductionBuilder::new()
+            .signer(server_signer)
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .timer(TimeoutTokio)
+            .roundtrip_timeout(Duration::from_secs(5))
+            .spawner(spawner)
+            .build::<Sendable, ServerConn>();
+        (sd, listener, manager)
     });
 
     let server = TokioWebSocketServer::new(
         addr,
         Duration::from_secs(60),
         DEFAULT_MAX_MESSAGE_SIZE,
-        sd.clone(),
+        sd_node,
     )
     .await?;
 
@@ -144,26 +139,22 @@ async fn ephemeral_and_sync_coexist_on_same_websocket() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    let (sd, _, listener, manager) = SubductionBuilder::new()
-        .signer(server_signer)
-        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TrackedTokioSpawn::new(TaskTracker::new()))
-        .timer(TimeoutTokio)
-        .roundtrip_timeout(Duration::from_secs(5))
-        .build::<Sendable, ServerConn>();
-
-    tokio::spawn(async move {
-        listener.await.ok();
-    });
-    tokio::spawn(async move {
-        manager.await.ok();
+    let sd_node = TokioSubduction::start(|spawner, _cancel| {
+        let (sd, _handler, listener, manager) = SubductionBuilder::new()
+            .signer(server_signer)
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .timer(TimeoutTokio)
+            .roundtrip_timeout(Duration::from_secs(5))
+            .spawner(spawner)
+            .build::<Sendable, ServerConn>();
+        (sd, listener, manager)
     });
 
     let server = TokioWebSocketServer::new(
         addr,
         Duration::from_secs(60),
         DEFAULT_MAX_MESSAGE_SIZE,
-        sd.clone(),
+        sd_node,
     )
     .await?;
 

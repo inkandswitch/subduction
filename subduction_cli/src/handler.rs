@@ -34,14 +34,14 @@ use subduction_ephemeral::{
 };
 use subduction_keyhive::handler::{SendableKeyhiveHandler, SendableRuntimeProtocol};
 use subduction_redb_storage::RedbStorage;
-use subduction_websocket::tokio::TokioSpawn;
+use subduction_tokio::spawn::TrackedTokioSpawn;
 
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
 
 /// The concrete ephemeral handler type for the CLI server.
 pub(crate) type CliEphemeralHandler =
-    EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock, TokioSpawn>;
+    EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock, TrackedTokioSpawn>;
 
 /// The concrete keyhive protocol type for the CLI server.
 pub(crate) type CliKeyhiveProtocol =
@@ -88,7 +88,7 @@ pub(crate) type CliSyncHandler = Arc<
         CliConn,
         CliKeyhivePolicyHandle,
         CountLeadingZeroBytes,
-        TokioSpawn,
+        TrackedTokioSpawn,
     >,
 >;
 

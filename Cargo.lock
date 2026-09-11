@@ -316,6 +316,7 @@ dependencies = [
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
+ "subduction_tokio",
  "subduction_websocket",
  "testresult",
  "tokio",
@@ -5395,6 +5396,7 @@ dependencies = [
  "subduction_iroh",
  "subduction_keyhive",
  "subduction_redb_storage",
+ "subduction_tokio",
  "subduction_websocket",
  "tempfile",
  "testresult",
@@ -5591,6 +5593,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "subduction_tokio"
+version = "0.1.0"
+dependencies = [
+ "future_form",
+ "futures",
+ "sedimentree_core",
+ "subduction_core",
+ "subduction_crypto",
+ "subduction_redb_storage",
+ "tempfile",
+ "testresult",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "subduction_wasm"
 version = "0.21.1"
 dependencies = [
@@ -5660,6 +5679,7 @@ dependencies = [
  "subduction_core",
  "subduction_crypto",
  "subduction_ephemeral",
+ "subduction_tokio",
  "tempfile",
  "testresult",
  "thiserror 2.0.20",
