@@ -80,9 +80,10 @@ A peer may have multiple simultaneous connections (e.g., different browser tabs)
 
 ## Push Invariant
 
-A _push_ is an unsolicited `LooseCommit` / `Fragment` message: forwarding data
-received from a peer (`recv_commit` / `recv_fragment`) or announcing data
-authored locally (`add_commit` / `add_fragment`). Both use one recipient set:
+A _push_ is a `LooseCommit` / `Fragment` message sent on the strength of a
+subscription rather than in reply to a request: forwarding data received from a
+peer (`recv_commit` / `recv_fragment`) or announcing data authored locally
+(`add_commit` / `add_fragment`). Both use one recipient set:
 
 > A push for sedimentree _T_ from origin _O_ goes to exactly
 > `(wants(T) ∩ may_fetch(T)) \ {O}`, where `wants(T) = subscriptions[T]` and
@@ -99,7 +100,7 @@ commits. Such a fallback cannot distinguish an empty `wants(T)` from an empty
 `wants(T) ∩ may_fetch(T)`, so it would fire exactly when policy had said no.
 
 Data also moves in the request/response half of batch sync
-(`send_requested_data`, `BatchSyncResponse`). Those are replies to a peer's own
+(`send_requested_data`, `BatchSyncResponse`). Those are replies to a specific
 request, gated by `authorize_fetch` on the responder, and are not pushes.
 
 ## Forward Path

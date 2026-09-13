@@ -191,7 +191,7 @@ async fn relay_topology_converges_on_initial_sync() -> TestResult {
     assert_eq!(
         r.get_commits(sed_id).await.map(|c| c.len()),
         None,
-        "R must not receive an unsolicited push for an unsubscribed tree"
+        "R must not be pushed a tree it has not subscribed to"
     );
 
     // A subscribes via R (the automerge-repo write path: store, then
