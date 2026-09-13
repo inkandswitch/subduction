@@ -21,7 +21,7 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
-use subduction_crypto::verified_meta::VerifiedMeta;
+use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 
 use crate::{
     collections::bounded_sharded_map::BoundedShardedMap,
@@ -34,10 +34,41 @@ use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use super::error::IoError;
 
+/// Items a batch sync response added to the local tree, in wire form, so
+/// the caller can push them on to its own subscribers (see
+/// [`peers::build_pushes`](super::peers::build_pushes)).
+#[derive(Debug, Default)]
+pub(crate) struct Ingested {
+    pub(crate) commits: Vec<(Signed<LooseCommit>, Blob)>,
+    pub(crate) fragments: Vec<(Signed<Fragment>, Blob)>,
+}
+
+impl Ingested {
+    pub(crate) fn commit(signed: Signed<LooseCommit>, blob: Blob) -> Self {
+        Self {
+            commits: alloc::vec![(signed, blob)],
+            fragments: Vec::new(),
+        }
+    }
+
+    pub(crate) fn fragment(signed: Signed<Fragment>, blob: Blob) -> Self {
+        Self {
+            commits: Vec::new(),
+            fragments: alloc::vec![(signed, blob)],
+        }
+    }
+
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.commits.is_empty() && self.fragments.is_empty()
+    }
+}
+
 /// Process an incoming batch sync response: verify and store all commits
-/// and fragments from the diff.
+/// and fragments from the diff. Returns the items not already present in the
+/// minimized local tree; the rest are written idempotently but not reported,
+/// so they are not re-pushed.
 ///
-/// Policy-rejected diffs are logged and silently ignored (returns `Ok(())`).
+/// Policy-rejected items are logged and skipped.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn recv_batch_sync_response<
     Async: FutureForm,
@@ -52,7 +83,7 @@ pub(crate) async fn recv_batch_sync_response<
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
-) -> Result<(), IoError<Async, Store, Conn, WireMsg>> {
+) -> Result<Ingested, IoError<Async, Store, Conn, WireMsg>> {
     tracing::info!(
         tree = ?id,
         peer = %from,
@@ -176,6 +207,7 @@ pub(crate) async fn recv_batch_sync_response<
         .copied()
         .collect();
 
+    let mut ingested = Ingested::default();
     for author_id in all_authors {
         let Some(putter) = putter_cache.get(&author_id) else {
             tracing::warn!(author = %author_id, "putter for author unexpectedly missing from cache");
@@ -184,15 +216,53 @@ pub(crate) async fn recv_batch_sync_response<
         let commits = commits_by_author.remove(&author_id).unwrap_or_default();
         let fragments = fragments_by_author.remove(&author_id).unwrap_or_default();
 
-        // Clone payloads for in-memory tree updates before moving into save_batch.
-        let commit_payloads: Vec<LooseCommit> = commits
-            .iter()
-            .map(|v: &VerifiedMeta<LooseCommit>| v.payload().clone())
-            .collect();
-        let fragment_payloads: Vec<Fragment> = fragments
-            .iter()
-            .map(|v: &VerifiedMeta<Fragment>| v.payload().clone())
-            .collect();
+        // Newness is judged against the tree *before* persisting, as in
+        // `insert_commit_locally`: a hydrate-on-miss after `save_batch` would
+        // load the just-written items and report nothing as new. A `None`
+        // tree (absent from storage) means everything is new.
+        //
+        // `seen_*` start as the heads the tree already has; each accepted item
+        // is added as we go, so `Set::insert` returns `false` for a head that
+        // is in the tree *or* appeared earlier in this response.
+        let (mut seen_commits, mut seen_fragments): (Set<CommitId>, Set<CommitId>) = sedimentrees
+            .with_hydrated_ref(
+                id,
+                || load_tree_via_putter::<Async, _>(putter),
+                |tree| {
+                    (
+                        commits
+                            .iter()
+                            .map(|v| v.payload().head())
+                            .filter(|h| tree.has_loose_commit(*h))
+                            .collect(),
+                        fragments
+                            .iter()
+                            .map(|v| v.payload().head())
+                            .filter(|h| tree.has_fragment(*h))
+                            .collect(),
+                    )
+                },
+            )
+            .await
+            .map_err(IoError::Storage)?
+            .unwrap_or_default();
+
+        ingested.commits.extend(
+            commits
+                .iter()
+                .filter(|v| seen_commits.insert(v.payload().head()))
+                .map(|v| (v.signed().clone(), v.blob().clone())),
+        );
+        ingested.fragments.extend(
+            fragments
+                .iter()
+                .filter(|v| seen_fragments.insert(v.payload().head()))
+                .map(|v| (v.signed().clone(), v.blob().clone())),
+        );
+        let commit_payloads: Vec<LooseCommit> =
+            commits.iter().map(|v| v.payload().clone()).collect();
+        let fragment_payloads: Vec<Fragment> =
+            fragments.iter().map(|v| v.payload().clone()).collect();
 
         putter
             .save_batch(commits, fragments)
@@ -222,7 +292,7 @@ pub(crate) async fn recv_batch_sync_response<
         }
     }
 
-    Ok(())
+    Ok(ingested)
 }
 
 /// Insert a verified commit into storage and the in-memory tree.

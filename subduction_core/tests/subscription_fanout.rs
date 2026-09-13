@@ -216,7 +216,7 @@ async fn add_commit_without_subscribers_pushes_nothing() -> TestResult {
     let (a_s, b_s) = (make_signer(1), make_signer(2));
     let a = make_node(a_s.clone(), OpenPolicy);
     let b = make_node(b_s.clone(), OpenPolicy);
-    connect(&a, &a_s, &b, &b_s).await?;
+    connect(&b, &b_s, &a, &a_s).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let id = SedimentreeId::new([1u8; 32]);
@@ -247,7 +247,7 @@ async fn add_fragment_without_subscribers_pushes_nothing() -> TestResult {
     let (a_s, b_s) = (make_signer(3), make_signer(4));
     let a = make_node(a_s.clone(), OpenPolicy);
     let b = make_node(b_s.clone(), OpenPolicy);
-    connect(&a, &a_s, &b, &b_s).await?;
+    connect(&b, &b_s, &a, &a_s).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let id = SedimentreeId::new([2u8; 32]);
@@ -285,8 +285,8 @@ async fn add_commit_pushes_only_to_authorized_subscribers() -> TestResult {
     let a = make_node(a_s.clone(), AllowFetchFor(BTreeSet::from([b_peer])));
     let b = make_node(b_s.clone(), OpenPolicy);
     let c = make_node(c_s.clone(), OpenPolicy);
-    connect(&a, &a_s, &b, &b_s).await?;
-    connect(&a, &a_s, &c, &c_s).await?;
+    connect(&b, &b_s, &a, &a_s).await?;
+    connect(&c, &c_s, &a, &a_s).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let id = SedimentreeId::new([3u8; 32]);
@@ -393,6 +393,60 @@ async fn add_commit_sends_one_frame_per_commit_to_a_subscriber() -> TestResult {
             .iter()
             .all(|m| matches!(m, SyncMessage::LooseCommit { .. })),
         "add_commit must push, not open a sync round; wire had {frames:?}"
+    );
+    Ok(())
+}
+
+/// The same intersection governs data a node pulls *as a requester*. Relay
+/// R (policy: only A may fetch) has subscribers A and C; R pulls X from its
+/// dialed upstream B and forwards it to A only.
+///
+/// ```text
+///   A ──dials──▸ R ──dials──▸ B (holds X)
+///   C ──dials──▸ R
+/// ```
+#[tokio::test]
+async fn requester_pulled_data_is_pushed_only_to_authorized_subscribers() -> TestResult {
+    let (a_s, c_s, r_s, b_s) = (
+        make_signer(10),
+        make_signer(11),
+        make_signer(12),
+        make_signer(13),
+    );
+    let a_peer = PeerId::from(a_s.verifying_key());
+    let r_peer = PeerId::from(r_s.verifying_key());
+
+    let a = make_node(a_s.clone(), OpenPolicy);
+    let c = make_node(c_s.clone(), OpenPolicy);
+    let r = make_node(r_s.clone(), AllowFetchFor(BTreeSet::from([a_peer])));
+    let b = make_node(b_s.clone(), OpenPolicy);
+    connect(&a, &a_s, &r, &r_s).await?;
+    connect(&c, &c_s, &r, &r_s).await?;
+    connect(&r, &r_s, &b, &b_s).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let id = SedimentreeId::new([5u8; 32]);
+    b.store_commit(id, make_head(1), BTreeSet::new(), make_blob(1))
+        .await?;
+
+    // Both subscribe on R. R has nothing yet, propagates upstream to B, and
+    // pulls X in the response.
+    a.sync_with_peer(&r_peer, id, true, SYNC_TIMEOUT).await?;
+    drop(c.sync_with_peer(&r_peer, id, true, SYNC_TIMEOUT).await);
+
+    assert!(
+        wait_until(|| async { commit_count(&r, id).await == 1 }).await,
+        "R should pull X from B"
+    );
+    assert!(
+        wait_until(|| async { commit_count(&a, id).await == 1 }).await,
+        "authorized subscriber A must receive what R pulled"
+    );
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    assert_eq!(
+        commit_count(&c, id).await,
+        0,
+        "C is subscribed but not authorized on R; it must not receive X"
     );
     Ok(())
 }

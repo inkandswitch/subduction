@@ -343,7 +343,9 @@ impl<
     }
 }
 
-/// Deferred subscription fan-out for a freshly-ingested commit or fragment.
+/// Deferred subscription fan-out for freshly-ingested commits or fragments,
+/// whether pushed to us or returned to one of our own requests (then with no
+/// ack to send).
 ///
 /// Built on the ingest path but **run off it**: [`SyncHandler`]'s `handle`
 /// spawns [`run`](FanOut::run) via the handler's [`Spawn`], so a slow
@@ -357,8 +359,8 @@ where
     Async: FutureForm,
 {
     /// `HeadsUpdate` ack to the originating peer (1.5-RTT second half).
-    ack_conn: Authenticated<Conn, Async>,
-    ack_msg: SyncMessage,
+    /// `None` when the trigger was a response to our own request.
+    ack: Option<(Authenticated<Conn, Async>, SyncMessage)>,
     /// Per-subscriber pushes, send counters already stamped in order.
     pushes: Vec<(Authenticated<Conn, Async>, SyncMessage)>,
 }
@@ -373,8 +375,10 @@ where
     /// is torn down by the listen loop's canonical path. A slow or absent peer
     /// just misses the live push and reconciles via batch sync.
     async fn run(self) {
-        if let Err(e) = self.ack_conn.send(&self.ack_msg).await {
-            tracing::warn!(peer = %self.ack_conn.peer_id(), error = %e, "peer disconnected while sending HeadsUpdate");
+        if let Some((ack_conn, ack_msg)) = &self.ack
+            && let Err(e) = ack_conn.send(ack_msg).await
+        {
+            tracing::warn!(peer = %ack_conn.peer_id(), error = %e, "peer disconnected while sending HeadsUpdate");
         }
 
         let results = futures::future::join_all(
@@ -512,17 +516,16 @@ impl<
                 crate::metrics::batch_sync_response();
 
                 match result {
-                    SyncResult::Ok(diff) => {
-                        self.recv_batch_sync_response(&from, id, diff).await?;
-                    }
+                    SyncResult::Ok(diff) => self.recv_batch_sync_response(&from, id, diff).await?,
                     SyncResult::NotFound => {
                         tracing::debug!(peer = %from, tree = ?id, "peer reports sedimentree not found");
+                        None
                     }
                     SyncResult::Unauthorized => {
                         tracing::debug!(peer = %from, tree = ?id, "peer reports we are unauthorized for sedimentree");
+                        None
                     }
                 }
-                None
             }
             SyncMessage::RemoveSubscriptions(crate::connection::message::RemoveSubscriptions {
                 ids,
@@ -638,8 +641,7 @@ impl<
                 .await;
 
             Some(FanOut {
-                ack_conn: conn.clone(),
-                ack_msg,
+                ack: Some((conn.clone(), ack_msg)),
                 pushes,
             })
         } else {
@@ -786,8 +788,7 @@ impl<
                 .await;
 
             Some(FanOut {
-                ack_conn: conn.clone(),
-                ack_msg,
+                ack: Some((conn.clone(), ack_msg)),
                 pushes,
             })
         } else {
@@ -1116,15 +1117,29 @@ impl<
         Ok(())
     }
 
+    /// Ingest a response to one of our own requests, then push whatever was
+    /// new to our subscribers (excluding the responder). No ack is owed.
     async fn recv_batch_sync_response(
         &self,
         from: &PeerId,
         id: SedimentreeId,
         diff: SyncDiff,
-    ) -> Result<(), IoError<Async, Store, Conn, SyncMessage>> {
-        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+        let ingested =
+            ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
+                .await?;
         self.minimize_tree(id).await;
-        Ok(())
+        if ingested.is_empty() {
+            return Ok(None);
+        }
+        let conns = self.get_authorized_subscriber_conns(id, from).await;
+        if conns.is_empty() {
+            return Ok(None);
+        }
+
+        let heads = self.heads_for(id).await;
+        let pushes = peers::build_pushes(id, &heads, &self.send_counter, &conns, &ingested).await;
+        Ok(Some(FanOut { ack: None, pushes }))
     }
 
     // -----------------------------------------------------------------------
@@ -1322,8 +1337,7 @@ mod tests {
                 id: SedimentreeId::new([0u8; 32]),
             });
         let fan_out = FanOut {
-            ack_conn,
-            ack_msg: msg.clone(),
+            ack: Some((ack_conn, msg.clone())),
             pushes: vec![
                 (ok_a, msg.clone()),
                 (ok_b, msg.clone()),

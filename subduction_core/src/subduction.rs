@@ -63,6 +63,7 @@ pub mod request;
 pub mod dispatch_completion;
 pub(crate) mod ingest;
 pub(crate) mod peers;
+pub use peers::SendPushes;
 pub(crate) mod spawn_guard;
 
 use crate::{
@@ -1338,43 +1339,12 @@ where
 
         self.minimize_tree(id).await;
 
-        // Read the just-written tree's heads via the cache (counts as an
-        // access — appropriate, the tree was just written so it is hot).
-        let heads = self
-            .sedimentrees
-            .get_cloned(&id)
-            .await
-            .map(|mut s| s.heads(&self.depth_metric))
-            .unwrap_or_default();
-
-        // Push invariant: subscribed and authorized peers only, no fallback.
-        // See `design/sync/subscriptions.md` § Push Invariant.
-        for conn in self.get_authorized_subscriber_conns(id, &self_id).await {
-            let peer_id = conn.peer_id();
-            tracing::debug!(tree = ?id, peer = %peer_id, "propagating commit for sedimentree");
-
-            let msg: Hdl::Message = SyncMessage::LooseCommit {
-                id,
-                commit: signed_for_wire.clone(),
-                blob: blob.clone(),
-                sender_heads: RemoteHeads {
-                    counter: self.send_counter.next(peer_id).await,
-                    heads: heads.clone(),
-                },
-            }
-            .into();
-
-            if let Err(e) = conn.send(&msg).await {
-                tracing::warn!(
-                    peer = %peer_id,
-                    error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
-                    "peer disconnected"
-                );
-                // No prune: a failed send means the transport is closed, so
-                // the read loop's canonical teardown removes it. Pruning here
-                // would skip the `on_peer_disconnect` hook.
-            }
-        }
+        self.push_to_subscribers(
+            id,
+            &self_id,
+            &ingest::Ingested::commit(signed_for_wire, blob),
+        )
+        .await;
 
         let mut maybe_requested_fragment = None;
         let depth = self.depth_metric.to_depth(commit_head);
@@ -1478,44 +1448,61 @@ where
 
         self.minimize_tree(id).await;
 
-        // Read the just-written tree's heads via the cache (counts as an
-        // access — the tree was just written so it is hot).
-        let heads = self
-            .sedimentrees
-            .get_cloned(&id)
-            .await
-            .map(|mut s| s.heads(&self.depth_metric))
-            .unwrap_or_default();
-
-        // Push invariant: see `add_commit`.
-        for conn in self.get_authorized_subscriber_conns(id, &self_id).await {
-            let peer_id = conn.peer_id();
-            tracing::debug!(digest = ?fragment_digest, tree = ?id, peer = %peer_id, "propagating fragment for sedimentree");
-
-            let msg: Hdl::Message = SyncMessage::Fragment {
-                id,
-                fragment: signed_for_wire.clone(),
-                blob: blob.clone(),
-                sender_heads: RemoteHeads {
-                    counter: self.send_counter.next(peer_id).await,
-                    heads: heads.clone(),
-                },
-            }
-            .into();
-
-            if let Err(e) = conn.send(&msg).await {
-                tracing::warn!(
-                    peer = %peer_id,
-                    error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
-                    "peer disconnected"
-                );
-                // No prune: a failed send means the transport is closed, so
-                // the read loop's canonical teardown removes it. Pruning here
-                // would skip the `on_peer_disconnect` hook.
-            }
-        }
+        self.push_to_subscribers(
+            id,
+            &self_id,
+            &ingest::Ingested::fragment(signed_for_wire, blob),
+        )
+        .await;
 
         Ok(())
+    }
+
+    /// Push `ingested` items for `id` to every subscriber that is authorized
+    /// to fetch it, excluding `origin` (the peer the data came from, or this
+    /// node for local writes). `SyncHandler` has the inbound equivalent; see
+    /// `design/sync/subscriptions.md` § Push Invariant.
+    ///
+    /// Frames are built here (so per-peer send counters are stamped in
+    /// order) and sent on a spawned task so a slow subscriber cannot stall
+    /// the caller. Best effort: a failed send is logged and the transport is
+    /// left for the read loop's canonical teardown, so the `on_peer_disconnect`
+    /// hook still fires.
+    pub(crate) async fn push_to_subscribers(
+        &self,
+        id: SedimentreeId,
+        origin: &PeerId,
+        ingested: &ingest::Ingested,
+    ) {
+        if ingested.is_empty() {
+            return;
+        }
+        let conns = self.get_authorized_subscriber_conns(id, origin).await;
+        if conns.is_empty() {
+            return;
+        }
+
+        // On a heads read failure push with empty heads rather than drop the
+        // data, matching `SyncHandler::heads_for`.
+        let heads = ingest::heads_or_hydrate(
+            &self.sedimentrees,
+            &self.storage,
+            &self.depth_metric,
+            id,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(tree = ?id, error = %e, "could not read heads; pushing with none");
+            Vec::new()
+        });
+
+        let pushes: Vec<(Authenticated<Conn, Async>, Hdl::Message)> =
+            peers::build_pushes(id, &heads, &self.send_counter, &conns, ingested)
+                .await
+                .into_iter()
+                .map(|(conn, msg)| (conn, msg.into()))
+                .collect();
+        self.spawner.spawn(Async::send_pushes(pushes));
     }
 
     // ── Batch / Bulk Ingestion ──────────────────────────────────────────
@@ -1753,8 +1740,10 @@ where
 
     /// Handle receiving a batch sync response from a peer.
     ///
-    /// Ingests all commits and fragments from the diff, then re-minimizes
-    /// the in-memory sedimentree to maintain the minimal covering invariant.
+    /// Ingests all commits and fragments from the diff, re-minimizes the
+    /// in-memory sedimentree, then pushes whatever was new to this node's
+    /// own subscribers (excluding `from`). Data this node learns as a
+    /// requester is forwarded exactly like data pushed to it.
     ///
     /// # Errors
     ///
@@ -1765,8 +1754,11 @@ where
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<Async, Store, Conn, Hdl::Message>> {
-        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
+        let ingested =
+            ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
+                .await?;
         self.minimize_tree(id).await;
+        self.push_to_subscribers(id, from, &ingested).await;
         Ok(())
     }
 
@@ -2274,7 +2266,7 @@ where
                     // items by author and writes each batch in a single `save_batch`.
                     // `requesting` is handled separately below, so the ingester's
                     // copy is left empty.
-                    ingest::recv_batch_sync_response(
+                    let ingested = ingest::recv_batch_sync_response(
                         &self.sedimentrees,
                         &self.storage,
                         to_ask,
@@ -2287,6 +2279,7 @@ where
                     )
                     .await?;
                     self.minimize_tree(id).await;
+                    self.push_to_subscribers(id, to_ask, &ingested).await;
 
                     // Update received stats (count what was offered, not verified)
                     stats.commits_received += commits_to_receive;
@@ -2509,7 +2502,7 @@ where
 
                                 // Ingest in one batched pass; see `sync_with_peer`.
                                 // `requesting` is handled separately below.
-                                ingest::recv_batch_sync_response(
+                                let ingested = ingest::recv_batch_sync_response(
                                     &self.sedimentrees,
                                     &self.storage,
                                     peer_id,
@@ -2522,6 +2515,7 @@ where
                                 )
                                 .await?;
                                 self.minimize_tree(id).await;
+                                self.push_to_subscribers(id, peer_id, &ingested).await;
 
                                 // Update received stats
                                 stats.commits_received += commits_to_receive;
@@ -3688,7 +3682,11 @@ pub trait SubductionFutureForm<
     Sign: Signer<Self>,
     Metric: DepthMetric,
     const SHARDS: usize,
->: FutureForm + RunManager<Authenticated<Conn, Self>, WireMsg> + Sized
+>:
+    FutureForm
+    + RunManager<Authenticated<Conn, Self>, WireMsg>
+    + Sized
+    + peers::SendPushes<Conn, WireMsg>
 {
 }
 
@@ -3701,7 +3699,10 @@ impl<
     Sign: Signer<Self>,
     Metric: DepthMetric,
     const SHARDS: usize,
-    Async: FutureForm + RunManager<Authenticated<Conn, Async>, WireMsg> + Sized,
+    Async: FutureForm
+        + RunManager<Authenticated<Conn, Async>, WireMsg>
+        + peers::SendPushes<Conn, WireMsg>
+        + Sized,
 > SubductionFutureForm<'a, Store, Conn, WireMsg, Auth, Sign, Metric, SHARDS> for Async
 {
 }
@@ -3724,7 +3725,11 @@ pub trait StartListener<
     Sign: Signer<Self>,
     Metric: DepthMetric,
     const SHARDS: usize,
->: FutureForm + RunManager<Authenticated<Conn, Self>, WireMsg> + Sized where
+>:
+    FutureForm
+    + RunManager<Authenticated<Conn, Self>, WireMsg>
+    + peers::SendPushes<Conn, WireMsg>
+    + Sized where
     Hdl::HandlerError: Into<ListenError<Self, Store, Conn, WireMsg>>,
 {
     /// Start the listener task for Subduction.
@@ -3841,7 +3846,11 @@ pub trait SpawnDocSync<
     Sign: Signer<Self>,
     Metric: DepthMetric,
     const SHARDS: usize,
->: FutureForm + RunManager<Authenticated<Conn, Self>, WireMsg> + Sized
+>:
+    FutureForm
+    + RunManager<Authenticated<Conn, Self>, WireMsg>
+    + peers::SendPushes<Conn, WireMsg>
+    + Sized
 {
     /// Construct the spawnable future for syncing a single document.
     #[allow(clippy::type_complexity)]

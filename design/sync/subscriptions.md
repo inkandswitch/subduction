@@ -81,16 +81,22 @@ A peer may have multiple simultaneous connections (e.g., different browser tabs)
 ## Push Invariant
 
 A _push_ is a `LooseCommit` / `Fragment` message sent on the strength of a
-subscription rather than in reply to a request: forwarding data received from a
-peer (`recv_commit` / `recv_fragment`) or announcing data authored locally
-(`add_commit` / `add_fragment`). Both use one recipient set:
+subscription rather than in reply to a request. Three things trigger one:
+data pushed to us by a peer (`recv_commit` / `recv_fragment`), data returned
+to us in a `BatchSyncResponse` to our own request, and data authored locally
+(`add_commit` / `add_fragment`). All three use one recipient set:
 
 > A push for sedimentree _T_ from origin _O_ goes to exactly
 > `(wants(T) ∩ may_fetch(T)) \ {O}`, where `wants(T) = subscriptions[T]` and
 > `may_fetch(T)` is the subset of peers for which `filter_authorized_fetch(P, [T])`
 > keeps _T_. _O_ is the peer the data came from, or this node for local writes.
 
-Having new data for _T_ triggers a push; it never widens the recipient set.
+Having new data for _T_ triggers a push, however it arrived; the arrival path
+never widens or narrows the recipient set.
+
+`subscriptions[T]` gains _P_ only when _P_ sends
+`BatchSyncRequest { T, subscribe: true }`, or when this node sends one to _P_
+(mutual subscription, so a node's own writes reach the peers it syncs with).
 There is no "nobody is subscribed, so send it to everyone" fallback: a locally
 authored commit on a tree with no authorized subscribers stays local until this
 node opens a subscribing sync round (`sync_with_all_peers(id, subscribe =
@@ -153,6 +159,10 @@ inbound subscribing `BatchSyncRequest` also propagates the subscription
 to every _other_ currently-connected peer. Forwarding _updates_
 (`LooseCommit` / `Fragment`) and forwarding _subscription requests_
 stay symmetric: both flow outward from every accepting node.
+
+What the relay learns from upstream it pushes to its own subscribers, by
+the [Push Invariant](#push-invariant), whether that data arrived as a push
+or in the response to the relay's own request.
 
 ```mermaid
 sequenceDiagram
