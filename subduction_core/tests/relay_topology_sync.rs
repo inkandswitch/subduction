@@ -309,10 +309,8 @@ async fn relay_topology_rapid_fire_then_idle_sync_is_empty() -> TestResult {
 /// about, R must propagate that subscription upstream to B so any
 /// future commits B pushes can be forwarded back through R to A.
 ///
-/// This is the symmetric counterpart of the existing outbound
-/// broadcast in `SyncHandler::recv_commit` / `recv_fragment`:
-/// forwarding updates and forwarding subscription requests are now
-/// both done by every node.
+/// R forwards A's subscribe over the connections R dialed; here that
+/// is B.
 #[tokio::test]
 async fn relay_topology_propagates_subscriptions_upstream() -> TestResult {
     let (a, r, b, _a_s, r_signer, b_signer) = setup_relay_topology().await?;

@@ -20,7 +20,7 @@ use sedimentree_core::{
 };
 
 use crate::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::{Connection, message::SyncMessage},
     peer::{counter::PeerCounter, id::PeerId},
     policy::storage::StoragePolicy,
@@ -203,6 +203,24 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> SendPushes<Conn, WireMsg
             .await;
         })
     }
+}
+
+/// The peers a subscribe from `originator` is forwarded to: every peer other
+/// than `originator` with at least one connection this node dialed. Upstream
+/// is a property of the peer, not of any one connection.
+pub fn upstream_peers<D: IntoIterator<Item = Direction>>(
+    peers: impl IntoIterator<Item = (PeerId, D)>,
+    originator: PeerId,
+) -> Vec<PeerId> {
+    peers
+        .into_iter()
+        .filter(|(peer, _)| *peer != originator)
+        .filter_map(|(peer, dirs)| {
+            dirs.into_iter()
+                .any(|d| d == Direction::Dialed)
+                .then_some(peer)
+        })
+        .collect()
 }
 
 #[cfg(test)]

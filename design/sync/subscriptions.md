@@ -156,9 +156,16 @@ forward path.
 
 To preserve that end-to-end reachability, every node that accepts an
 inbound subscribing `BatchSyncRequest` also propagates the subscription
-to every _other_ currently-connected peer. Forwarding _updates_
-(`LooseCommit` / `Fragment`) and forwarding _subscription requests_
-stay symmetric: both flow outward from every accepting node.
+to its _upstream_ peers: the connections this node _dialed_
+(`Direction::Dialed`, recorded at handshake). Propagation never subscribes a peer
+that dialed us to a tree on a third party's behalf, and never tells it a
+tree's ID.
+
+Clients dial servers, relays dial the servers behind them, and servers dial
+nobody: a hub server propagates nothing, and each relay in a chain forwards
+one hop further up. Both ends of a simultaneous open are `Dialed`: each
+is the other's upstream. There is no override: a node that dials
+the peers it serves will propagate to them.
 
 What the relay learns from upstream it pushes to its own subscribers, by
 the [Push Invariant](#push-invariant), whether that data arrived as a push
@@ -219,8 +226,9 @@ after one round.
 
 ### Originator Exclusion
 
-The propagation step iterates connected peers other than the originator.
-A's subscribe does not cause R to send a `BatchSyncRequest` back to A.
+The propagation step iterates the peers this node dialed, other than the
+originator. A's subscribe does not cause R to send a `BatchSyncRequest` back
+to A.
 This matters in topologies where A and B are mutual relays for each
 other.
 

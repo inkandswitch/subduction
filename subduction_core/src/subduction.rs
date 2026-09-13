@@ -63,7 +63,7 @@ pub mod request;
 pub mod dispatch_completion;
 pub(crate) mod ingest;
 pub(crate) mod peers;
-pub use peers::SendPushes;
+pub use peers::{SendPushes, upstream_peers};
 pub(crate) mod spawn_guard;
 
 use crate::{
@@ -2030,12 +2030,12 @@ where
         Ok(per_peer)
     }
 
-    /// Forward an inbound subscription for `id` to every connected peer
-    /// other than `originator` not already subscribed for `id`, via
-    /// [`sync_with_peer`](Self::sync_with_peer) with `subscribe = true`.
-    /// This keeps relay topologies reachable: updates an upstream peer
-    /// later pushes flow back through us to the originator. Best-effort;
-    /// per-peer errors are logged and ignored. See
+    /// Forward an inbound subscription for `id` to every peer this node
+    /// dialed ([`Direction::Dialed`](crate::authenticated::Direction::Dialed))
+    /// other than `originator`, via [`sync_with_peer`](Self::sync_with_peer)
+    /// with `subscribe = true`. Upstream is a property of the peer, not the
+    /// socket: a peer we dialed on any connection counts. Peers that only
+    /// dialed us are never subscribed on a third party's behalf. Best-effort; per-peer errors are logged. See
     /// `design/sync/subscriptions.md#upstream-propagation-relay-topologies`.
     ///
     /// # Concurrency
@@ -2067,7 +2067,12 @@ where
     pub(crate) async fn propagate_subscription(&self, id: SedimentreeId, originator: PeerId) {
         let peers: Vec<PeerId> = {
             let conns = self.connections.lock().await;
-            conns.keys().copied().filter(|p| *p != originator).collect()
+            peers::upstream_peers(
+                conns
+                    .iter()
+                    .map(|(peer, conns)| (*peer, conns.iter().map(Authenticated::direction))),
+                originator,
+            )
         };
 
         if peers.is_empty() {

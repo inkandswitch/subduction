@@ -1,5 +1,7 @@
-//! Laws for the requester-side push path.
+//! Laws for subscription propagation and requester-side push.
 //!
+//! - `upstream_peers` selects exactly the non-originator peers with a dialed
+//!   connection, regardless of how many other connections they have.
 //! - Requester-side ingest reports each head once: repeats within a response
 //!   and items already in the tree are not pushed.
 //!
@@ -9,7 +11,11 @@
 #![cfg(feature = "bolero")]
 #![allow(clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use future_form::Sendable;
 use sedimentree_core::{
@@ -30,12 +36,42 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder, upstream_peers},
 };
 use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
 const fn peer(seed: u8) -> PeerId {
     PeerId::new([seed; 32])
+}
+
+/// `upstream_peers(peers, originator) == { p ≠ originator : Dialed ∈ dirs(p) }`.
+#[test]
+fn prop_upstream_peers_is_dialed_minus_originator() {
+    bolero::check!()
+        .with_arbitrary::<(BTreeMap<u8, Vec<bool>>, u8)>()
+        .for_each(|(table, originator)| {
+            let originator = peer(*originator);
+            let input = table.iter().map(|(seed, dialed)| {
+                (
+                    peer(*seed),
+                    dialed.iter().map(|d| {
+                        if *d {
+                            Direction::Dialed
+                        } else {
+                            Direction::Accepted
+                        }
+                    }),
+                )
+            });
+            let got: BTreeSet<PeerId> = upstream_peers(input, originator).into_iter().collect();
+
+            let want: BTreeSet<PeerId> = table
+                .iter()
+                .filter(|(seed, dialed)| peer(**seed) != originator && dialed.contains(&true))
+                .map(|(seed, _)| peer(*seed))
+                .collect();
+            assert_eq!(got, want);
+        });
 }
 
 type Conn = ChannelMockConnection<SyncMessage>;
