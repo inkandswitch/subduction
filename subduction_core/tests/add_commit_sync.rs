@@ -327,17 +327,14 @@ async fn full_sync_sends_all_commits() -> TestResult {
     }
     assert_eq!(expected_digests.len(), 5, "Should have 5 commit digests");
 
-    // Drain broadcast messages (commits were sent when added)
-    let mut broadcast_count = 0;
-    while let Ok(msg) = handle.outbound_rx.try_recv() {
-        if matches!(msg, SyncMessage::LooseCommit { .. }) {
-            broadcast_count += 1;
-        }
-    }
-
-    // Note: When there are no subscribers, commits are broadcast to all connections
-    // So we should see the commits being broadcast
-    eprintln!("Broadcast count during add_commit: {broadcast_count}");
+    // The mock server never subscribed, so nothing was pushed on add_commit.
+    let pushed = std::iter::from_fn(|| handle.outbound_rx.try_recv().ok())
+        .filter(|msg| matches!(msg, SyncMessage::LooseCommit { .. }))
+        .count();
+    assert_eq!(
+        pushed, 0,
+        "add_commit must not push to an unsubscribed peer"
+    );
 
     // Now call full_sync - this should send a BatchSyncRequest
     // The client has 5 commits, the "server" has none

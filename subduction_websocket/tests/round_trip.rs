@@ -55,6 +55,28 @@ fn random_commit_id() -> CommitId {
     CommitId::new(bytes)
 }
 
+/// Poll `cond` until it holds or `timeout` elapses. A sync round returns
+/// once the requested data has been *sent*; the responder ingests it
+/// asynchronously, so assertions about the responder's state must poll.
+async fn wait_until<F, Fut>(timeout: Duration, mut cond: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: core::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if cond().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+const INGEST_WAIT: Duration = Duration::from_secs(2);
+
 type TestSubduction = Arc<
     Subduction<
         'static,
@@ -241,18 +263,26 @@ async fn batch_sync() -> TestResult {
         .full_sync_with_all_peers(CallTimeout::TimeoutMillis(100))
         .await;
 
+    // Verify both sides have all 3 commits after sync. The client's two
+    // commits travel in the sync round's second half; poll for the server
+    // to ingest them.
+    let server_has_all = wait_until(INGEST_WAIT, || async {
+        server_subduction
+            .get_commits(sed_id)
+            .await
+            .is_some_and(|c| c.len() == 3)
+    })
+    .await;
+    assert!(
+        server_has_all,
+        "server should have 3 commits after sync, has {:?}",
+        server_subduction.get_commits(sed_id).await.map(|c| c.len())
+    );
+
     let server_updated = server_subduction
         .get_commits(sed_id)
         .await
         .ok_or("sedimentree exists")?;
-
-    // Verify both sides have all 3 commits after sync
-    assert_eq!(
-        server_updated.len(),
-        3,
-        "server should have 3 commits after sync"
-    );
-
     let client_updated = client
         .get_commits(sed_id)
         .await
@@ -399,16 +429,24 @@ async fn second_sync_round_is_empty() -> TestResult {
         round1_stats.total_sent(),
     );
 
-    // Both sides should have all 4 commits
-    let server_commits = server
-        .get_commits(sed_id)
-        .await
-        .ok_or("server should have sedimentree")?;
+    // Both sides should have all 4 commits. The server ingests the
+    // client's half of the exchange asynchronously, so poll for it.
+    let server_has_all = wait_until(INGEST_WAIT, || async {
+        server
+            .get_commits(sed_id)
+            .await
+            .is_some_and(|c| c.len() == 4)
+    })
+    .await;
+    assert!(
+        server_has_all,
+        "server should have all 4 commits, has {:?}",
+        server.get_commits(sed_id).await.map(|c| c.len())
+    );
     let client_commits = client
         .get_commits(sed_id)
         .await
         .ok_or("client should have sedimentree")?;
-    assert_eq!(server_commits.len(), 4, "server should have all 4 commits");
     assert_eq!(client_commits.len(), 4, "client should have all 4 commits");
 
     // --- Round 2: should be a no-op ---

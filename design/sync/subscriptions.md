@@ -78,6 +78,31 @@ A peer may have multiple simultaneous connections (e.g., different browser tabs)
 - Updates are sent to _all_ connections for that peer
 - Cleanup only occurs when the _last_ connection for a peer closes
 
+## Push Invariant
+
+A _push_ is a `LooseCommit` / `Fragment` message sent on the strength of a
+subscription rather than in reply to a request: forwarding data received from a
+peer (`recv_commit` / `recv_fragment`) or announcing data authored locally
+(`add_commit` / `add_fragment`). Both use one recipient set:
+
+> A push for sedimentree _T_ from origin _O_ goes to exactly
+> `(wants(T) ∩ may_fetch(T)) \ {O}`, where `wants(T) = subscriptions[T]` and
+> `may_fetch(T)` is the subset of peers for which `filter_authorized_fetch(P, [T])`
+> keeps _T_. _O_ is the peer the data came from, or this node for local writes.
+
+Having new data for _T_ triggers a push; it never widens the recipient set.
+There is no "nobody is subscribed, so send it to everyone" fallback: a locally
+authored commit on a tree with no authorized subscribers stays local until this
+node opens a subscribing sync round (`sync_with_all_peers(id, subscribe =
+true)`), after which mutual subscription and
+[upstream propagation](#upstream-propagation-relay-topologies) carry later
+commits. Such a fallback cannot distinguish an empty `wants(T)` from an empty
+`wants(T) ∩ may_fetch(T)`, so it would fire exactly when policy had said no.
+
+Data also moves in the request/response half of batch sync
+(`send_requested_data`, `BatchSyncResponse`). Those are replies to a specific
+request, gated by `authorize_fetch` on the responder, and are not pushes.
+
 ## Forward Path
 
 When a commit or fragment arrives, the server forwards it to subscribed peers who are also authorized:
@@ -259,7 +284,9 @@ sequenceDiagram
 ### Why Bundle Subscribe with Batch Sync?
 
 1. **Atomic operation** — peer gets current state and subscribes in one request
-2. **No stale subscriptions** — subscription only created after successful sync
+2. **One round trip** — the subscription is recorded when the request is
+   handled, before the fetch-policy check; an unauthorized subscriber is simply
+   filtered out of every push by `may_fetch`
 3. **Simpler protocol** — no separate "subscribe" message type
 
 ### Why Not Broadcast to All Peers?
@@ -267,6 +294,8 @@ sequenceDiagram
 1. **Bandwidth** — broadcasting to uninterested peers wastes bandwidth
 2. **Privacy** — peers should only learn about documents they're authorized for
 3. **Scale** — subscription sets are typically small relative to total connections
+
+This applies to locally authored data too; see [Push Invariant](#push-invariant).
 
 ### Why Per-Peer Not Per-Connection?
 
