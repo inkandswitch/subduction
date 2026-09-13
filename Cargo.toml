@@ -31,20 +31,20 @@ authors = [
 
 [workspace.dependencies]
 # Internal crates
-automerge_subduction_wasm = { version = "0.17.1", path = "automerge_subduction_wasm", default-features = false }
-sedimentree_core = { version = "0.14.1", path = "sedimentree_core", default-features = false }
-sedimentree_fs_storage = { version = "0.12.1", path = "sedimentree_fs_storage" }
-sedimentree_wasm = { version = "0.17.1", path = "sedimentree_wasm" }
-subduction_core = { version = "0.18.1", path = "subduction_core", default-features = false }
-subduction_crypto = { version = "0.9.1", path = "subduction_crypto", default-features = false }
-subduction_ephemeral = { version = "0.8.1", path = "subduction_ephemeral", default-features = false }
-subduction_http_longpoll = { version = "0.11.1", path = "subduction_http_longpoll", default-features = false }
-subduction_iroh = { version = "0.10.1", path = "subduction_iroh" }
-subduction_keyhive = { version = "0.8.1", path = "subduction_keyhive" }
-subduction_redb_storage = { version = "0.2.1", path = "subduction_redb_storage" }
-subduction_wasm = { version = "0.21.1", path = "subduction_wasm" }
-subduction_wasm_bootstrap = { version = "0.3.1", path = "subduction_wasm_bootstrap" }
-subduction_websocket = { version = "0.12.1", path = "subduction_websocket", default-features = false }
+automerge_subduction_wasm = { version = "0.17.2", path = "automerge_subduction_wasm", default-features = false }
+sedimentree_core = { version = "0.14.2", path = "sedimentree_core", default-features = false }
+sedimentree_fs_storage = { version = "0.12.2", path = "sedimentree_fs_storage" }
+sedimentree_wasm = { version = "0.17.2", path = "sedimentree_wasm" }
+subduction_core = { version = "0.18.2", path = "subduction_core", default-features = false }
+subduction_crypto = { version = "0.9.2", path = "subduction_crypto", default-features = false }
+subduction_ephemeral = { version = "0.8.2", path = "subduction_ephemeral", default-features = false }
+subduction_http_longpoll = { version = "0.11.2", path = "subduction_http_longpoll", default-features = false }
+subduction_iroh = { version = "0.10.2", path = "subduction_iroh" }
+subduction_keyhive = { version = "0.8.2", path = "subduction_keyhive" }
+subduction_redb_storage = { version = "0.2.2", path = "subduction_redb_storage" }
+subduction_wasm = { version = "0.21.2", path = "subduction_wasm" }
+subduction_wasm_bootstrap = { version = "0.3.2", path = "subduction_wasm_bootstrap" }
+subduction_websocket = { version = "0.12.2", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"

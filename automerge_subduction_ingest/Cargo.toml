@@ -1,6 +1,6 @@
 [package]
 name = "automerge_subduction_ingest"
-version = "0.6.1"
+version = "0.6.2"
 description = "CLI tool for ingesting Automerge documents into Subduction"
 
 categories = ["command-line-utilities"]
