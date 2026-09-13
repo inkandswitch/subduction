@@ -26,7 +26,7 @@ use future_form::{FutureForm, Sendable};
 use nonempty::NonEmpty;
 use sedimentree_core::collections::Map;
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::{Connection, test_utils::TokioSpawn},
     handler::Handler,
     peer::id::PeerId,
@@ -154,7 +154,7 @@ fn make_handler(
 
 async fn register(connections: &Connections, conn: WedgeableConn) -> Auth {
     let peer_id = conn.peer_id;
-    let auth = Authenticated::new_for_test(conn, peer_id);
+    let auth = Authenticated::new_for_test(conn, peer_id, Direction::Dialed);
     connections
         .lock()
         .await

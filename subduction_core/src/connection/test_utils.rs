@@ -23,7 +23,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{Connection, message::SyncMessage};
 use crate::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -62,12 +62,21 @@ impl MockConnection {
         Self { peer_id }
     }
 
-    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    /// Wrap this connection in an `Authenticated` wrapper for testing, as a
+    /// peer this node dialed (the mock plays an upstream). Use
+    /// [`authenticated_as`](Self::authenticated_as) to choose the direction.
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
     pub fn authenticated(self) -> Authenticated<Self, Sendable> {
-        Authenticated::new_for_test(self, self.peer_id)
+        self.authenticated_as(Direction::Dialed)
+    }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing, on the
+    /// given side of the (skipped) handshake.
+    #[must_use]
+    pub fn authenticated_as(self, direction: Direction) -> Authenticated<Self, Sendable> {
+        Authenticated::new_for_test(self, self.peer_id, direction)
     }
 }
 
@@ -139,12 +148,21 @@ impl FailingSendMockConnection {
         Self { peer_id, fail_send }
     }
 
-    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    /// Wrap this connection in an `Authenticated` wrapper for testing, as a
+    /// peer this node dialed (the mock plays an upstream). Use
+    /// [`authenticated_as`](Self::authenticated_as) to choose the direction.
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
     pub fn authenticated(self) -> Authenticated<Self, Sendable> {
-        Authenticated::new_for_test(self, self.peer_id)
+        self.authenticated_as(Direction::Dialed)
+    }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing, on the
+    /// given side of the (skipped) handshake.
+    #[must_use]
+    pub fn authenticated_as(self, direction: Direction) -> Authenticated<Self, Sendable> {
+        Authenticated::new_for_test(self, self.peer_id, direction)
     }
 }
 
@@ -254,13 +272,22 @@ impl<M> ChannelMockConnection<M> {
         Self::new_with_handle(PeerId::new([0u8; 32]))
     }
 
-    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    /// Wrap this connection in an `Authenticated` wrapper for testing, as a
+    /// peer this node dialed (the mock plays an upstream). Use
+    /// [`authenticated_as`](Self::authenticated_as) to choose the direction.
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
     pub fn authenticated<K: FutureForm>(self) -> Authenticated<Self, K> {
+        self.authenticated_as(Direction::Dialed)
+    }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing, on the
+    /// given side of the (skipped) handshake.
+    #[must_use]
+    pub fn authenticated_as<K: FutureForm>(self, direction: Direction) -> Authenticated<Self, K> {
         let peer_id = self.peer_id;
-        Authenticated::new_for_test(self, peer_id)
+        Authenticated::new_for_test(self, peer_id, direction)
     }
 }
 

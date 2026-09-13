@@ -20,7 +20,7 @@ use sedimentree_core::{
 
 use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::{
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
@@ -141,8 +141,10 @@ async fn connect_pair(
     let peer_a = PeerId::from(a_signer.verifying_key());
     let peer_b = PeerId::from(b_signer.verifying_key());
 
-    let auth_a: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_a, peer_b);
-    let auth_b: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_b, peer_a);
+    let auth_a: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(conn_a, peer_b, Direction::Dialed);
+    let auth_b: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(conn_b, peer_a, Direction::Accepted);
 
     a.add_connection(auth_a).await?;
     b.add_connection(auth_b).await?;
@@ -730,17 +732,20 @@ fn make_restrictive_mock_node(
     sd
 }
 
-/// Register a [`ChannelMockConnection`] as `peer`, returning the
-/// test-side handle for injecting inbound and observing outbound
-/// messages. The closure adapts over each relay node's policy type.
+/// Register a [`ChannelMockConnection`] as `peer` on the given side of the
+/// handshake, returning the test-side handle for injecting inbound and
+/// observing outbound messages. The closure adapts over each relay node's
+/// policy type.
 async fn attach_mock_peer<S>(
     add_connection: impl FnOnce(
         Authenticated<MockConn, Sendable>,
     ) -> BoxFuture<'static, Result<bool, S>>,
     peer: PeerId,
+    direction: Direction,
 ) -> Result<ChannelMockConnectionHandle<SyncMessage>, S> {
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer);
-    let auth: Authenticated<MockConn, Sendable> = Authenticated::new_for_test(conn, peer);
+    let auth: Authenticated<MockConn, Sendable> =
+        Authenticated::new_for_test(conn, peer, direction);
     add_connection(auth).await?;
     Ok(handle)
 }
@@ -828,12 +833,14 @@ async fn relay_topology_repeated_subscribe_sends_exactly_one_upstream_request() 
     let a_handle = attach_mock_peer(
         move |auth| Box::pin(async move { r_for_a.add_connection(auth).await }),
         a_peer,
+        Direction::Accepted,
     )
     .await?;
     let r_for_b = Arc::clone(&r);
     let b_handle = attach_mock_peer(
         move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
         b_peer,
+        Direction::Dialed,
     )
     .await?;
 
@@ -912,12 +919,14 @@ async fn relay_topology_unauthorized_subscribe_sends_zero_upstream_requests() ->
     let u_handle = attach_mock_peer(
         move |auth| Box::pin(async move { r_for_u.add_connection(auth).await }),
         u_peer,
+        Direction::Accepted,
     )
     .await?;
     let r_for_b = Arc::clone(&r);
     let b_handle = attach_mock_peer(
         move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
         b_peer,
+        Direction::Dialed,
     )
     .await?;
 
@@ -994,12 +1003,14 @@ async fn relay_topology_unauthorized_upstream_response_rolls_back_claim() -> Tes
     let a_handle = attach_mock_peer(
         move |auth| Box::pin(async move { r_for_a.add_connection(auth).await }),
         a_peer,
+        Direction::Accepted,
     )
     .await?;
     let r_for_b = Arc::clone(&r);
     let b_handle = attach_mock_peer(
         move |auth| Box::pin(async move { r_for_b.add_connection(auth).await }),
         b_peer,
+        Direction::Dialed,
     )
     .await?;
 

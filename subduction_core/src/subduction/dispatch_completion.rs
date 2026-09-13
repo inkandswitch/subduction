@@ -113,7 +113,11 @@ mod tests {
     type TestOutcome = DispatchOutcome<MockConnection, Sendable, ()>;
 
     fn auth() -> Authenticated<MockConnection, Sendable> {
-        Authenticated::new_for_test(MockConnection::new(), PeerId::new([0u8; 32]))
+        Authenticated::new_for_test(
+            MockConnection::new(),
+            PeerId::new([0u8; 32]),
+            crate::authenticated::Direction::Dialed,
+        )
     }
 
     /// A guard dropped after recording a result reports `Completed`, carrying

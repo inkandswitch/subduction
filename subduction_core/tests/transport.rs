@@ -200,7 +200,7 @@ mod managed_connection {
 
     use futures::future::BoxFuture;
     use subduction_core::{
-        authenticated::Authenticated,
+        authenticated::{Authenticated, Direction},
         connection::{
             managed::{CallError, ManagedCall, ManagedConnection},
             message::BatchSyncRequest,
@@ -235,7 +235,7 @@ mod managed_connection {
     ) {
         let peer_id = test_peer_id();
         let (conn, handle) = ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
-        let auth = Authenticated::new_for_test(conn, peer_id);
+        let auth = Authenticated::new_for_test(conn, peer_id, Direction::Dialed);
         let mux = Arc::new(Multiplexer::new(peer_id, Duration::from_secs(30)));
         let managed = ManagedConnection::new(auth, mux.clone(), AlwaysTimeout);
         (managed, mux, handle)
@@ -304,7 +304,7 @@ mod call_deadline {
 
     use futures::future::BoxFuture;
     use subduction_core::{
-        authenticated::Authenticated,
+        authenticated::{Authenticated, Direction},
         connection::{
             managed::{CallError, ManagedCall, ManagedConnection},
             message::BatchSyncRequest,
@@ -370,7 +370,7 @@ mod call_deadline {
     ) {
         let peer_id = mux.peer_id();
         let (conn, handle) = ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
-        let auth = Authenticated::new_for_test(conn, peer_id);
+        let auth = Authenticated::new_for_test(conn, peer_id, Direction::Dialed);
         (ManagedConnection::new(auth, mux, timer), handle)
     }
 
@@ -554,7 +554,7 @@ mod call_deadline_local {
     use future_form::Local;
     use futures::future::LocalBoxFuture;
     use subduction_core::{
-        authenticated::Authenticated,
+        authenticated::{Authenticated, Direction},
         connection::{
             managed::{CallError, ManagedCall, ManagedConnection},
             message::BatchSyncRequest,
@@ -615,7 +615,7 @@ mod call_deadline_local {
     ) {
         let peer_id = mux.peer_id();
         let (conn, handle) = ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
-        let auth = Authenticated::new_for_test(conn, peer_id);
+        let auth = Authenticated::new_for_test(conn, peer_id, Direction::Dialed);
         (ManagedConnection::new(auth, mux, timer), handle)
     }
 

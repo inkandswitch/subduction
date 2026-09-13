@@ -18,7 +18,7 @@ use sedimentree_core::{
     id::SedimentreeId, loose_commit::id::CommitId, sedimentree::FingerprintSummary,
 };
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::{
         message::{BatchSyncRequest, RequestId, SyncMessage},
         test_utils::{ChannelMockConnection, ChannelTransport, InstantTimeout, TokioSpawn},
@@ -182,7 +182,7 @@ const fn make_head(seed: u8) -> CommitId {
 }
 
 /// Connect two nodes (of possibly different policy types) over an
-/// in-process channel pair.
+/// in-process channel pair. `a` dials `b`.
 async fn connect<PA: TestPolicy, PB: TestPolicy>(
     a: &Node<PA>,
     a_signer: &MemorySigner,
@@ -193,9 +193,9 @@ async fn connect<PA: TestPolicy, PB: TestPolicy>(
     let peer_a = PeerId::from(a_signer.verifying_key());
     let peer_b = PeerId::from(b_signer.verifying_key());
     let auth_a: Authenticated<Conn, Sendable> =
-        Authenticated::new_for_test(MessageTransport::new(t_a), peer_b);
+        Authenticated::new_for_test(MessageTransport::new(t_a), peer_b, Direction::Dialed);
     let auth_b: Authenticated<Conn, Sendable> =
-        Authenticated::new_for_test(MessageTransport::new(t_b), peer_a);
+        Authenticated::new_for_test(MessageTransport::new(t_b), peer_a, Direction::Accepted);
     a.add_connection(auth_a).await?;
     b.add_connection(auth_b).await?;
     Ok(())

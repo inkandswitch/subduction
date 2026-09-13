@@ -21,7 +21,7 @@ use sedimentree_core::{
     sedimentree::FingerprintSummary,
 };
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::{
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult,
@@ -246,7 +246,7 @@ fn make_handler() -> (
 
 fn make_auth_conn(peer_id: PeerId) -> Authenticated<TestConn, Sendable> {
     let (conn, _handle) = ChannelMockConnection::new_with_handle(peer_id);
-    Authenticated::new_for_test(conn, peer_id)
+    Authenticated::new_for_test(conn, peer_id, Direction::Dialed)
 }
 
 const fn test_request_id() -> RequestId {

@@ -37,7 +37,24 @@ use crate::{
 pub struct Authenticated<Conn: Clone, Async: FutureForm> {
     inner: Conn,
     peer_id: PeerId,
+    direction: Direction,
     _marker: PhantomData<fn() -> Async>,
+}
+
+/// Which side of the handshake this node was on.
+///
+/// A node dials its upstream peers (a client dials a sync server, a relay
+/// dials the server behind it) and accepts from the peers it serves. Both
+/// ends of a simultaneous open are `Dialed`.
+///
+/// The direction is fixed for the life of the wrapper; [`Reconnect`] swaps
+/// only the inner connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// This node initiated the handshake (`handshake::initiate`).
+    Dialed,
+    /// This node accepted the handshake (`handshake::respond`).
+    Accepted,
 }
 
 impl<Conn: Clone, Async: FutureForm> Clone for Authenticated<Conn, Async> {
@@ -45,6 +62,7 @@ impl<Conn: Clone, Async: FutureForm> Clone for Authenticated<Conn, Async> {
         Self {
             inner: self.inner.clone(),
             peer_id: self.peer_id,
+            direction: self.direction,
             _marker: PhantomData,
         }
     }
@@ -62,6 +80,7 @@ impl<Conn: Clone + core::fmt::Debug, Async: FutureForm> core::fmt::Debug
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Authenticated")
             .field("peer_id", &self.peer_id)
+            .field("direction", &self.direction)
             .field("inner", &self.inner)
             .finish()
     }
@@ -76,10 +95,11 @@ impl<Conn: Clone, Async: FutureForm> Authenticated<Conn, Async> {
     ///
     /// [`handshake::initiate`]: super::handshake::initiate
     /// [`handshake::respond`]: super::handshake::respond
-    pub(crate) fn from_handshake(inner: Conn, peer_id: PeerId) -> Self {
+    pub(crate) fn from_handshake(inner: Conn, peer_id: PeerId, direction: Direction) -> Self {
         Self {
             inner,
             peer_id,
+            direction,
             _marker: PhantomData,
         }
     }
@@ -87,6 +107,11 @@ impl<Conn: Clone, Async: FutureForm> Authenticated<Conn, Async> {
     /// The verified peer identity, established during the handshake.
     pub const fn peer_id(&self) -> PeerId {
         self.peer_id
+    }
+
+    /// Which side of the handshake this node was on.
+    pub const fn direction(&self) -> Direction {
+        self.direction
     }
 
     /// Transform the inner connection while preserving the authentication proof.
@@ -99,6 +124,7 @@ impl<Conn: Clone, Async: FutureForm> Authenticated<Conn, Async> {
         Authenticated {
             inner: f(self.inner),
             peer_id: self.peer_id,
+            direction: self.direction,
             _marker: PhantomData,
         }
     }
@@ -106,11 +132,14 @@ impl<Conn: Clone, Async: FutureForm> Authenticated<Conn, Async> {
     /// Construct for testing purposes only.
     ///
     /// This bypasses handshake verification and should only be used in tests.
+    /// Callers state which side of the (skipped) handshake this end is on,
+    /// since propagation behavior depends on it.
     #[cfg(any(test, feature = "test_utils"))]
-    pub fn new_for_test(inner: Conn, peer_id: PeerId) -> Self {
+    pub fn new_for_test(inner: Conn, peer_id: PeerId, direction: Direction) -> Self {
         Self {
             inner,
             peer_id,
+            direction,
             _marker: PhantomData,
         }
     }

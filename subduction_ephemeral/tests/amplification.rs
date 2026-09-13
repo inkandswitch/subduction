@@ -20,7 +20,7 @@ use future_form::Sendable;
 use nonempty::NonEmpty;
 use sedimentree_core::collections::Map;
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelMockConnection, TokioSpawn},
     handler::Handler,
     peer::id::PeerId,
@@ -70,7 +70,7 @@ fn make_open_handler(
 
 async fn register_peer(connections: &Connections, peer_id: PeerId) -> (EphAuth, EphHandle) {
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    let auth = Authenticated::new_for_test(conn, peer_id);
+    let auth = Authenticated::new_for_test(conn, peer_id, Direction::Dialed);
     connections
         .lock()
         .await
