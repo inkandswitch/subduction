@@ -78,6 +78,27 @@ A peer may have multiple simultaneous connections (e.g., different browser tabs)
 - Updates are sent to _all_ connections for that peer
 - Cleanup only occurs when the _last_ connection for a peer closes
 
+## Push Invariant
+
+Every `LooseCommit` / `Fragment` push — whether forwarding data received from a
+peer or announcing data authored locally via `add_commit` / `add_fragment` —
+obeys one rule:
+
+> A push for sedimentree _T_ goes to exactly `wants(T) ∩ may_fetch(T)`, where
+> `wants(T) = subscriptions[T]` and `may_fetch(T)` is the subset of those peers
+> for which `filter_authorized_fetch(P, [T])` keeps _T_.
+
+Having new data for _T_ is what _triggers_ a push; it never widens the
+recipient set. There is no other push path. In particular there is no "nobody
+is subscribed, so send it to everyone" fallback: a locally authored commit on a
+tree with no (authorized) subscribers stays local until this node opens a
+subscribing sync round (`sync_with_all_peers(id, subscribe = true)`), at which
+point mutual subscription and
+[upstream propagation](#upstream-propagation-relay-topologies) take over. A
+fallback of that kind cannot distinguish an empty `wants(T)` from an empty
+`wants(T) ∩ may_fetch(T)`, and so would fire precisely when policy had said
+no.
+
 ## Forward Path
 
 When a commit or fragment arrives, the server forwards it to subscribed peers who are also authorized:
@@ -267,6 +288,13 @@ sequenceDiagram
 1. **Bandwidth** — broadcasting to uninterested peers wastes bandwidth
 2. **Privacy** — peers should only learn about documents they're authorized for
 3. **Scale** — subscription sets are typically small relative to total connections
+
+This applies to locally authored data too. A new document does not need a
+broadcast to reach peers: the author's own subscribing sync round (the
+`store_*` + `sync_with_all_peers(subscribe = true)` write path used by
+`add_commits_batch` and automerge-repo) both delivers the data and establishes
+the subscriptions that carry every later commit. See [Push
+Invariant](#push-invariant).
 
 ### Why Per-Peer Not Per-Connection?
 

@@ -458,6 +458,23 @@ where
             .unwrap_or_default()
     }
 
+    /// Get the peers subscribed to a sedimentree on this node: the inbound
+    /// side of [`get_peer_subscriptions`](Self::get_peer_subscriptions).
+    ///
+    /// This is the raw subscription set; the push path additionally filters
+    /// it through [`StoragePolicy::filter_authorized_fetch`]. Observability
+    /// accessor (used by integration tests).
+    ///
+    /// [`StoragePolicy::filter_authorized_fetch`]: crate::policy::storage::StoragePolicy::filter_authorized_fetch
+    pub async fn get_subscribers(&self, sedimentree_id: SedimentreeId) -> Set<PeerId> {
+        self.subscriptions
+            .lock()
+            .await
+            .get(&sedimentree_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Called after a successful reconnection to re-add the connection.
     ///
     /// This re-registers the connection with the manager using the same [`ConnectionId`].
@@ -1073,6 +1090,10 @@ where
             // tree is already minimized for wire use.
             let tree = self.get_or_hydrate(id).await?;
             if let Some(tree) = tree {
+                // Asking every peer is fine here: these are *requests*, and
+                // each responder applies its own fetch policy before answering.
+                // (Contrast `add_commit`, which pushes data and therefore only
+                // targets authorized subscribers.)
                 let conns = self.all_connections().await;
                 for conn in conns {
                     let peer_id = conn.peer_id();
@@ -1262,15 +1283,23 @@ where
             .then(|| FragmentRequested::new(commit_head, depth)))
     }
 
-    /// Add a new (incremental) commit locally and propagate it to all connected peers.
+    /// Add a new (incremental) commit locally and push it to authorized
+    /// subscribers.
     ///
     /// The commit is constructed internally from the provided parts, ensuring
     /// that the blob metadata is computed correctly from the blob.
     ///
     /// This is the store+propagate combinator for a single commit;
-    /// propagation is a best-effort push (`Connection::send`) to authorized
-    /// subscribers, so it does not block on peer acks. For a durable write
-    /// with no propagation, use [`store_commit`](Self::store_commit).
+    /// propagation is a best-effort push (`Connection::send`) to peers that
+    /// are subscribed to `id` *and* pass
+    /// [`filter_authorized_fetch`](crate::policy::storage::StoragePolicy::filter_authorized_fetch),
+    /// so it does not block on peer acks. Peers that have not subscribed
+    /// receive nothing: a brand-new tree with no subscribers stays local
+    /// until this node opens a subscribing sync round, e.g. via
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers) with
+    /// `subscribe = true` (which is what the batch combinators such as
+    /// [`add_commits_batch`](Self::add_commits_batch) do). For a durable
+    /// write with no propagation, use [`store_commit`](Self::store_commit).
     ///
     /// # Returns
     ///
@@ -1322,15 +1351,11 @@ where
             .map(|mut s| s.heads(&self.depth_metric))
             .unwrap_or_default();
         {
-            let conns = {
-                let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
-                if subscriber_conns.is_empty() {
-                    tracing::debug!(tree = ?id, "no subscribers for sedimentree, broadcasting to all connections");
-                    self.all_connections().await
-                } else {
-                    subscriber_conns
-                }
-            };
+            // Subscribed *and* authorized peers only. There is deliberately
+            // no "no subscribers, so tell everyone" fallback: it would push
+            // unsolicited data to every connection and, worse, fire exactly
+            // when every subscriber failed the fetch policy.
+            let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
 
             for conn in conns {
                 let peer_id = conn.peer_id();
@@ -1410,15 +1435,20 @@ where
         Ok(())
     }
 
-    /// Add a new (incremental) fragment locally and propagate it to all connected peers.
+    /// Add a new (incremental) fragment locally and push it to authorized
+    /// subscribers.
     ///
     /// The fragment is constructed internally from the provided parts, ensuring
     /// that the blob metadata is computed correctly from the blob.
     ///
     /// This is the store+propagate combinator for a single fragment;
-    /// propagation is a best-effort push (`Connection::send`) to authorized
-    /// subscribers, so it does not block on peer acks. For a durable write
-    /// with no propagation, use [`store_fragment`](Self::store_fragment).
+    /// propagation is a best-effort push (`Connection::send`) to peers that
+    /// are subscribed to `id` *and* pass
+    /// [`filter_authorized_fetch`](crate::policy::storage::StoragePolicy::filter_authorized_fetch),
+    /// so it does not block on peer acks. Unsubscribed peers receive nothing;
+    /// see [`add_commit`](Self::add_commit) for how a new tree first reaches
+    /// peers. For a durable write with no propagation, use
+    /// [`store_fragment`](Self::store_fragment).
     ///
     /// NOTE this performs no integrity checks;
     /// we assume this is a good fragment at the right depth
@@ -1466,15 +1496,9 @@ where
             .map(|mut s| s.heads(&self.depth_metric))
             .unwrap_or_default();
 
-        let conns = {
-            let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
-            if subscriber_conns.is_empty() {
-                tracing::debug!(tree = ?id, "no subscribers for sedimentree, broadcasting fragment to all connections");
-                self.all_connections().await
-            } else {
-                subscriber_conns
-            }
-        };
+        // Subscribed *and* authorized peers only; see `add_commit` for why
+        // there is no broadcast fallback.
+        let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
 
         for conn in conns {
             let peer_id = conn.peer_id();

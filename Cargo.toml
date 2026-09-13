@@ -35,10 +35,6 @@ automerge_subduction_wasm = { version = "0.17.1", path = "automerge_subduction_w
 sedimentree_core = { version = "0.14.1", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.12.1", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.17.1", path = "sedimentree_wasm" }
-# 0.17.0: breaking — `PeerCounter::{clear_peer, clear_all}` removed (counters
-# are never reset; see `peer::counter` docs), and `metrics::connection_opened/
-# closed` no longer maintain the `connections_active` gauge (use
-# `set_connections_active`).
 subduction_core = { version = "0.18.1", path = "subduction_core", default-features = false }
 subduction_crypto = { version = "0.9.1", path = "subduction_crypto", default-features = false }
 subduction_ephemeral = { version = "0.8.1", path = "subduction_ephemeral", default-features = false }

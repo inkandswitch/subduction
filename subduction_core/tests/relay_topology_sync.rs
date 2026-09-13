@@ -176,32 +176,51 @@ async fn setup_relay_topology() -> TestResult<(
 
 #[tokio::test]
 async fn relay_topology_converges_on_initial_sync() -> TestResult {
-    let (a, r, b, _a_signer, _r_signer, _b_signer) = setup_relay_topology().await?;
+    let (a, r, b, _a_signer, r_signer, _b_signer) = setup_relay_topology().await?;
 
     let sed_id = SedimentreeId::new([7u8; 32]);
+    let r_peer = PeerId::from(r_signer.verifying_key());
 
     a.add_commit(sed_id, make_head(1), BTreeSet::new(), make_blob(1))
         .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
-    // `add_commit`'s broadcast fallback (no subscribers → broadcast to all
-    // connections) reaches R immediately.
+    // Nobody has subscribed to `sed_id` yet, so `add_commit` pushes to no
+    // one: the commit is local to A until A opens a subscribing sync.
     assert_eq!(a.get_commits(sed_id).await.map(|c| c.len()), Some(1));
-    assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), Some(1));
+    assert_eq!(
+        r.get_commits(sed_id).await.map(|c| c.len()),
+        None,
+        "R must not receive an unsolicited push for an unsubscribed tree"
+    );
+
+    // A subscribes via R (the automerge-repo write path: store, then
+    // `sync_with_all_peers(subscribe = true)`). The 1.5-RTT exchange
+    // carries the commit to R.
+    a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
+    assert!(
+        wait_until(|| {
+            let r = Arc::clone(&r);
+            async move { r.get_commits(sed_id).await.map(|c| c.len()) == Some(1) }
+        })
+        .await,
+        "R did not receive the commit via A's subscribing sync"
+    );
 
     // B has no sedimentree yet, so `full_sync_with_all_peers` (which
     // iterates B's known sedimentrees) is a no-op for this id. Force a
     // per-id sync to subscribe B and pull the data.
-    b.sync_with_peer(
-        &PeerId::from(make_signer(20).verifying_key()),
-        sed_id,
-        true,
-        SYNC_TIMEOUT,
-    )
-    .await?;
-    tokio::time::sleep(PROPAGATION_PAUSE).await;
-
-    assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(1));
+    b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+        .await?;
+    assert!(
+        wait_until(|| {
+            let b = Arc::clone(&b);
+            async move { b.get_commits(sed_id).await.map(|c| c.len()) == Some(1) }
+        })
+        .await,
+        "B did not receive the commit from R"
+    );
 
     Ok(())
 }
@@ -373,10 +392,11 @@ async fn relay_topology_one_more_commit_transfers_only_the_delta() -> TestResult
     assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), Some(16));
     assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(16));
 
-    // Author one new commit on A and let the broadcast propagate before
-    // measuring delta-sync behavior. `add_commit` broadcasts via the
-    // subscription path; without the pause its delivery races with the
-    // explicit sync we're about to invoke.
+    // Author one new commit on A and let the push propagate before
+    // measuring delta-sync behavior. The full syncs above established
+    // mutual subscriptions, so `add_commit` pushes to R (and R forwards
+    // to B); without the pause its delivery races with the explicit sync
+    // we're about to invoke.
     a.add_commit(sed_id, make_head(99), BTreeSet::new(), make_blob(99))
         .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
@@ -389,7 +409,7 @@ async fn relay_topology_one_more_commit_transfers_only_the_delta() -> TestResult
     assert_eq!(r.get_commits(sed_id).await.map(|c| c.len()), Some(17));
     assert_eq!(b.get_commits(sed_id).await.map(|c| c.len()), Some(17));
 
-    // Either the broadcast won (0 transferred during sync) or the sync
+    // Either the push won (0 transferred during sync) or the sync
     // delivered the new commit (1 transferred) — never the full history.
     assert!(
         a_stats.total_received() <= 1 && a_stats.total_sent() <= 1,

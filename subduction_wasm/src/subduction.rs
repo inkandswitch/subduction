@@ -854,8 +854,11 @@ impl WasmSubduction {
     ///
     /// Propagation is a best-effort `send` to subscribers; it does not block
     /// on peer acks (no per-peer result is produced for single-item pushes).
-    /// For a durable write with no propagation, use
-    /// [`storeCommit`](Self::store_commit).
+    /// Peers that have not subscribed to this sedimentree receive nothing, so
+    /// for a brand-new document follow up with
+    /// [`syncWithAllPeers`](Self::sync_with_all_peers) (`subscribe = true`),
+    /// or use [`addBatch`](Self::add_batch) which does both. For a durable
+    /// write with no propagation, use [`storeCommit`](Self::store_commit).
     ///
     /// # Errors
     ///
