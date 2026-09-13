@@ -938,8 +938,9 @@ impl WasmSubduction {
     /// the provided blob, ensuring consistency by construction.
     ///
     /// Propagation is a best-effort `send` to subscribers; it does not block
-    /// on peer acks. For a durable write with no propagation, use
-    /// [`storeFragment`](Self::store_fragment).
+    /// on peer acks. Unsubscribed peers receive nothing; see
+    /// [`addCommit`](Self::add_commit). For a durable write with no
+    /// propagation, use [`storeFragment`](Self::store_fragment).
     ///
     /// # Errors
     ///

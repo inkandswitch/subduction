@@ -80,24 +80,27 @@ A peer may have multiple simultaneous connections (e.g., different browser tabs)
 
 ## Push Invariant
 
-Every `LooseCommit` / `Fragment` push — whether forwarding data received from a
-peer or announcing data authored locally via `add_commit` / `add_fragment` —
-obeys one rule:
+A _push_ is an unsolicited `LooseCommit` / `Fragment` message: forwarding data
+received from a peer (`recv_commit` / `recv_fragment`) or announcing data
+authored locally (`add_commit` / `add_fragment`). Both use one recipient set:
 
-> A push for sedimentree _T_ goes to exactly `wants(T) ∩ may_fetch(T)`, where
-> `wants(T) = subscriptions[T]` and `may_fetch(T)` is the subset of those peers
-> for which `filter_authorized_fetch(P, [T])` keeps _T_.
+> A push for sedimentree _T_ from origin _O_ goes to exactly
+> `(wants(T) ∩ may_fetch(T)) \ {O}`, where `wants(T) = subscriptions[T]` and
+> `may_fetch(T)` is the subset of peers for which `filter_authorized_fetch(P, [T])`
+> keeps _T_. _O_ is the peer the data came from, or this node for local writes.
 
-Having new data for _T_ is what _triggers_ a push; it never widens the
-recipient set. There is no other push path. In particular there is no "nobody
-is subscribed, so send it to everyone" fallback: a locally authored commit on a
-tree with no (authorized) subscribers stays local until this node opens a
-subscribing sync round (`sync_with_all_peers(id, subscribe = true)`), at which
-point mutual subscription and
-[upstream propagation](#upstream-propagation-relay-topologies) take over. A
-fallback of that kind cannot distinguish an empty `wants(T)` from an empty
-`wants(T) ∩ may_fetch(T)`, and so would fire precisely when policy had said
-no.
+Having new data for _T_ triggers a push; it never widens the recipient set.
+There is no "nobody is subscribed, so send it to everyone" fallback: a locally
+authored commit on a tree with no authorized subscribers stays local until this
+node opens a subscribing sync round (`sync_with_all_peers(id, subscribe =
+true)`), after which mutual subscription and
+[upstream propagation](#upstream-propagation-relay-topologies) carry later
+commits. Such a fallback cannot distinguish an empty `wants(T)` from an empty
+`wants(T) ∩ may_fetch(T)`, so it would fire exactly when policy had said no.
+
+Data also moves in the request/response half of batch sync
+(`send_requested_data`, `BatchSyncResponse`). Those are replies to a peer's own
+request, gated by `authorize_fetch` on the responder, and are not pushes.
 
 ## Forward Path
 
@@ -280,7 +283,9 @@ sequenceDiagram
 ### Why Bundle Subscribe with Batch Sync?
 
 1. **Atomic operation** — peer gets current state and subscribes in one request
-2. **No stale subscriptions** — subscription only created after successful sync
+2. **One round trip** — the subscription is recorded when the request is
+   handled, before the fetch-policy check; an unauthorized subscriber is simply
+   filtered out of every push by `may_fetch`
 3. **Simpler protocol** — no separate "subscribe" message type
 
 ### Why Not Broadcast to All Peers?
@@ -289,12 +294,7 @@ sequenceDiagram
 2. **Privacy** — peers should only learn about documents they're authorized for
 3. **Scale** — subscription sets are typically small relative to total connections
 
-This applies to locally authored data too. A new document does not need a
-broadcast to reach peers: the author's own subscribing sync round (the
-`store_*` + `sync_with_all_peers(subscribe = true)` write path used by
-`add_commits_batch` and automerge-repo) both delivers the data and establishes
-the subscriptions that carry every later commit. See [Push
-Invariant](#push-invariant).
+This applies to locally authored data too; see [Push Invariant](#push-invariant).
 
 ### Why Per-Peer Not Per-Connection?
 

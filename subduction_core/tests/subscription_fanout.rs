@@ -1,14 +1,12 @@
-//! The push invariant for locally authored data:
+//! The push invariant for locally authored data (see
+//! `design/sync/subscriptions.md` § Push Invariant):
 //!
-//! > `add_commit` / `add_fragment` push to peer P for tree T **iff** P is in
-//! > `subscriptions[T]` **and** `filter_authorized_fetch(P, [T])` keeps T.
+//! > `add_commit` / `add_fragment` push for tree T to exactly
+//! > `wants(T) ∩ may_fetch(T)`.
 //!
-//! In particular there is no "nobody subscribed, so tell everyone" fallback:
-//! an unsubscribed peer receives nothing, and a subscribed-but-unauthorized
-//! peer receives nothing. Each negative case is paired with a positive
-//! control on the same harness so a pass cannot be vacuous.
-
-#![allow(clippy::expect_used, clippy::indexing_slicing)]
+//! An unsubscribed peer receives nothing; a subscribed-but-unauthorized peer
+//! receives nothing. Each negative assertion has a positive control on the
+//! same harness so a pass cannot be vacuous.
 
 use core::{convert::Infallible, fmt};
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
@@ -16,11 +14,15 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
-    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, crypto::fingerprint::FingerprintSeed, depth::CountLeadingZeroBytes,
+    id::SedimentreeId, loose_commit::id::CommitId, sedimentree::FingerprintSummary,
 };
 use subduction_core::{
     authenticated::Authenticated,
-    connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    connection::{
+        message::{BatchSyncRequest, RequestId, SyncMessage},
+        test_utils::{ChannelMockConnection, ChannelTransport, InstantTimeout, TokioSpawn},
+    },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, open::OpenPolicy, storage::StoragePolicy},
@@ -73,10 +75,11 @@ where
     }
 }
 
-/// Allows connections and puts; denies every fetch. A peer may subscribe
-/// (subscription is recorded) but must never be pushed data.
-#[derive(Clone, Copy)]
-struct RejectFetchPolicy;
+/// Allows connections and puts; allows fetches only for the listed peers.
+/// Any peer may subscribe (the subscription is recorded), but only listed
+/// peers may be pushed data.
+#[derive(Clone)]
+struct AllowFetchFor(BTreeSet<PeerId>);
 
 #[derive(Debug, Clone, Copy)]
 struct FetchRejected;
@@ -89,7 +92,7 @@ impl fmt::Display for FetchRejected {
 
 impl core::error::Error for FetchRejected {}
 
-impl ConnectionPolicy<Sendable> for RejectFetchPolicy {
+impl ConnectionPolicy<Sendable> for AllowFetchFor {
     type ConnectionDisallowed = Infallible;
 
     fn authorize_connect(
@@ -100,16 +103,17 @@ impl ConnectionPolicy<Sendable> for RejectFetchPolicy {
     }
 }
 
-impl StoragePolicy<Sendable> for RejectFetchPolicy {
+impl StoragePolicy<Sendable> for AllowFetchFor {
     type FetchDisallowed = FetchRejected;
     type PutDisallowed = Infallible;
 
     fn authorize_fetch(
         &self,
-        _peer: PeerId,
+        peer: PeerId,
         _sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
-        async { Err(FetchRejected) }.boxed()
+        let allowed = self.0.contains(&peer);
+        async move { allowed.then_some(()).ok_or(FetchRejected) }.boxed()
     }
 
     fn authorize_put(
@@ -123,10 +127,11 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 
     fn filter_authorized_fetch(
         &self,
-        _peer: PeerId,
-        _ids: Vec<SedimentreeId>,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
-        async { Vec::new() }.boxed()
+        let allowed = self.0.contains(&peer);
+        async move { if allowed { ids } else { Vec::new() } }.boxed()
     }
 }
 
@@ -268,77 +273,126 @@ async fn add_fragment_without_subscribers_pushes_nothing() -> TestResult {
     Ok(())
 }
 
-/// A peer that *is* subscribed but fails `filter_authorized_fetch` must not
-/// be pushed data. Before the fix, an all-unauthorized subscriber set looked
-/// like "no subscribers" and triggered a policy-free broadcast.
+/// Two subscribers, one authorized and one not: the push goes to exactly the
+/// intersection. Policy is evaluated on the pushing node (A), the only node
+/// whose `filter_authorized_fetch` matters for A's pushes.
 #[tokio::test]
-async fn add_commit_with_only_unauthorized_subscribers_pushes_nothing() -> TestResult {
-    let (a_s, b_s) = (make_signer(5), make_signer(6));
-    // A enforces the policy (it decides who may fetch from it).
-    let a = make_node(a_s.clone(), RejectFetchPolicy);
+async fn add_commit_pushes_only_to_authorized_subscribers() -> TestResult {
+    let (a_s, b_s, c_s) = (make_signer(5), make_signer(6), make_signer(7));
+    let b_peer = PeerId::from(b_s.verifying_key());
+    let c_peer = PeerId::from(c_s.verifying_key());
+
+    let a = make_node(a_s.clone(), AllowFetchFor(BTreeSet::from([b_peer])));
     let b = make_node(b_s.clone(), OpenPolicy);
+    let c = make_node(c_s.clone(), OpenPolicy);
     connect(&a, &a_s, &b, &b_s).await?;
+    connect(&a, &a_s, &c, &c_s).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let id = SedimentreeId::new([3u8; 32]);
     let a_peer = PeerId::from(a_s.verifying_key());
-    let b_peer = PeerId::from(b_s.verifying_key());
 
-    // B subscribes. A records the subscription (that happens before the
-    // fetch policy check) but answers `Unauthorized`, so the sync result is
-    // irrelevant here.
-    drop(b.sync_with_peer(&a_peer, id, true, SYNC_TIMEOUT).await);
+    // Both subscribe. A records both subscriptions (that happens before the
+    // fetch-policy check); C's request is answered `Unauthorized`, which
+    // `sync_with_peer` reports as `Ok((false, ..))`, not an error.
+    b.sync_with_peer(&a_peer, id, true, SYNC_TIMEOUT).await?;
+    c.sync_with_peer(&a_peer, id, true, SYNC_TIMEOUT).await?;
     assert!(
-        wait_until(|| async { a.get_subscribers(id).await.contains(&b_peer) }).await,
-        "A should have recorded B's subscription"
+        wait_until(|| async {
+            let subs = a.get_subscribers(id).await;
+            subs.contains(&b_peer) && subs.contains(&c_peer)
+        })
+        .await,
+        "A should have recorded both subscriptions"
     );
 
     a.add_commit(id, make_head(1), BTreeSet::new(), make_blob(1))
         .await?;
 
+    assert!(
+        wait_until(|| async { commit_count(&b, id).await == 1 }).await,
+        "authorized subscriber B must receive the push"
+    );
     tokio::time::sleep(PROPAGATION_PAUSE).await;
-    assert_eq!(commit_count(&a, id).await, 1);
     assert_eq!(
-        commit_count(&b, id).await,
+        commit_count(&c, id).await,
         0,
-        "B is subscribed but unauthorized; add_commit must not push to it"
+        "C is subscribed but not authorized; it must not be pushed"
     );
     Ok(())
 }
 
-/// Once B is subscribed, each `add_commit` on A is pushed to B exactly once
-/// (no duplicate deliveries, no reliance on a later sync round).
+/// Wire-level count: once a peer is subscribed, each `add_commit` produces
+/// exactly one outbound `LooseCommit` frame to it, with no sync round.
+///
+/// Uses a mock connection whose outbound frames are observable, since a
+/// receiving node deduplicates by commit identity and its stored count
+/// cannot distinguish one delivery from several.
 #[tokio::test]
-async fn add_commit_pushes_to_each_subscriber_once() -> TestResult {
-    let (a_s, b_s) = (make_signer(7), make_signer(8));
-    let a = make_node(a_s.clone(), OpenPolicy);
-    let b = make_node(b_s.clone(), OpenPolicy);
-    connect(&a, &a_s, &b, &b_s).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
+async fn add_commit_sends_one_frame_per_commit_to_a_subscriber() -> TestResult {
+    let (a, _handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+        .signer(make_signer(8))
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    tokio::spawn(listener);
+    tokio::spawn(manager);
 
     let id = SedimentreeId::new([4u8; 32]);
-    let a_peer = PeerId::from(a_s.verifying_key());
-    let b_peer = PeerId::from(b_s.verifying_key());
+    let b_peer = PeerId::new([9u8; 32]);
+    let (conn, handle) = ChannelMockConnection::new_with_handle(b_peer);
+    a.add_connection(conn.authenticated()).await?;
 
-    // B subscribes to an (as yet empty) tree on A.
-    b.sync_with_peer(&a_peer, id, true, SYNC_TIMEOUT).await?;
+    // B subscribes (empty fingerprints: B has nothing).
+    handle
+        .inbound_tx
+        .send(SyncMessage::BatchSyncRequest(BatchSyncRequest {
+            id,
+            req_id: RequestId {
+                requestor: b_peer,
+                nonce: 1,
+            },
+            fingerprint_summary: FingerprintSummary::new(
+                FingerprintSeed::new(0, 0),
+                BTreeSet::new(),
+                BTreeSet::new(),
+            ),
+            subscribe: true,
+        }))
+        .await?;
     assert!(
         wait_until(|| async { a.get_subscribers(id).await.contains(&b_peer) }).await,
         "A should have recorded B's subscription"
     );
+    // Discard the BatchSyncResponse so only pushes remain on the wire.
+    tokio::time::sleep(PROPAGATION_PAUSE).await;
+    while handle.outbound_rx.try_recv().is_ok() {}
 
     for n in 1..=3u8 {
         a.add_commit(id, make_head(n), BTreeSet::new(), make_blob(n))
             .await?;
-        assert!(
-            wait_until(|| async { commit_count(&b, id).await == usize::from(n) }).await,
-            "B should have {n} commit(s) after the {n}th push, has {}",
-            commit_count(&b, id).await
-        );
     }
-
-    // Settle, then confirm nothing was delivered twice.
     tokio::time::sleep(PROPAGATION_PAUSE).await;
-    assert_eq!(commit_count(&b, id).await, 3);
+
+    let mut frames = Vec::new();
+    while let Ok(msg) = handle.outbound_rx.try_recv() {
+        frames.push(msg);
+    }
+    let pushed: Vec<_> = frames
+        .iter()
+        .filter(|m| matches!(m, SyncMessage::LooseCommit { .. }))
+        .collect();
+    assert_eq!(
+        pushed.len(),
+        3,
+        "expected exactly one LooseCommit frame per add_commit; wire had {frames:?}"
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|m| matches!(m, SyncMessage::LooseCommit { .. })),
+        "add_commit must push, not open a sync round; wire had {frames:?}"
+    );
     Ok(())
 }

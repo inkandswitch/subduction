@@ -1090,10 +1090,8 @@ where
             // tree is already minimized for wire use.
             let tree = self.get_or_hydrate(id).await?;
             if let Some(tree) = tree {
-                // Asking every peer is fine here: these are *requests*, and
-                // each responder applies its own fetch policy before answering.
-                // (Contrast `add_commit`, which pushes data and therefore only
-                // targets authorized subscribers.)
+                // Requests, not pushes: each responder applies its own fetch
+                // policy, so asking every peer is fine.
                 let conns = self.all_connections().await;
                 for conn in conns {
                     let peer_id = conn.peer_id();
@@ -1289,17 +1287,15 @@ where
     /// The commit is constructed internally from the provided parts, ensuring
     /// that the blob metadata is computed correctly from the blob.
     ///
-    /// This is the store+propagate combinator for a single commit;
-    /// propagation is a best-effort push (`Connection::send`) to peers that
-    /// are subscribed to `id` *and* pass
-    /// [`filter_authorized_fetch`](crate::policy::storage::StoragePolicy::filter_authorized_fetch),
-    /// so it does not block on peer acks. Peers that have not subscribed
-    /// receive nothing: a brand-new tree with no subscribers stays local
-    /// until this node opens a subscribing sync round, e.g. via
-    /// [`sync_with_all_peers`](Self::sync_with_all_peers) with
-    /// `subscribe = true` (which is what the batch combinators such as
-    /// [`add_commits_batch`](Self::add_commits_batch) do). For a durable
+    /// This is the store+propagate combinator for a single commit. The push
+    /// is a best-effort `Connection::send` to peers subscribed to `id` that
+    /// pass [`filter_authorized_fetch`]; it does not block on peer acks.
+    /// Unsubscribed peers receive nothing, so for a new tree follow up with
+    /// [`sync_with_all_peers`](Self::sync_with_all_peers)`(id, true, ..)`, as
+    /// [`add_commits_batch`](Self::add_commits_batch) does. For a durable
     /// write with no propagation, use [`store_commit`](Self::store_commit).
+    ///
+    /// [`filter_authorized_fetch`]: crate::policy::storage::StoragePolicy::filter_authorized_fetch
     ///
     /// # Returns
     ///
@@ -1350,38 +1346,33 @@ where
             .await
             .map(|mut s| s.heads(&self.depth_metric))
             .unwrap_or_default();
-        {
-            // Subscribed *and* authorized peers only. There is deliberately
-            // no "no subscribers, so tell everyone" fallback: it would push
-            // unsolicited data to every connection and, worse, fire exactly
-            // when every subscriber failed the fetch policy.
-            let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
 
-            for conn in conns {
-                let peer_id = conn.peer_id();
-                tracing::debug!(tree = ?id, peer = %peer_id, "propagating commit for sedimentree");
+        // Push invariant: subscribed and authorized peers only, no fallback.
+        // See `design/sync/subscriptions.md` § Push Invariant.
+        for conn in self.get_authorized_subscriber_conns(id, &self_id).await {
+            let peer_id = conn.peer_id();
+            tracing::debug!(tree = ?id, peer = %peer_id, "propagating commit for sedimentree");
 
-                let msg: Hdl::Message = SyncMessage::LooseCommit {
-                    id,
-                    commit: signed_for_wire.clone(),
-                    blob: blob.clone(),
-                    sender_heads: RemoteHeads {
-                        counter: self.send_counter.next(peer_id).await,
-                        heads: heads.clone(),
-                    },
-                }
-                .into();
+            let msg: Hdl::Message = SyncMessage::LooseCommit {
+                id,
+                commit: signed_for_wire.clone(),
+                blob: blob.clone(),
+                sender_heads: RemoteHeads {
+                    counter: self.send_counter.next(peer_id).await,
+                    heads: heads.clone(),
+                },
+            }
+            .into();
 
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::warn!(
-                        peer = %peer_id,
-                        error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
-                        "peer disconnected"
-                    );
-                    // No prune: a failed send means the transport is closed, so
-                    // the read loop's canonical teardown removes it. Pruning here
-                    // would skip the `on_peer_disconnect` hook.
-                }
+            if let Err(e) = conn.send(&msg).await {
+                tracing::warn!(
+                    peer = %peer_id,
+                    error = %IoError::<Async, Store, Conn, Hdl::Message>::ConnSend(e),
+                    "peer disconnected"
+                );
+                // No prune: a failed send means the transport is closed, so
+                // the read loop's canonical teardown removes it. Pruning here
+                // would skip the `on_peer_disconnect` hook.
             }
         }
 
@@ -1496,11 +1487,8 @@ where
             .map(|mut s| s.heads(&self.depth_metric))
             .unwrap_or_default();
 
-        // Subscribed *and* authorized peers only; see `add_commit` for why
-        // there is no broadcast fallback.
-        let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
-
-        for conn in conns {
+        // Push invariant: see `add_commit`.
+        for conn in self.get_authorized_subscriber_conns(id, &self_id).await {
             let peer_id = conn.peer_id();
             tracing::debug!(digest = ?fragment_digest, tree = ?id, peer = %peer_id, "propagating fragment for sedimentree");
 
