@@ -6,6 +6,11 @@ export interface SubductionOptions {
     maxResidentTrees?: number;
     policy?: Policy;
     ephemeralPolicy?: EphemeralPolicy;
+    /**
+     * Called when a remote peer's heads for a sedimentree change, with `heads`
+     * sorted and deduplicated. Return quickly and do not call back into
+     * Subduction synchronously; schedule such calls (e.g. `queueMicrotask`).
+     */
     onRemoteHeads?: (id: SedimentreeId, peer: PeerId, heads: CommitId[]) => void;
     onEphemeral?: (topic: Topic, sender: PeerId, payload: Uint8Array) => void;
     /**

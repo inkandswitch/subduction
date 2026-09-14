@@ -375,13 +375,10 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
     SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
 {
     /// Set the [`RemoteHeadsObserver`] invoked when a remote peer's heads for
-    /// a sedimentree _change_. Peers report heads constantly — on
-    /// `HeadsUpdate`, on `sender_heads` of subscription pushes, and on
-    /// `responder_heads` of every sync response — so updates are filtered per
-    /// `(peer, sedimentree)` and forwarded only when the heads differ from the
-    /// last reported. See [`FilteredHeadsNotifier`].
-    ///
-    /// [`FilteredHeadsNotifier`]: crate::remote_heads::FilteredHeadsNotifier
+    /// a sedimentree change. Heads arrive on `HeadsUpdate`, `sender_heads`,
+    /// and `responder_heads`; the observer is called only when they differ
+    /// from the last report for that `(peer, sedimentree)`. See
+    /// [`RemoteHeadsObserver`] for the callback's obligations.
     ///
     /// Defaults to [`NoRemoteHeadsObserver`], which discards all
     /// notifications.

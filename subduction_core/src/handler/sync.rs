@@ -188,6 +188,8 @@ impl<
 > SyncHandler<Async, E, Conn, Metric, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
+    ///
+    /// See [`RemoteHeadsObserver`] for the callback's obligations.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
         minimized_tree_store: E::MinimizedTreeStore,
@@ -313,9 +315,8 @@ impl<
     }
 
     fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()> {
-        // Teardown already removed the peer's connection and subscriptions, and
-        // the send counter deliberately survives (see `PeerCounter`). The heads
-        // filter's entries do not — they are per-session.
+        // The send counter survives (see `PeerCounter`); notifier entries are
+        // per-session.
         Async::from_future(async move { self.heads_notifier.remove_peer(peer).await })
     }
 }
@@ -491,7 +492,8 @@ impl<
         //    `Subduction::sync_with_all_peers` via `RemoteHeadsNotifier`.
         //
         // 2. `sender_heads` on subscription-push `LooseCommit`/`Fragment`
-        //    messages — handled here in dispatch.
+        //    messages — reported by `recv_commit` / `recv_fragment` after
+        //    verification, authorization, and storage.
         //
         // 3. `HeadsUpdate` messages (post-ingestion ack from the 1.5 RTT
         //    second half) — handled here in dispatch.
@@ -617,13 +619,6 @@ impl<
             }
         };
 
-        // Only now: the sender's heads ride on a message whose signature is
-        // verified and whose tree this peer is allowed to write. Reporting
-        // earlier would hand the application heads from an unauthenticated
-        // peer, and would let any peer plant filter state for trees it has
-        // no access to.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
-
         let signed_for_wire = verified.signed().clone();
 
         // Reject like the signature and policy paths above: a mismatched
@@ -650,6 +645,11 @@ impl<
             .insert_commit_locally(&putter, verified_meta)
             .await
             .map_err(IoError::from)?;
+
+        // Report heads only after the message is verified, authorized, and
+        // stored, so the observer never sees heads for data we rejected or do
+        // not yet hold.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -777,13 +777,6 @@ impl<
             }
         };
 
-        // Only now: the sender's heads ride on a message whose signature is
-        // verified and whose tree this peer is allowed to write. Reporting
-        // earlier would hand the application heads from an unauthenticated
-        // peer, and would let any peer plant filter state for trees it has
-        // no access to.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
-
         let signed_for_wire = verified.signed().clone();
 
         // Reject without disconnecting; see `recv_commit`.
@@ -807,6 +800,9 @@ impl<
             .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::from)?;
+
+        // Heads reported after verification and storage; see `recv_commit`.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
