@@ -36,7 +36,10 @@ use crate::{
     authenticated::{Authenticated, Direction},
     connection::{
         message::{BatchSyncRequest, RequestId, SyncMessage},
-        test_utils::{ChannelTransport, InstantTimeout, PausableChannelTransport, TokioSpawn},
+        test_utils::{
+            ChannelMockConnection, ChannelMockConnectionHandle, ChannelTransport, InstantTimeout,
+            PausableChannelTransport, TokioSpawn,
+        },
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -273,4 +276,36 @@ pub fn subscribe_request(from: PeerId, id: SedimentreeId) -> SyncMessage {
         ),
         subscribe: true,
     })
+}
+
+/// A node whose peers are [`ChannelMockConnection`]s, for tests that drive the
+/// wire by hand rather than through a second node.
+pub type MockConn = ChannelMockConnection<SyncMessage>;
+
+/// [`spawn_node`] over [`MockConn`].
+#[must_use]
+pub fn spawn_mock_node(seed: u8) -> (TestNode<MockConn, InstantTimeout>, PeerId) {
+    spawn_node(seed, InstantTimeout)
+}
+
+/// Attach a mock peer to `node`, returning the handle that drives its wire.
+///
+/// `direction` is the node's view of who dialed whom, which is what
+/// subscription propagation reads; pass it deliberately.
+///
+/// # Panics
+///
+/// Panics if the node refuses the connection.
+pub async fn attach_mock<Timer: Timeout<Sendable> + Clone + Send + Sync + 'static>(
+    node: &TestNode<MockConn, Timer>,
+    peer: PeerId,
+    direction: Direction,
+) -> ChannelMockConnectionHandle<SyncMessage> {
+    let (conn, handle) = MockConn::new_with_handle(peer);
+
+    node.add_connection(Authenticated::new_for_test(conn, peer, direction))
+        .await
+        .expect("node should accept the mock connection");
+
+    handle
 }

@@ -23,30 +23,22 @@ use std::{
 };
 
 use future_form::Sendable;
-use sedimentree_core::{
-    blob::BlobMeta, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::LooseCommit,
-};
+use sedimentree_core::{blob::BlobMeta, id::SedimentreeId, loose_commit::LooseCommit};
 use subduction_core::{
-    authenticated::{Authenticated, Direction},
+    authenticated::Direction,
     connection::{
         message::{BatchSyncResponse, RequestedData, SyncDiff, SyncMessage, SyncResult},
-        test_utils::{
-            ChannelMockConnection, ChannelMockConnectionHandle, InstantTimeout, TokioSpawn,
-        },
+        test_utils::{ChannelMockConnectionHandle, InstantTimeout},
     },
-    handler::sync::SyncHandler,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
     remote_heads::RemoteHeads,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
     test_utils::{
-        ChannelConn, TestNode, dial, make_blob, make_head, make_signer, spawn_channel_node,
-        subscribe_request, wait_until,
+        ChannelConn, TestNode, attach_mock, dial, make_blob, make_head, make_signer,
+        spawn_channel_node, spawn_mock_node, subscribe_request, wait_until,
     },
     timeout::call::CallTimeout,
 };
-use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
@@ -88,52 +80,6 @@ async fn drain_until_answered(
     }
 }
 
-type MockConn = ChannelMockConnection<SyncMessage>;
-
-type MockHub = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        MockConn,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            MockConn,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TokioSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
-
-fn make_hub() -> MockHub {
-    let (sd, _h, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-        .signer(make_signer(100))
-        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
-        .timer(InstantTimeout)
-        .build::<Sendable, MockConn>();
-    tokio::spawn(listener);
-    tokio::spawn(manager);
-    sd
-}
-
-async fn attach_mock(
-    hub: &MockHub,
-    peer: PeerId,
-    direction: Direction,
-) -> TestResult<ChannelMockConnectionHandle<SyncMessage>> {
-    let (conn, handle) = MockConn::new_with_handle(peer);
-    hub.add_connection(Authenticated::new_for_test(conn, peer, direction))
-        .await?;
-    Ok(handle)
-}
-
 /// Answer every subscribing `BatchSyncRequest` on `handle` with an empty
 /// `Ok` response, and count them.
 fn answer_and_count(
@@ -171,16 +117,16 @@ fn answer_and_count(
 /// must not hear about X at all, and must not become a subscriber.
 #[tokio::test]
 async fn subscribe_is_not_forwarded_to_other_downstreams() -> TestResult {
-    let hub = make_hub();
+    let (hub, _hub_peer) = spawn_mock_node(100);
     let a_peer = PeerId::new([1u8; 32]);
     let b_peer = PeerId::new([2u8; 32]);
     let up_peer = PeerId::new([3u8; 32]);
-    let a = attach_mock(&hub, a_peer, Direction::Accepted).await?;
-    let b = attach_mock(&hub, b_peer, Direction::Accepted).await?;
+    let a = attach_mock(&hub, a_peer, Direction::Accepted).await;
+    let b = attach_mock(&hub, b_peer, Direction::Accepted).await;
     // The hub dials U, so propagation has somewhere legitimate to go. Without
     // it there would be nothing to wait *for*, and the assertion below would
     // pass on any machine slow enough.
-    let _up = attach_mock(&hub, up_peer, Direction::Dialed).await?;
+    let _up = attach_mock(&hub, up_peer, Direction::Dialed).await;
     let x = SedimentreeId::new([9u8; 32]);
     let a_requests = answer_and_count(a, x);
 
@@ -220,11 +166,11 @@ async fn subscribe_is_not_forwarded_to_other_downstreams() -> TestResult {
 /// rule (the relay case).
 #[tokio::test]
 async fn subscribe_is_forwarded_to_dialed_upstream() -> TestResult {
-    let hub = make_hub();
+    let (hub, _hub_peer) = spawn_mock_node(100);
     let b_peer = PeerId::new([2u8; 32]);
     let up_peer = PeerId::new([3u8; 32]);
-    let b = attach_mock(&hub, b_peer, Direction::Accepted).await?;
-    let up = attach_mock(&hub, up_peer, Direction::Dialed).await?;
+    let b = attach_mock(&hub, b_peer, Direction::Accepted).await;
+    let up = attach_mock(&hub, up_peer, Direction::Dialed).await;
     let x = SedimentreeId::new([9u8; 32]);
     let up_requests = answer_and_count(up, x);
 
@@ -352,11 +298,11 @@ async fn relay_forwards_data_it_pulled_from_upstream() -> TestResult {
 /// answers with a duplicated item; B must receive exactly one frame.
 #[tokio::test]
 async fn duplicate_items_in_a_response_are_pushed_once() -> TestResult {
-    let hub = make_hub();
+    let (hub, _hub_peer) = spawn_mock_node(100);
     let b_peer = PeerId::new([2u8; 32]);
     let up_peer = PeerId::new([3u8; 32]);
-    let b = attach_mock(&hub, b_peer, Direction::Accepted).await?;
-    let up = attach_mock(&hub, up_peer, Direction::Dialed).await?;
+    let b = attach_mock(&hub, b_peer, Direction::Accepted).await;
+    let up = attach_mock(&hub, up_peer, Direction::Dialed).await;
     let x = SedimentreeId::new([9u8; 32]);
 
     // U answers the hub's propagated request with commit C, listed twice.
@@ -452,11 +398,11 @@ async fn relay_forwards_fragments_it_pulled_from_upstream() -> TestResult {
 /// answers with the same commit; B's wire stays quiet.
 #[tokio::test]
 async fn already_known_items_are_not_re_pushed() -> TestResult {
-    let hub = make_hub();
+    let (hub, _hub_peer) = spawn_mock_node(100);
     let b_peer = PeerId::new([2u8; 32]);
     let up_peer = PeerId::new([3u8; 32]);
-    let b = attach_mock(&hub, b_peer, Direction::Accepted).await?;
-    let up = attach_mock(&hub, up_peer, Direction::Dialed).await?;
+    let b = attach_mock(&hub, b_peer, Direction::Accepted).await;
+    let up = attach_mock(&hub, up_peer, Direction::Dialed).await;
     let x = SedimentreeId::new([12u8; 32]);
 
     let blob = make_blob(1);
