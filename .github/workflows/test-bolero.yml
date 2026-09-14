@@ -70,3 +70,10 @@ jobs:
         BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --tests
       env:
         RUST_BACKTRACE: 1
+
+    - name: Run Property Tests on subduction_hyper
+      working-directory: subduction_hyper
+      run: |
+        BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features bolero --lib
+      env:
+        RUST_BACKTRACE: 1

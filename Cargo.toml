@@ -88,7 +88,7 @@ futures-util = { version = "0.3.31", default-features = false, features = [
 ] }
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4.3"
-http = { version = "1", default-features = false }
+http = { version = "1.5", default-features = false }
 http-body-util = "0.1.4"
 iroh = "1.0"
 hyper = { version = "1.6", default-features = false }

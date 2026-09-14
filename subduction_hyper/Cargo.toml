@@ -37,7 +37,11 @@ hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["http1", "server", "tokio"] }
 sha1 = { workspace = true }
 subduction_crypto = { workspace = true, features = ["std"] }
-subduction_websocket = { workspace = true, features = ["std", "tokio_client", "tokio_server"] }
+subduction_websocket = { workspace = true, features = [
+  "std",
+  "tokio_client",
+  "tokio_server",
+] }
 tokio = { workspace = true, features = [
   "io-util",
   "macros",
