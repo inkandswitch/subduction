@@ -244,7 +244,8 @@ impl WasmSubduction {
             WasmSpawn,
         )
         // Wall-clock seeded so sequences resume above previous values across
-        // page reloads; receivers never reset their high-water marks.
+        // page reloads; a receiver that missed the old session's end would
+        // otherwise drop the new sequence as stale.
         .with_send_counter(PeerCounter::with_seed(date_now_micros_seed));
 
         let eph_policy = opts
@@ -1770,7 +1771,12 @@ export interface SubductionOptions {
     policy?: Policy;
     /** Ephemeral message authorization policy. Defaults to allow-all. */
     ephemeralPolicy?: EphemeralPolicy;
-    /** Callback fired when a peer's heads change. */
+    /**
+     * Called when a remote peer's heads for a sedimentree change:
+     * `(sedimentreeId, peerId, heads)`, `heads` sorted and deduplicated.
+     * Return quickly and do not call back into Subduction synchronously;
+     * schedule such calls (e.g. `queueMicrotask`).
+     */
     onRemoteHeads?: Function;
     /** Callback fired on inbound ephemeral messages. */
     onEphemeral?: Function;

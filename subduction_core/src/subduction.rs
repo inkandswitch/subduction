@@ -631,8 +631,8 @@ where
     /// * Returns [`Conn::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), Conn::DisconnectionError> {
         // Drain connections and muxes in one `connections` critical
-        // section (outer before inner), then cancel off the lock. This is
-        // the bulk equivalent of `teardown_peer` for every peer at once.
+        // section (outer before inner), then clean up off the lock as
+        // `teardown_peer` does, in bulk.
         let (all_conns, removed_muxes): (Vec<Authenticated<Conn, Async>>, Vec<Arc<Multiplexer>>) = {
             let mut guard = self.connections.lock().await;
             let conns = core::mem::take(&mut *guard)
@@ -650,7 +650,8 @@ where
 
         Self::cancel_detached_muxes(removed_muxes).await;
         self.subscriptions.lock().await.clear();
-        // Send counters survive on purpose; see `teardown_peer`.
+        self.outgoing_subscriptions.lock().await.clear();
+        // Send counters survive on purpose; see `PeerCounter`.
 
         for peer_id in peers_torn_down {
             self.handler.on_peer_disconnect(peer_id).await;
@@ -941,10 +942,12 @@ where
     /// and its muxes have been detached via
     /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked).
     ///
-    /// Shared post-lock cleanup for [`disconnect`](Self::disconnect) and
-    /// [`disconnect_from_peer`](Self::disconnect_from_peer) so they clean
-    /// up the same state in the same order. Emits `conn_count`
-    /// `connection_closed` metrics.
+    /// Shared post-lock cleanup for [`disconnect`](Self::disconnect),
+    /// [`disconnect_from_peer`](Self::disconnect_from_peer), and
+    /// [`remove_connection`](Self::remove_connection); fires
+    /// [`Handler::on_peer_disconnect`](crate::handler::Handler::on_peer_disconnect)
+    /// and emits `conn_count` `connection_closed` metrics.
+    /// [`disconnect_all`](Self::disconnect_all) does the same in bulk.
     async fn teardown_peer(
         &self,
         peer_id: &PeerId,
@@ -958,14 +961,8 @@ where
         // (`clear_stale_outgoing_claims`); this bounds the map.
         self.outgoing_subscriptions.lock().await.remove(peer_id);
 
-        // The send counter is deliberately not cleared: a receiver that never
-        // observes this disconnect keeps its high-water mark, so a restarted
-        // sequence would be dropped as stale.
+        // The send counter is deliberately not cleared; see `PeerCounter`.
 
-        // Proactive teardown is still a disconnect, so handlers get the same
-        // hook the listener's reactive path gives them. Without it, per-session
-        // handler state — the heads filter, ephemeral subscriptions, in-flight
-        // send counts — outlives the peer.
         self.handler.on_peer_disconnect(*peer_id).await;
 
         #[cfg(feature = "metrics")]
@@ -2256,10 +2253,7 @@ where
                     responder_heads,
                     ..
                 }) => {
-                    self.handler
-                        .notify_remote_heads(id, conn.peer_id(), responder_heads.clone())
-                        .await;
-                    stats.remote_heads = responder_heads;
+                    stats.remote_heads = responder_heads.clone();
                     let SyncDiff {
                         missing_commits,
                         missing_fragments,
@@ -2298,6 +2292,9 @@ where
                     .await?;
                     self.minimize_tree(id).await;
                     self.push_to_subscribers(id, to_ask, &ingested).await;
+                    self.handler
+                        .notify_remote_heads(id, *to_ask, responder_heads)
+                        .await;
 
                     // Update received stats (count what was offered, not verified)
                     stats.commits_received += commits_to_receive;
@@ -2483,10 +2480,7 @@ where
                                 responder_heads,
                                 ..
                             }) => {
-                                self.handler
-                                    .notify_remote_heads(id, *peer_id, responder_heads.clone())
-                                    .await;
-                                stats.remote_heads = responder_heads;
+                                stats.remote_heads = responder_heads.clone();
                                 let SyncDiff {
                                     missing_commits,
                                     missing_fragments,
@@ -2532,6 +2526,9 @@ where
                                 .await?;
                                 self.minimize_tree(id).await;
                                 self.push_to_subscribers(id, peer_id, &ingested).await;
+                                self.handler
+                                    .notify_remote_heads(id, *peer_id, responder_heads)
+                                    .await;
 
                                 // Update received stats
                                 stats.commits_received += commits_to_receive;
@@ -3201,9 +3198,7 @@ where
                                     "error dispatching message"
                                 );
 
-                                if self.remove_connection(&conn).await == Some(true) {
-                                    handler.on_peer_disconnect(peer_id).await;
-                                }
+                                self.remove_connection(&conn).await;
                                 tracing::debug!(peer = %peer_id, "removed failed connection");
                             }
                             DispatchOutcome::Completed { result: Ok(()), .. } => {
@@ -3267,9 +3262,7 @@ where
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
                         tracing::warn!(conn = %conn_id, peer = %peer_id, "connection closed, removing");
-                        if self.remove_connection(&conn).await == Some(true) {
-                            handler.on_peer_disconnect(peer_id).await;
-                        }
+                        self.remove_connection(&conn).await;
                     } else {
                         // Must break: a permanently-ready arm above
                         // `msg_queue` would starve dispatch forever.

@@ -45,7 +45,7 @@ const TS_FRAME_HANDLER: &str = r#"
 export interface FrameHandler {
     /** Called with the CBOR payload (no SUK envelope) for each inbound keyhive frame. */
     onMessage(payload: Uint8Array, peerId: PeerId): void;
-    /** Called when a peer's last connection drops. */
+    /** Called once when a peer's last connection is gone, including via `disconnectFromPeer` / `disconnectAll`. */
     onPeerDisconnect(peerId: PeerId): void;
 }
 "#;

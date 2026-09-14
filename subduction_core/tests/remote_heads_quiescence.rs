@@ -1,89 +1,138 @@
 //! Heads notifications must quiesce once two peers have converged.
 //!
-//! An application that reacts to `on_remote_heads` by syncing (the obvious
-//! reading of the callback) will otherwise loop forever: every sync round
-//! answers with `responder_heads`, every `responder_heads` is reported, and
-//! every report triggers another sync. The heads never change, so nothing
-//! makes it stop.
+//! An observer that syncs on every notification must terminate once peers
+//! converge: each sync answers with `responder_heads`, and reporting
+//! unchanged heads would restart the loop.
 //!
-//! Regression guard for heads notifications repeating unchanged heads.
+//! Unit tests of the filter itself live in `subduction_core::remote_heads`;
+//! these tests exercise the wiring through a running node.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use core::time::Duration;
+use core::convert::Infallible;
 use std::{
     collections::BTreeSet,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use future_form::Sendable;
+use futures::future::BoxFuture;
 use sedimentree_core::{
-    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::{Blob, BlobMeta},
+    depth::CountLeadingZeroBytes,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_core::{
-    authenticated::Authenticated,
-    connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
-    handler::sync::SyncHandler,
+    authenticated::{Authenticated, Direction},
+    connection::{
+        message::SyncMessage,
+        test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    },
+    handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
-    policy::open::OpenPolicy,
+    policy::{connection::ConnectionPolicy, open::OpenPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsObserver},
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
-use subduction_crypto::signer::memory::MemorySigner;
+use subduction_crypto::{
+    signed::Signed, signer::memory::MemorySigner, verified_author::VerifiedAuthor,
+};
 use testresult::TestResult;
 
 type Conn = MessageTransport<ChannelTransport>;
 
-type Node<R> = Arc<
+type Node<P, R> = Arc<
     Subduction<
         'static,
         Sendable,
         MemoryStorage,
         Conn,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            Conn,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TokioSpawn,
-            256,
-            R,
-        >,
-        OpenPolicy,
+        SyncHandler<Sendable, MemoryStorage, Conn, P, CountLeadingZeroBytes, TokioSpawn, 256, R>,
+        P,
         MemorySigner,
         InstantTimeout,
         TokioSpawn,
     >,
 >;
 
-/// Counts notifications and remembers the heads reported each time.
+type NodeHandler<P, R> =
+    Arc<SyncHandler<Sendable, MemoryStorage, Conn, P, CountLeadingZeroBytes, TokioSpawn, 256, R>>;
+
+/// Refuses every write.
+#[derive(Debug, Clone, Copy)]
+struct DenyWrites;
+
+#[derive(Debug, thiserror::Error)]
+#[error("writes are refused")]
+struct WritesRefused;
+
+impl ConnectionPolicy<Sendable> for DenyWrites {
+    type ConnectionDisallowed = Infallible;
+
+    fn authorize_connect(&self, _peer: PeerId) -> BoxFuture<'_, Result<(), Infallible>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl StoragePolicy<Sendable> for DenyWrites {
+    type FetchDisallowed = Infallible;
+    type PutDisallowed = WritesRefused;
+
+    fn authorize_fetch(
+        &self,
+        _peer: PeerId,
+        _id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Infallible>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn authorize_put(
+        &self,
+        _requestor: PeerId,
+        _author: VerifiedAuthor,
+        _id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), WritesRefused>> {
+        Box::pin(async { Err(WritesRefused) })
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        _peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        Box::pin(async move { ids })
+    }
+}
+
+/// Remembers every delivery.
 #[derive(Clone, Debug, Default)]
-struct CountingObserver {
-    calls: Arc<AtomicUsize>,
-    reported: Arc<Mutex<Vec<RemoteHeads>>>,
-}
+struct RecordingObserver(Arc<Mutex<Vec<(SedimentreeId, PeerId, RemoteHeads)>>>);
 
-impl CountingObserver {
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
+impl RecordingObserver {
+    fn deliveries(&self) -> Vec<(SedimentreeId, PeerId, RemoteHeads)> {
+        self.0.lock().expect("poisoned").clone()
     }
 
-    fn reported(&self) -> Vec<RemoteHeads> {
-        self.reported.lock().expect("poisoned").clone()
+    fn count(&self) -> usize {
+        self.0.lock().expect("poisoned").len()
+    }
+
+    fn heads(&self) -> Vec<Vec<CommitId>> {
+        self.deliveries()
+            .into_iter()
+            .map(|(_, _, h)| h.heads)
+            .collect()
     }
 }
 
-impl RemoteHeadsObserver for CountingObserver {
-    fn on_remote_heads(&self, _id: SedimentreeId, _peer: PeerId, heads: RemoteHeads) {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        self.reported.lock().expect("poisoned").push(heads);
+impl RemoteHeadsObserver for RecordingObserver {
+    fn on_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
+        self.0.lock().expect("poisoned").push((id, peer, heads));
     }
 }
 
@@ -91,10 +140,28 @@ fn signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
 }
 
-fn node<R: RemoteHeadsObserver + Send + Sync + 'static>(seed: u8, observer: R) -> Node<R> {
-    let (sd, _handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+fn peer_id(seed: u8) -> PeerId {
+    PeerId::from(signer(seed).verifying_key())
+}
+
+fn node<R: RemoteHeadsObserver + Send + Sync + 'static>(
+    seed: u8,
+    observer: R,
+) -> Node<OpenPolicy, R> {
+    node_with_policy(seed, observer, OpenPolicy).0
+}
+
+fn node_with_policy<P, R>(seed: u8, observer: R, policy: P) -> (Node<P, R>, NodeHandler<P, R>)
+where
+    P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Clone + Send + Sync + 'static,
+    <P as StoragePolicy<Sendable>>::PutDisallowed: Send + Sync + 'static,
+    <P as StoragePolicy<Sendable>>::FetchDisallowed: Send + Sync + 'static,
+    <P as ConnectionPolicy<Sendable>>::ConnectionDisallowed: Send + Sync + 'static,
+    R: RemoteHeadsObserver + Send + Sync + 'static,
+{
+    let (sd, handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
         .signer(signer(seed))
-        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .storage(MemoryStorage::new(), Arc::new(policy))
         .spawner(TokioSpawn)
         .timer(InstantTimeout)
         .heads_observer(observer)
@@ -102,42 +169,55 @@ fn node<R: RemoteHeadsObserver + Send + Sync + 'static>(seed: u8, observer: R) -
 
     tokio::spawn(listener);
     tokio::spawn(manager);
-    sd
+    (sd, handler)
 }
 
-async fn connect<A, B>(a: &Node<A>, a_seed: u8, b: &Node<B>, b_seed: u8) -> TestResult
+async fn connect_nodes<PA, RA, PB, RB>(
+    a: &Node<PA, RA>,
+    a_seed: u8,
+    b: &Node<PB, RB>,
+    b_seed: u8,
+) -> TestResult
 where
-    A: RemoteHeadsObserver + Send + Sync + 'static,
-    B: RemoteHeadsObserver + Send + Sync + 'static,
+    PA: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'static,
+    <PA as StoragePolicy<Sendable>>::PutDisallowed: Send + Sync + 'static,
+    <PA as StoragePolicy<Sendable>>::FetchDisallowed: Send + Sync + 'static,
+    <PA as ConnectionPolicy<Sendable>>::ConnectionDisallowed: Send + Sync + 'static,
+    PB: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'static,
+    <PB as StoragePolicy<Sendable>>::PutDisallowed: Send + Sync + 'static,
+    <PB as StoragePolicy<Sendable>>::FetchDisallowed: Send + Sync + 'static,
+    <PB as ConnectionPolicy<Sendable>>::ConnectionDisallowed: Send + Sync + 'static,
+    RA: RemoteHeadsObserver + Send + Sync + 'static,
+    RB: RemoteHeadsObserver + Send + Sync + 'static,
 {
     let (ta, tb) = ChannelTransport::pair();
-    let peer_a = PeerId::from(signer(a_seed).verifying_key());
-    let peer_b = PeerId::from(signer(b_seed).verifying_key());
 
+    // Direction only affects subscription propagation, which is not exercised here.
     a.add_connection(Authenticated::new_for_test(
         MessageTransport::new(ta),
-        peer_b,
+        peer_id(b_seed),
+        Direction::Dialed,
     ))
     .await?;
     b.add_connection(Authenticated::new_for_test(
         MessageTransport::new(tb),
-        peer_a,
+        peer_id(a_seed),
+        Direction::Accepted,
     ))
     .await?;
     Ok(())
 }
 
-/// Two converged peers, repeatedly synced. The heads never change, so the
-/// observer should be told once and then left alone.
+/// `sync_with_peer` reports `responder_heads` before returning, so no settling
+/// is needed between rounds.
 #[tokio::test]
 async fn repeated_sync_of_converged_trees_stops_notifying() -> TestResult {
-    let observer = CountingObserver::default();
+    let observer = RecordingObserver::default();
     let a = node(1, observer.clone());
-    let b = node(2, CountingObserver::default());
-    connect(&a, 1, &b, 2).await?;
+    let b = node(2, RecordingObserver::default());
+    connect_nodes(&a, 1, &b, 2).await?;
 
     let doc = SedimentreeId::new([9u8; 32]);
-    let peer_b = PeerId::from(signer(2).verifying_key());
 
     b.add_commit(
         doc,
@@ -147,57 +227,36 @@ async fn repeated_sync_of_converged_trees_stops_notifying() -> TestResult {
     )
     .await?;
 
-    // First sync: A learns about the commit. A notification here is correct.
-    a.sync_with_peer(&peer_b, doc, true, CallTimeout::TimeoutMillis(500))
+    a.sync_with_peer(&peer_id(2), doc, true, CallTimeout::TimeoutMillis(500))
         .await?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let after_first = observer.calls();
-    assert!(
-        after_first >= 1,
-        "the first sync should report B's heads at least once"
-    );
+    let after_first = observer.count();
+    assert!(after_first >= 1, "the first sync reports B's heads");
 
-    // Nothing changes from here on. Five more no-op sync rounds.
     for _ in 0..5 {
-        a.sync_with_peer(&peer_b, doc, true, CallTimeout::TimeoutMillis(500))
+        a.sync_with_peer(&peer_id(2), doc, true, CallTimeout::TimeoutMillis(500))
             .await?;
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    let after_repeats = observer.calls();
-    let reported = observer.reported();
-    let distinct: BTreeSet<Vec<CommitId>> = reported.iter().map(|h| h.heads.clone()).collect();
-
+    let distinct: BTreeSet<Vec<CommitId>> = observer.heads().into_iter().collect();
+    assert_eq!(distinct.len(), 1, "one distinct heads value: {distinct:?}");
     assert_eq!(
-        distinct.len(),
-        1,
-        "expected one distinct heads value across all notifications, got {}: {reported:?}",
-        distinct.len()
-    );
-    assert_eq!(
-        after_repeats,
+        observer.count(),
         after_first,
-        "syncing a converged tree notified the observer {} more times with unchanged heads; \
-         an app that syncs in response to a notification never quiesces",
-        after_repeats - after_first
+        "syncing a converged tree re-reported unchanged heads"
     );
 
     Ok(())
 }
 
-/// Filtering must not swallow real news: when the peer's heads actually move,
-/// the observer hears about it.
 #[tokio::test]
 async fn changed_heads_still_notify() -> TestResult {
-    let observer = CountingObserver::default();
+    let observer = RecordingObserver::default();
     let a = node(3, observer.clone());
-    let b = node(4, CountingObserver::default());
-    connect(&a, 3, &b, 4).await?;
+    let b = node(4, RecordingObserver::default());
+    connect_nodes(&a, 3, &b, 4).await?;
 
     let doc = SedimentreeId::new([8u8; 32]);
-    let peer_b = PeerId::from(signer(4).verifying_key());
 
-    let mut distinct_heads = BTreeSet::new();
     for i in 1..=3u8 {
         b.add_commit(
             doc,
@@ -206,183 +265,26 @@ async fn changed_heads_still_notify() -> TestResult {
             Blob::new(vec![i; 16]),
         )
         .await?;
-
-        a.sync_with_peer(&peer_b, doc, true, CallTimeout::TimeoutMillis(500))
+        a.sync_with_peer(&peer_id(4), doc, true, CallTimeout::TimeoutMillis(500))
             .await?;
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        distinct_heads.insert(
-            observer
-                .reported()
-                .last()
-                .expect("a new commit should have been reported")
-                .heads
-                .clone(),
-        );
     }
 
-    assert_eq!(
-        distinct_heads.len(),
-        3,
-        "each new commit should have produced a distinct heads report, got {distinct_heads:?}"
-    );
+    let distinct: BTreeSet<Vec<CommitId>> = observer.heads().into_iter().collect();
+    assert_eq!(distinct.len(), 3, "each new commit is a distinct report");
     Ok(())
 }
 
-/// Peers stamp one counter sequence across every tree, so a message about
-/// tree Y must not mask a fresh, lower-counter message about tree X. Driven
-/// directly, because the in-process channel transport will not reorder on
-/// demand.
-#[tokio::test]
-async fn a_later_tree_does_not_mask_an_earlier_one() {
-    use subduction_core::remote_heads::FilteredHeadsNotifier;
-
-    let observer = CountingObserver::default();
-    let notifier = FilteredHeadsNotifier::new(observer.clone());
-
-    let peer = PeerId::new([1u8; 32]);
-    let tree_x = SedimentreeId::new([b'x'; 32]);
-    let tree_y = SedimentreeId::new([b'y'; 32]);
-
-    // Y's message (counter 6) overtakes X's (counter 5) in flight.
-    notifier
-        .notify(
-            tree_y,
-            peer,
-            RemoteHeads {
-                counter: 6,
-                heads: vec![CommitId::new([0xBB; 32])],
-            },
-        )
-        .await;
-    notifier
-        .notify(
-            tree_x,
-            peer,
-            RemoteHeads {
-                counter: 5,
-                heads: vec![CommitId::new([0xAA; 32])],
-            },
-        )
-        .await;
-
-    assert_eq!(
-        observer.calls(),
-        2,
-        "X's update was dropped because an unrelated tree had a higher counter"
-    );
-}
-
-/// A reconnecting peer is a new session: the first heads it reports should
-/// reach the observer again, even though they are unchanged.
-#[tokio::test]
-async fn reconnecting_peer_reports_again() {
-    use subduction_core::remote_heads::FilteredHeadsNotifier;
-
-    let observer = CountingObserver::default();
-    let notifier = FilteredHeadsNotifier::new(observer.clone());
-
-    let peer = PeerId::new([2u8; 32]);
-    let other = PeerId::new([3u8; 32]);
-    let doc = SedimentreeId::new([7u8; 32]);
-    let heads = RemoteHeads {
-        counter: 10,
-        heads: vec![CommitId::new([0xCC; 32])],
-    };
-
-    notifier.notify(doc, peer, heads.clone()).await;
-    notifier.notify(doc, other, heads.clone()).await;
-    assert_eq!(observer.calls(), 2, "each peer reports once");
-
-    // Unchanged heads from a live peer stay filtered.
-    notifier
-        .notify(
-            doc,
-            peer,
-            RemoteHeads {
-                counter: 11,
-                ..heads.clone()
-            },
-        )
-        .await;
-    assert_eq!(observer.calls(), 2);
-
-    notifier.remove_peer(peer).await;
-
-    notifier
-        .notify(
-            doc,
-            peer,
-            RemoteHeads {
-                counter: 12,
-                ..heads.clone()
-            },
-        )
-        .await;
-    assert_eq!(observer.calls(), 3, "a new session should report once");
-
-    // Forgetting one peer must not forget the others.
-    notifier
-        .notify(
-            doc,
-            other,
-            RemoteHeads {
-                counter: 13,
-                ..heads
-            },
-        )
-        .await;
-    assert_eq!(observer.calls(), 3, "the other peer's state survived");
-}
-
-/// `RemoteHeads::default()` is what `NotFound` and `Unauthorized` responses
-/// carry: counter zero and no heads. It says nothing about the peer's state,
-/// so it must not reach the observer — nor record anything that would make a
-/// later, real update look stale.
-#[tokio::test]
-async fn counterless_updates_are_ignored() {
-    use subduction_core::remote_heads::FilteredHeadsNotifier;
-
-    let observer = CountingObserver::default();
-    let notifier = FilteredHeadsNotifier::new(observer.clone());
-
-    let peer = PeerId::new([4u8; 32]);
-    let doc = SedimentreeId::new([5u8; 32]);
-
-    notifier.notify(doc, peer, RemoteHeads::default()).await;
-    assert_eq!(observer.calls(), 0, "a counterless update said nothing");
-
-    notifier
-        .notify(
-            doc,
-            peer,
-            RemoteHeads {
-                counter: 1,
-                heads: vec![CommitId::new([1u8; 32])],
-            },
-        )
-        .await;
-    assert_eq!(
-        observer.calls(),
-        1,
-        "the counterless update must not have recorded state that filters a real one"
-    );
-}
-
-/// `remove_peer` has to be reached through `Handler::on_peer_disconnect` for
-/// any of this to hold in a running node. Tearing a peer down through the
-/// public API and reconnecting must report its heads again — the direct
-/// `remove_peer` test cannot see whether the hook is wired, and proactive
-/// disconnects historically skipped it.
+/// A proactive disconnect must reach `FilteredHeadsNotifier::remove_peer`
+/// through `Handler::on_peer_disconnect`, so a reconnecting peer's unchanged
+/// heads are reported again.
 #[tokio::test]
 async fn disconnect_through_the_api_clears_filter_state() -> TestResult {
-    let observer = CountingObserver::default();
+    let observer = RecordingObserver::default();
     let a = node(5, observer.clone());
-    let b = node(6, CountingObserver::default());
-    connect(&a, 5, &b, 6).await?;
+    let b = node(6, RecordingObserver::default());
+    connect_nodes(&a, 5, &b, 6).await?;
 
     let doc = SedimentreeId::new([3u8; 32]);
-    let peer_b = PeerId::from(signer(6).verifying_key());
 
     b.add_commit(
         doc,
@@ -391,80 +293,91 @@ async fn disconnect_through_the_api_clears_filter_state() -> TestResult {
         Blob::new(b"before".to_vec()),
     )
     .await?;
-    a.sync_with_peer(&peer_b, doc, true, CallTimeout::TimeoutMillis(500))
+    a.sync_with_peer(&peer_id(6), doc, true, CallTimeout::TimeoutMillis(500))
         .await?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let before = observer.calls();
+    let before = observer.count();
     assert!(before >= 1);
 
-    // Proactive teardown, the path an embedder drives.
-    a.disconnect_from_peer(&peer_b).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    a.disconnect_from_peer(&peer_id(6)).await?;
 
-    // Reconnect and sync the same, unchanged tree.
-    connect(&a, 5, &b, 6).await?;
-    a.sync_with_peer(&peer_b, doc, true, CallTimeout::TimeoutMillis(500))
+    connect_nodes(&a, 5, &b, 6).await?;
+    a.sync_with_peer(&peer_id(6), doc, true, CallTimeout::TimeoutMillis(500))
         .await?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     assert!(
-        observer.calls() > before,
-        "after a disconnect the peer's heads are news again; \
-         got {} notifications before and {} after",
-        before,
-        observer.calls()
+        observer.count() > before,
+        "after a disconnect the peer's heads are reported again"
     );
     Ok(())
 }
 
-/// Concurrent notifications for one `(peer, tree)` must not leave the observer
-/// holding older heads than the filter has recorded: the recorded state is
-/// what suppresses future reports, so a stale last delivery is permanent.
-#[tokio::test]
-async fn concurrent_updates_deliver_in_recorded_order() {
-    use std::sync::Arc as StdArc;
-    use subduction_core::remote_heads::FilteredHeadsNotifier;
+/// Heads on a push the storage policy refuses never reach the observer.
+/// Drives the handler directly so the outcome is observable without settling.
+mod policy_denied_pushes {
+    use super::*;
 
-    let observer = CountingObserver::default();
-    let notifier = StdArc::new(FilteredHeadsNotifier::new(observer.clone()));
+    const DOC: SedimentreeId = SedimentreeId::new([13u8; 32]);
+    const REFUSED: CommitId = CommitId::new([1u8; 32]);
 
-    let peer = PeerId::new([9u8; 32]);
-    let doc = SedimentreeId::new([9u8; 32]);
-
-    let mut tasks = Vec::new();
-    for counter in 1..=64u64 {
-        let notifier = StdArc::clone(&notifier);
-        tasks.push(tokio::spawn(async move {
-            notifier
-                .notify(
-                    doc,
-                    peer,
-                    RemoteHeads {
-                        counter,
-                        heads: vec![CommitId::new([u8::try_from(counter).unwrap_or(0); 32])],
-                    },
-                )
-                .await;
-        }));
-    }
-    for task in tasks {
-        task.await.expect("notify task panicked");
+    fn sender_heads() -> RemoteHeads {
+        RemoteHeads {
+            counter: 1,
+            heads: vec![REFUSED],
+        }
     }
 
-    let reported = observer.reported();
-    let last = reported.last().expect("something was reported");
-    let highest = reported
-        .iter()
-        .map(|h| h.counter)
-        .max()
-        .expect("at least one");
-    assert_eq!(
-        last.counter,
-        highest,
-        "the observer's final view is stale: last delivered {} but saw {} \
-         (sequence: {:?})",
-        last.counter,
-        highest,
-        reported.iter().map(|h| h.counter).collect::<Vec<_>>()
-    );
+    async fn assert_not_notified(message: SyncMessage) -> TestResult {
+        let observer = RecordingObserver::default();
+        let (locked, handler) = node_with_policy(21, observer.clone(), DenyWrites);
+        let (transport, _far_end) = ChannelTransport::pair();
+        let conn = Authenticated::new_for_test(
+            MessageTransport::new(transport),
+            peer_id(22),
+            Direction::Accepted,
+        );
+
+        handler.handle(&conn, message).await?;
+
+        assert_eq!(
+            locked.get_commits(DOC).await.map_or(0, |c| c.len()),
+            0,
+            "the policy should have refused the write"
+        );
+        assert!(
+            observer.deliveries().is_empty(),
+            "heads from a refused push reached the observer: {:?}",
+            observer.deliveries()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit() -> TestResult {
+        let blob = Blob::new(b"refused".to_vec());
+        let commit = LooseCommit::new(DOC, REFUSED, BTreeSet::new(), BlobMeta::new(&blob));
+        let signed = Signed::seal::<Sendable, _>(&signer(22), commit).await;
+
+        assert_not_notified(SyncMessage::LooseCommit {
+            id: DOC,
+            commit: signed.into_signed(),
+            blob,
+            sender_heads: sender_heads(),
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn fragment() -> TestResult {
+        let blob = Blob::new(b"refused".to_vec());
+        let fragment = Fragment::new(DOC, REFUSED, BTreeSet::new(), &[], BlobMeta::new(&blob));
+        let signed = Signed::seal::<Sendable, _>(&signer(22), fragment).await;
+
+        assert_not_notified(SyncMessage::Fragment {
+            id: DOC,
+            fragment: signed.into_signed(),
+            blob,
+            sender_heads: sender_heads(),
+        })
+        .await
+    }
 }

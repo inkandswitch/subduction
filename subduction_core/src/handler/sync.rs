@@ -197,6 +197,8 @@ impl<
 > SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
+    ///
+    /// See [`RemoteHeadsObserver`] for the callback's obligations.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
@@ -316,9 +318,8 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
     }
 
     fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()> {
-        // Teardown already removed the peer's connection and subscriptions, and
-        // the send counter deliberately survives (see `PeerCounter`). The heads
-        // filter's entries do not — they are per-session.
+        // The send counter survives (see `PeerCounter`); notifier entries are
+        // per-session.
         Async::from_future(async move { self.heads_notifier.remove_peer(peer).await })
     }
 }
@@ -487,14 +488,15 @@ impl<
     ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
         // Note: remote heads arrive via three paths:
         //
-        // 1. `responder_heads` in `BatchSyncResponse` â handled by
+        // 1. `responder_heads` in `BatchSyncResponse` — handled by
         //    `Subduction::sync_with_all_peers` via `RemoteHeadsNotifier`.
         //
         // 2. `sender_heads` on subscription-push `LooseCommit`/`Fragment`
-        //    messages â handled here in dispatch.
+        //    messages — reported by `recv_commit` / `recv_fragment` after
+        //    verification, authorization, and storage.
         //
         // 3. `HeadsUpdate` messages (post-ingestion ack from the 1.5 RTT
-        //    second half) â handled here in dispatch.
+        //    second half) — handled here in dispatch.
         let fanout = match message {
             SyncMessage::LooseCommit {
                 id,
@@ -617,13 +619,6 @@ impl<
             }
         };
 
-        // Only now: the sender's heads ride on a message whose signature is
-        // verified and whose tree this peer is allowed to write. Reporting
-        // earlier would hand the application heads from an unauthenticated
-        // peer, and would let any peer plant filter state for trees it has
-        // no access to.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
-
         let signed_for_wire = verified.signed().clone();
 
         // Reject like the signature and policy paths above: a mismatched
@@ -650,6 +645,11 @@ impl<
             .insert_commit_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
+
+        // Report heads only after the message is verified, authorized, and
+        // stored, so the observer never sees heads for data we rejected or do
+        // not yet hold.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -777,13 +777,6 @@ impl<
             }
         };
 
-        // Only now: the sender's heads ride on a message whose signature is
-        // verified and whose tree this peer is allowed to write. Reporting
-        // earlier would hand the application heads from an unauthenticated
-        // peer, and would let any peer plant filter state for trees it has
-        // no access to.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
-
         let signed_for_wire = verified.signed().clone();
 
         // Reject without disconnecting; see `recv_commit`.
@@ -807,6 +800,9 @@ impl<
             .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
+
+        // Heads reported after verification and storage; see `recv_commit`.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -888,11 +884,11 @@ impl<
         // as targeted point reads. For a cache-resident tree this avoids a
         // full commit+fragment storage scan. The cached tree holds payload
         // metadata only, so the wire data (signed bytes + blobs) still comes
-        // from storage â but only for the (typically small) local-only set.
+        // from storage — but only for the (typically small) local-only set.
         //
         // Coherence note: writes persist to storage *before* updating the
         // resident tree, so a commit that is durable but not yet cached is
-        // omitted from this response. That brief lag is benign â the next
+        // omitted from this response. That brief lag is benign — the next
         // sync round picks it up, and the protocol tolerates stale views.
         let cached = self
             .sedimentrees
@@ -918,7 +914,7 @@ impl<
                     diff.local_fragment_ids.iter().copied().collect();
 
                 // Each table is scanned only when the diff actually wants
-                // something from it â a commit-only tree shouldn't pay a
+                // something from it — a commit-only tree shouldn't pay a
                 // fragments scan (a directory walk on the fs backend).
                 let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
                 if !wanted_commits.is_empty() {
@@ -981,7 +977,7 @@ impl<
                             // Cache-ahead-of-storage window: the resident
                             // tree claims an item storage no longer holds
                             // (e.g. a racing delete). The item is silently
-                            // omitted â the next sync round self-corrects â
+                            // omitted — the next sync round self-corrects —
                             // but the condition should be observable.
                             tracing::debug!(
                                 tree = ?id,
@@ -1035,7 +1031,7 @@ impl<
                     .map_err(IoError::Storage)?;
 
             // Byzantine duplicates (multiple payloads per id) resolve
-            // first-loaded-wins â the same policy for commits and
+            // first-loaded-wins — the same policy for commits and
             // fragments, in both the crossover and slow paths.
             let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
             for vm in verified_commits {
@@ -1047,7 +1043,7 @@ impl<
             }
 
             // Build the resident tree from the data we just loaded
-            // (reusing the fetcher reads above â no second storage
+            // (reusing the fetcher reads above — no second storage
             // round-trip).
             let loose_commits: Vec<_> = commit_by_id
                 .values()
@@ -1064,7 +1060,7 @@ impl<
             // Caching an empty tree for a never-stored id would make a
             // later `get_or_hydrate(id)` return `Some(empty)` instead of
             // `None`, corrupting the exists-vs-nonexistent contract
-            // eviction relies on â and would let any authorized peer
+            // eviction relies on — and would let any authorized peer
             // pollute the cache by requesting arbitrary ids
             // (`get_fetcher` gates on policy, not existence). When there
             // is no data we diff against an ephemeral empty tree and
@@ -1180,7 +1176,7 @@ impl<
     }
 
     // -----------------------------------------------------------------------
-    // Delegating helpers â logic lives in `ingest` and `peers` modules
+    // Delegating helpers — logic lives in `ingest` and `peers` modules
     // -----------------------------------------------------------------------
 
     async fn insert_commit_locally(
@@ -1207,7 +1203,7 @@ impl<
     ///
     /// Routes through [`ingest::heads_or_hydrate`] so an evicted (or
     /// never-resident) tree reports its real heads from storage rather than
-    /// empty, while a resident hit computes heads in place â no tree clone and
+    /// empty, while a resident hit computes heads in place — no tree clone and
     /// a single dirty-gated minimize. A nonexistent tree (or a storage error)
     /// yields empty heads (best-effort; the heads field is advisory).
     async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
@@ -1267,8 +1263,8 @@ const POINT_READ_CHUNK: usize = 32;
 /// from point reads to one bulk scan when the requestor is missing more
 /// than `total_items / 4` of the tree.
 ///
-/// A cold clone (fresh peer, empty fingerprint summary) of a *popular* â
-/// therefore cache-resident â tree would otherwise hit the point-read path
+/// A cold clone (fresh peer, empty fingerprint summary) of a *popular* —
+/// therefore cache-resident — tree would otherwise hit the point-read path
 /// with the entire tree as its missing set: thousands of storage
 /// round-trips where one bulk scan does the same work.
 ///
@@ -1351,7 +1347,7 @@ mod tests {
     };
 
     /// Pins which `FanOut::run` arm feeds which `outcome` of
-    /// `subscription_pushes_total` â a swapped classification would corrupt
+    /// `subscription_pushes_total` — a swapped classification would corrupt
     /// the dead-connection push signal while every render-level test still
     /// passes.
     #[test]

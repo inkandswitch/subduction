@@ -28,7 +28,7 @@ sequenceDiagram
     Note left of A: Notify heads observer (only on change)
 
     A-->>B: LooseCommit / Fragment { sender_heads }
-    Note right of B: Store received data
+    Note right of B: Verify, authorize, store
     Note right of B: Notify heads observer (only on change)
 ```
 
@@ -220,11 +220,8 @@ WebRTC, relay).
 The `responder_heads` on `BatchSyncResponse` and the `sender_heads` on fire-and-forget
 `LooseCommit`/`Fragment` messages both carry `RemoteHeads`. The application receives
 heads notifications via `RemoteHeadsObserver::on_remote_heads(id, peer, heads)`,
-filtered per `(peer, sedimentree)`: an update is delivered only when its
-`counter` exceeds the last seen for that pair *and* its heads differ from the
-last heads reported. The counter filter drops reordered messages; the heads
-comparison stops an application that syncs in response from looping on its own
-sync's reply.
+filtered per `(peer, sedimentree)`: delivered only when the counter is newer
+*and* the heads differ from the last delivery.
 
 [`PeerCounter`]: ../../subduction_core/src/peer/counter.rs
 
@@ -273,7 +270,7 @@ sequenceDiagram
         Note left of A: Resolve fingerprints → items
         A-->>B: LooseCommit { sender_heads } (fire-and-forget)
         A-->>B: Fragment { sender_heads } (fire-and-forget)
-        Note right of B: Store received data
+        Note right of B: Verify, authorize, store
         Note right of B: Notify heads observer (only on change)
     end
 

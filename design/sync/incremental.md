@@ -132,7 +132,7 @@ Sent as WebSocket binary frames with a maximum size of 5 MB. No request ID — t
 | **Low latency**    | Push immediately on change                                                              |
 | **Consistency**    | Content-addressed deduplication                                                         |
 | **Idempotency**    | Same commit can be received multiple times safely                                       |
-| **Ordering**       | Per-`(peer, sedimentree)` high-water mark on `RemoteHeads`; observer hears only changes |
+| **Ordering**       | Per-`(peer, sedimentree)` high-water mark on `RemoteHeads`; observer notified only on change |
 | **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver`                   |
 
 ## Sequence Diagram (Commit)
@@ -147,13 +147,13 @@ sequenceDiagram
 
     A->>B: LooseCommit { id, commit, blob, sender_heads }
 
-    Note right of B: Verify authorization
+    Note right of B: Verify signature + authorization
     Note right of B: Store commit + blob
     Note right of B: Update sedimentree
     Note right of B: Notify heads observer (only on change)
 
     B->>A: HeadsUpdate { id, heads }
-    Note left of A: Notify heads observer
+    Note left of A: Notify heads observer (only on change)
 
     Note over A,B: Commit Propagated (1.5 RTT)
 ```
@@ -226,11 +226,6 @@ if depth > Depth(0) {
 ```rust
 let Message::LooseCommit { id, signed_commit, blob, sender_heads } = msg;
 
-// Notify heads observer (FilteredHeadsNotifier: only on change)
-if !sender_heads.is_empty() {
-    heads_notifier.notify(id, sender_peer_id, sender_heads);
-}
-
 // Verify signature; author extracted from signature, not sender
 let verified = signed_commit.verify()?;
 let author = verified.author();
@@ -241,6 +236,9 @@ let putter = policy.authorize_put(sender_peer_id, author, id).await?;
 // CAS storage: keyed by digest
 putter.save_loose_commit(verified).await?;
 putter.save_blob(blob.clone()).await?;
+
+// Report heads only after verification, authorization, and storage
+heads_notifier.notify(id, sender_peer_id, sender_heads).await;
 
 // Send HeadsUpdate back to originating peer
 let heads_msg = SyncMessage::HeadsUpdate {
