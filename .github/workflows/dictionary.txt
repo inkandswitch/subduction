@@ -391,6 +391,7 @@ sharding
 sneakernets
 socio-economic
 sortable
+spawner
 stateful
 statefulness
 struct
