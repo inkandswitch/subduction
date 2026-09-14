@@ -127,13 +127,13 @@ Sent as WebSocket binary frames with a maximum size of 5 MB. No request ID — t
 
 ## Properties
 
-| Property | Mechanism |
-|----------|-----------|
-| **Low latency** | Push immediately on change |
-| **Consistency** | Content-addressed deduplication |
-| **Idempotency** | Same commit can be received multiple times safely |
-| **Ordering** | Per-peer monotonic counter on `RemoteHeads`; staleness-filtered on receive |
-| **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver` |
+| Property           | Mechanism                                                                               |
+|--------------------|-----------------------------------------------------------------------------------------|
+| **Low latency**    | Push immediately on change                                                              |
+| **Consistency**    | Content-addressed deduplication                                                         |
+| **Idempotency**    | Same commit can be received multiple times safely                                       |
+| **Ordering**       | Per-`(peer, sedimentree)` high-water mark on `RemoteHeads`; observer hears only changes |
+| **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver`                   |
 
 ## Sequence Diagram (Commit)
 
@@ -150,7 +150,7 @@ sequenceDiagram
     Note right of B: Verify authorization
     Note right of B: Store commit + blob
     Note right of B: Update sedimentree
-    Note right of B: Notify heads observer (staleness-filtered)
+    Note right of B: Notify heads observer (only on change)
 
     B->>A: HeadsUpdate { id, heads }
     Note left of A: Notify heads observer
@@ -226,7 +226,7 @@ if depth > Depth(0) {
 ```rust
 let Message::LooseCommit { id, signed_commit, blob, sender_heads } = msg;
 
-// Notify heads observer (staleness-filtered via FilteredHeadsNotifier)
+// Notify heads observer (FilteredHeadsNotifier: only on change)
 if !sender_heads.is_empty() {
     heads_notifier.notify(id, sender_peer_id, sender_heads);
 }

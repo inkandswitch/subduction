@@ -86,9 +86,16 @@ impl<SyncH, EphH, W> ComposedHandler<SyncH, EphH, W> {
     }
 }
 
-impl<SyncH: RemoteHeadsNotifier, EphH, W> RemoteHeadsNotifier for ComposedHandler<SyncH, EphH, W> {
-    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        self.sync.notify_remote_heads(id, peer, heads);
+impl<Async: FutureForm, SyncH: RemoteHeadsNotifier<Async>, EphH, W> RemoteHeadsNotifier<Async>
+    for ComposedHandler<SyncH, EphH, W>
+{
+    fn notify_remote_heads(
+        &self,
+        id: SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) -> Async::Future<'_, ()> {
+        self.sync.notify_remote_heads(id, peer, heads)
     }
 }
 
