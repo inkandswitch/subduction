@@ -185,9 +185,14 @@ impl WasmComposedHandler {
     }
 }
 
-impl RemoteHeadsNotifier for WasmComposedHandler {
-    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        self.sync.notify_remote_heads(id, peer, heads);
+impl RemoteHeadsNotifier<Local> for WasmComposedHandler {
+    fn notify_remote_heads(
+        &self,
+        id: SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) -> LocalBoxFuture<'_, ()> {
+        self.sync.notify_remote_heads(id, peer, heads)
     }
 }
 
