@@ -226,17 +226,16 @@ if depth > Depth(0) {
 ```rust
 let Message::LooseCommit { id, signed_commit, blob, sender_heads } = msg;
 
-// Notify heads observer (FilteredHeadsNotifier: only on change)
-if !sender_heads.is_empty() {
-    heads_notifier.notify(id, sender_peer_id, sender_heads);
-}
-
 // Verify signature; author extracted from signature, not sender
 let verified = signed_commit.verify()?;
 let author = verified.author();
 
 // Check authorization (author from signature, not sender)
 let putter = policy.authorize_put(sender_peer_id, author, id).await?;
+
+// Only now notify the heads observer: the sender's heads ride on a message
+// this peer was allowed to send (FilteredHeadsNotifier: only on change)
+heads_notifier.notify(id, sender_peer_id, sender_heads).await;
 
 // CAS storage: keyed by digest
 putter.save_loose_commit(verified).await?;

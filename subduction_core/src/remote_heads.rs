@@ -107,7 +107,20 @@ struct Reported {
 pub struct FilteredHeadsNotifier<R: RemoteHeadsObserver> {
     observer: R,
     reported: Arc<Mutex<Map<(PeerId, SedimentreeId), Reported>>>,
+
+    /// Entries held per peer, so the cap below can be enforced without
+    /// scanning the map.
+    per_peer: Arc<Mutex<Map<PeerId, usize>>>,
 }
+
+/// How many `(peer, sedimentree)` entries one peer may occupy.
+///
+/// `HeadsUpdate` names an arbitrary sedimentree and carries no authorship to
+/// check against a policy, so without a cap a peer could stream unique ids and
+/// grow this map for as long as it stays connected. Past the cap the filter
+/// keeps reporting that peer's updates but stops recording them, which is how
+/// it behaved before the filter existed: duplicates, not silence.
+const MAX_TREES_PER_PEER: usize = 4096;
 
 impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
     /// Create a new filtered notifier wrapping the given observer.
@@ -115,6 +128,7 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
         Self {
             observer,
             reported: Arc::new(Mutex::new(Map::new())),
+            per_peer: Arc::new(Mutex::new(Map::new())),
         }
     }
 
@@ -162,6 +176,20 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
                 last.heads.clone_from(&heads.heads);
             }
             Entry::Vacant(slot) => {
+                let mut per_peer = self.per_peer.lock().await;
+                let held = per_peer.entry(peer).or_insert(0);
+                if *held >= MAX_TREES_PER_PEER {
+                    // At the cap: report without recording. The peer keeps
+                    // being heard, it just stops earning memory.
+                    drop(per_peer);
+                    drop(reported);
+                    tracing::warn!(peer = %peer, "heads filter at its per-peer cap; reporting without recording");
+                    self.observer.on_remote_heads(id, peer, heads);
+                    return;
+                }
+
+                *held += 1;
+                drop(per_peer);
                 slot.insert(Reported {
                     counter: heads.counter,
                     heads: heads.heads.clone(),
@@ -189,6 +217,7 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
             .lock()
             .await
             .retain(|(recorded, _), _| *recorded != peer);
+        self.per_peer.lock().await.remove(&peer);
     }
 }
 
@@ -205,6 +234,7 @@ impl<R: RemoteHeadsObserver + Clone> Clone for FilteredHeadsNotifier<R> {
         Self {
             observer: self.observer.clone(),
             reported: self.reported.clone(),
+            per_peer: self.per_peer.clone(),
         }
     }
 }

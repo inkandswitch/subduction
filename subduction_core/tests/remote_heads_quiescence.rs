@@ -789,3 +789,149 @@ fn prop_observer_sees_exactly_the_changes() {
             assert_eq!(actual, expected);
         });
 }
+
+/// `on_peer_disconnect` must fire exactly once per departure. Teardown runs
+/// from both the listener's reactive path and the proactive `disconnect*`
+/// APIs, and both funnel through `teardown_peer`; a hook in either layer *and*
+/// in `teardown_peer` would call handlers twice. `remove_peer` is idempotent,
+/// but a third-party handler's cleanup need not be.
+mod disconnect_hook {
+    use super::*;
+    use core::sync::atomic::AtomicUsize;
+    use subduction_core::{
+        connection::message::SyncMessage, handler::Handler, remote_heads::RemoteHeadsNotifier,
+    };
+
+    type Inner = SyncHandler<
+        Sendable,
+        MemoryStorage,
+        Conn,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        TokioSpawn,
+        256,
+        CountingObserver,
+    >;
+
+    /// Delegates everything, counting disconnect notifications.
+    struct CountingDisconnects {
+        inner: Arc<Inner>,
+        disconnects: Arc<AtomicUsize>,
+    }
+
+    impl Handler<Sendable, Conn> for CountingDisconnects {
+        type Message = SyncMessage;
+        type HandlerError = <Inner as Handler<Sendable, Conn>>::HandlerError;
+
+        fn handle<'a>(
+            &'a self,
+            conn: &'a Authenticated<Conn, Sendable>,
+            message: Self::Message,
+        ) -> BoxFuture<'a, Result<(), Self::HandlerError>> {
+            Box::pin(async move { self.inner.handle(conn, message).await })
+        }
+
+        fn on_peer_disconnect(&self, peer: PeerId) -> BoxFuture<'_, ()> {
+            self.disconnects.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { self.inner.on_peer_disconnect(peer).await })
+        }
+    }
+
+    impl RemoteHeadsNotifier<Sendable> for CountingDisconnects {
+        fn notify_remote_heads(
+            &self,
+            id: SedimentreeId,
+            peer: PeerId,
+            heads: RemoteHeads,
+        ) -> BoxFuture<'_, ()> {
+            Box::pin(async move { self.inner.notify_remote_heads(id, peer, heads).await })
+        }
+    }
+
+    #[tokio::test]
+    async fn fires_once_per_departure() -> TestResult {
+        let disconnects = Arc::new(AtomicUsize::new(0));
+
+        let (sd, listener, manager, ()) = SubductionBuilder::new()
+            .signer(signer(31))
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .timer(InstantTimeout)
+            .heads_observer(CountingObserver::default())
+            .build_composed::<Sendable, Conn, CountingDisconnects, ()>(|sync_handler| {
+                (
+                    Arc::new(CountingDisconnects {
+                        inner: sync_handler,
+                        disconnects: disconnects.clone(),
+                    }),
+                    (),
+                )
+            });
+
+        tokio::spawn(listener);
+        tokio::spawn(manager);
+
+        let peer = PeerId::from(signer(32).verifying_key());
+        let (transport, _far_end) = ChannelTransport::pair();
+        sd.add_connection(Authenticated::new_for_test(
+            MessageTransport::new(transport),
+            peer,
+        ))
+        .await?;
+
+        sd.disconnect_from_peer(&peer).await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(
+            disconnects.load(Ordering::SeqCst),
+            1,
+            "a proactive disconnect should notify handlers exactly once"
+        );
+        Ok(())
+    }
+
+    /// The reactive path is the one that can double-fire: the listener removes
+    /// the connection, and `remove_connection` runs `teardown_peer`. A hook in
+    /// both layers calls every handler twice for one departure.
+    #[tokio::test]
+    async fn a_dropped_connection_fires_once_too() -> TestResult {
+        let disconnects = Arc::new(AtomicUsize::new(0));
+
+        let (sd, listener, manager, ()) = SubductionBuilder::new()
+            .signer(signer(33))
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .timer(InstantTimeout)
+            .heads_observer(CountingObserver::default())
+            .build_composed::<Sendable, Conn, CountingDisconnects, ()>(|sync_handler| {
+                (
+                    Arc::new(CountingDisconnects {
+                        inner: sync_handler,
+                        disconnects: disconnects.clone(),
+                    }),
+                    (),
+                )
+            });
+        tokio::spawn(listener);
+        tokio::spawn(manager);
+
+        let peer = PeerId::from(signer(34).verifying_key());
+        let (transport, far_end) = ChannelTransport::pair();
+        sd.add_connection(Authenticated::new_for_test(
+            MessageTransport::new(transport),
+            peer,
+        ))
+        .await?;
+
+        // The peer goes away: the listener notices and tears the peer down.
+        drop(far_end);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            disconnects.load(Ordering::SeqCst),
+            1,
+            "a dropped connection should notify handlers exactly once"
+        );
+        Ok(())
+    }
+}

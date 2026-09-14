@@ -961,10 +961,11 @@ where
         // observes this disconnect keeps its high-water mark, so a restarted
         // sequence would be dropped as stale.
 
-        // Proactive teardown is still a disconnect, so handlers get the same
-        // hook the listener's reactive path gives them. Without it, per-session
-        // handler state — the heads filter, ephemeral subscriptions, in-flight
-        // send counts — outlives the peer.
+        // Every teardown path ends here — the listener's reactive removal and
+        // the proactive `disconnect*` APIs alike — so the hook fires exactly
+        // once per peer departure. Without it, per-session handler state (the
+        // heads filter, ephemeral subscriptions, in-flight send counts)
+        // outlives the peer.
         self.handler.on_peer_disconnect(*peer_id).await;
 
         #[cfg(feature = "metrics")]
@@ -3202,9 +3203,10 @@ where
                                     "error dispatching message"
                                 );
 
-                                if self.remove_connection(&conn).await == Some(true) {
-                                    handler.on_peer_disconnect(peer_id).await;
-                                }
+                                // `remove_connection` runs `teardown_peer`,
+                                // which fires `on_peer_disconnect` for the
+                                // peer's last connection.
+                                self.remove_connection(&conn).await;
                                 tracing::debug!(peer = %peer_id, "removed failed connection");
                             }
                             DispatchOutcome::Completed { result: Ok(()), .. } => {
@@ -3268,9 +3270,8 @@ where
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
                         tracing::warn!(conn = %conn_id, peer = %peer_id, "connection closed, removing");
-                        if self.remove_connection(&conn).await == Some(true) {
-                            handler.on_peer_disconnect(peer_id).await;
-                        }
+                        // Hook fires inside `teardown_peer`; see above.
+                        self.remove_connection(&conn).await;
                     } else {
                         // Must break: a permanently-ready arm above
                         // `msg_queue` would starve dispatch forever.
