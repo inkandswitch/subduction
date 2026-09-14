@@ -24,16 +24,12 @@ use std::{
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::BlobMeta, crypto::fingerprint::FingerprintSeed, depth::CountLeadingZeroBytes,
-    id::SedimentreeId, loose_commit::LooseCommit, sedimentree::FingerprintSummary,
+    blob::BlobMeta, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::LooseCommit,
 };
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::{
-        message::{
-            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
-            SyncResult,
-        },
+        message::{BatchSyncResponse, RequestedData, SyncDiff, SyncMessage, SyncResult},
         test_utils::{
             ChannelMockConnection, ChannelMockConnectionHandle, InstantTimeout, TokioSpawn,
         },
@@ -46,7 +42,7 @@ use subduction_core::{
     subduction::{Subduction, builder::SubductionBuilder},
     test_utils::{
         ChannelConn, TestNode, dial, make_blob, make_head, make_signer, spawn_channel_node,
-        wait_until,
+        subscribe_request, wait_until,
     },
     timeout::call::CallTimeout,
 };
@@ -90,22 +86,6 @@ async fn drain_until_answered(
 
         frames.push(msg);
     }
-}
-
-const fn subscribe_request(from: PeerId, id: SedimentreeId) -> SyncMessage {
-    SyncMessage::BatchSyncRequest(BatchSyncRequest {
-        id,
-        req_id: RequestId {
-            requestor: from,
-            nonce: 1,
-        },
-        fingerprint_summary: FingerprintSummary::new(
-            FingerprintSeed::new(0, 0),
-            BTreeSet::new(),
-            BTreeSet::new(),
-        ),
-        subscribe: true,
-    })
 }
 
 type MockConn = ChannelMockConnection<SyncMessage>;

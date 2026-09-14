@@ -20,16 +20,14 @@ use std::{
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    crypto::fingerprint::FingerprintSeed,
     depth::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::FingerprintSummary,
 };
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::{
-        message::{BatchSyncRequest, RequestId, RequestedData, SyncDiff, SyncMessage},
+        message::{RequestedData, SyncDiff, SyncMessage},
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
     handler::sync::SyncHandler,
@@ -37,6 +35,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder, upstream_peers},
+    test_utils::subscribe_request,
 };
 use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
@@ -104,22 +103,6 @@ fn signed_commit(id: SedimentreeId, head: u8) -> (Signed<LooseCommit>, Blob) {
     ))
     .into_signed();
     (signed, blob)
-}
-
-const fn subscribe_request(from: PeerId, id: SedimentreeId) -> SyncMessage {
-    SyncMessage::BatchSyncRequest(BatchSyncRequest {
-        id,
-        req_id: RequestId {
-            requestor: from,
-            nonce: 1,
-        },
-        fingerprint_summary: FingerprintSummary::new(
-            FingerprintSeed::new(0, 0),
-            BTreeSet::new(),
-            BTreeSet::new(),
-        ),
-        subscribe: true,
-    })
 }
 
 /// Requester-side ingest reports `unique(response) \ already_present`, so a

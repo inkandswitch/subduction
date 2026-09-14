@@ -21,12 +21,13 @@
     reason = "fixtures panic on impossible setup failures; tests are the caller"
 )]
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use core::time::Duration;
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+    blob::Blob, crypto::fingerprint::FingerprintSeed, depth::CountLeadingZeroBytes,
+    id::SedimentreeId, loose_commit::id::CommitId, sedimentree::FingerprintSummary,
     test_utils::commit_id_with_depth,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -34,7 +35,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use crate::{
     authenticated::{Authenticated, Direction},
     connection::{
-        message::SyncMessage,
+        message::{BatchSyncRequest, RequestId, SyncMessage},
         test_utils::{ChannelTransport, InstantTimeout, PausableChannelTransport, TokioSpawn},
     },
     handler::sync::SyncHandler,
@@ -242,4 +243,34 @@ pub async fn dial_pausable<Timer: Timeout<Sendable> + Clone + Send + Sync + 'sta
         .expect("target should accept the connection");
 
     (out, inbound)
+}
+
+/// A `BatchSyncRequest` that subscribes to `id` and offers nothing.
+///
+/// The empty [`FingerprintSummary`] says "I have none of this tree", so the
+/// responder replies with everything it holds — what a fresh subscriber looks
+/// like on the wire.
+///
+/// The nonce is derived from `id` rather than fixed, so a peer subscribing to
+/// several trees produces distinct [`RequestId`]s. Mock peers do not correlate
+/// responses, but two live requests sharing an id is a confusing thing to
+/// leave lying in a test fixture.
+#[must_use]
+pub fn subscribe_request(from: PeerId, id: SedimentreeId) -> SyncMessage {
+    let mut nonce_bytes = [0u8; 8];
+    nonce_bytes.copy_from_slice(&id.as_bytes()[..8]);
+
+    SyncMessage::BatchSyncRequest(BatchSyncRequest {
+        id,
+        req_id: RequestId {
+            requestor: from,
+            nonce: u64::from_be_bytes(nonce_bytes),
+        },
+        fingerprint_summary: FingerprintSummary::new(
+            FingerprintSeed::new(0, 0),
+            BTreeSet::new(),
+            BTreeSet::new(),
+        ),
+        subscribe: true,
+    })
 }
