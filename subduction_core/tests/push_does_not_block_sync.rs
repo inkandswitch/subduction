@@ -11,104 +11,28 @@
 //!   (R→A sends parked)
 //! ```
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, time::Duration};
 
-use future_form::Sendable;
-use sedimentree_core::{
-    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
-};
+use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
-    authenticated::{Authenticated, Direction},
-    connection::test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
-    handler::sync::SyncHandler,
-    peer::id::PeerId,
-    policy::open::OpenPolicy,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    connection::test_utils::TokioTimeout,
+    test_utils::{dial_pausable, make_blob, make_head, spawn_node},
     timeout::call::CallTimeout,
-    transport::message::MessageTransport,
 };
-use subduction_crypto::signer::memory::MemorySigner;
 use testresult::TestResult;
-
-type Conn = MessageTransport<PausableChannelTransport>;
-
-type Node = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>,
-        OpenPolicy,
-        MemorySigner,
-        TokioTimeout,
-        TokioSpawn,
-    >,
->;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
 
 /// A sync round with one wedged subscriber must finish well inside this.
 const BOUND: Duration = Duration::from_secs(3);
 
-fn make_node(seed: u8) -> (Node, PeerId) {
-    let signer = MemorySigner::from_bytes(&[seed; 32]);
-    let peer = PeerId::from(signer.verifying_key());
-    let (sd, _h, listener, manager) = SubductionBuilder::new()
-        .signer(signer)
-        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
-        .timer(TokioTimeout)
-        .build::<Sendable, Conn>();
-    tokio::spawn(listener);
-    tokio::spawn(manager);
-    (sd, peer)
-}
-
-/// `dialer` dials `acceptor`; returns the dialer-side and acceptor-side
-/// transports so a test can pause either direction.
-async fn dial(
-    dialer: &Node,
-    dialer_peer: PeerId,
-    acceptor: &Node,
-    acceptor_peer: PeerId,
-) -> TestResult<(PausableChannelTransport, PausableChannelTransport)> {
-    let (t_d, t_a) = PausableChannelTransport::pair();
-    dialer
-        .add_connection(Authenticated::new_for_test(
-            MessageTransport::new(t_d.clone()),
-            acceptor_peer,
-            Direction::Dialed,
-        ))
-        .await?;
-    acceptor
-        .add_connection(Authenticated::new_for_test(
-            MessageTransport::new(t_a.clone()),
-            dialer_peer,
-            Direction::Accepted,
-        ))
-        .await?;
-    Ok((t_d, t_a))
-}
-
-fn make_blob(seed: u8) -> Blob {
-    Blob::new((0..64).map(|i| seed.wrapping_add(i)).collect())
-}
-
-const fn make_head(seed: u8) -> CommitId {
-    let mut bytes = [0u8; 32];
-    bytes[0] = seed;
-    CommitId::new(bytes)
-}
-
 #[tokio::test]
 async fn wedged_subscriber_does_not_block_relay_sync() -> TestResult {
-    let (a, a_peer) = make_node(1);
-    let (r, r_peer) = make_node(2);
-    let (b, b_peer) = make_node(3);
-    let (_a_side, r_to_a) = dial(&a, a_peer, &r, r_peer).await?;
-    dial(&r, r_peer, &b, b_peer).await?;
+    let (a, a_peer) = spawn_node(1, TokioTimeout);
+    let (r, r_peer) = spawn_node(2, TokioTimeout);
+    let (b, b_peer) = spawn_node(3, TokioTimeout);
+    let (_a_side, r_to_a) = dial_pausable(&a, a_peer, &r, r_peer).await;
+    dial_pausable(&r, r_peer, &b, b_peer).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     // A subscribes to X on R while nobody has X yet, so R records A as a
@@ -141,11 +65,11 @@ async fn wedged_subscriber_does_not_block_relay_sync() -> TestResult {
 /// Same, for the all-peers round used by the batch write path.
 #[tokio::test]
 async fn wedged_subscriber_does_not_block_sync_with_all_peers() -> TestResult {
-    let (a, a_peer) = make_node(4);
-    let (r, r_peer) = make_node(5);
-    let (b, b_peer) = make_node(6);
-    let (_a_side, r_to_a) = dial(&a, a_peer, &r, r_peer).await?;
-    dial(&r, r_peer, &b, b_peer).await?;
+    let (a, a_peer) = spawn_node(4, TokioTimeout);
+    let (r, r_peer) = spawn_node(5, TokioTimeout);
+    let (b, b_peer) = spawn_node(6, TokioTimeout);
+    let (_a_side, r_to_a) = dial_pausable(&a, a_peer, &r, r_peer).await;
+    dial_pausable(&r, r_peer, &b, b_peer).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let x = SedimentreeId::new([10u8; 32]);

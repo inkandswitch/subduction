@@ -11,6 +11,7 @@
 //! ```text
 //!   A ──dials──▸ S ◂──dials── B          A ──dials──▸ R ──dials──▸ B
 //! ```
+#![allow(clippy::expect_used)]
 
 use std::{
     collections::BTreeSet,
@@ -23,12 +24,8 @@ use std::{
 
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta},
-    crypto::fingerprint::FingerprintSeed,
-    depth::CountLeadingZeroBytes,
-    id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::FingerprintSummary,
+    blob::BlobMeta, crypto::fingerprint::FingerprintSeed, depth::CountLeadingZeroBytes,
+    id::SedimentreeId, loose_commit::LooseCommit, sedimentree::FingerprintSummary,
 };
 use subduction_core::{
     authenticated::{Authenticated, Direction},
@@ -38,8 +35,7 @@ use subduction_core::{
             SyncResult,
         },
         test_utils::{
-            ChannelMockConnection, ChannelMockConnectionHandle, ChannelTransport, InstantTimeout,
-            TokioSpawn,
+            ChannelMockConnection, ChannelMockConnectionHandle, InstantTimeout, TokioSpawn,
         },
     },
     handler::sync::SyncHandler,
@@ -48,45 +44,52 @@ use subduction_core::{
     remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    test_utils::{
+        ChannelConn, TestNode, dial, make_blob, make_head, make_signer, spawn_channel_node,
+        wait_until,
+    },
     timeout::call::CallTimeout,
-    transport::message::MessageTransport,
 };
 use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 use testresult::TestResult;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
-const SETTLE: Duration = Duration::from_millis(150);
-const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long to wait for a frame that must arrive. Not a settling period:
+/// every wait below is anchored to a state change or a sentinel frame.
+const WIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
-async fn wait_until<F, Fut>(mut cond: F) -> bool
-where
-    F: FnMut() -> Fut,
-    Fut: core::future::Future<Output = bool>,
-{
-    let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
+/// Everything on `rx` up to the response for `sentinel`.
+///
+/// The hub answers every `BatchSyncRequest`, so subscribing to an unrelated
+/// tree and reading until its response arrives flushes the wire: whatever the
+/// hub was going to send about the tree under test is already in `frames`.
+/// A timer would only guess at that.
+async fn drain_until_answered(
+    mock: &ChannelMockConnectionHandle<SyncMessage>,
+    peer: PeerId,
+    sentinel: SedimentreeId,
+) -> Vec<SyncMessage> {
+    mock.inbound_tx
+        .send(subscribe_request(peer, sentinel))
+        .await
+        .expect("mock inbound is open");
+
+    let mut frames = Vec::new();
     loop {
-        if cond().await {
-            return true;
+        let msg = tokio::time::timeout(WIRE_TIMEOUT, mock.outbound_rx.recv())
+            .await
+            .expect("hub should answer the sentinel subscribe")
+            .expect("mock outbound is open");
+
+        if matches!(
+            &msg,
+            SyncMessage::BatchSyncResponse(r) if r.id == sentinel
+        ) {
+            return frames;
         }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        frames.push(msg);
     }
-}
-
-fn make_signer(seed: u8) -> MemorySigner {
-    MemorySigner::from_bytes(&[seed; 32])
-}
-
-fn make_blob(seed: u8) -> Blob {
-    Blob::new((0..64).map(|i| seed.wrapping_add(i)).collect())
-}
-
-const fn make_head(seed: u8) -> CommitId {
-    let mut bytes = [0u8; 32];
-    bytes[0] = seed;
-    CommitId::new(bytes)
 }
 
 const fn subscribe_request(from: PeerId, id: SedimentreeId) -> SyncMessage {
@@ -191,8 +194,13 @@ async fn subscribe_is_not_forwarded_to_other_downstreams() -> TestResult {
     let hub = make_hub();
     let a_peer = PeerId::new([1u8; 32]);
     let b_peer = PeerId::new([2u8; 32]);
+    let up_peer = PeerId::new([3u8; 32]);
     let a = attach_mock(&hub, a_peer, Direction::Accepted).await?;
     let b = attach_mock(&hub, b_peer, Direction::Accepted).await?;
+    // The hub dials U, so propagation has somewhere legitimate to go. Without
+    // it there would be nothing to wait *for*, and the assertion below would
+    // pass on any machine slow enough.
+    let _up = attach_mock(&hub, up_peer, Direction::Dialed).await?;
     let x = SedimentreeId::new([9u8; 32]);
     let a_requests = answer_and_count(a, x);
 
@@ -201,7 +209,18 @@ async fn subscribe_is_not_forwarded_to_other_downstreams() -> TestResult {
         wait_until(|| async { hub.get_subscribers(x).await.contains(&b_peer) }).await,
         "hub should record B's subscription"
     );
-    tokio::time::sleep(SETTLE).await;
+
+    // The claim is recorded before the request goes out, so this is proof the
+    // propagation pass ran and chose its peers.
+    assert!(
+        wait_until(|| async {
+            hub.outgoing_claims(&up_peer)
+                .await
+                .is_some_and(|claims| claims.contains(&x))
+        })
+        .await,
+        "hub should propagate B's subscribe to the upstream it dialed"
+    );
 
     assert_eq!(
         a_requests.load(Ordering::SeqCst),
@@ -241,60 +260,7 @@ async fn subscribe_is_forwarded_to_dialed_upstream() -> TestResult {
     Ok(())
 }
 
-type Conn = MessageTransport<ChannelTransport>;
-
-type Node = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
-
-fn make_node(seed: u8) -> (Node, PeerId) {
-    let signer = make_signer(seed);
-    let peer = PeerId::from(signer.verifying_key());
-    let (sd, _h, listener, manager) = SubductionBuilder::new()
-        .signer(signer)
-        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
-        .timer(InstantTimeout)
-        .build::<Sendable, Conn>();
-    tokio::spawn(listener);
-    tokio::spawn(manager);
-    (sd, peer)
-}
-
-/// `dialer` dials `acceptor`.
-async fn dial(
-    dialer: &Node,
-    dialer_peer: PeerId,
-    acceptor: &Node,
-    acceptor_peer: PeerId,
-) -> TestResult {
-    let (t_d, t_a) = ChannelTransport::pair();
-    dialer
-        .add_connection(Authenticated::new_for_test(
-            MessageTransport::new(t_d),
-            acceptor_peer,
-            Direction::Dialed,
-        ))
-        .await?;
-    acceptor
-        .add_connection(Authenticated::new_for_test(
-            MessageTransport::new(t_a),
-            dialer_peer,
-            Direction::Accepted,
-        ))
-        .await?;
-    Ok(())
-}
+type Node = TestNode<ChannelConn, InstantTimeout>;
 
 async fn has(node: &Node, id: SedimentreeId) -> bool {
     node.get_commits(id).await.is_some_and(|c| !c.is_empty())
@@ -309,11 +275,11 @@ async fn has_fragment(node: &Node, id: SedimentreeId) -> bool {
 /// ask, it gets it.
 #[tokio::test]
 async fn client_does_not_receive_documents_it_never_asked_for() -> TestResult {
-    let (a, a_peer) = make_node(1);
-    let (b, b_peer) = make_node(2);
-    let (s, s_peer) = make_node(3);
-    dial(&a, a_peer, &s, s_peer).await?;
-    dial(&b, b_peer, &s, s_peer).await?;
+    let (a, a_peer) = spawn_channel_node(1);
+    let (b, b_peer) = spawn_channel_node(2);
+    let (s, s_peer) = spawn_channel_node(3);
+    dial(&a, a_peer, &s, s_peer).await;
+    dial(&b, b_peer, &s, s_peer).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     // B: the automerge-repo write path — store, then subscribing sync.
@@ -325,7 +291,15 @@ async fn client_does_not_receive_documents_it_never_asked_for() -> TestResult {
         wait_until(|| has(&s, x)).await,
         "server should receive X from B"
     );
-    tokio::time::sleep(SETTLE).await;
+
+    // The server stamps a per-recipient send counter before pushing, so an
+    // unstamped counter is proof nothing was ever addressed to A 2014 stronger
+    // than A merely not holding X, which could also mean it dropped it.
+    assert_eq!(
+        s.send_counter_value(&a_peer).await,
+        None,
+        "the server addressed a frame to A, who never asked for X"
+    );
 
     assert_eq!(
         s.get_subscribers(x).await.into_iter().collect::<Vec<_>>(),
@@ -341,7 +315,15 @@ async fn client_does_not_receive_documents_it_never_asked_for() -> TestResult {
     b.store_commit(x, make_head(2), BTreeSet::new(), make_blob(2))
         .await?;
     b.sync_with_all_peers(x, true, SYNC_TIMEOUT).await?;
-    tokio::time::sleep(SETTLE).await;
+    assert!(
+        wait_until(|| async { s.get_commits(x).await.map(|c| c.len()) == Some(2) }).await,
+        "server should receive B's later edit"
+    );
+    assert_eq!(
+        s.send_counter_value(&a_peer).await,
+        None,
+        "the server addressed B's later edit to A"
+    );
     assert!(!has(&a, x).await, "A must not have X after B's later edit");
 
     // Positive control.
@@ -362,11 +344,11 @@ async fn client_does_not_receive_documents_it_never_asked_for() -> TestResult {
 /// ```
 #[tokio::test]
 async fn relay_forwards_data_it_pulled_from_upstream() -> TestResult {
-    let (a, a_peer) = make_node(4);
-    let (r, r_peer) = make_node(5);
-    let (b, b_peer) = make_node(6);
-    dial(&a, a_peer, &r, r_peer).await?;
-    dial(&r, r_peer, &b, b_peer).await?;
+    let (a, a_peer) = spawn_channel_node(4);
+    let (r, r_peer) = spawn_channel_node(5);
+    let (b, b_peer) = spawn_channel_node(6);
+    dial(&a, a_peer, &r, r_peer).await;
+    dial(&r, r_peer, &b, b_peer).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let x = SedimentreeId::new([8u8; 32]);
@@ -436,10 +418,7 @@ async fn duplicate_items_in_a_response_are_pushed_once() -> TestResult {
         wait_until(|| async { hub.get_commits(x).await.is_some() }).await,
         "hub should ingest U's response"
     );
-    let mut frames = Vec::new();
-    while let Ok(Ok(msg)) = tokio::time::timeout(SETTLE, b.outbound_rx.recv()).await {
-        frames.push(msg);
-    }
+    let frames = drain_until_answered(&b, b_peer, SedimentreeId::new([0xEE; 32])).await;
     let pushed = frames
         .iter()
         .filter(|m| matches!(m, SyncMessage::LooseCommit { .. }))
@@ -459,11 +438,11 @@ async fn duplicate_items_in_a_response_are_pushed_once() -> TestResult {
 /// Same as [`relay_forwards_data_it_pulled_from_upstream`], for a fragment.
 #[tokio::test]
 async fn relay_forwards_fragments_it_pulled_from_upstream() -> TestResult {
-    let (a, a_peer) = make_node(7);
-    let (r, r_peer) = make_node(8);
-    let (b, b_peer) = make_node(9);
-    dial(&a, a_peer, &r, r_peer).await?;
-    dial(&r, r_peer, &b, b_peer).await?;
+    let (a, a_peer) = spawn_channel_node(7);
+    let (r, r_peer) = spawn_channel_node(8);
+    let (b, b_peer) = spawn_channel_node(9);
+    dial(&a, a_peer, &r, r_peer).await;
+    dial(&r, r_peer, &b, b_peer).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let x = SedimentreeId::new([11u8; 32]);
@@ -528,32 +507,23 @@ async fn already_known_items_are_not_re_pushed() -> TestResult {
         }
     });
 
-    let drain = |rx: &async_channel::Receiver<SyncMessage>| {
-        let rx = rx.clone();
-        async move {
-            let mut n = 0;
-            while let Ok(Ok(msg)) = tokio::time::timeout(SETTLE, rx.recv()).await {
-                if matches!(msg, SyncMessage::LooseCommit { .. }) {
-                    n += 1;
-                }
-            }
-            n
-        }
+    let pushes = async |sentinel: u8| {
+        drain_until_answered(&b, b_peer, SedimentreeId::new([sentinel; 32]))
+            .await
+            .iter()
+            .filter(|m| matches!(m, SyncMessage::LooseCommit { .. }))
+            .count()
     };
 
     // First pull: B subscribes, hub propagates to U, gets X, pushes to B.
     b.inbound_tx.send(subscribe_request(b_peer, x)).await?;
     assert!(wait_until(|| async { hub.get_commits(x).await.is_some() }).await);
-    assert_eq!(
-        drain(&b.outbound_rx).await,
-        1,
-        "first pull pushes X to B once"
-    );
+    assert_eq!(pushes(0xE1).await, 1, "first pull pushes X to B once");
 
     // Second pull: the hub asks U again and gets the same X back.
     hub.sync_with_peer(&up_peer, x, false, SYNC_TIMEOUT).await?;
     assert_eq!(
-        drain(&b.outbound_rx).await,
+        pushes(0xE2).await,
         0,
         "X is already known; it must not be pushed to B again"
     );
