@@ -1,0 +1,58 @@
+[package]
+name = "subduction_hyper"
+version = "0.1.0"
+description = "Accept Subduction WebSocket connections from hyper-based HTTP servers (axum, poem, salvo, raw hyper)"
+
+categories = ["web-programming", "web-programming::websocket"]
+keywords = ["axum", "hyper", "subduction", "sync", "websocket"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-tungstenite = { workspace = true, features = ["tokio-runtime"] }
+future_form = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true, features = ["std"] }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["tokio"] }
+subduction_core = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+tracing = { workspace = true, features = ["std"] }
+tungstenite = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+bolero = { workspace = true, features = ["arbitrary"] }
+future_form = { workspace = true }
+futures-util = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["http1", "server", "tokio"] }
+sha1 = { workspace = true }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_websocket = { workspace = true, features = ["std", "tokio_client", "tokio_server"] }
+tokio = { workspace = true, features = [
+  "io-util",
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+# Property tests for header-token matching and key validation.
+bolero = []
+
+[lints]
+workspace = true

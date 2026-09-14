@@ -1,0 +1,39 @@
+//! # Subduction over hyper
+//!
+//! Accept Subduction WebSocket connections from any HTTP server built on
+//! [`hyper`] 1.x — axum, poem, salvo, or hyper itself — and hand them to
+//! `subduction_websocket` as an [`async_tungstenite::WebSocketStream`].
+//!
+//! Framework WebSocket modules (e.g. `axum::extract::ws`) wrap their own copy
+//! of tungstenite and seal the stream, so nothing from them can reach
+//! `WebSocket::new_with_keepalive`. This crate goes one layer down instead:
+//! hyper exposes the raw post-`101` connection through
+//! [`hyper::upgrade::OnUpgrade`], and that is all a WebSocket framer needs.
+//!
+//! ```text
+//! HTTP request ─▶ upgrade::validate(parts)        ─▶ AcceptKey     (http types only)
+//!              ─▶ upgrade::accept_response(key)   ─▶ 101 response  (send it)
+//!              ─▶ OnUpgrade.await                 ─▶ Upgraded      (hyper hands over the pipe)
+//!              ─▶ upgrade::from_upgraded(io, cfg) ─▶ WebSocketStream<HyperIo>
+//! ```
+//!
+//! The [`upgrade`] module is framework-neutral: it speaks only `http` types,
+//! so it can be driven from any hyper-based handler.
+//!
+//! The result is an `async_tungstenite::WebSocketStream<HyperIo>`, which
+//! `subduction_websocket::websocket::WebSocket::new_with_keepalive` accepts
+//! directly. It is *not* a `TokioWebSocketServer` connection: that server's
+//! accepted type is fixed to plain TCP. Embedders therefore spawn the listen,
+//! sender, and keepalive tasks, wrap the socket in a `MessageTransport`, and
+//! call `Subduction::add_connection` themselves. `handle_websocket` in
+//! `subduction_cli/src/server.rs` is a worked example.
+//!
+//! This crate is std- and tokio-only: hyper's upgrade machinery and
+//! [`spawn_upgrade`](upgrade::spawn_upgrade) both need a tokio runtime, so
+//! there is no `no_std` build.
+//!
+//! See [`upgrade`] for limitations.
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+pub mod upgrade;
