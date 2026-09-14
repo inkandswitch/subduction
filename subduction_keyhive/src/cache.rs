@@ -159,6 +159,29 @@ impl PeriodicEventCache {
                 }
             }
         }
+        // A connected peer the projection cannot attribute at all cannot be
+        // proven to be a non-recipient. When the batch carries a change the
+        // local agent can see — i.e. a private event whose audience is narrower
+        // than "everyone connected" — such a peer is indistinguishable from a
+        // real recipient whose identity we failed to resolve (a subscription
+        // registered under a transport id, or a membership view that has not
+        // converged yet). Skipping it drops the only notification that
+        // recipient would ever receive, so select it conservatively and name it
+        // in the diagnostic below.
+        let locally_changed = local_visible.is_some_and(|visible| {
+            visible.intersection(changed).next().is_some()
+        });
+        let unattributable: Vec<&KeyhivePeerId> = if locally_changed && !public_hit {
+            connected
+                .iter()
+                .filter(|peer| !self.agent_hashes.contains_key(*peer))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for peer in &unattributable {
+            peers.insert((*peer).clone());
+        }
         // Hashes absent from the visible projection — not public and not visible
         // to the local agent — are unclassified (pending or lagged).
         for hash in changed {
@@ -167,6 +190,34 @@ impl PeriodicEventCache {
             if !is_public && !is_local {
                 unclassified.insert(*hash);
             }
+        }
+        if !changed.is_empty() {
+            // A connected peer that is not selected here is never told about these
+            // events, and because it does not know they exist it will never ask.
+            // Name those peers and how much of the projection each one sees.
+            let unselected = connected
+                .iter()
+                .filter(|peer| !peers.contains(*peer))
+                .map(|peer| match self.agent_hashes.get(peer) {
+                    Some(visible) => format!("{}:visible={}", peer, visible.len()),
+                    None => format!("{}:visible=none", peer),
+                })
+                .collect::<Vec<_>>();
+            let unattributable_names = unattributable
+                .iter()
+                .map(|peer| peer.to_string())
+                .collect::<Vec<_>>();
+            tracing::debug!(
+                changed = changed.len(),
+                public_hit,
+                local_visible = local_visible.map_or(0, |visible| visible.len()),
+                selected = peers.len(),
+                unclassified = unclassified.len(),
+                locally_changed,
+                unattributable = ?unattributable_names,
+                unselected = %unselected.join(" "),
+                "advertisement targets classified"
+            );
         }
         (peers, unclassified)
     }
@@ -245,6 +296,12 @@ impl PeriodicEventCache {
         let public_peer = KeyhivePeerId::from_identifier(&Public.id());
         let new_public = new_agent_hashes.remove(&public_peer).unwrap_or_default();
 
+        tracing::debug!(
+            known_events = known.len(),
+            agent_hashes = new_agent_hashes.len(),
+            public_hashes = new_public.len(),
+            "advertisement cache refreshed"
+        );
         self.agent_hashes = new_agent_hashes;
         self.public_hashes = new_public;
         // Materialize the public set once per refresh so per-request serving
@@ -314,21 +371,28 @@ mod tests {
         cache.agent_hashes.insert(peer(1), changed(&[1]));
         let (peers, _) = cache.notification_targets(&local(0), &connected(&[1]), &changed(&[1]));
         assert_eq!(peers, connected(&[1]));
-        // Revoke: alice loses visibility.
+        // Revoke: alice loses visibility. She keeps being told about the batch
+        // because an unprojected peer is indistinguishable from one whose
+        // identity we failed to resolve — the revoke notice is worth the one
+        // extra sync round, and a recipient we cannot see must never be lost.
         cache.agent_hashes.remove(&peer(1));
         let (peers, _) = cache.notification_targets(&local(0), &connected(&[1]), &changed(&[1]));
-        assert!(peers.is_empty());
+        assert_eq!(peers, connected(&[1]));
     }
 
     #[test]
-    fn notification_targets_unknown_peer_is_not_selected() {
+    fn notification_targets_unattributable_peer_is_selected_conservatively() {
         let mut cache = PeriodicEventCache::new();
         cache.agent_hashes.insert(peer(0), changed(&[1])); // local
         cache.agent_hashes.insert(peer(1), changed(&[1]));
-        // Carol is connected but unknown to the cache.
+        // Carol is connected but absent from the visibility projection: her id
+        // cannot be matched against the change's audience, so we cannot prove
+        // she is not a recipient. Selecting her is the only way the
+        // notification cannot be silently dropped when the projection and the
+        // connected-peer identity disagree.
         let (peers, _) =
             cache.notification_targets(&local(0), &connected(&[1, 3]), &changed(&[1]));
-        assert_eq!(peers, connected(&[1]));
+        assert_eq!(peers, connected(&[1, 3]));
     }
 
     #[test]
@@ -347,7 +411,10 @@ mod tests {
         cache.agent_hashes.insert(peer(0), changed(&[6])); // local only
         let (peers, unclassified) =
             cache.notification_targets(&local(0), &connected(&[1]), &changed(&[6]));
-        assert!(peers.is_empty());
+        // The local-only hash is classified (not unclassified), and the
+        // unprojected peer is selected conservatively rather than assumed
+        // uninvolved.
+        assert_eq!(peers, connected(&[1]));
         assert!(unclassified.is_empty(), "incorporated local-only event is classified");
     }
 

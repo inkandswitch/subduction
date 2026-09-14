@@ -216,6 +216,14 @@ where
     /// raw event storage deduplicates the next arrival. The source is retained
     /// so retries preserve remote attribution.
     unreported_incorporations: Mutex<BTreeMap<EventHash, Option<KeyhivePeerId>>>,
+    /// Events this protocol wrote into the retained event log *while they were
+    /// still dependency-pending*. They carry no admission row yet, and they are
+    /// not necessarily pending when a later exchange resolves them — that
+    /// exchange may have snapshotted its pending set before this event was even
+    /// written. Tracking them here keeps the admission independent of which
+    /// exchange happens to observe the resolution, so no delivered event can be
+    /// left permanently without an admission row.
+    unadmitted_inserted: Mutex<BTreeMap<EventHash, Option<KeyhivePeerId>>>,
     /// The durable storage backend serializes writes; admission reconciliation
     /// uses the retained event log and therefore does not need a protocol-wide lock.
     /// The keyhive projection's pending event set as of the last ingestion.
@@ -232,6 +240,9 @@ where
     /// refresh. The cache is stale whenever the hive's own generation has
     /// moved past this value — no external change signal required.
     snapshot_state_generation: AtomicU64,
+    /// Principal-store counter total observed at the last refresh, for the
+    /// two-sample staleness check in `ensure_cache_current`.
+    snapshot_nested_generation: AtomicU64,
     next_request_nonce: AtomicU64,
     outbound_requests: Mutex<Map<RequestId, OutboundRequest>>,
     _marker: core::marker::PhantomData<Async>,
@@ -292,11 +303,13 @@ where
             attempt_storage_recovery: false,
             on_durable_incorporation: None,
             unreported_incorporations: Mutex::new(BTreeMap::new()),
+            unadmitted_inserted: Mutex::new(BTreeMap::new()),
             pending_hashes: Mutex::new(None),
             syncpoints: Mutex::new(SyncpointMap::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             cache_refresh_lock: Mutex::new(()),
             snapshot_state_generation: AtomicU64::new(0),
+            snapshot_nested_generation: AtomicU64::new(0),
             next_request_nonce: AtomicU64::new(0),
             outbound_requests: Mutex::new(Map::new()),
             _marker: core::marker::PhantomData,
@@ -1679,9 +1692,24 @@ where
                 }
             }
         }
-        for (hash, source) in inserted_hashes {
-            if !new_pending.contains(&hash) {
-                newly_admitted.insert(hash, source);
+        // An event written while still pending keeps its place in the log but has
+        // no admission row. Whichever exchange first observes it as incorporated
+        // must admit it, so re-check everything this protocol is still holding —
+        // not only what this exchange inserted. Relying on `prev_pending` alone
+        // loses the resolution whenever a concurrent exchange snapshotted its
+        // pending set before this event was written.
+        {
+            let mut tracked = self.unadmitted_inserted.lock().await;
+            for (hash, source) in inserted_hashes {
+                tracked.entry(hash).or_insert(source);
+            }
+            let outstanding: Vec<_> = core::mem::take(&mut *tracked).into_iter().collect();
+            for (hash, source) in outstanding {
+                if new_pending.contains(&hash) {
+                    tracked.insert(hash, source);
+                } else {
+                    newly_admitted.insert(hash, source);
+                }
             }
         }
 
@@ -1979,8 +2007,24 @@ where
         loop {
             let snapshot_generation = self.snapshot_state_generation.load(Ordering::Acquire);
             let before = self.keyhive.state_generation();
+            let nested_now = self.keyhive.nested_store_generation_sum().await;
             if snapshot_generation == before {
-                return Ok(());
+                // Two-sample staleness check. The hive generation alone cannot see
+                // a mutation that reached only a principal store, and a cache that
+                // serves a pre-mutation advertisement view will never tell a peer
+                // about the resulting event. If any route still escapes the shared
+                // counter, this both reports it and rebuilds anyway.
+                let published_nested = self.snapshot_nested_generation.load(Ordering::Acquire);
+                if nested_now == published_nested {
+                    return Ok(());
+                }
+                tracing::warn!(
+                    hive_generation = before,
+                    snapshot_generation,
+                    published_nested,
+                    nested_now,
+                    "principal store counters moved while the hive generation did not;                      rebuilding the advertisement cache"
+                );
             }
 
             // A structural projection change invalidates every peer syncpoint.
@@ -1998,6 +2042,8 @@ where
             // Publish exactly the generation observed before and after the
             // rebuild. Never label an older snapshot with a later generation.
             self.snapshot_state_generation.store(before, Ordering::Release);
+            self.snapshot_nested_generation
+                .store(self.keyhive.nested_store_generation_sum().await, Ordering::Release);
             if self.keyhive.state_generation() == before {
                 return Ok(());
             }
