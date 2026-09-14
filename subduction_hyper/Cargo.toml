@@ -15,6 +15,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-tungstenite = { workspace = true, features = ["tokio-runtime"] }
+axum = { workspace = true, optional = true }
 future_form = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true, features = ["std"] }
@@ -26,6 +27,7 @@ tracing = { workspace = true, features = ["std"] }
 tungstenite = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
 base64 = { workspace = true }
 bolero = { workspace = true, features = ["arbitrary"] }
 future_form = { workspace = true }
@@ -44,13 +46,22 @@ tokio = { workspace = true, features = [
   "sync",
   "time",
 ] }
+tower = { workspace = true, features = ["util"] }
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[[test]]
+name = "axum"
+required-features = ["axum"]
+
 [features]
 default = []
+# `TungsteniteUpgrade`: an axum extractor that replaces
+# `axum::extract::ws::WebSocketUpgrade` and yields an
+# `async_tungstenite::WebSocketStream` instead of axum's sealed `WebSocket`.
+axum = ["dep:axum"]
 # Property tests for header-token matching and key validation.
 bolero = []
 

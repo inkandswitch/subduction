@@ -24,6 +24,7 @@ HTTP request ─▶ upgrade::validate(parts)        ─▶ AcceptKey     (http t
 
 | Server           | Path                                                                                                                                                                                      |
 |------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| axum             | `subduction_hyper::axum::TungsteniteUpgrade` extractor (feature `axum`)                                                                                                                   |
 | tower, raw hyper | `upgrade::{validate, accept_response, spawn_upgrade}` from a handler                                                                                                                      |
 | poem, salvo      | Same, once their request type is passed to `validate` as `http` parts                                                                                                                     |
 | rocket           | Not needed: rocket's `IoHandler` yields raw I/O. Wrap it in `TokioAdapter` and call `WebSocketStream::from_raw_socket`. (Rocket 0.5 is hyper 0.14, so this crate cannot serve it anyway.) |
@@ -45,6 +46,23 @@ Not implemented, and not a structural limitation: it is a different handshake �
 It is opt-in on both sides. hyper accepts extended `CONNECT` only when the server calls `enable_connect_protocol`, which this crate never does, so a compliant client will not attempt it and nothing breaks silently; a request that arrives regardless is refused with `400`.
 
 Worth adding when someone needs it. h2-only ingress is the case that forces it; connection coalescing (sync sharing one connection with the HTTP routes it already shares a port with) is a secondary benefit. Measure flow control first: the default 64 KiB stream and connection windows are small relative to Subduction's sync messages, so `initial_stream_window_size` will likely need raising.
+
+## axum
+
+Swap the extractor type in the handler signature. Routing, middleware, and state are otherwise unchanged. The handler body changes: `on_upgrade` takes the spawner the node was built with and a `WebSocketConfig` instead of builder methods, and the callback receives a tungstenite stream instead of axum's sealed `WebSocket`. The extractor consumes the request's `OnUpgrade`, so it replaces `axum::extract::ws::WebSocketUpgrade` rather than wrapping it.
+
+```rust
+use subduction_hyper::axum::TungsteniteUpgrade;
+
+async fn ws(upgrade: TungsteniteUpgrade, State(app): State<App>) -> Response {
+    upgrade.on_upgrade(&app.spawner, app.ws_config, |ws| async move {
+        // handshake::respond(WebSocketHandshake::new(ws), ...)
+        // then WebSocket::new_with_keepalive(...)
+    })
+}
+```
+
+To control task spawning (e.g. a `TaskTracker` for graceful shutdown), use `upgrade.into_parts()` with `upgrade::upgrade` instead of `on_upgrade`. The handler must then return `upgrade::accept_response(&key)` itself, or the client waits forever for a `101` that never comes.
 
 ## Raw hyper
 

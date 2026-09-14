@@ -17,8 +17,10 @@
 //!              ─▶ upgrade::from_upgraded(io, cfg) ─▶ WebSocketStream<HyperIo>
 //! ```
 //!
-//! The [`upgrade`] module is framework-neutral: it speaks only `http` types,
-//! so it can be driven from any hyper-based handler.
+//! The [`upgrade`] module is framework-neutral. With the `axum` feature, the
+//! [`axum::TungsteniteUpgrade`] extractor
+//! packages those steps as a replacement for
+//! `axum::extract::ws::WebSocketUpgrade`.
 //!
 //! The result is an `async_tungstenite::WebSocketStream<HyperIo>`, which
 //! `subduction_websocket::websocket::WebSocket::new_with_keepalive` accepts
@@ -35,5 +37,9 @@
 //! See [`upgrade`] for limitations.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+
+#[cfg(feature = "axum")]
+#[cfg_attr(docsrs, doc(cfg(feature = "axum")))]
+pub mod axum;
 
 pub mod upgrade;
