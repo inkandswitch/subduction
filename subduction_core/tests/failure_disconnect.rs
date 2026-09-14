@@ -144,8 +144,15 @@ impl Handler<Sendable, Conn> for RejectMessages {
         Box::pin(async {})
     }
 }
-impl RemoteHeadsNotifier for RejectMessages {
-    fn notify_remote_heads(&self, _id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {}
+impl RemoteHeadsNotifier<Sendable> for RejectMessages {
+    fn notify_remote_heads(
+        &self,
+        _id: SedimentreeId,
+        _peer: PeerId,
+        _heads: RemoteHeads,
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 }
 type Node = Subduction<
     'static,
