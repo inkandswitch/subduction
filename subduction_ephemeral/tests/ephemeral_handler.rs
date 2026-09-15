@@ -12,7 +12,7 @@ use future_form::Sendable;
 use nonempty::NonEmpty;
 use sedimentree_core::collections::Map;
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelMockConnection, TokioSpawn},
     handler::Handler,
     peer::id::PeerId,
@@ -80,7 +80,7 @@ fn make_small_payload_handler(
 
 async fn register_peer(connections: &Connections, peer_id: PeerId) -> (EphAuth, EphHandle) {
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    let auth = Authenticated::new_for_test(conn, peer_id);
+    let auth = Authenticated::new_for_test(conn, peer_id, Direction::Dialed);
     connections
         .lock()
         .await
@@ -669,6 +669,7 @@ async fn gossip_terminates_in_ring_topology() -> TestResult {
     let auth_from_a_on_b = Authenticated::new_for_test(
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_a).0,
         peer_a,
+        Direction::Accepted,
     );
     handler_b.handle(&auth_from_a_on_b, msg_at_b).await?;
 
@@ -685,6 +686,7 @@ async fn gossip_terminates_in_ring_topology() -> TestResult {
     let auth_from_b_on_c = Authenticated::new_for_test(
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_b).0,
         peer_b,
+        Direction::Accepted,
     );
     handler_c.handle(&auth_from_b_on_c, msg_at_c).await?;
 
@@ -786,6 +788,7 @@ async fn gossip_terminates_with_nonce_dedup_across_multiple_hops() -> TestResult
     let relay_from_a = Authenticated::new_for_test(
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_a).0,
         peer_a,
+        Direction::Accepted,
     );
     handler_b.handle(&relay_from_a, msg_at_b).await?;
 
@@ -802,6 +805,7 @@ async fn gossip_terminates_with_nonce_dedup_across_multiple_hops() -> TestResult
     let relay_from_b = Authenticated::new_for_test(
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_b).0,
         peer_b,
+        Direction::Accepted,
     );
     handler_c.handle(&relay_from_b, msg_at_c).await?;
 
@@ -815,6 +819,7 @@ async fn gossip_terminates_with_nonce_dedup_across_multiple_hops() -> TestResult
     let relay_from_c = Authenticated::new_for_test(
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_c).0,
         peer_c,
+        Direction::Accepted,
     );
     handler_d.handle(&relay_from_c, msg_at_d.clone()).await?;
 
@@ -834,6 +839,7 @@ async fn gossip_terminates_with_nonce_dedup_across_multiple_hops() -> TestResult
     let relay_from_d = Authenticated::new_for_test(
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(peer_d).0,
         peer_d,
+        Direction::Accepted,
     );
     handler_b.handle(&relay_from_d, msg_looped_to_b).await?;
 
@@ -1529,11 +1535,11 @@ async fn fan_out_to_multiple_connections_per_peer() -> TestResult {
     // Register two connections for the same peer.
     let (first_conn, first_handle) =
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(target_peer);
-    let first_auth = Authenticated::new_for_test(first_conn, target_peer);
+    let first_auth = Authenticated::new_for_test(first_conn, target_peer, Direction::Dialed);
 
     let (second_conn, second_handle) =
         ChannelMockConnection::<EphemeralMessage>::new_with_handle(target_peer);
-    let second_auth = Authenticated::new_for_test(second_conn, target_peer);
+    let second_auth = Authenticated::new_for_test(second_conn, target_peer, Direction::Dialed);
 
     {
         let mut locked = connections.lock().await;

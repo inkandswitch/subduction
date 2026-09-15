@@ -111,3 +111,7 @@ pub mod transport;
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub mod metrics;
+
+#[cfg(any(test, feature = "test_utils"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "test_utils")))]
+pub mod test_utils;

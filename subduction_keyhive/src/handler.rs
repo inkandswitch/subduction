@@ -385,7 +385,11 @@ mod tests {
     }
 
     fn test_conn() -> Authenticated<DummyConn, future_form::Sendable> {
-        Authenticated::new_for_test(DummyConn, test_peer_id())
+        Authenticated::new_for_test(
+            DummyConn,
+            test_peer_id(),
+            subduction_core::authenticated::Direction::Dialed,
+        )
     }
 
     #[tokio::test]

@@ -16,7 +16,7 @@ use sedimentree_core::{
 };
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -103,8 +103,10 @@ async fn connect_pair(
     let peer_a = PeerId::from(a_signer.verifying_key());
     let peer_b = PeerId::from(b_signer.verifying_key());
 
-    let auth_a: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_a, peer_b);
-    let auth_b: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_b, peer_a);
+    let auth_a: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(conn_a, peer_b, Direction::Dialed);
+    let auth_b: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(conn_b, peer_a, Direction::Accepted);
 
     a.add_connection(auth_a).await?;
     b.add_connection(auth_b).await?;

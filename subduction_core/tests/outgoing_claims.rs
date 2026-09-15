@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{depth::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -61,7 +61,7 @@ fn make_node() -> TestSubduction {
 fn make_conn(peer: PeerId) -> (Authenticated<Conn, Sendable>, PausableChannelTransport) {
     let (transport, remote) = PausableChannelTransport::pair();
     (
-        Authenticated::new_for_test(MessageTransport::new(transport), peer),
+        Authenticated::new_for_test(MessageTransport::new(transport), peer, Direction::Dialed),
         remote,
     )
 }

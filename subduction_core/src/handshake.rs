@@ -70,7 +70,9 @@ use future_form::FutureForm;
 use thiserror::Error;
 
 use crate::{
-    authenticated::Authenticated, nonce_cache::NonceCache, peer::id::PeerId,
+    authenticated::{Authenticated, Direction},
+    nonce_cache::NonceCache,
+    peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 use sedimentree_core::codec::{
@@ -454,6 +456,15 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
     now: TimestampSeconds,
     nonce: Nonce,
 ) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
+    // Every success path of `initiate` yields a dialed connection.
+    let dialed = |handshake: H, peer_id: PeerId| {
+        let (conn, extra) = build_connection(handshake, peer_id);
+        (
+            Authenticated::from_handshake(conn, peer_id, Direction::Dialed),
+            extra,
+        )
+    };
+
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
     let signed_challenge = Signed::seal::<K, _>(signer, challenge).await.into_signed();
@@ -471,8 +482,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
             // Normal case: responder sent a response to our challenge.
             let verified = verify_response(&signed_response, &challenge)?;
             let peer_id = verified.server_id;
-            let (conn, extra) = build_connection(handshake, peer_id);
-            Ok((Authenticated::from_handshake(conn, peer_id), extra))
+            Ok(dialed(handshake, peer_id))
         }
         HandshakeMessage::Rejection(rejection) => Err(AuthenticateError::Rejected {
             reason: rejection.reason,
@@ -557,8 +567,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
                     .await
                     .map_err(AuthenticateError::Transport)?;
 
-                let (conn, extra) = build_connection(handshake, peer_id);
-                Ok((Authenticated::from_handshake(conn, peer_id), extra))
+                Ok(dialed(handshake, peer_id))
             } else {
                 // Loser: send our response to their challenge, then wait
                 // for the winner to respond to ours.
@@ -574,8 +583,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>
                     return Err(AuthenticateError::SimultaneousOpenPeerMismatch);
                 }
 
-                let (conn, extra) = build_connection(handshake, peer_id);
-                Ok((Authenticated::from_handshake(conn, peer_id), extra))
+                Ok(dialed(handshake, peer_id))
             }
         }
     }
@@ -691,7 +699,10 @@ pub async fn respond<K: FutureForm, H: Handshake<K>, C: Clone, E, S: Signer<K>>(
 
     let peer_id = verified.client_id;
     let (conn, extra) = build_connection(handshake, peer_id);
-    Ok((Authenticated::from_handshake(conn, peer_id), extra))
+    Ok((
+        Authenticated::from_handshake(conn, peer_id, Direction::Accepted),
+        extra,
+    ))
 }
 
 /// Helper to send a rejection message.
@@ -1554,7 +1565,56 @@ mod tests {
 
             assert_eq!(a_auth.peer_id(), peer_id_b, "A should authenticate B");
             assert_eq!(b_auth.peer_id(), peer_id_a, "B should authenticate A");
+            assert_eq!(a_auth.direction(), Direction::Dialed);
+            assert_eq!(b_auth.direction(), Direction::Dialed);
 
+            Ok(())
+        }
+
+        /// The normal case: the initiator's connection is `Dialed`, the
+        /// responder's is `Accepted`.
+        #[tokio::test]
+        async fn initiate_and_respond_record_direction() -> TestResult {
+            let (transport_a, transport_b) = ChannelHandshake::pair();
+            let signer_a = test_signer(1);
+            let signer_b = test_signer(2);
+            let peer_id_a = PeerId::from(signer_a.verifying_key());
+            let peer_id_b = PeerId::from(signer_b.verifying_key());
+            let now = TimestampSeconds::new(1000);
+
+            let a_handle = tokio::spawn(async move {
+                initiate::<Sendable, _, _, _, _>(
+                    transport_a,
+                    |_hs, peer_id| (peer_id, ()),
+                    &signer_a,
+                    Audience::known(peer_id_b),
+                    now,
+                    Nonce::random(),
+                )
+                .await
+            });
+            let b_handle = tokio::spawn(async move {
+                respond::<Sendable, _, _, _, _>(
+                    transport_b,
+                    |_hs, peer_id| (peer_id, ()),
+                    &signer_b,
+                    &NonceCache::new(MAX_PLAUSIBLE_DRIFT),
+                    peer_id_b,
+                    None,
+                    now,
+                    MAX_PLAUSIBLE_DRIFT,
+                )
+                .await
+            });
+
+            let (a_result, b_result) = tokio::join!(a_handle, b_handle);
+            let (a_auth, ()) = a_result??;
+            let (b_auth, ()) = b_result??;
+
+            assert_eq!(a_auth.peer_id(), peer_id_b);
+            assert_eq!(b_auth.peer_id(), peer_id_a);
+            assert_eq!(a_auth.direction(), Direction::Dialed);
+            assert_eq!(b_auth.direction(), Direction::Accepted);
             Ok(())
         }
 

@@ -25,7 +25,7 @@ use sedimentree_core::{
     blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
-    authenticated::Authenticated,
+    authenticated::{Authenticated, Direction},
     connection::{
         managed::CallError,
         test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
@@ -99,8 +99,10 @@ async fn connect_pair(
     let peer_a = PeerId::from(a_signer.verifying_key());
     let peer_b = PeerId::from(b_signer.verifying_key());
 
-    let auth_a: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_a, peer_b);
-    let auth_b: Authenticated<Conn, Sendable> = Authenticated::new_for_test(conn_b, peer_a);
+    let auth_a: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(conn_a, peer_b, Direction::Dialed);
+    let auth_b: Authenticated<Conn, Sendable> =
+        Authenticated::new_for_test(conn_b, peer_a, Direction::Accepted);
 
     a.add_connection(auth_a).await?;
     b.add_connection(auth_b).await?;
@@ -347,14 +349,14 @@ async fn reconnect_during_remove_connection_never_clobbers_mux() -> TestResult {
         // Establish a connection to remove.
         let (t_a, _t_b) = PausableChannelTransport::pair();
         let old_conn: Authenticated<Conn, Sendable> =
-            Authenticated::new_for_test(MessageTransport::new(t_a), b_peer);
+            Authenticated::new_for_test(MessageTransport::new(t_a), b_peer, Direction::Dialed);
         a.add_connection(old_conn.clone()).await?;
 
         // Race: a reconnect (new distinct connection) concurrently with
         // removing the old one.
         let (t_a2, _t_b2) = PausableChannelTransport::pair();
         let new_conn: Authenticated<Conn, Sendable> =
-            Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer);
+            Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer, Direction::Dialed);
 
         let a1 = a.clone();
         let a2 = a.clone();
@@ -397,12 +399,12 @@ async fn reconnect_during_disconnect_from_peer_never_clobbers_mux() -> TestResul
     for i in 0..64u8 {
         let (t_a, _t_b) = PausableChannelTransport::pair();
         let old_conn: Authenticated<Conn, Sendable> =
-            Authenticated::new_for_test(MessageTransport::new(t_a), b_peer);
+            Authenticated::new_for_test(MessageTransport::new(t_a), b_peer, Direction::Dialed);
         a.add_connection(old_conn).await?;
 
         let (t_a2, _t_b2) = PausableChannelTransport::pair();
         let new_conn: Authenticated<Conn, Sendable> =
-            Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer);
+            Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer, Direction::Dialed);
 
         let a1 = a.clone();
         let a2 = a.clone();
@@ -441,10 +443,10 @@ async fn send_counter_survives_disconnects() -> TestResult {
     // Two distinct connections to the same peer.
     let (t_a1, _t_b1) = PausableChannelTransport::pair();
     let conn1: Authenticated<Conn, Sendable> =
-        Authenticated::new_for_test(MessageTransport::new(t_a1), b_peer);
+        Authenticated::new_for_test(MessageTransport::new(t_a1), b_peer, Direction::Dialed);
     let (t_a2, _t_b2) = PausableChannelTransport::pair();
     let conn2: Authenticated<Conn, Sendable> =
-        Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer);
+        Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer, Direction::Dialed);
     a.add_connection(conn1.clone()).await?;
     a.add_connection(conn2.clone()).await?;
 
@@ -577,7 +579,7 @@ async fn remove_non_last_connection_does_not_cancel_pending_calls() -> TestResul
     // Second, distinct connection to the SAME peer.
     let (t_a2, _t_b2) = PausableChannelTransport::pair();
     let conn_a2: Authenticated<Conn, Sendable> =
-        Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer);
+        Authenticated::new_for_test(MessageTransport::new(t_a2), b_peer, Direction::Dialed);
     a.add_connection(conn_a2.clone()).await?;
 
     assert_eq!(a.connection_count(&b_peer).await, 2, "two connections");
@@ -744,10 +746,11 @@ async fn dropping_full_sync_aborts_spawned_per_document_tasks() -> TestResult {
 
     let (t_a, t_b) = PausableChannelTransport::pair();
     let conn_a: Authenticated<CountingConn, Sendable> =
-        Authenticated::new_for_test(MessageTransport::new(t_a), b_peer);
+        Authenticated::new_for_test(MessageTransport::new(t_a), b_peer, Direction::Dialed);
     let conn_b: Authenticated<CountingConn, Sendable> = Authenticated::new_for_test(
         MessageTransport::new(t_b.clone()),
         PeerId::from(a_signer.verifying_key()),
+        Direction::Accepted,
     );
     a.add_connection(conn_a).await?;
     b.add_connection(conn_b).await?;
