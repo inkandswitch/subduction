@@ -1,37 +1,89 @@
-//! Replacement for `axum::extract::ws::WebSocketUpgrade` that yields an
-//! [`async_tungstenite::WebSocketStream`].
+//! An axum extractor that yields an [`async_tungstenite::WebSocketStream`]
+//! ready for `subduction_websocket`.
 //!
-//! It stands where axum's extractor stands: same handler position, same
-//! routing, middleware, state, and rejection-into-response. The handler body
-//! differs, because the point is to get a different stream out —
-//! [`on_upgrade`](TungsteniteUpgrade::on_upgrade) takes a [`WebSocketConfig`]
-//! rather than builder methods, and the callback receives a tungstenite
-//! stream rather than axum's sealed `WebSocket`.
+//! Name [`TungsteniteUpgrade`] as a handler argument and finish with
+//! [`on_upgrade`](TungsteniteUpgrade::on_upgrade), which returns the `101`
+//! response and hands the upgraded stream to a callback on a spawned task.
+//!
+//! The callback runs the Subduction handshake and gives the node the resulting
+//! connection. [`handshake::respond`] is the accepting side of that exchange;
+//! `handshake::initiate` is for sockets this node dialed. The node records
+//! which side it was, so the choice outlives the handshake — and because a
+//! mutual `initiate` still authenticates, getting it backwards here fails
+//! silently rather than loudly.
+//!
+//! [`handshake::respond`]: subduction_core::handshake::respond
 //!
 //! ```no_run
-//! use axum::{Router, extract::State, response::Response, routing::get};
-//! use subduction_hyper::axum::TungsteniteUpgrade;
-//! use subduction_websocket::tokio::TokioSpawn;
-//! use tungstenite::protocol::WebSocketConfig;
+//! # use std::sync::Arc;
+//! # use axum::{Router, response::Response, routing::get};
+//! # use future_form::Sendable;
+//! # use subduction_core::{
+//! #     handshake, nonce_cache::NonceCache, peer::id::PeerId, spawn::Spawn,
+//! #     timestamp::TimestampSeconds, transport::message::MessageTransport,
+//! # };
+//! # use subduction_crypto::signer::memory::MemorySigner;
+//! # use subduction_hyper::{axum::TungsteniteUpgrade, upgrade::HyperIo};
+//! # use subduction_websocket::{
+//! #     handshake::WebSocketHandshake, sleep::TokioSleeper, tokio::TokioSpawn,
+//! #     websocket::{KeepAlive, WebSocket},
+//! # };
+//! # use tungstenite::protocol::WebSocketConfig;
+//! # const MAX_DRIFT: core::time::Duration = core::time::Duration::from_secs(60);
+//! async fn ws(upgrade: TungsteniteUpgrade) -> Response {
+//!     // Any `Spawn<Sendable>` works here; `TokioSpawn` is the stock one.
+//!     // The callback wants it too, so hand it a copy rather than a borrow.
+//!     let spawner = TokioSpawn;
+//!     let inner = spawner;
 //!
-//! // Hold the spawner the node was built with, so upgrade tasks share its
-//! // lifecycle. `TrackedTokioSpawn` additionally joins them at shutdown.
-//! #[derive(Clone)]
-//! struct App {
-//!     spawner: TokioSpawn,
-//! }
+//!     upgrade.on_upgrade(&spawner, WebSocketConfig::default(), move |ws| async move {
+//!         # let signer: MemorySigner = unimplemented!();
+//!         # let nonce_cache: NonceCache = unimplemented!();
+//!         # let my_peer_id: PeerId = unimplemented!();
+//!         let Ok((authenticated, ())) = handshake::respond::<Sendable, _, _, _, _>(
+//!             WebSocketHandshake::new(ws),
+//!             |hs, peer_id| {
+//!                 // Framing the socket yields two futures alongside it. Nothing
+//!                 // moves until all three are running.
+//!                 let (socket, sender_fut, keepalive) = WebSocket::new_with_keepalive(
+//!                     hs.into_inner(),
+//!                     peer_id,
+//!                     KeepAlive::balanced(),
+//!                     TokioSleeper,
+//!                 );
 //!
-//! async fn ws(upgrade: TungsteniteUpgrade, State(app): State<App>) -> Response {
-//!     upgrade.on_upgrade(&app.spawner, WebSocketConfig::default(), |ws| async move {
-//!         // `ws` is an `async_tungstenite::WebSocketStream`; run the
-//!         // Subduction handshake and hand it to `WebSocket::new_with_keepalive`.
-//!         let _ = ws;
+//!                 let listener = socket.clone();
+//!                 inner.spawn(Box::pin(async move {
+//!                     let _ = listener.listen().await;
+//!                 }));
+//!                 inner.spawn(Box::pin(async move {
+//!                     let _ = sender_fut.await;
+//!                 }));
+//!                 inner.spawn(Box::pin(async move {
+//!                     let _ = keepalive.await;
+//!                 }));
+//!
+//!                 (MessageTransport::new(socket), ())
+//!             },
+//!             &signer,
+//!             &nonce_cache,
+//!             my_peer_id,
+//!             None,
+//!             TimestampSeconds::now(),
+//!             MAX_DRIFT,
+//!         )
+//!         .await
+//!         else {
+//!             return;
+//!         };
+//!
+//!         # let subduction: Arc<()> = unimplemented!();
+//!         // subduction.add_connection(authenticated).await;
+//!         let _ = authenticated;
 //!     })
 //! }
 //!
-//! let app: Router = Router::new()
-//!     .route("/ws", get(ws))
-//!     .with_state(App { spawner: TokioSpawn });
+//! let app: Router = Router::new().route("/ws", get(ws));
 //! ```
 //!
 //! Extracting removes hyper's [`OnUpgrade`] from the request, so this cannot be
@@ -75,8 +127,22 @@ impl TungsteniteUpgrade {
     /// connection is wrapped with `config` and passed to `f` on a spawned task.
     ///
     /// Nothing between this handler and the socket may replace that response.
-    /// See [`upgrade::spawn_upgrade`] for the contract, including the spawner
-    /// to pass and the absence of any deadline.
+    /// See [`upgrade::spawn_upgrade`] for the contract, including the absence
+    /// of any deadline.
+    ///
+    /// # Arguments
+    ///
+    /// * `spawner` — where the upgrade task runs. `&TokioSpawn` spawns on the
+    ///   current runtime and holds no state; `&TrackedTokioSpawn` additionally
+    ///   joins its tasks at shutdown. Pass the spawner the node was built with,
+    ///   so upgrade tasks share its lifecycle.
+    /// * `config` — tungstenite framing limits for the resulting stream.
+    ///   [`WebSocketConfig::default`] unless message sizes need raising.
+    /// * `f` — runs on the upgraded stream once the client completes the
+    ///   handshake. This is where [`handshake::respond`] and
+    ///   `Subduction::add_connection` go; see the [module docs](self).
+    ///
+    /// [`handshake::respond`]: subduction_core::handshake::respond
     ///
     /// To drive the upgrade yourself instead, use
     /// [`into_parts`](Self::into_parts) with [`upgrade::upgrade`].
