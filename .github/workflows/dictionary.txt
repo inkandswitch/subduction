@@ -286,6 +286,7 @@ http
 http-server
 https
 hyper
+hyper's
 iai-callgrind
 img
 impl
@@ -411,6 +412,7 @@ targetId
 teardown
 th
 tokio
+tokio's
 tombstoned
 topologies
 tradeoff
