@@ -395,11 +395,14 @@ impl<Sign, Sp, Store, Metric, HeadsObserver, const SHARDS: usize>
 impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
     SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, SHARDS>
 {
-    /// Set the [`RemoteHeadsObserver`] invoked whenever a remote peer
-    /// reports its heads for a sedimentree — via a `HeadsUpdate` message,
-    /// `sender_heads` on subscription pushes, or `responder_heads` in a
-    /// sync response. Updates pass through a per-peer staleness filter
-    /// (monotonic counter) before reaching the observer.
+    /// Set the [`RemoteHeadsObserver`] invoked when a remote peer's heads for
+    /// a sedimentree _change_. Peers report heads constantly — on
+    /// `HeadsUpdate`, on `sender_heads` of subscription pushes, and on
+    /// `responder_heads` of every sync response — so updates are filtered per
+    /// `(peer, sedimentree)` and forwarded only when the heads differ from the
+    /// last reported. See [`FilteredHeadsNotifier`].
+    ///
+    /// [`FilteredHeadsNotifier`]: crate::remote_heads::FilteredHeadsNotifier
     ///
     /// Defaults to [`NoRemoteHeadsObserver`], which discards all
     /// notifications.
@@ -680,7 +683,7 @@ impl<
         'a: 'static,
         Metric: Clone,
         SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>:
-            Handler<Async, Conn, Message = SyncMessage>,
+            Handler<Async, Conn, Message = SyncMessage> + RemoteHeadsNotifier<Async>,
         <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver> as Handler<
             Async,
             Conn,
@@ -809,7 +812,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         'a: 'static,
-        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
+        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier<Async>,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
@@ -913,12 +916,12 @@ impl<
         Timer: Timeout<Async> + Clone + Send + Sync + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         'a: 'static,
-        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
+        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier<Async>,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         Metric: Clone,
         SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>:
-            Handler<Async, Conn, Message = SyncMessage>,
+            Handler<Async, Conn, Message = SyncMessage> + RemoteHeadsNotifier<Async>,
         <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver> as Handler<
             Async,
             Conn,

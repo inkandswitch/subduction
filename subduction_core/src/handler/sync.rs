@@ -315,11 +315,11 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
         })
     }
 
-    fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
-        // No-op: teardown already removed the peer's connection and
-        // subscriptions, and the send counter deliberately survives (see
-        // `PeerCounter`).
-        Async::from_future(async {})
+    fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()> {
+        // Teardown already removed the peer's connection and subscriptions, and
+        // the send counter deliberately survives (see `PeerCounter`). The heads
+        // filter's entries do not ? they are per-session.
+        Async::from_future(async move { self.heads_notifier.remove_peer(peer).await })
     }
 }
 
@@ -327,6 +327,22 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
 // RemoteHeadsNotifier implementation
 // ---------------------------------------------------------------------------
 
+#[future_form(
+    Sendable where
+        Store: Storage<Sendable> + Send + Sync,
+        Conn: Connection<Sendable, SyncMessage> + PartialEq + Clone + Send + Sync + 'static,
+        Auth: StoragePolicy<Sendable> + Send + Sync,
+        Metric: DepthMetric + Send + Sync,
+        Sp: Spawn<Sendable> + Send + Sync,
+        R: RemoteHeadsObserver + Send + Sync,
+    Local where
+        Store: Storage<Local>,
+        Conn: Connection<Local, SyncMessage> + PartialEq + Clone + 'static,
+        Auth: StoragePolicy<Local>,
+        Metric: DepthMetric,
+        Sp: Spawn<Local>,
+        R: RemoteHeadsObserver
+)]
 impl<
     Async: FutureForm,
     Store: Storage<Async>,
@@ -336,10 +352,15 @@ impl<
     Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> RemoteHeadsNotifier for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
+> RemoteHeadsNotifier<Async> for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
 {
-    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        self.heads_notifier.notify(id, peer, heads);
+    fn notify_remote_heads(
+        &self,
+        id: SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) -> Async::Future<'_, ()> {
+        Async::from_future(async move { self.heads_notifier.notify(id, peer, heads).await })
     }
 }
 
@@ -481,8 +502,8 @@ impl<
                 blob,
                 sender_heads,
             } => {
-                self.heads_notifier.notify(id, from, sender_heads);
-                self.recv_commit(&from, id, &commit, blob, conn).await?
+                self.recv_commit(&from, id, &commit, blob, sender_heads, conn)
+                    .await?
             }
             SyncMessage::Fragment {
                 id,
@@ -490,8 +511,8 @@ impl<
                 blob,
                 sender_heads,
             } => {
-                self.heads_notifier.notify(id, from, sender_heads);
-                self.recv_fragment(&from, id, &fragment, blob, conn).await?
+                self.recv_fragment(&from, id, &fragment, blob, sender_heads, conn)
+                    .await?
             }
             SyncMessage::BatchSyncRequest(BatchSyncRequest {
                 id,
@@ -542,7 +563,7 @@ impl<
             }
             SyncMessage::HeadsUpdate { id, heads } => {
                 tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
-                self.heads_notifier.notify(id, from, heads);
+                self.heads_notifier.notify(id, from, heads).await;
                 None
             }
         };
@@ -560,6 +581,7 @@ impl<
         id: SedimentreeId,
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
+        sender_heads: RemoteHeads,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
@@ -594,6 +616,13 @@ impl<
                 return Ok(None);
             }
         };
+
+        // Only now: the sender's heads ride on a message whose signature is
+        // verified and whose tree this peer is allowed to write. Reporting
+        // earlier would hand the application heads from an unauthenticated
+        // peer, and would let any peer plant filter state for trees it has
+        // no access to.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let signed_for_wire = verified.signed().clone();
 
@@ -712,6 +741,7 @@ impl<
         id: SedimentreeId,
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
+        sender_heads: RemoteHeads,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
@@ -746,6 +776,13 @@ impl<
                 return Ok(None);
             }
         };
+
+        // Only now: the sender's heads ride on a message whose signature is
+        // verified and whose tree this peer is allowed to write. Reporting
+        // earlier would hand the application heads from an unauthenticated
+        // peer, and would let any peer plant filter state for trees it has
+        // no access to.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let signed_for_wire = verified.signed().clone();
 
