@@ -27,6 +27,7 @@ pub(crate) const KEYHIVE_DIR: &str = ".keyhive";
 
 pub(crate) const ARCHIVES_SUBDIR: &str = "archives";
 pub(crate) const OPS_SUBDIR: &str = "ops";
+pub(crate) const LOCAL_SECRETS_SUBDIR: &str = "local_secrets";
 const TMP_SUBDIR: &str = "tmp";
 
 /// Monotonic per-process counter for temp filenames. A unique temp path per
@@ -40,7 +41,12 @@ static NEXT_TMP_ID: AtomicU64 = AtomicU64::new(0);
 /// ```text
 /// <root>/archives/<hex>.bin
 /// <root>/ops/<hex>.bin
+/// <root>/local_secrets/<hex>.bin
 /// ```
+///
+/// Every directory is hash-addressed: the file name is the BLAKE3 hash of its
+/// contents. `ops/` holds peer-visible events, `local_secrets/` holds the
+/// local-only private key material that must never be exposed to peers.
 #[derive(Debug, Clone)]
 pub(crate) struct FsKeyhiveStorage {
     root: PathBuf,
@@ -55,10 +61,12 @@ pub(crate) enum FsKeyhiveStorageError {
 }
 
 impl FsKeyhiveStorage {
-    /// Create the storage root, its `archives/` and `ops/` subdirs.
+    /// Create the storage root, its `archives/`, `ops/`, and `local_secrets/`
+    /// subdirs.
     pub(crate) fn new(root: PathBuf) -> io::Result<Self> {
         std::fs::create_dir_all(root.join(ARCHIVES_SUBDIR))?;
         std::fs::create_dir_all(root.join(OPS_SUBDIR))?;
+        std::fs::create_dir_all(root.join(LOCAL_SECRETS_SUBDIR))?;
         std::fs::create_dir_all(root.join(TMP_SUBDIR))?;
         Ok(Self { root })
     }
@@ -69,6 +77,10 @@ impl FsKeyhiveStorage {
 
     fn event_dir(&self) -> PathBuf {
         self.root.join(OPS_SUBDIR)
+    }
+
+    fn local_secret_dir(&self) -> PathBuf {
+        self.root.join(LOCAL_SECRETS_SUBDIR)
     }
 
     fn tmp_dir(&self) -> PathBuf {
@@ -166,12 +178,21 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+    ) -> BoxFuture<'_, Result<bool, Self::Error>> {
         let parent_dir = self.event_dir();
         async move {
+            // Events are content-addressed, so a file already at this hash
+            // holds exactly these bytes: report a duplicate rather than a new
+            // insert. Two concurrent first-writes of the same hash can both
+            // observe `false`/`true` either way; the bytes stored are
+            // identical, so the outcome is benign.
+            if tokio::fs::try_exists(parent_dir.join(format!("{}.bin", hash.to_hex()))).await? {
+                return Ok(false);
+            }
             self.save_file(parent_dir, hash, data)
                 .await
-                .map_err(Into::into)
+                .map_err(FsKeyhiveStorageError::from)?;
+            Ok(true)
         }
         .boxed()
     }
@@ -181,8 +202,59 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
         async move { Self::load_dir(dir).await.map_err(Into::into) }.boxed()
     }
 
+    fn load_events_with_source(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>, Option<KeyhivePeerId>)>, Self::Error>>
+    {
+        let dir = self.event_dir();
+        async move {
+            // `ops/` persists hash → bytes only: this layout has no column for
+            // the peer an event was learned from, so every event is reported as
+            // unattributable (`None`). Consumers treat unattributable events
+            // conservatively (notify all connected peers except a known
+            // source); see `KeyhiveStorage::load_events_with_source`.
+            Ok(Self::load_dir(dir)
+                .await?
+                .into_iter()
+                .map(|(hash, data)| (hash, data, None))
+                .collect())
+        }
+        .boxed()
+    }
+
     fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
         let dir = self.event_dir();
+        async move { Self::delete_file(dir, hash).await.map_err(Into::into) }.boxed()
+    }
+
+    fn save_local_secret(
+        &self,
+        hash: StorageHash,
+        data: Vec<u8>,
+    ) -> BoxFuture<'_, Result<bool, Self::Error>> {
+        let parent_dir = self.local_secret_dir();
+        async move {
+            // Same content-addressed dedup as `save_event`.
+            if tokio::fs::try_exists(parent_dir.join(format!("{}.bin", hash.to_hex()))).await? {
+                return Ok(false);
+            }
+            self.save_file(parent_dir, hash, data)
+                .await
+                .map_err(FsKeyhiveStorageError::from)?;
+            Ok(true)
+        }
+        .boxed()
+    }
+
+    fn load_local_secrets(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+        let dir = self.local_secret_dir();
+        async move { Self::load_dir(dir).await.map_err(Into::into) }.boxed()
+    }
+
+    fn delete_local_secret(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
+        let dir = self.local_secret_dir();
         async move { Self::delete_file(dir, hash).await.map_err(Into::into) }.boxed()
     }
 }
@@ -293,7 +365,7 @@ mod tests {
         storage.delete_archive(hash).await.unwrap();
         let loaded = storage.load_archives().await.unwrap();
 
-        assert!(loaded.is_empty());
+        assert!(loaded.is_empty(), "deleted archive must be gone from disk");
     }
 
     #[tokio::test]
@@ -306,7 +378,7 @@ mod tests {
         storage.delete_event(hash).await.unwrap();
         let loaded = storage.load_events().await.unwrap();
 
-        assert!(loaded.is_empty());
+        assert!(loaded.is_empty(), "deleted event must be gone from disk");
     }
 
     #[tokio::test]
@@ -351,5 +423,73 @@ mod tests {
         assert_eq!(archives[0].1, b"archive");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].1, b"event");
+    }
+
+    #[tokio::test]
+    async fn save_event_reports_new_insert_only_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0x10);
+
+        let first = storage.save_event(hash, b"event".to_vec()).await.unwrap();
+        let second = storage.save_event(hash, b"event".to_vec()).await.unwrap();
+
+        assert!(first, "the first save of a hash is a new insert");
+        assert!(!second, "a content-addressed duplicate is not a new insert");
+    }
+
+    #[tokio::test]
+    async fn save_load_delete_local_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0x11);
+        let data = b"local-secret".to_vec();
+
+        let first = storage.save_local_secret(hash, data.clone()).await.unwrap();
+        let second = storage.save_local_secret(hash, data.clone()).await.unwrap();
+        let loaded = storage.load_local_secrets().await.unwrap();
+
+        assert!(first, "the first save of a secret is a new insert");
+        assert!(!second, "a duplicate secret is not a new insert");
+        assert_eq!(loaded, vec![(hash, data)]);
+
+        storage.delete_local_secret(hash).await.unwrap();
+        assert!(
+            storage.load_local_secrets().await.unwrap().is_empty(),
+            "deleted secret must be gone from disk"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_secrets_and_events_are_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0x12);
+
+        storage.save_event(hash, b"event".to_vec()).await.unwrap();
+        storage
+            .save_local_secret(hash, b"secret".to_vec())
+            .await
+            .unwrap();
+
+        let events = storage.load_events().await.unwrap();
+        let secrets = storage.load_local_secrets().await.unwrap();
+
+        assert_eq!(events, vec![(hash, b"event".to_vec())]);
+        assert_eq!(secrets, vec![(hash, b"secret".to_vec())]);
+    }
+
+    #[tokio::test]
+    async fn load_events_with_source_has_no_attribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = make_storage(dir.path());
+        let hash = test_hash(0x13);
+
+        storage.save_event(hash, b"event".to_vec()).await.unwrap();
+        let loaded = storage.load_events_with_source().await.unwrap();
+
+        // `ops/` has no column for the learning peer: attribution is always
+        // unavailable, and consumers treat such events conservatively.
+        assert_eq!(loaded, vec![(hash, b"event".to_vec(), None)]);
     }
 }

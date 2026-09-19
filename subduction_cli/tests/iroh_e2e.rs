@@ -84,10 +84,11 @@ struct ServerInfo {
 }
 
 fn cli_binary() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().expect("test executable path");
-    path.pop(); // remove test binary name
-    path.pop(); // remove `deps`
-    path.push("subduction_cli");
+    // Cargo sets this for integration tests of the package that defines the
+    // binary, and it is correct under any target-dir layout (including the
+    // per-package `build/` layout used by recent nightlies), unlike walking
+    // up from `current_exe()`.
+    let path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_subduction_cli"));
     assert!(
         path.exists(),
         "CLI binary not found at {} — run `cargo build -p subduction_cli` first",

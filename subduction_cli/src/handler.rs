@@ -18,6 +18,7 @@ use crate::{
 };
 use future_form::Sendable;
 use futures::future::BoxFuture;
+use keyhive_core::listener::no_listener::NoListener;
 use sedimentree_core::depth::CountLeadingZeroBytes;
 use subduction_core::{
     authenticated::Authenticated,
@@ -44,11 +45,16 @@ pub(crate) type CliEphemeralHandler =
     EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock, TokioSpawn>;
 
 /// The concrete keyhive protocol type for the CLI server.
+///
+/// [`NoListener`]: the CLI queries keyhive on demand for authorization
+/// ([`CliKeyhivePolicyHandle`](crate::policy::CliKeyhivePolicyHandle)) and has
+/// nothing to do with membership *notifications*.
 pub(crate) type CliKeyhiveProtocol =
-    Arc<SendableRuntimeProtocol<CliConnKeyhiveAdapter, FsKeyhiveStorage>>;
+    Arc<SendableRuntimeProtocol<NoListener, CliConnKeyhiveAdapter, FsKeyhiveStorage>>;
 
 /// The concrete keyhive handler type for the CLI server.
 pub(crate) type CliKeyhiveHandler = SendableKeyhiveHandler<
+    NoListener,
     CliConnKeyhiveAdapter,
     FsKeyhiveStorage,
     CliConn,

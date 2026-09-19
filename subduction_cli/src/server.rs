@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use dupe::Dupe;
 use eyre::Result;
 use future_form::Sendable;
 use iroh::{EndpointAddr, endpoint::presets};
@@ -51,6 +52,7 @@ use subduction_ephemeral::{
     policy::OpenEphemeralPolicy,
 };
 
+use keyhive_core::listener::no_listener::NoListener;
 use subduction_keyhive::{connection::KeyhiveConnection, runtime::init_sendable_keyhive};
 
 use crate::{
@@ -303,11 +305,16 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
     tracing::info!(root = ?keyhive_root, "Initializing keyhive storage");
     let fs_keyhive_storage = FsKeyhiveStorage::new(keyhive_root)?;
 
-    let (keyhive_instance, kh_peer_id, contact_card) = init_sendable_keyhive(keyhive_signer)
-        .await
-        .map_err(|e| eyre::eyre!(e))?;
+    let (keyhive_instance, kh_peer_id, contact_card) =
+        init_sendable_keyhive(keyhive_signer, NoListener)
+            .await
+            .map_err(|e| eyre::eyre!(e))?;
 
-    let shared_keyhive = Arc::new(async_lock::Mutex::new(keyhive_instance));
+    // The protocol holds one shared handle to the keyhive; the policy handle
+    // keeps its own `Mutex`-guarded clone of the same instance (see
+    // `CliKeyhivePolicyHandle`). Both clones share state.
+    let shared_keyhive = Arc::new(keyhive_instance.dupe());
+    let policy_keyhive = Arc::new(async_lock::Mutex::new(keyhive_instance));
 
     let keyhive_protocol: CliKeyhiveProtocol = Arc::new(subduction_keyhive::KeyhiveProtocol::new(
         Arc::clone(&shared_keyhive),
@@ -321,7 +328,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
     }
 
     // Keyhive-backed authorization.
-    let storage_policy = Arc::new(CliKeyhivePolicyHandle::new(Arc::clone(&shared_keyhive)));
+    let storage_policy = Arc::new(CliKeyhivePolicyHandle::new(policy_keyhive));
 
     // Periodic keyhive cache refresh.
     if args.keyhive_cache_refresh {
@@ -1147,7 +1154,15 @@ async fn accept_loop<H: CliWireHandler>(
 }
 
 /// Handle a WebSocket connection: upgrade, handshake, add connection.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+// `result_large_err`: `accept_hdr_async_with_config`'s `NoCallback`-style hook
+// signature fixes the error type to `hyper::Response<Option<String>>` (136 B).
+// The closure below only ever returns `Ok`; the type is the dependency's, not
+// ours, so there is nothing here to box or narrow.
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::result_large_err
+)]
 async fn handle_websocket<H: CliWireHandler>(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
