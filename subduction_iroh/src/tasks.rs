@@ -245,7 +245,10 @@ mod tests {
 
         let code: u64 = kind.close_code().into();
         assert_eq!(code, 1009);
-        assert!(!kind.close_reason().is_empty());
+        assert!(
+            !kind.close_reason().is_empty(),
+            "over-capacity closes need a reason"
+        );
     }
 
     /// Peer-driven stream terminations (reset, already-closed) are benign

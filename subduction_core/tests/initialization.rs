@@ -7,7 +7,7 @@ async fn test_new_has_empty_sedimentrees() {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
     let ids = subduction.sedimentree_ids().await;
-    assert!(ids.is_empty());
+    assert!(ids.is_empty(), "a fresh subduction has no sedimentrees");
 }
 
 #[tokio::test]

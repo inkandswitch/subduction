@@ -78,10 +78,7 @@ impl WasmCommitId {
         }
 
         let mut arr = [0u8; 32];
-        for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
-            let &[hi_byte, lo_byte] = chunk else {
-                return Err(WasmInvalidCommitId::InvalidHex);
-            };
+        for (i, &[hi_byte, lo_byte]) in s.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let hi = hex_nibble(hi_byte).ok_or(WasmInvalidCommitId::InvalidHex)?;
             let lo = hex_nibble(lo_byte).ok_or(WasmInvalidCommitId::InvalidHex)?;
             if let Some(slot) = arr.get_mut(i) {

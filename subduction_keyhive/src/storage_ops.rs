@@ -292,6 +292,10 @@ where
 /// secret half of the key it publishes, as ONE content-addressed durable
 /// record. The record is atomic — op and secret are never separated by a
 /// crash — and idempotent under replay (deduped by content hash).
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the record cannot be encoded or persisted.
 pub async fn save_local_prekey_change<S, Async>(
     storage: &S,
     op: &KeyOp,
@@ -330,6 +334,10 @@ where
 }
 
 /// Load all local-only CGKA private-key deltas.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the stored secrets cannot be loaded or decoded.
 pub async fn load_local_cgka_secrets<S, Async>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, LocalCgkaSecret)>, StorageError>
@@ -342,13 +350,18 @@ where
         .into_iter()
         .filter_map(|(hash, material)| match material {
             LocalKeyMaterial::Cgka(secret) => Some((hash, secret)),
-            LocalKeyMaterial::Prekey(_) => None,
-            LocalKeyMaterial::PrekeyChange { .. } => None,
+            // Only CGKA deltas are wanted; the other record kinds exist for
+            // `load_local_prekey_secrets` and `load_local_prekey_changes`.
+            LocalKeyMaterial::Prekey(_) | LocalKeyMaterial::PrekeyChange { .. } => None,
         })
         .collect())
 }
 
 /// Load all local-only prekey private-key deltas.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the stored secrets cannot be loaded or decoded.
 pub async fn load_local_prekey_secrets<S, Async>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, LocalPrekeySecret)>, StorageError>
@@ -360,14 +373,20 @@ where
         .await?
         .into_iter()
         .filter_map(|(hash, material)| match material {
-            LocalKeyMaterial::Cgka(_) => None,
             LocalKeyMaterial::Prekey(secret) => Some((hash, secret)),
-            LocalKeyMaterial::PrekeyChange { .. } => None,
+            // Only bare prekey secrets are wanted; the other record kinds
+            // exist for `load_local_cgka_secrets` and
+            // `load_local_prekey_changes`.
+            LocalKeyMaterial::Cgka(_) | LocalKeyMaterial::PrekeyChange { .. } => None,
         })
         .collect())
 }
     /// Load all combined prekey-state change records (signed membership op +
     /// secret half) in insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if the stored records cannot be loaded or decoded.
     pub async fn load_local_prekey_changes<S, Async>(
         storage: &S,
     ) -> Result<Vec<(StorageHash, KeyOp, ShareSecretKey)>, StorageError>
@@ -379,9 +398,11 @@ where
             .await?
             .into_iter()
             .filter_map(|(hash, material)| match material {
-                LocalKeyMaterial::Cgka(_) => None,
-                LocalKeyMaterial::Prekey(_) => None,
                 LocalKeyMaterial::PrekeyChange { op, secret } => Some((hash, op, secret)),
+                // Only combined prekey-change records are wanted; the other
+                // record kinds exist for `load_local_cgka_secrets` and
+                // `load_local_prekey_secrets`.
+                LocalKeyMaterial::Cgka(_) | LocalKeyMaterial::Prekey(_) => None,
             })
             .collect())
     }
@@ -417,6 +438,10 @@ where
 
 /// A variant of [`ingest_from_storage`] that indicates if there were events
 /// that have missing deps and are thus pending.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if loading, deserialization, or archive ingestion fails.
 pub async fn ingest_from_storage_with_pending_progress<Async, Signer, T, P, C, L, R, S>(
     keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
     storage: &S,
@@ -497,6 +522,67 @@ where
     );
 
     Ok((pending, resolved_pending))
+}
+
+/// Replay one persisted local-secret record into the keyhive during
+/// compaction, exactly as it was saved: each `PrekeyChange` record carries its
+/// own op and secret, so it replays as its own single-entry delta.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the record cannot be decoded or the keyhive
+/// rejects it.
+async fn replay_local_secret<Async, Signer, T, P, C, L, R>(
+    keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
+    bytes: &[u8],
+) -> Result<(), StorageError>
+where
+    Signer: AsyncSigner<Async> + Clone,
+    T: ContentRef + serde::de::DeserializeOwned,
+    P: for<'de> serde::Deserialize<'de>,
+    C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
+    L: MembershipListener<Async, Signer, T>,
+    R: rand::CryptoRng + rand::RngCore,
+    Async: FutureForm,
+{
+    match decode_local_key_material(bytes)? {
+        LocalKeyMaterial::Cgka(secret) => {
+            keyhive
+                .import_local_cgka_secret(secret)
+                .await
+                .map_err(|error| {
+                    StorageError::Load(alloc::format!(
+                        "local CGKA secret ingestion failed: {error:?}"
+                    ))
+                })
+        }
+        LocalKeyMaterial::Prekey(secret) => keyhive
+            .import_local_prekey_secret(secret)
+            .await
+            .map_err(|error| {
+                StorageError::Load(alloc::format!(
+                    "local prekey secret ingestion failed: {error:?}"
+                ))
+            }),
+        LocalKeyMaterial::PrekeyChange { op, secret } => {
+            let delta = PrekeyStateDelta {
+                magic: PREKEY_STATE_DELTA_MAGIC,
+                format_version: PREKEY_STATE_FORMAT_VERSION,
+                prekey_pairs: BTreeMap::from_iter([(secret.share_key(), secret)]),
+                ops: Vec::from([op]),
+            };
+            let encoded = bincode_serialize(&delta)?;
+            keyhive
+                .import_prekey_state(&encoded)
+                .await
+                .map_err(|error| {
+                    StorageError::Load(alloc::format!(
+                        "local prekey state replay failed: {error:?}"
+                    ))
+                })?;
+            Ok(())
+        }
+    }
 }
 
 /// Compact keyhive storage by consolidating archives and removing processed events.
@@ -580,44 +666,7 @@ where
     let pending = keyhive.ingest_unsorted_static_events(events).await;
 
     for (_, bytes) in &raw_local_secrets {
-        match decode_local_key_material(bytes)? {
-            LocalKeyMaterial::Cgka(secret) => keyhive
-                .import_local_cgka_secret(secret)
-                .await
-                .map_err(|error| {
-                    StorageError::Load(alloc::format!(
-                        "local CGKA secret ingestion failed: {error:?}"
-                    ))
-                })?,
-            LocalKeyMaterial::Prekey(secret) => keyhive
-                .import_local_prekey_secret(secret)
-                .await
-                .map_err(|error| {
-                    StorageError::Load(alloc::format!(
-                        "local prekey secret ingestion failed: {error:?}"
-                    ))
-                })?,
-            LocalKeyMaterial::PrekeyChange { op, secret } => {
-                let delta = PrekeyStateDelta {
-                    magic: PREKEY_STATE_DELTA_MAGIC,
-                    format_version: PREKEY_STATE_FORMAT_VERSION,
-                    prekey_pairs: alloc::collections::BTreeMap::from_iter([(
-                        secret.share_key(),
-                        secret,
-                    )]),
-                    ops: alloc::vec::Vec::from([op]),
-                };
-                let encoded = bincode_serialize(&delta)?;
-                keyhive
-                    .import_prekey_state(&encoded)
-                    .await
-                    .map_err(|error| {
-                        StorageError::Load(alloc::format!(
-                            "local prekey state replay failed: {error:?}"
-                        ))
-                    })?;
-            }
-        }
+        replay_local_secret(keyhive, bytes).await?;
     }
 
     // Get hashes of pending events
@@ -755,7 +804,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(archives_before.len(), 2);
-        assert!(!events_before.is_empty());
+        assert!(
+            !events_before.is_empty(),
+            "compaction starts from stored events"
+        );
 
         // Compact
         let consolidated_id = StorageHash::new([10u8; 32]);

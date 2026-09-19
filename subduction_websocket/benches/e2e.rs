@@ -1129,8 +1129,14 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                                 let c = client.inner();
                                 handles.push(tokio::spawn(async move {
                                     assert_sync(
-                                        c.sync_with_peer(&server_peer_id, sed_id, true, TIMEOUT)
-                                            .await,
+                                        c.sync_with_peer(
+                                            &server_peer_id,
+                                            sed_id,
+                                            true,
+                                            TIMEOUT,
+                                            None,
+                                        )
+                                        .await,
                                     );
                                 }));
                             }
@@ -1197,8 +1203,14 @@ fn bench_concurrent_clients_fs(c: &mut Criterion) {
                                 let c = client.inner();
                                 handles.push(tokio::spawn(async move {
                                     assert_sync(
-                                        c.sync_with_peer(&server_peer_id, sed_id, true, TIMEOUT)
-                                            .await,
+                                        c.sync_with_peer(
+                                            &server_peer_id,
+                                            sed_id,
+                                            true,
+                                            TIMEOUT,
+                                            None,
+                                        )
+                                        .await,
                                     );
                                 }));
                             }

@@ -307,7 +307,7 @@ fn missing_fragment_internal_bridge_converges_by_spilling_residue() {
 
     assert_eq!(to_compact.len(), 1);
     assert_eq!(to_compact[0].head(), root.head());
-    assert!(to_incomplete.is_empty());
+    assert!(to_incomplete.is_empty(), "compact has nothing to send back");
     for commit in to_compact {
         compact.add_commit(commit);
     }

@@ -62,7 +62,7 @@ impl SessionId {
 
         let mut bytes = [0u8; 16];
         #[allow(clippy::indexing_slicing)]
-        for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+        for (i, chunk) in s.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let hi = hex_digit(chunk[0])?;
             let lo = hex_digit(chunk[1])?;
             bytes[i] = (hi << 4) | lo;

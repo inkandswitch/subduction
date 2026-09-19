@@ -1,5 +1,7 @@
 //! Regression coverage for duplicate Keyhive sync responses.
 #![cfg(feature = "test-utils")]
+// Test target: unwraps are the failure mode for this scaffolding.
+#![allow(clippy::unwrap_used)]
 
 use subduction_keyhive::{
     SyncStatus,

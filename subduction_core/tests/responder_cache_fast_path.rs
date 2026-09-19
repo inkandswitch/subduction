@@ -338,6 +338,7 @@ async fn responder_serves_resident_tree_without_bulk_scans() -> TestResult {
             sed_id,
             false,
             CallTimeout::TimeoutMillis(2_000),
+            None,
         )
         .await?;
     assert!(synced, "sync should reach Bob");
@@ -418,6 +419,7 @@ async fn cold_clone_of_resident_tree_uses_bulk_scan() -> TestResult {
             sed_id,
             false,
             CallTimeout::TimeoutMillis(5_000),
+            None,
         )
         .await?;
     assert!(synced, "sync should reach Bob");
@@ -493,6 +495,7 @@ async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
             sed_id,
             false,
             CallTimeout::TimeoutMillis(2_000),
+            None,
         )
         .await?;
     assert!(synced, "first sync should reach Bob");
@@ -517,6 +520,7 @@ async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
             sed_id,
             false,
             CallTimeout::TimeoutMillis(2_000),
+            None,
         )
         .await?;
     assert!(synced, "second sync should reach Bob");
@@ -586,6 +590,7 @@ async fn cache_ahead_of_storage_omits_phantom_items() -> TestResult {
             sed_id,
             false,
             CallTimeout::TimeoutMillis(2_000),
+            None,
         )
         .await?;
     assert!(synced, "sync must succeed despite the phantom item");
@@ -666,6 +671,7 @@ async fn moderate_diff_on_large_tree_stays_on_point_reads() -> TestResult {
             sed_id,
             false,
             CallTimeout::TimeoutMillis(5_000),
+            None,
         )
         .await?;
     assert!(synced, "sync should reach Bob");

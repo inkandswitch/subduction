@@ -27,7 +27,7 @@ use futures::future::Aborted;
 use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
-        message::{SyncMessage, SyncResult},
+        message::SyncMessage,
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     handler::sync::SyncHandler,
@@ -41,6 +41,7 @@ use subduction_core::{
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     depth::CountLeadingZeroBytes,
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
@@ -170,7 +171,7 @@ async fn child_boot_commit_with_parent_wire_id_is_not_admitted_into_parent_sed()
     let parent_commits = node.get_commits(parent_sed).await;
     let parent_heads: BTreeSet<_> = parent_commits
         .as_ref()
-        .map(|cs| cs.iter().map(|c| c.head()).collect())
+        .map(|cs| cs.iter().map(LooseCommit::head).collect())
         .unwrap_or_default();
 
     assert!(
@@ -212,7 +213,7 @@ async fn child_boot_fragment_with_parent_wire_id_is_not_admitted_into_parent_sed
     };
     let blob = Blob::new(frag_head.to_vec());
     let blob_meta = BlobMeta::new(&blob);
-    let fragment = sedimentree_core::fragment::Fragment::new(
+    let fragment = Fragment::new(
         child_sed,
         sedimentree_core::loose_commit::id::CommitId::new(frag_head),
         BTreeSet::new(),
@@ -235,7 +236,7 @@ async fn child_boot_fragment_with_parent_wire_id_is_not_admitted_into_parent_sed
     let parent_fragments = node.get_fragments(parent_sed).await;
     let parent_frag_heads: BTreeSet<_> = parent_fragments
         .as_ref()
-        .map(|fs| fs.iter().map(|f| f.head()).collect())
+        .map(|fs| fs.iter().map(Fragment::head).collect())
         .unwrap_or_default();
 
     assert!(

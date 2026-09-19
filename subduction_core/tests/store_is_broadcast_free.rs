@@ -167,7 +167,7 @@ async fn store_built_batch_does_not_broadcast() -> TestResult {
     // Positive control: an explicit sync from B pulls the data, confirming
     // the link works and the negative assertion above wasn't vacuous.
     let a_peer = PeerId::from(a_signer.verifying_key());
-    b.sync_with_peer(&a_peer, sed_id, true, SYNC_TIMEOUT)
+    b.sync_with_peer(&a_peer, sed_id, true, SYNC_TIMEOUT, None)
         .await?;
 
     let converged =

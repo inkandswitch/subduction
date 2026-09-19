@@ -24,15 +24,31 @@ use subduction_crypto::{nonce::Nonce, signer::Signer};
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 /// Error type for client connection.
+///
+/// Both variants are boxed: `tungstenite::Error` and
+/// `AuthenticateError<WebSocketHandshakeError>` are each 136 bytes, and the
+/// variants are only built from `?`/`From` below.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientConnectError {
     /// WebSocket connection error.
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tungstenite::Error),
+    WebSocket(Box<tungstenite::Error>),
 
     /// Handshake failed.
     #[error("handshake error: {0}")]
-    Handshake(#[from] AuthenticateError<WebSocketHandshakeError>),
+    Handshake(Box<AuthenticateError<WebSocketHandshakeError>>),
+}
+
+impl From<tungstenite::Error> for ClientConnectError {
+    fn from(error: tungstenite::Error) -> Self {
+        Self::WebSocket(Box::new(error))
+    }
+}
+
+impl From<AuthenticateError<WebSocketHandshakeError>> for ClientConnectError {
+    fn from(error: AuthenticateError<WebSocketHandshakeError>) -> Self {
+        Self::Handshake(Box::new(error))
+    }
 }
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
@@ -355,7 +371,7 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
             ClientConnectError::WebSocket(_) => true,
 
             // Handshake errors depend on the specific type
-            ClientConnectError::Handshake(auth_err) => match auth_err {
+            ClientConnectError::Handshake(auth_err) => match &**auth_err {
                 // Transport errors - check the underlying WebSocket error
                 AuthenticateError::Transport(ws_err) => match ws_err {
                     WebSocketHandshakeError::WebSocket(_)

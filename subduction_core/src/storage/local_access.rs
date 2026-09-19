@@ -47,7 +47,6 @@ impl<Store> LocalStorageAccess<Store> {
     // ==================== Hydration Operations ====================
 
     /// Load all sedimentree IDs from storage.
-    #[must_use]
     pub fn load_all_sedimentree_ids<Async: FutureForm>(
         &self,
     ) -> Async::Future<'_, Result<Set<SedimentreeId>, Store::Error>>
@@ -58,7 +57,6 @@ impl<Store> LocalStorageAccess<Store> {
     }
 
     /// Whether a sedimentree ID is registered (single-key existence check).
-    #[must_use]
     pub fn contains_sedimentree_id<Async: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
@@ -72,7 +70,6 @@ impl<Store> LocalStorageAccess<Store> {
     /// Load all loose commits with their blobs for a sedimentree.
     ///
     /// Used for hydration at startup.
-    #[must_use]
     pub fn load_loose_commits<Async: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
@@ -86,7 +83,6 @@ impl<Store> LocalStorageAccess<Store> {
     /// Load all loose-commit payloads (no blobs) for a sedimentree — the
     /// metadata-only hydration read. See
     /// [`Storage::load_loose_commit_metas`].
-    #[must_use]
     pub fn load_loose_commit_metas<Async: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
@@ -100,7 +96,6 @@ impl<Store> LocalStorageAccess<Store> {
     /// Load all fragments with their blobs for a sedimentree.
     ///
     /// Used for hydration at startup.
-    #[must_use]
     pub fn load_fragments<Async: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
@@ -113,7 +108,6 @@ impl<Store> LocalStorageAccess<Store> {
 
     /// Load all fragment payloads (no blobs) for a sedimentree — the
     /// metadata-only hydration read. See [`Storage::load_fragment_metas`].
-    #[must_use]
     pub fn load_fragment_metas<Async: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,

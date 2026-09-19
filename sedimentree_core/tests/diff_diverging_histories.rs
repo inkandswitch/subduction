@@ -53,8 +53,14 @@ fn identical_trees_have_empty_diff() {
     let summary = remote.fingerprint_summarize(&SEED);
     let diff = local.diff_remote_fingerprints(&summary);
 
-    assert!(diff.local_only_commits.is_empty());
-    assert!(diff.remote_only_commit_fingerprints.is_empty());
+    assert!(
+        diff.local_only_commits.is_empty(),
+        "identical trees have nothing local-only"
+    );
+    assert!(
+        diff.remote_only_commit_fingerprints.is_empty(),
+        "identical trees have nothing remote-only"
+    );
 }
 
 #[test]
@@ -78,7 +84,10 @@ fn full_local_empty_remote_sends_all() {
     let diff = local.diff_remote_fingerprints(&summary);
 
     assert_eq!(diff.local_only_commits.len(), 2);
-    assert!(diff.remote_only_commit_fingerprints.is_empty());
+    assert!(
+        diff.remote_only_commit_fingerprints.is_empty(),
+        "an empty remote has nothing to request"
+    );
 }
 
 /// Disjoint sets produce `local_only.len() == |local|` and
@@ -163,7 +172,10 @@ fn remote_is_prefix_of_local() {
     let sent_ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
     assert!(sent_ids.contains(&head(3)) && sent_ids.contains(&head(4)));
     assert!(!sent_ids.contains(&head(1)) && !sent_ids.contains(&head(2)));
-    assert!(diff.remote_only_commit_fingerprints.is_empty());
+    assert!(
+        diff.remote_only_commit_fingerprints.is_empty(),
+        "the remote has nothing the local lacks"
+    );
 }
 
 #[test]
@@ -179,7 +191,10 @@ fn local_is_prefix_of_remote() {
     let summary = remote.fingerprint_summarize(&SEED);
     let diff = local.diff_remote_fingerprints(&summary);
 
-    assert!(diff.local_only_commits.is_empty());
+    assert!(
+        diff.local_only_commits.is_empty(),
+        "a local prefix has nothing local-only"
+    );
     assert_eq!(diff.remote_only_commit_fingerprints.len(), 2);
 }
 

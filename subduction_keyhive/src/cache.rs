@@ -199,18 +199,18 @@ impl PeriodicEventCache {
                 .iter()
                 .filter(|peer| !peers.contains(*peer))
                 .map(|peer| match self.agent_hashes.get(peer) {
-                    Some(visible) => format!("{}:visible={}", peer, visible.len()),
-                    None => format!("{}:visible=none", peer),
+                    Some(visible) => format!("{peer}:visible={}", visible.len()),
+                    None => format!("{peer}:visible=none"),
                 })
                 .collect::<Vec<_>>();
             let unattributable_names = unattributable
                 .iter()
-                .map(|peer| peer.to_string())
+                .map(ToString::to_string)
                 .collect::<Vec<_>>();
             tracing::debug!(
                 changed = changed.len(),
                 public_hit,
-                local_visible = local_visible.map_or(0, |visible| visible.len()),
+                local_visible = local_visible.map_or(0, BTreeSet::len),
                 selected = peers.len(),
                 unclassified = unclassified.len(),
                 locally_changed,

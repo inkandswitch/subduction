@@ -140,13 +140,13 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`tungstenite::Error`] if there is a problem binding the socket.
+    /// Returns [`std::io::Error`] if there is a problem binding the socket.
     pub async fn new(
         address: SocketAddr,
         handshake_max_drift: Duration,
         max_message_size: usize,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Self, std::io::Error> {
         Self::new_with_keepalive(
             address,
             handshake_max_drift,
@@ -163,7 +163,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`tungstenite::Error`] if binding the socket fails.
+    /// Returns [`std::io::Error`] if binding the socket fails.
     pub async fn new_with_keepalive(
         address: SocketAddr,
         handshake_max_drift: Duration,
@@ -171,7 +171,7 @@ where
         keepalive: KeepAlive,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
         tasks: TaskTracker,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Self, std::io::Error> {
         Self::new_with_tracker_and_keepalive(
             address,
             handshake_max_drift,
@@ -194,14 +194,14 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`tungstenite::Error`] if binding the socket fails.
+    /// Returns [`std::io::Error`] if binding the socket fails.
     pub async fn new_with_tracker(
         address: SocketAddr,
         handshake_max_drift: Duration,
         max_message_size: usize,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
         tasks: TaskTracker,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Self, std::io::Error> {
         Self::new_with_tracker_and_keepalive(
             address,
             handshake_max_drift,
@@ -218,7 +218,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`tungstenite::Error`] if binding the socket fails.
+    /// Returns [`std::io::Error`] if binding the socket fails.
     #[allow(clippy::too_many_lines)]
     pub async fn new_with_tracker_and_keepalive(
         address: SocketAddr,
@@ -227,7 +227,7 @@ where
         keepalive: KeepAlive,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
         tasks: TaskTracker,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Self, std::io::Error> {
         let server_peer_id = subduction.peer_id();
         tracing::info!(
             "Starting WebSocket server on {} as {}",
@@ -432,7 +432,7 @@ where
         policy: P,
         nonce_cache: NonceCache,
         depth_metric: M,
-    ) -> Result<Self, tungstenite::Error>
+    ) -> Result<Self, std::io::Error>
     where
         M: Clone,
         S: core::fmt::Debug,
@@ -472,7 +472,7 @@ where
         policy: P,
         nonce_cache: NonceCache,
         depth_metric: M,
-    ) -> Result<Self, tungstenite::Error>
+    ) -> Result<Self, std::io::Error>
     where
         M: Clone,
         S: core::fmt::Debug,
@@ -624,7 +624,7 @@ where
         ws_config.max_frame_size = Some(self.max_message_size);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
-            .map_err(TryConnectError::WebSocket)?;
+            .map_err(TryConnectError::from)?;
 
         // Perform handshake
         let audience = Audience::known(expected_peer_id);
@@ -757,7 +757,7 @@ where
         ws_config.max_frame_size = Some(self.max_message_size);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
-            .map_err(TryConnectError::WebSocket)?;
+            .map_err(TryConnectError::from)?;
 
         // Perform handshake with discovery audience
         let audience = Audience::discover(service_name.as_bytes());
@@ -894,17 +894,37 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
 >;
 
 /// Error type for connecting to a peer.
+///
+/// The `WebSocket` and `Handshake` variants are boxed: `tungstenite::Error`
+/// and `AuthenticateError<WebSocketHandshakeError>` are each 136 bytes, so
+/// leaving them inline would make every `Result<_, TryConnectError<_>>`
+/// large. Both are built through the `From` impls below, which the call
+/// sites reach via `map_err(TryConnectError::from)` / `?`.
 #[derive(Debug, thiserror::Error)]
 pub enum TryConnectError<E: core::error::Error> {
     /// WebSocket connection error.
     #[error("WebSocket connection error: {0}")]
-    WebSocket(#[from] tungstenite::Error),
+    WebSocket(Box<tungstenite::Error>),
 
     /// Handshake failed.
     #[error("handshake error: {0}")]
-    Handshake(#[from] AuthenticateError<WebSocketHandshakeError>),
+    Handshake(Box<AuthenticateError<WebSocketHandshakeError>>),
 
     /// Adding the connection failed.
     #[error("add connection error: {0}")]
     AddConnection(#[from] AddConnectionError<E>),
+}
+
+impl<E: core::error::Error> From<tungstenite::Error> for TryConnectError<E> {
+    fn from(error: tungstenite::Error) -> Self {
+        Self::WebSocket(Box::new(error))
+    }
+}
+
+impl<E: core::error::Error> From<AuthenticateError<WebSocketHandshakeError>>
+    for TryConnectError<E>
+{
+    fn from(error: AuthenticateError<WebSocketHandshakeError>) -> Self {
+        Self::Handshake(Box::new(error))
+    }
 }

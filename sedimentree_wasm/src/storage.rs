@@ -257,8 +257,7 @@ impl Storage<Local> for JsStorage {
             // back to enumerating all ids — correct, just O(total trees).
             let has_method =
                 js_sys::Reflect::get(self.as_ref(), &JsValue::from_str("containsSedimentreeId"))
-                    .map(|m| m.is_function())
-                    .unwrap_or(false);
+                    .is_ok_and(|m| m.is_function());
 
             if has_method {
                 let js_promise = self

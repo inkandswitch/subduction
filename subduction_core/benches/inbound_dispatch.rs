@@ -286,7 +286,7 @@ fn one_cold_start(
                     .map(|doc| {
                         let a = Arc::clone(&a);
                         async move {
-                            a.sync_with_peer(&b_peer, doc_id(doc), true, SYNC_TIMEOUT)
+                            a.sync_with_peer(&b_peer, doc_id(doc), true, SYNC_TIMEOUT, None)
                                 .await
                         }
                     })

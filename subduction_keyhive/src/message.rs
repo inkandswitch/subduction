@@ -299,7 +299,7 @@ mod wire_format_tests {
         KeyhivePeerId::from_bytes([byte; 32])
     }
 
-    fn request_id(nonce: u64) -> RequestId {
+    const fn request_id(nonce: u64) -> RequestId {
         RequestId {
             requestor: peer(1),
             nonce,

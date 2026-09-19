@@ -509,7 +509,7 @@ async fn many_independent_sync_with_peer_calls_are_concurrent() -> TestResult {
     // what JS Promise.all would do from the Wasm bindings.
     let mut sync_futures: futures::stream::FuturesUnordered<_> = sed_ids
         .iter()
-        .map(|&sed_id| alice.sync_with_peer(&bob_peer_id, sed_id, true, sync_timeout))
+        .map(|&sed_id| alice.sync_with_peer(&bob_peer_id, sed_id, true, sync_timeout, None))
         .collect();
 
     let mut success_count = 0;

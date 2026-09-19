@@ -45,6 +45,16 @@ pub enum RunError {
     ChanSend(Box<async_channel::SendError<Vec<u8>>>),
 
     /// WebSocket error.
+    ///
+    /// Boxed: `tungstenite::Error` is 136 bytes and this variant is only
+    /// built from `?`/`From` below, so the indirection costs nothing on the
+    /// error path but keeps every `Result<_, RunError>` small.
     #[error(transparent)]
-    WebSocket(#[from] tungstenite::Error),
+    WebSocket(Box<tungstenite::Error>),
+}
+
+impl From<tungstenite::Error> for RunError {
+    fn from(error: tungstenite::Error) -> Self {
+        Self::WebSocket(Box::new(error))
+    }
 }

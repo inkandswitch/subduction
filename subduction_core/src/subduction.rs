@@ -99,7 +99,8 @@ use core::{marker::PhantomData, time::Duration};
 use dispatch_completion::{DispatchCompletion, DispatchOutcome};
 
 use error::{
-    AddConnectionError, IoError, ListenError, SendRequestedDataError, Unauthorized, WriteError,
+    AddConnectionError, IoError, ListenError, ReconnectError, SendRequestedDataError, Unauthorized,
+    WriteError,
 };
 use fragment_batch_item::FragmentBatchItem;
 use future_form::{FutureForm, Local, Sendable, future_form};
@@ -522,13 +523,14 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if the manager channel is closed. On failure, any
-    /// registration performed by this call is rolled back.
+    /// Returns [`ReconnectError::SendToClosedChannel`] if the manager
+    /// channel is closed. On failure, any registration performed by this
+    /// call is rolled back.
     pub async fn on_reconnect_success(
         &self,
         conn_id: ConnectionId,
         conn: Authenticated<Conn, Async>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), ReconnectError> {
         tracing::info!(
             %conn_id,
             peer_id = %conn.peer_id(),
@@ -555,7 +557,7 @@ where
             if inserted {
                 self.remove_connection(&conn).await;
             }
-            return Err(());
+            return Err(ReconnectError::SendToClosedChannel);
         }
 
         Ok(())
@@ -612,7 +614,6 @@ where
     /// # Errors
     ///
     /// * Returns `Conn::DisconnectionError` if disconnect fails or it occurs ungracefully.
-    #[expect(clippy::missing_panics_doc)]
     pub async fn disconnect(
         &self,
         conn: &Authenticated<Conn, Async>,
@@ -637,12 +638,8 @@ where
                 RemoveResult::Removed(remaining) => {
                     connections.insert(peer_id, remaining);
                     let multiplexer = self
-                        .multiplexers
-                        .lock()
-                        .await
-                        .get_mut(&peer_id)
-                        .expect("peer multiplexers must accompany connections")
-                        .remove(connection_index);
+                        .detach_one_mux_locked(&mut connections, &peer_id, connection_index)
+                        .await;
                     (alloc::vec![multiplexer], false)
                 }
                 RemoveResult::WasLast(_) => (
@@ -889,12 +886,8 @@ where
                 RemoveResult::Removed(remaining) => {
                     connections.insert(peer_id, remaining);
                     let multiplexer = self
-                        .multiplexers
-                        .lock()
-                        .await
-                        .get_mut(&peer_id)
-                        .expect("peer multiplexers must accompany connections")
-                        .remove(connection_index);
+                        .detach_one_mux_locked(&mut connections, &peer_id, connection_index)
+                        .await;
                     (alloc::vec![multiplexer], false)
                 }
                 RemoveResult::WasLast(_) => (
@@ -912,7 +905,7 @@ where
             Self::cancel_detached_muxes(detached_muxes).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
-        };
+        }
         self.refresh_connection_gauge().await;
         Some(was_last)
     }
@@ -947,6 +940,32 @@ where
             .await
             .remove(peer_id)
             .unwrap_or_default()
+    }
+
+    /// Remove and return a single connection's multiplexer from a peer
+    /// that keeps other connections.
+    ///
+    /// Takes the held `connections` guard by `&mut` for the same reason
+    /// as [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked):
+    /// the mux removal must happen inside the caller's `connections`
+    /// critical section, in the `connections → multiplexers` lock order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the peer has no multiplexers: connections and their
+    /// multiplexers are inserted and removed together, so a tracked
+    /// connection index always names a mux.
+    async fn detach_one_mux_locked(
+        &self,
+        _connections_guard: &mut Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>,
+        peer_id: &PeerId,
+        index: usize,
+    ) -> Arc<Multiplexer> {
+        let mut muxes = self.multiplexers.lock().await;
+        let Some(peer_muxes) = muxes.get_mut(peer_id) else {
+            unreachable!("peer multiplexers must accompany connections")
+        };
+        peer_muxes.remove(index)
     }
 
     /// Cancel the pending calls on a set of detached multiplexers.
@@ -4231,6 +4250,9 @@ where
 }
 
 #[cfg(test)]
+// Test-only module (`cfg(test)`), never shipped: expects are the failure
+// mode here.
+#[allow(clippy::expect_used)]
 mod tests {
     use super::{
         ingest::tests::{GatedSaveStorage, GatedWrite},

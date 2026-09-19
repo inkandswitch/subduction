@@ -171,7 +171,9 @@ async fn store_commit_signals_fragment_requested_on_boundary() -> TestResult {
         .store_commit(sed_id, head, BTreeSet::new(), make_blob(1))
         .await?;
 
-    let fragment_requested = requested.expect("a boundary commit must request a fragment (Some)");
+    let (fragment_requested, _frontier) = requested;
+    let fragment_requested =
+        fragment_requested.expect("a boundary commit must request a fragment (Some)");
     assert_eq!(
         fragment_requested.head(),
         head,
@@ -195,7 +197,7 @@ async fn store_commit_no_fragment_requested_off_boundary() -> TestResult {
         .await?;
 
     assert!(
-        requested.is_none(),
+        requested.0.is_none(),
         "a non-boundary commit must not request a fragment (None)"
     );
 

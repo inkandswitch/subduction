@@ -60,7 +60,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
     /// 2. The blob content matches the claimed metadata
     ///
     /// The commit and blob are stored atomically.
-    #[must_use]
     pub fn save_commit(
         &self,
         verified: VerifiedMeta<LooseCommit>,
@@ -78,7 +77,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
     /// 2. The blob content matches the claimed metadata
     ///
     /// The fragment and blob are stored atomically.
-    #[must_use]
     pub fn save_fragment(
         &self,
         verified: VerifiedMeta<Fragment>,
@@ -91,7 +89,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
     /// Save a batch of commits and fragments with their blobs.
     ///
     /// Returns the count of items saved.
-    #[must_use]
     pub fn save_batch(
         &self,
         commits: Vec<VerifiedMeta<LooseCommit>>,
@@ -106,7 +103,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
     /// Register this sedimentree ID as having data stored.
     ///
     /// This is bookkeeping to track which sedimentrees exist.
-    #[must_use]
     pub fn save_sedimentree_id(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.save_sedimentree_id(self.sedimentree_id)
     }

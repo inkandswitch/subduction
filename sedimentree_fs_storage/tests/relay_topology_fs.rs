@@ -233,9 +233,9 @@ async fn fs_relay_two_clients_add_built_batch_converge_via_relay() -> TestResult
     let sed_id = SedimentreeId::new([0xA2; 32]);
 
     let r_peer = PeerId::from(make_signer(20).verifying_key());
-    h.a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+    h.a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT, None)
         .await?;
-    h.b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+    h.b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT, None)
         .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 
@@ -275,9 +275,9 @@ async fn fs_relay_two_clients_rapid_fire_converges() -> TestResult {
     let sed_id = SedimentreeId::new([0xA3; 32]);
 
     let r_peer = PeerId::from(make_signer(20).verifying_key());
-    h.a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+    h.a.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT, None)
         .await?;
-    h.b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT)
+    h.b.sync_with_peer(&r_peer, sed_id, true, SYNC_TIMEOUT, None)
         .await?;
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 

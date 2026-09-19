@@ -181,6 +181,9 @@ mod tests {
     }
 
     #[test]
+    // The rejected-id lists are built one line above; indexing reads the
+    // single element that was just pushed.
+    #[allow(clippy::indexing_slicing)]
     fn session_reports_policy_rejections() {
         use crate::connection::message::RequestId;
         let id = SedimentreeId::new([7; 32]);

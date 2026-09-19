@@ -196,8 +196,14 @@ fn prop_self_diff_is_empty() {
             let tree = Sedimentree::new(vec![], close_ancestry(commits));
             let diff = tree.diff_remote_fingerprints(&tree.fingerprint_summarize(seed));
 
-            assert!(diff.local_only_commits.is_empty());
-            assert!(diff.remote_only_commit_fingerprints.is_empty());
+            assert!(
+                diff.local_only_commits.is_empty(),
+                "own summary has nothing local-only"
+            );
+            assert!(
+                diff.remote_only_commit_fingerprints.is_empty(),
+                "own summary has nothing remote-only"
+            );
         });
 }
 

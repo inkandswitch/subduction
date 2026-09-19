@@ -104,6 +104,19 @@ pub enum AddConnectionError<D> {
     SendToClosedChannel,
 }
 
+/// An error that can occur when registering a reconnected connection.
+///
+/// The connection was already authenticated by the time
+/// [`Subduction::on_reconnect_success`](crate::subduction::Subduction::on_reconnect_success)
+/// runs, so unlike [`AddConnectionError`] there is no policy-rejection
+/// arm here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+pub enum ReconnectError {
+    /// Tried to send a message to a closed channel.
+    #[error("tried to send to closed channel")]
+    SendToClosedChannel,
+}
+
 /// An error that can occur during local write operations.
 #[derive(Debug, Error)]
 pub enum WriteError<

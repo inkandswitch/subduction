@@ -842,7 +842,10 @@ impl WasmSubduction {
             .store_commit(core_id, core_head, core_parents, blob)
             .await?;
 
-        Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
+        // `store_commit` also returns the sedimentree's frontier heads (used by
+        // the native durable-write paths); the JS contract is still only the
+        // optional fragment request.
+        Ok(maybe_fragment_requested.0.map(WasmFragmentRequested::from))
     }
 
     /// Add a commit with its associated blob to the storage, then push it to

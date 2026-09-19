@@ -59,7 +59,7 @@ impl StorageHash {
             return None;
         }
         let mut bytes = [0u8; 32];
-        for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+        for (i, chunk) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let high = char::from(*chunk.first()?).to_digit(16)?;
             let low = char::from(*chunk.get(1)?).to_digit(16)?;
             #[allow(clippy::cast_possible_truncation)] // high and low are both < 16

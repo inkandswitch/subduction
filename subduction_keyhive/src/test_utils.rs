@@ -355,7 +355,7 @@ mod nested_chain_sync_repro {
     //! Repro for the flaky "receiver never learns the document through a
     //! nested group chain" convergence failure observed under load in
     //! townframe's runtime2 tests, plus a no-change-signal variant proving
-    //! cache freshness now derives from Keyhive::state_generation.
+    //! cache freshness now derives from `Keyhive::state_generation`.
 
     use super::*;
     use keyhive_core::principal::agent::Agent;
@@ -465,9 +465,11 @@ mod nested_chain_sync_repro {
     }
 
     /// Raw embedder-side Keyhive mutations with no change signal: cache
-    /// freshness derives from Keyhive::state_generation alone.
+    /// freshness derives from `Keyhive::state_generation` alone.
     #[tokio::test(flavor = "multi_thread")]
     async fn nested_group_chain_propagates_via_sync_rounds() {
-        run_chain().await;
+        // `run_chain`'s future is ~30 KB; box it so the test task does not
+        // carry that frame through every poll.
+        Box::pin(run_chain()).await;
     }
 }

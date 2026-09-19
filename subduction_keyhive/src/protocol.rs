@@ -146,6 +146,10 @@ pub struct VisibilityTargets {
     /// silently dropping them.
     pub unclassified: BTreeSet<EventHash>,
 }
+/// WAL events that lack an admission entry, paired with the serialized
+/// event bytes and the original source attribution.
+pub type UnadmittedWalEvents = Vec<(EventHash, Vec<u8>, Option<KeyhivePeerId>)>;
+
 /// Durable post-ingestion incorporation hook.
 ///
 /// The sink is awaited before the protocol acknowledges the exchange, so the
@@ -177,7 +181,7 @@ pub trait DurableIncorporationSink<Async: future_form::FutureForm>: Send + Sync 
         self: Arc<Self>,
     ) -> <Async as future_form::FutureForm>::Future<
         'static,
-        Result<Vec<(EventHash, Vec<u8>, Option<KeyhivePeerId>)>, StorageError>,
+        Result<UnadmittedWalEvents, StorageError>,
     >;
 }
 
@@ -922,37 +926,14 @@ where
             .filter(|h| !local_events.contains_key(h) && !our_pending_set.contains(h))
             .collect();
         // TEMPORARY instrumentation
-        {
-            let send_prefixes: Vec<alloc::string::String> = found_ops
-                .iter()
-                .map(|bytes| {
-                    let h = crate::storage_ops::hash_event_bytes(bytes).0;
-                    let kind = match bincode_deserialize::<StaticEvent<Vec<u8>>>(bytes) {
-                        Ok(ev) => match &ev {
-                            StaticEvent::Delegated(_) => "deleg",
-                            StaticEvent::Revoked(_) => "revok",
-                            StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => "prek",
-                            StaticEvent::CgkaOperation(_) => "cgka",
-                        },
-                        Err(_) => "unk",
-                    };
-                    alloc::format!("{}:{kind}", Self::short_hash(&h))
-                })
-                .collect();
-            let req_prefixes: Vec<alloc::string::String> =
-                requested.iter().map(|h| Self::short_hash(h)).collect();
-            tracing::warn!(
-                local = %self.peer_id(),
-                from = %sender_id,
-                ?request_id,
-                sending = found_ops.len(),
-                ?send_prefixes,
-                requesting = requested.len(),
-                ?req_prefixes,
-                our_pending = our_pending_hashes.len(),
-                "INSTR sync response"
-            );
-        }
+        Self::log_sync_response_plan(
+            &self.peer_id(),
+            &sender_id,
+            &request_id,
+            &found_ops,
+            &requested,
+            our_pending_hashes.len(),
+        );
         tracing::debug!(
             from = %sender_id,
             ?request_id,
@@ -974,6 +955,48 @@ where
 
         self.sign_and_send(&sender_id, response, false).await?;
         Ok(())
+    }
+
+    /// TEMPORARY instrumentation: log a sync response's send/request sets
+    /// with per-event kind prefixes, so a divergence between peers is readable
+    /// from the logs alone.
+    fn log_sync_response_plan(
+        local: &KeyhivePeerId,
+        sender_id: &KeyhivePeerId,
+        request_id: &RequestId,
+        found_ops: &[Arc<[u8]>],
+        requested: &[EventHash],
+        our_pending: usize,
+    ) {
+        let send_prefixes: Vec<alloc::string::String> = found_ops
+            .iter()
+            .map(|bytes| {
+                let h = crate::storage_ops::hash_event_bytes(bytes).0;
+                let kind = match bincode_deserialize::<StaticEvent<Vec<u8>>>(bytes) {
+                    Ok(ev) => match &ev {
+                        StaticEvent::Delegated(_) => "deleg",
+                        StaticEvent::Revoked(_) => "revok",
+                        StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => "prek",
+                        StaticEvent::CgkaOperation(_) => "cgka",
+                    },
+                    Err(_) => "unk",
+                };
+                alloc::format!("{}:{kind}", Self::short_hash(&h))
+            })
+            .collect();
+        let req_prefixes: Vec<alloc::string::String> =
+            requested.iter().map(|h| Self::short_hash(h)).collect();
+        tracing::warn!(
+            local = %local,
+            from = %sender_id,
+            ?request_id,
+            sending = found_ops.len(),
+            ?send_prefixes,
+            requesting = requested.len(),
+            ?req_prefixes,
+            our_pending,
+            "INSTR sync response"
+        );
     }
 
     /// Handle a `SyncResponse`: ingest events we received and send any
@@ -1445,11 +1468,15 @@ where
     /// by loading from storage and retrying.
     /// TEMPORARY instrumentation: count Delegated events in a fresh
     /// all-agent snapshot, plus per-agent set sizes.
-    pub async fn snapshot_probe(&self, peer: &KeyhivePeerId) -> (usize, Option<usize>) {
-        let snapshot = self
-            .all_agent_events(&Default::default())
-            .await
-            .expect("all_agent_events");
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if the snapshot cannot be built.
+    pub async fn snapshot_probe(
+        &self,
+        peer: &KeyhivePeerId,
+    ) -> Result<(usize, Option<usize>), ProtocolError<Conn::SendError>> {
+        let snapshot = self.all_agent_events(&BTreeSet::default()).await?;
         let delegs = snapshot
             .event_data
             .values()
@@ -1465,13 +1492,24 @@ where
             .iter()
             .find(|(k, _)| *k == peer)
             .map(|(_, v)| v.len());
-        (delegs, peer_set)
+        Ok((delegs, peer_set))
     }
 
     /// TEMPORARY instrumentation: hash prefixes of every persisted event.
-    pub async fn load_event_hash_prefixes(&self) -> Vec<alloc::string::String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if the stored events cannot be loaded.
+    pub async fn load_event_hash_prefixes(
+        &self,
+    ) -> Result<Vec<alloc::string::String>, ProtocolError<Conn::SendError>> {
         let mut out = Vec::new();
-        for (hash, bytes) in self.storage.load_events().await.expect("load events") {
+        let stored = self
+            .storage
+            .load_events()
+            .await
+            .map_err(|error| ProtocolError::Storage(StorageError::Load(error.to_string())))?;
+        for (hash, bytes) in stored {
             let StorageHash(hb) = hash;
             let mut s = alloc::string::String::new();
             for b in hb.iter().take(4) {
@@ -1482,23 +1520,19 @@ where
             // event on every node, independent of storage-hash specifics.
             let ident = match bincode_deserialize::<StaticEvent<Vec<u8>>>(&bytes) {
                 Ok(ev) => match &ev {
-                    StaticEvent::Delegated(sg) => {
-                        (alloc::format!("deleg"), sg.signature().to_bytes())
-                    }
-                    StaticEvent::Revoked(sg) => {
-                        (alloc::format!("revok"), sg.signature().to_bytes())
-                    }
+                    StaticEvent::Delegated(sg) => ("deleg".to_string(), sg.signature().to_bytes()),
+                    StaticEvent::Revoked(sg) => ("revok".to_string(), sg.signature().to_bytes()),
                     StaticEvent::PrekeysExpanded(sg) => {
-                        (alloc::format!("prekx"), sg.signature().to_bytes())
+                        ("prekx".to_string(), sg.signature().to_bytes())
                     }
                     StaticEvent::PrekeyRotated(sg) => {
-                        (alloc::format!("prekr"), sg.signature().to_bytes())
+                        ("prekr".to_string(), sg.signature().to_bytes())
                     }
                     StaticEvent::CgkaOperation(sg) => {
-                        (alloc::format!("cgka"), sg.signature().to_bytes())
+                        ("cgka".to_string(), sg.signature().to_bytes())
                     }
                 },
-                Err(_) => (alloc::format!("unk"), [0u8; 64]),
+                Err(_) => ("unk".to_string(), [0u8; 64]),
             };
             let mut ep = alloc::string::String::new();
             for b in ident.1.iter().take(4) {
@@ -1508,7 +1542,7 @@ where
             out.push(alloc::format!("{}={ep}", ident.0));
         }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// TEMPORARY instrumentation: short hex prefix of an event-hash for logs.
@@ -1606,6 +1640,11 @@ where
     /// Call this immediately after the corresponding Keyhive mutation. Startup
     /// full-projection reconciliation repairs any crash between mutation,
     /// persistence, and durable admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] if serialization, storage, or the durable
+    /// admission hook fails.
     pub async fn persist_local_events(
         &self,
         events: Vec<StaticEvent<CRef>>,
@@ -2197,7 +2236,7 @@ mod tests {
     struct RecordingSink {
         reports: async_lock::Mutex<Vec<(Vec<EventHash>, Option<KeyhivePeerId>)>>,
         admitted: async_lock::Mutex<BTreeSet<EventHash>>,
-        unadmitted: async_lock::Mutex<Vec<(EventHash, Vec<u8>, Option<KeyhivePeerId>)>>,
+        unadmitted: async_lock::Mutex<UnadmittedWalEvents>,
         unadmitted_queries: AtomicUsize,
         fail_admit: AtomicBool,
     }
@@ -2425,7 +2464,7 @@ mod tests {
         let (conn1, _) = create_channel_pair(peer_id.clone(), &peer1);
         let (conn2, _) = create_channel_pair(peer_id.clone(), &peer2);
 
-        assert!(protocol.peer_ids().await.is_empty());
+        assert!(protocol.peer_ids().await.is_empty(), "no peers before any add");
 
         protocol.add_peer(peer1.clone(), conn1).await;
         protocol.add_peer(peer2.clone(), conn2).await;
@@ -2769,7 +2808,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let event_bytes: Vec<Arc<[u8]>> = pair.values().map(Dupe::dupe).collect();
-        assert!(!event_bytes.is_empty());
+        assert!(!event_bytes.is_empty(), "the peer pair has events to send");
 
         protocol.ingest_events(&event_bytes, None).await.unwrap();
 

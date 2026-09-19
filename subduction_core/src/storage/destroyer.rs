@@ -48,7 +48,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
     }
 
     /// Delete a single loose commit and its blob by [`CommitId`].
-    #[must_use]
     pub fn delete_loose_commit(
         &self,
         commit_id: CommitId,
@@ -58,13 +57,11 @@ impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
     }
 
     /// Delete all loose commits and their blobs for this sedimentree.
-    #[must_use]
     pub fn delete_loose_commits(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.delete_loose_commits(self.sedimentree_id)
     }
 
     /// Delete a fragment and its blob by fragment head [`CommitId`].
-    #[must_use]
     pub fn delete_fragment(
         &self,
         fragment_head: CommitId,
@@ -74,7 +71,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
     }
 
     /// Delete all fragments and their blobs for this sedimentree.
-    #[must_use]
     pub fn delete_fragments(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.delete_fragments(self.sedimentree_id)
     }
@@ -85,7 +81,6 @@ impl<Async: FutureForm, Store: Storage<Async>> Destroyer<Async, Store> {
     /// commits/fragments, so removing a tree must delete its id (not just
     /// its data) for it to disappear from
     /// [`load_all_sedimentree_ids`](crate::storage::traits::Storage::load_all_sedimentree_ids).
-    #[must_use]
     pub fn delete_sedimentree_id(&self) -> Async::Future<'_, Result<(), Store::Error>> {
         self.storage.delete_sedimentree_id(self.sedimentree_id)
     }
