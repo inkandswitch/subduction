@@ -95,8 +95,8 @@ iroh = "1.0"
 hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 js-sys = { version = "=0.3.98", default-features = false }
-keyhive_core = { version = "0.5.0", git = "https://github.com/dman-os/keyhive", rev = "d4bda7c71db4efcdf988348478f1e802170a7ecd" }
-keyhive_crypto = { version = "0.2.1", git = "https://github.com/dman-os/keyhive", rev = "d4bda7c71db4efcdf988348478f1e802170a7ecd" }
+keyhive_core = { version = "0.5.0", git = "https://github.com/dman-os/keyhive", rev = "3afcd2946d2a5452b3e4ca0077707672af945d4c" }
+keyhive_crypto = { version = "0.2.1", git = "https://github.com/dman-os/keyhive", rev = "3afcd2946d2a5452b3e4ca0077707672af945d4c" }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 metrics-process = "2.0"
