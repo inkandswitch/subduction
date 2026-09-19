@@ -32,8 +32,10 @@
 //! [`Mutex`]: async_lock::Mutex
 
 use alloc::vec::Vec;
+use async_lock::MutexGuard;
 use core::{
     hash::Hash,
+    ops::{Deref, DerefMut},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -374,6 +376,79 @@ impl<K: Hash + Ord, V, const N: usize> BoundedShardedMap<K, V, N> {
         Ok(result)
     }
 
+    /// Ensure `key` is resident — hydrating (or defaulting) from `load` on a
+    /// miss — and return a guard that keeps the shard lock held across the
+    /// caller's awaits.
+    ///
+    /// This is the guard-returning twin of
+    /// [`with_entry_hydrated`](Self::with_entry_hydrated): instead of running
+    /// a synchronous `mutate` under the lock, it hands the caller the locked
+    /// value so the caller can span its own (possibly awaiting) critical
+    /// section — e.g. a read-modify-persist-apply sequence that must be
+    /// atomic against concurrent readers of the same shard.
+    ///
+    /// The hydration, LRU and capacity behaviour is identical to
+    /// `with_entry_hydrated`: on a miss `load` runs with **no lock held**,
+    /// then the loaded value — or `V::default()` when `load` returns
+    /// `Ok(None)` — is installed (or a concurrently-installed value is
+    /// adopted), the per-shard capacity is enforced for a newly-installed
+    /// key, and an access is recorded.
+    ///
+    /// The caller should drop the returned guard promptly: while it is held
+    /// every other accessor of *any* key in the same shard blocks, and the
+    /// guard deliberately spans awaits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `load`'s error if hydration fails; nothing is installed.
+    pub async fn entry_guard_hydrated<Load, Fut, E>(
+        &self,
+        key: K,
+        load: Load,
+    ) -> Result<EntryGuard<'_, K, V>, E>
+    where
+        K: Clone,
+        V: Default,
+        Load: FnOnce() -> Fut,
+        Fut: core::future::Future<Output = Result<Option<V>, E>>,
+    {
+        // Fast path: resident hit — take the lock and hand it to the caller.
+        {
+            let tick = self.next_tick();
+            let mut shard = self.inner.get_shard_containing(&key).lock().await;
+            let mut hit = false;
+            if let Some(entry) = shard.get_mut(&key) {
+                hit = true;
+                if self.per_shard_capacity.is_some() {
+                    entry.1 = tick;
+                }
+            }
+            if hit {
+                return Ok(EntryGuard { shard, key });
+            }
+        }
+
+        // Miss: load with NO lock held.
+        let loaded = load().await?;
+
+        // Re-lock and install, adopting a concurrently-installed value. From
+        // here the lock is not released again until the returned guard drops.
+        let tick = self.next_tick();
+        let mut shard = self.inner.get_shard_containing(&key).lock().await;
+        let mut hit = false;
+        if let Some(entry) = shard.get_mut(&key) {
+            hit = true;
+            if self.per_shard_capacity.is_some() {
+                entry.1 = tick;
+            }
+        }
+        if !hit {
+            self.evict_if_full_locked(&mut shard, &key);
+            shard.insert(key.clone(), (loaded.unwrap_or_default(), tick));
+        }
+        Ok(EntryGuard { shard, key })
+    }
+
     /// Remove a key, returning its value if present.
     pub async fn remove(&self, key: &K) -> Option<V> {
         self.inner
@@ -400,6 +475,70 @@ impl<K: Hash + Ord, V, const N: usize> BoundedShardedMap<K, V, N> {
     /// Whether the map has no resident entries.
     pub async fn is_empty(&self) -> bool {
         self.inner.is_empty().await
+    }
+}
+
+/// A held shard lock for a single key, returned by
+/// [`BoundedShardedMap::entry_guard_hydrated`].
+///
+/// Unlike the closure-based accessors, the guard keeps the shard mutex
+/// locked across the caller's awaits, so a caller can span a
+/// read-modify-persist-apply sequence in one critical section — in particular
+/// so a concurrent reader cannot observe the pre-mutation value between a
+/// durable write and the in-RAM apply.
+///
+/// Dereferences to the key's value, which is guaranteed present for the
+/// guard's lifetime: the guard is only created once the key is installed
+/// under the held lock, and no other holder can remove it while the guard
+/// lives. Callers should drop it promptly — while held, access to every key
+/// in the same shard blocks.
+#[derive(Debug)]
+pub struct EntryGuard<'a, K: Hash + Ord, V> {
+    shard: MutexGuard<'a, Map<K, (V, Tick)>>,
+    key: K,
+}
+
+impl<K: Hash + Ord, V> EntryGuard<'_, K, V> {
+    /// Shared access to the guarded value.
+    #[expect(
+        clippy::expect_used,
+        reason = "the guard is only created once its key is installed under the held lock, \
+                  and no other holder can remove it while the guard lives"
+    )]
+    fn value(&self) -> &V {
+        &self
+            .shard
+            .get(&self.key)
+            .expect("entry_guard key is present for the guard's lifetime")
+            .0
+    }
+
+    /// Mutable access to the guarded value.
+    #[expect(
+        clippy::expect_used,
+        reason = "the guard is only created once its key is installed under the held lock, \
+                  and no other holder can remove it while the guard lives"
+    )]
+    fn value_mut(&mut self) -> &mut V {
+        &mut self
+            .shard
+            .get_mut(&self.key)
+            .expect("entry_guard key is present for the guard's lifetime")
+            .0
+    }
+}
+
+impl<K: Hash + Ord, V> Deref for EntryGuard<'_, K, V> {
+    type Target = V;
+
+    fn deref(&self) -> &V {
+        self.value()
+    }
+}
+
+impl<K: Hash + Ord, V> DerefMut for EntryGuard<'_, K, V> {
+    fn deref_mut(&mut self) -> &mut V {
+        self.value_mut()
     }
 }
 

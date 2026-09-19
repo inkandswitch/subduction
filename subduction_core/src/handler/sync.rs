@@ -920,10 +920,19 @@ impl<
         // metadata only, so the wire data (signed bytes + blobs) still comes
         // from storage — but only for the (typically small) local-only set.
         //
-        // Coherence note: writes persist to storage *before* updating the
-        // resident tree, so a commit that is durable but not yet cached is
-        // omitted from this response. That brief lag is benign — the next
-        // sync round picks it up, and the protocol tolerates stale views.
+        // Coherence note: the resident tree is written under the same shard
+        // lock that this read takes, and every write *persists before it
+        // applies* — storage's "part changed" notification fires inside the
+        // persist. All local write paths hold that lock across both the save
+        // and the in-RAM apply: `insert_commit_locally`,
+        // `insert_fragment_locally`, `recv_batch_sync_response`, and the bulk
+        // paths `store_commits_batch`, `store_fragments_batch`,
+        // `store_built_batch`, and `insert_sedimentree_locally` (each via
+        // `BoundedShardedMap::entry_guard_hydrated`). So a reader here cannot
+        // acquire the shard and observe a persisted-but-uncached write:
+        // storage's "part changed" notification can never fire ahead of what
+        // this `with_entry` can serve, and no write is silently dropped from
+        // the diff with no later round to pick it up.
         let cached = self
             .sedimentrees
             .with_entry(&id, |tree| {

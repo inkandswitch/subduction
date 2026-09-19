@@ -67,7 +67,7 @@ pub(crate) mod spawn_guard;
 
 use crate::{
     authenticated::Authenticated,
-    collections::bounded_sharded_map::BoundedShardedMap,
+    collections::bounded_sharded_map::{BoundedShardedMap, EntryGuard},
     connection::{
         Connection,
         backoff::Backoff,
@@ -1643,18 +1643,22 @@ where
             verified_commits.push(verified_meta);
         }
 
+        // One shard-lock hold spans the save and the in-RAM apply; see
+        // `tree_guard` for the invariant this protects.
+        let mut tree = self
+            .tree_guard(id)
+            .await
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
         putter
             .save_batch(verified_commits, Vec::new())
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+        for commit in commit_payloads {
+            tree.add_commit(commit);
+        }
+        drop(tree);
         self.minimize_tree(id).await;
 
         tracing::info!(count, "bulk-insert of commits complete, tree minimized");
@@ -1715,18 +1719,22 @@ where
             verified_fragments.push(verified_meta);
         }
 
+        // One shard-lock hold spans the save and the in-RAM apply; see
+        // `tree_guard` for the invariant this protects.
+        let mut tree = self
+            .tree_guard(id)
+            .await
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
         putter
             .save_batch(Vec::new(), verified_fragments)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.with_tree_hydrated(id, move |tree| {
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+        for fragment in fragment_payloads {
+            tree.add_fragment(fragment);
+        }
+        drop(tree);
         self.minimize_tree(id).await;
         tracing::info!(count, "bulk-insert of fragments complete, tree minimized");
         Ok(())
@@ -1803,21 +1811,25 @@ where
             verified_fragments.push(verified_meta);
         }
 
+        // One shard-lock hold spans the save and the in-RAM apply; see
+        // `tree_guard` for the invariant this protects.
+        let mut tree = self
+            .tree_guard(id)
+            .await
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
         putter
             .save_batch(verified_commits, verified_fragments)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+        for commit in commit_payloads {
+            tree.add_commit(commit);
+        }
+        for fragment in fragment_payloads {
+            tree.add_fragment(fragment);
+        }
+        drop(tree);
         self.minimize_tree(id).await;
 
         tracing::info!(
@@ -3006,21 +3018,19 @@ where
             .map(|v| v.payload().clone())
             .collect();
 
+        // One shard-lock hold spans the persist and the in-RAM merge; see
+        // `tree_guard` for the invariant this protects. Hydrating on a miss
+        // (before the save) still starts the merge from the tree's full
+        // durable pre-save history.
+        let mut tree = self.tree_guard(id).await?;
+
         putter
             .save_batch(verified_commits, verified_fragments)
             .await?;
 
         let sedimentree = Sedimentree::new(fragments, loose_commits);
-        // Hydrate-on-miss so merging into an evicted tree preserves its full
-        // durable history.
-        let access = self.storage.hydration_access();
-        self.sedimentrees
-            .with_entry_hydrated(
-                id,
-                || ingest::load_tree::<Async, _>(&access, id),
-                |tree| tree.merge(sedimentree),
-            )
-            .await?;
+        tree.merge(sedimentree);
+        drop(tree);
 
         Ok(())
     }
@@ -3299,26 +3309,35 @@ where
             .map_err(IoError::Storage)
     }
 
-    /// Mutate the in-memory tree for `id`, hydrating it from storage first if
-    /// it is not resident.
+    /// Lock the shard for `id` and return a guard over its resident tree,
+    /// hydrating it from storage first if it is not resident.
     ///
-    /// The write-path counterpart to [`get_or_hydrate`](Self::get_or_hydrate):
-    /// a mutation applied to an evicted tree starts from its full durable
-    /// history rather than an empty default. The caller is responsible for
-    /// having persisted the underlying data to storage *before* calling this
-    /// (storage is the source of truth). The mutation runs against the
-    /// [`MinimizedSedimentree`] wrapper, which it marks dirty; callers
-    /// re-minimize (e.g. via [`minimize_tree`](Self::minimize_tree)) afterward.
-    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree) -> R, R>(
+    /// This is the write-path counterpart to
+    /// [`get_or_hydrate`](Self::get_or_hydrate) and the guard-returning
+    /// counterpart to the closure-based accessors: the shard lock stays held
+    /// until the caller drops the guard, so a write path can span its persist
+    /// and its in-RAM apply in one critical section. Every local write persists
+    /// *before* it applies, and storage emits its "part changed" notification
+    /// inside the persist; if the two were separate lock holds a reader (e.g.
+    /// the sync responder) could acquire the shard in between, be served the
+    /// pre-apply tree, and never be refreshed because the notification already
+    /// fired. Holding the guard across both closes that window. See
+    /// [`insert_commit_locally`](ingest::insert_commit_locally) for the full
+    /// rationale.
+    ///
+    /// A tree absent from storage hydrates to an empty default. The mutation
+    /// runs against the [`MinimizedSedimentree`] wrapper, which it marks dirty;
+    /// callers re-minimize (e.g. via [`minimize_tree`](Self::minimize_tree))
+    /// after dropping the guard. Drop the guard promptly — while it is held,
+    /// access to every key in the same shard blocks.
+    async fn tree_guard(
         &self,
         id: SedimentreeId,
-        mutate: F,
-    ) -> Result<R, IoError<Async, Store, Conn, Hdl::Message>> {
+    ) -> Result<EntryGuard<'_, SedimentreeId, MinimizedSedimentree>, Store::Error> {
         let access = self.storage.hydration_access();
         self.sedimentrees
-            .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access, id), mutate)
+            .entry_guard_hydrated(id, || ingest::load_tree::<Async, _>(&access, id))
             .await
-            .map_err(IoError::Storage)
     }
 }
 
@@ -4213,7 +4232,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ingest::tests::{GatedSaveStorage, GatedWrite},
+        *,
+    };
     use crate::{
         collections::bounded_sharded_map::BoundedShardedMap,
         connection::test_utils::{
@@ -4227,14 +4249,16 @@ mod tests {
     use alloc::collections::BTreeSet;
     use async_lock::Mutex;
     use future_form::Sendable;
+    use futures::future::poll_immediate;
     use sedimentree_core::{
-        blob::Blob,
+        blob::{Blob, BlobMeta},
         collections::Map,
         depth::CountLeadingZeroBytes,
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::{LooseCommit, id::CommitId},
     };
+    use subduction_crypto::signer::memory::MemorySigner;
     use testresult::TestResult;
 
     fn make_commit_parts() -> (CommitId, BTreeSet<CommitId>, Blob) {
@@ -4370,5 +4394,241 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// Concrete `Subduction` over the shared gated-storage test double. The
+    /// bulk local write paths (`store_sedimentree`, `store_commits_batch`,
+    /// `store_fragments_batch`, `store_built_batch`) are `Subduction` methods,
+    /// so exercising their shard-lock hold needs a full instance.
+    type GatedSubduction = Subduction<
+        'static,
+        Sendable,
+        GatedSaveStorage,
+        FailingSendMockConnection,
+        SyncHandler<
+            Sendable,
+            GatedSaveStorage,
+            FailingSendMockConnection,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+            TestSpawn,
+        >,
+        OpenPolicy,
+        MemorySigner,
+        InstantTimeout,
+        TestSpawn,
+    >;
+
+    /// Build a `Subduction` whose single storage backend is `storage`, wired
+    /// to the same shared state as the other `subduction` tests.
+    fn subduction_over(
+        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>>,
+        storage: StoragePowerbox<GatedSaveStorage, OpenPolicy>,
+    ) -> Arc<GatedSubduction> {
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let handler = Arc::new(SyncHandler::new(
+            Arc::clone(&sedimentrees),
+            Arc::clone(&connections),
+            Arc::clone(&subscriptions),
+            storage.clone(),
+            CountLeadingZeroBytes,
+            TestSpawn,
+        ));
+        let (subduction, _listener, _actor) = Subduction::<
+            '_,
+            Sendable,
+            _,
+            FailingSendMockConnection,
+            _,
+            _,
+            _,
+            InstantTimeout,
+            _,
+        >::new(
+            handler,
+            None,
+            test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
+            storage,
+            PeerCounter::default(),
+            NonceCache::default(),
+            InstantTimeout,
+            Duration::from_secs(30),
+            CountLeadingZeroBytes,
+            TestSpawn,
+        );
+        subduction
+    }
+
+    /// Drive `write` to the gated `save_batch`, prove a reader on the
+    /// responder's `with_entry` path is blocked for the duration of the save,
+    /// then release the save and return the write's result.
+    ///
+    /// The write paths persist to storage — which emits the "part changed"
+    /// notification the sync task wakes on — before applying to the in-RAM
+    /// tree. If those are not one shard-lock hold, a reader arriving in
+    /// between observes the pre-apply tree, and because the notification
+    /// already fired, no later sync round refreshes it. The `is_none`
+    /// assertion on the reader's first poll is therefore the guard: against
+    /// the pre-fix body (save outside the shard lock, so the tree is not yet
+    /// resident) that poll completes with `Some(None)` instead of `Pending`
+    /// and the assertion fails.
+    async fn assert_shard_held_across_save<W>(
+        write: W,
+        storage: &GatedSaveStorage,
+        sedimentrees: &Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>>,
+        id: SedimentreeId,
+        present: impl Fn(&mut MinimizedSedimentree) -> bool,
+    ) -> W::Output
+    where
+        W: core::future::Future,
+    {
+        let entered = storage.save_entered();
+        let release = storage.save_release();
+        let mut write = Box::pin(write);
+
+        // Drive the write into the gated save; the only await that cannot
+        // complete without the test is the save gate itself.
+        assert!(
+            poll_immediate(write.as_mut()).await.is_none(),
+            "write must block inside the gated save_batch"
+        );
+        assert!(
+            poll_immediate(entered.notified()).await.is_some(),
+            "write must reach the gated save_batch before blocking"
+        );
+
+        // Reader: the exact shard-locked path the sync responder uses
+        // (`with_entry` on the same id). While the save is in flight it must
+        // not acquire the shard, so a single poll is `Pending`.
+        let reader_maps = Arc::clone(sedimentrees);
+        let mut reader =
+            Box::pin(async move { reader_maps.with_entry(&id, |tree| present(tree)).await });
+        assert!(
+            poll_immediate(reader.as_mut()).await.is_none(),
+            "reader acquired the shard while save_batch was in flight, so it \
+             observed the pre-apply tree — which the already-fired sync \
+             notification will never refresh"
+        );
+
+        // Release the blocked save; the write applies and drops the guard.
+        release.notify_one();
+        let output = write.await;
+
+        assert_eq!(
+            reader.await,
+            Some(true),
+            "reader must observe the applied item once the write completes"
+        );
+
+        output
+    }
+
+    /// `store_sedimentree` — the production-reachable path (the embedder's
+    /// `persist_initial_document`) — must hold one shard lock across the
+    /// `save_batch` that persists the tree and the `merge` that applies it.
+    #[tokio::test]
+    async fn store_sedimentree_holds_shard_guard_across_save_batch() {
+        let id = SedimentreeId::new([0x71; 32]);
+        let head = CommitId::new([0xD1; 32]);
+        let blob = Blob::new(vec![0x71u8; 16]);
+        let commit = LooseCommit::new(id, head, BTreeSet::new(), BlobMeta::new(&blob));
+        let tree = Sedimentree::new(Vec::new(), vec![commit]);
+
+        let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
+            Arc::new(BoundedShardedMap::with_key(0, 0));
+        let storage = GatedSaveStorage::new(GatedWrite::Batch);
+        let subduction = subduction_over(
+            Arc::clone(&sedimentrees),
+            StoragePowerbox::new(storage.clone(), Arc::new(OpenPolicy)),
+        );
+
+        let write = subduction.store_sedimentree(id, tree, vec![blob]);
+        assert_shard_held_across_save(write, &storage, &sedimentrees, id, |tree| {
+            tree.has_loose_commit(head)
+        })
+        .await
+        .expect("store_sedimentree succeeds");
+    }
+
+    /// `store_commits_batch` must hold one shard lock across its `save_batch`
+    /// and the commit applies.
+    #[tokio::test]
+    async fn store_commits_batch_holds_shard_guard_across_save_batch() {
+        let id = SedimentreeId::new([0x72; 32]);
+        let head = CommitId::new([0xD2; 32]);
+        let blob = Blob::new(vec![0x72u8; 16]);
+
+        let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
+            Arc::new(BoundedShardedMap::with_key(0, 0));
+        let storage = GatedSaveStorage::new(GatedWrite::Batch);
+        let subduction = subduction_over(
+            Arc::clone(&sedimentrees),
+            StoragePowerbox::new(storage.clone(), Arc::new(OpenPolicy)),
+        );
+
+        let write = subduction.store_commits_batch(id, vec![(head, BTreeSet::new(), blob)]);
+        assert_shard_held_across_save(write, &storage, &sedimentrees, id, |tree| {
+            tree.has_loose_commit(head)
+        })
+        .await
+        .expect("store_commits_batch succeeds");
+    }
+
+    /// `store_fragments_batch` must hold one shard lock across its `save_batch`
+    /// and the fragment applies.
+    #[tokio::test]
+    async fn store_fragments_batch_holds_shard_guard_across_save_batch() {
+        let id = SedimentreeId::new([0x73; 32]);
+        let head = CommitId::new([0xD3; 32]);
+        let item = FragmentBatchItem {
+            head,
+            boundary: BTreeSet::new(),
+            checkpoints: Vec::new(),
+            blob: Blob::new(vec![0x73u8; 16]),
+        };
+
+        let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
+            Arc::new(BoundedShardedMap::with_key(0, 0));
+        let storage = GatedSaveStorage::new(GatedWrite::Batch);
+        let subduction = subduction_over(
+            Arc::clone(&sedimentrees),
+            StoragePowerbox::new(storage.clone(), Arc::new(OpenPolicy)),
+        );
+
+        let write = subduction.store_fragments_batch(id, vec![item]);
+        assert_shard_held_across_save(write, &storage, &sedimentrees, id, |tree| {
+            tree.has_fragment(head)
+        })
+        .await
+        .expect("store_fragments_batch succeeds");
+    }
+
+    /// `store_built_batch` must hold one shard lock across its `save_batch`
+    /// and the commit/fragment applies.
+    #[tokio::test]
+    async fn store_built_batch_holds_shard_guard_across_save_batch() {
+        let id = SedimentreeId::new([0x74; 32]);
+        let head = CommitId::new([0xD4; 32]);
+        let blob = Blob::new(vec![0x74u8; 16]);
+        let commit = LooseCommit::new(id, head, BTreeSet::new(), BlobMeta::new(&blob));
+
+        let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
+            Arc::new(BoundedShardedMap::with_key(0, 0));
+        let storage = GatedSaveStorage::new(GatedWrite::Batch);
+        let subduction = subduction_over(
+            Arc::clone(&sedimentrees),
+            StoragePowerbox::new(storage.clone(), Arc::new(OpenPolicy)),
+        );
+
+        let write = subduction.store_built_batch(id, vec![(commit, blob)], Vec::new());
+        assert_shard_held_across_save(write, &storage, &sedimentrees, id, |tree| {
+            tree.has_loose_commit(head)
+        })
+        .await
+        .expect("store_built_batch succeeds");
     }
 }
