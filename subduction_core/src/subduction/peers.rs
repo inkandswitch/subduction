@@ -165,9 +165,6 @@ pub(crate) async fn build_pushes<Conn: Clone, Async: FutureForm>(
 /// heads another way this round: `exclude` names the peers already getting
 /// them on a push or an ack. Watchers are re-checked against the fetch policy
 /// so a revoked peer stops hearing heads without a disconnect.
-///
-/// Both fan-out paths (`Subduction` and `SyncHandler`) use this alongside
-/// [`build_pushes`] so watcher delivery cannot drift from push delivery.
 pub(crate) async fn build_watcher_heads_updates<
     Async: FutureForm,
     Store: Storage<Async>,
@@ -205,13 +202,23 @@ pub(crate) async fn build_watcher_heads_updates<
         }
     }
 
-    let conns: Vec<Authenticated<Conn, Async>> = {
+    // One connection per peer suffices: a heads report is per peer, not per
+    // connection. A watcher with no connection is a teardown straggler (its
+    // watch arrived after `remove_peer`); drop it here.
+    let mut conns = Vec::with_capacity(authorized.len());
+    let mut orphaned = Vec::new();
+    {
         let guard = connections.lock().await;
-        authorized
-            .into_iter()
-            .filter_map(|peer| guard.get(&peer).map(|conns| conns.first().clone()))
-            .collect()
-    };
+        for peer in authorized {
+            match guard.get(&peer) {
+                Some(peer_conns) => conns.push(peer_conns.first().clone()),
+                None => orphaned.push(peer),
+            }
+        }
+    }
+    for peer in orphaned {
+        watches.remove_watcher(peer, &[id]).await;
+    }
 
     let mut out = Vec::with_capacity(conns.len());
     for conn in conns {

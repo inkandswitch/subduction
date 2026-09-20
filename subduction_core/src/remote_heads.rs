@@ -235,6 +235,15 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
     pub async fn remove_peer(&self, peer: PeerId) {
         self.peers.lock().await.remove(&peer);
     }
+
+    /// Forget what was reported about `id` for every peer, so the next report
+    /// of `id` is delivered even if unchanged.
+    pub async fn forget_tree(&self, id: SedimentreeId) {
+        let filters: Vec<Arc<Mutex<PeerFilter>>> = self.peers.lock().await.values().cloned().collect();
+        for filter in filters {
+            filter.lock().await.reported.remove(&id);
+        }
+    }
 }
 
 impl<R: RemoteHeadsObserver + core::fmt::Debug> core::fmt::Debug for FilteredHeadsNotifier<R> {
@@ -275,6 +284,11 @@ pub trait RemoteHeadsNotifier<Async: FutureForm> {
         peer: PeerId,
         heads: RemoteHeads,
     ) -> Async::Future<'_, ()>;
+
+    /// Forget what has been reported about `id` for every peer, so the next
+    /// report is delivered even if the heads are unchanged. Called when the
+    /// application stops watching `id`.
+    fn forget_remote_heads(&self, id: SedimentreeId) -> Async::Future<'_, ()>;
 }
 
 #[cfg(test)]

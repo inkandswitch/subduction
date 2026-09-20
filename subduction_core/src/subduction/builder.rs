@@ -780,7 +780,10 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     /// handler also stamps outgoing messages with counters (e.g., wraps a
     /// [`SyncHandler`]), you must share the same `PeerCounter` between
     /// the handler and `Subduction` — use [`build`](Self::build) or [`build_composed`](Self::build_composed)
-    /// instead, which handle this automatically.
+    /// instead, which handle this automatically. The same applies to the
+    /// heads-watch table: a handler holding its own [`HeadsWatches`] never
+    /// sees [`watch_heads`](crate::subduction::Subduction::watch_heads) calls
+    /// on the built `Subduction`.
     ///
     /// [`PeerCounter`]: crate::peer::counter::PeerCounter
     /// [`SyncHandler`]: crate::handler::sync::SyncHandler

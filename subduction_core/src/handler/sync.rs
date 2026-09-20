@@ -370,6 +370,10 @@ impl<
     ) -> Async::Future<'_, ()> {
         Async::from_future(async move { self.heads_notifier.notify(id, peer, heads).await })
     }
+
+    fn forget_remote_heads(&self, id: SedimentreeId) -> Async::Future<'_, ()> {
+        Async::from_future(async move { self.heads_notifier.forget_tree(id).await })
+    }
 }
 
 /// Deferred subscription fan-out for freshly-ingested commits or fragments,
@@ -613,7 +617,7 @@ impl<
                     tracing::debug!(peer = %from, tree = ?id, "peer refused heads watch: unauthorized");
                 }
                 WatchOutcome::AtCapacity => {
-                    tracing::warn!(peer = %from, tree = ?id, "peer refused heads watch: at capacity");
+                    tracing::debug!(peer = %from, tree = ?id, "peer refused heads watch: at capacity");
                 }
             }
         }
@@ -622,36 +626,52 @@ impl<
     /// Record `from` as a watcher of each authorized id and answer with the
     /// current heads. Refusals are per id, so one unauthorized tree does not
     /// fail the rest.
+    ///
+    /// Work per message is bounded: ids are deduplicated, at most
+    /// [`MAX_WATCHERS_PER_PEER`] are considered, and once the peer is at
+    /// capacity the rest are refused without a policy call or heads read.
     async fn recv_watch_heads(
         &self,
         from: PeerId,
         ids: Vec<SedimentreeId>,
         conn: &Authenticated<Conn, Async>,
     ) {
+        let mut seen = Set::new();
+        let ids: Vec<SedimentreeId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
+
         let mut results = Vec::with_capacity(ids.len());
-        for id in ids {
-            let outcome = if self
-                .storage
-                .policy()
-                .authorize_fetch(from, id)
-                .await
-                .is_err()
-            {
-                tracing::debug!(peer = %from, tree = ?id, "policy rejected heads watch");
+        let mut unauthorized = 0usize;
+        let mut at_capacity = false;
+        for (n, id) in ids.into_iter().enumerate() {
+            let outcome = if at_capacity || n >= MAX_WATCHERS_PER_PEER {
+                WatchOutcome::AtCapacity
+            } else if let Err(e) = self.storage.policy().authorize_fetch(from, id).await {
+                tracing::debug!(peer = %from, tree = ?id, error = %e, "policy rejected heads watch");
+                unauthorized += 1;
                 WatchOutcome::Unauthorized
             } else {
                 match self.heads_watches.add_watcher(from, id).await {
-                    Ok(()) => WatchOutcome::Watching(RemoteHeads {
-                        counter: self.send_counter.next(from).await,
-                        heads: self.heads_for(id).await,
-                    }),
+                    Ok(()) => {
+                        let heads = self.heads_for(id).await;
+                        WatchOutcome::Watching(RemoteHeads {
+                            counter: self.send_counter.next(from).await,
+                            heads,
+                        })
+                    }
                     Err(WatchRefused::AtCapacity) => {
-                        tracing::warn!(peer = %from, tree = ?id, cap = MAX_WATCHERS_PER_PEER, "heads watch refused: peer at capacity");
+                        at_capacity = true;
                         WatchOutcome::AtCapacity
                     }
                 }
             };
             results.push(WatchResult { id, outcome });
+        }
+
+        if at_capacity {
+            tracing::warn!(peer = %from, cap = MAX_WATCHERS_PER_PEER, "refusing heads watches: peer at capacity");
+        }
+        if unauthorized > 0 {
+            tracing::debug!(peer = %from, unauthorized, "refused unauthorized heads watches");
         }
 
         let resp: SyncMessage = WatchHeadsResponse { results }.into();

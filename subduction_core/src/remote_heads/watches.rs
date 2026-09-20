@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! watched  : Set<Tree>            what the application asked for; the delivery gate
-//! watchers : Map<Tree, Set<Peer>> peers we owe HeadsUpdates to
+//! watchers : Map<Tree, Set<Peer>> peers to send HeadsUpdates to
 //! ```
 //!
 //! [`WatchHeads`]: crate::connection::message::WatchHeads
@@ -26,7 +26,7 @@ use crate::peer::id::PeerId;
 /// How many sedimentrees one peer may watch on this node.
 ///
 /// A watch costs an entry for as long as the peer stays connected, and a
-/// peer may name any id, so the table needs a bound the peer cannot lift.
+/// peer may name any id, so the table is bounded per peer.
 pub const MAX_WATCHERS_PER_PEER: usize = 4096;
 
 /// Both directions of heads-watch state, shared between [`Subduction`] and
@@ -47,9 +47,10 @@ struct State {
 }
 
 /// Why a peer's watch was not recorded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum WatchRefused {
     /// The peer already holds [`MAX_WATCHERS_PER_PEER`] watches here.
+    #[error("peer already holds {MAX_WATCHERS_PER_PEER} heads watches")]
     AtCapacity,
 }
 
@@ -59,8 +60,6 @@ impl HeadsWatches {
     pub fn new() -> Self {
         Self::default()
     }
-
-    // ── application intent ──────────────────────────────────────────────
 
     /// Record that the application wants heads for `id`. Returns `true` if
     /// this is new.
@@ -78,13 +77,10 @@ impl HeadsWatches {
         self.state.lock().await.watched.iter().copied().collect()
     }
 
-    /// Whether the application is watching `id`. This is the delivery gate:
-    /// heads about `id` reach the observer only if true.
+    /// Whether the application is watching `id`.
     pub async fn is_watched(&self, id: SedimentreeId) -> bool {
         self.state.lock().await.watched.contains(&id)
     }
-
-    // ── watches peers hold on us ────────────────────────────────────────
 
     /// Record `peer` as a watcher of `id`, subject to the per-peer cap.
     /// Idempotent: re-watching an already-watched id is `Ok` and costs
@@ -94,7 +90,7 @@ impl HeadsWatches {
     ///
     /// [`WatchRefused::AtCapacity`] if `peer` already holds
     /// [`MAX_WATCHERS_PER_PEER`] watches.
-    pub async fn add_watcher(&self, peer: PeerId, id: SedimentreeId) -> Result<(), WatchRefused> {
+    pub(crate) async fn add_watcher(&self, peer: PeerId, id: SedimentreeId) -> Result<(), WatchRefused> {
         let mut state = self.state.lock().await;
         let State {
             watchers,
@@ -119,7 +115,7 @@ impl HeadsWatches {
     }
 
     /// Stop sending `peer` heads for `ids`.
-    pub async fn remove_watcher(&self, peer: PeerId, ids: &[SedimentreeId]) {
+    pub(crate) async fn remove_watcher(&self, peer: PeerId, ids: &[SedimentreeId]) {
         let mut state = self.state.lock().await;
         let State {
             watchers,
@@ -147,7 +143,7 @@ impl HeadsWatches {
     }
 
     /// Peers watching `id`.
-    pub async fn watchers_of(&self, id: SedimentreeId) -> Vec<PeerId> {
+    pub(crate) async fn watchers_of(&self, id: SedimentreeId) -> Vec<PeerId> {
         self.state
             .lock()
             .await
@@ -157,11 +153,9 @@ impl HeadsWatches {
             .unwrap_or_default()
     }
 
-    // ── session lifecycle ───────────────────────────────────────────────
-
-    /// Forget `peer`'s watches on us. Application intent survives, so our
-    /// watches are re-sent when the peer reconnects.
-    pub async fn remove_peer(&self, peer: PeerId) {
+    /// Drop `peer`'s watches on this node. The application's own watches are
+    /// kept and replayed on reconnect.
+    pub(crate) async fn remove_peer(&self, peer: PeerId) {
         let mut state = self.state.lock().await;
         state.watcher_counts.remove(&peer);
         state.watchers.retain(|_, peers| {
@@ -171,7 +165,7 @@ impl HeadsWatches {
     }
 
     /// [`remove_peer`](Self::remove_peer) for every peer at once.
-    pub async fn remove_all_peers(&self) {
+    pub(crate) async fn remove_all_peers(&self) {
         let mut state = self.state.lock().await;
         state.watcher_counts.clear();
         state.watchers.clear();

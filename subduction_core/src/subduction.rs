@@ -136,6 +136,10 @@ use subduction_crypto::{
 /// capacity instead of a copied literal.
 pub const CONNECTION_CLOSED_CHANNEL_CAPACITY: usize = 32;
 
+/// Ids per `WatchHeads` frame when replaying watches to a new connection.
+/// Keeps each frame small and well under the wire's `u16` count.
+const WATCH_HEADS_BATCH: usize = 1024;
+
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
 #[allow(clippy::type_complexity)]
@@ -446,12 +450,13 @@ where
 
     /// Ask every current and future peer to report its heads for `id`.
     ///
-    /// Each peer answers with its current heads (delivered to the
-    /// [`RemoteHeadsObserver`]) and then sends a `HeadsUpdate` on every
-    /// change. The watch is re-sent to peers that reconnect. Idempotent.
+    /// Each peer answers with a snapshot and then a `HeadsUpdate` on every
+    /// change, delivered to the [`RemoteHeadsObserver`]; see its docs for what
+    /// is and is not reported. Idempotent; replayed on reconnect.
     ///
-    /// Heads for a sedimentree reach the observer _only_ while it is watched:
-    /// neither syncing nor being pushed to implies a watch.
+    /// A peer reports changes made through its `add_*` APIs, inbound sync,
+    /// and [`remove_sedimentree`](Self::remove_sedimentree). Its `store_*`
+    /// writes are local until the next sync, and are not reported.
     ///
     /// [`RemoteHeadsObserver`]: crate::remote_heads::RemoteHeadsObserver
     pub async fn watch_heads(&self, id: SedimentreeId) {
@@ -462,15 +467,16 @@ where
         self.send_to_all(WatchHeads { ids: vec![id] }.into()).await;
     }
 
-    /// Stop watching `id`. Peers are told to stop sending `HeadsUpdate`s and
-    /// any in-flight report for `id` is dropped at delivery.
+    /// Stop watching `id`. Peers are told to stop sending `HeadsUpdate`s, any
+    /// in-flight report for `id` is dropped at delivery, and the notifier
+    /// forgets `id` so a later re-watch delivers its snapshot even if unchanged.
     pub async fn unwatch_heads(&self, id: SedimentreeId) {
         if !self.heads_watches.unwatch(id).await {
             return;
         }
         tracing::debug!(tree = ?id, "unwatching heads");
-        self.send_to_all(UnwatchHeads { ids: vec![id] }.into())
-            .await;
+        self.handler.forget_remote_heads(id).await;
+        self.send_to_all(UnwatchHeads { ids: vec![id] }.into()).await;
     }
 
     /// Whether the application is watching heads for `id`.
@@ -485,12 +491,20 @@ where
             return;
         }
         tracing::debug!(peer = %conn.peer_id(), trees = ids.len(), "replaying heads watches");
-        let msg: Hdl::Message = SyncMessage::from(WatchHeads { ids }).into();
-        self.spawner
-            .spawn(Async::send_pushes(vec![(conn.clone(), msg)]));
+        for chunk in ids.chunks(WATCH_HEADS_BATCH) {
+            let msg: Hdl::Message = SyncMessage::from(WatchHeads {
+                ids: chunk.to_vec(),
+            })
+            .into();
+            if let Err(e) = conn.send(&msg).await {
+                tracing::warn!(peer = %conn.peer_id(), error = %e, "failed to replay heads watches");
+                return;
+            }
+        }
     }
 
-    /// Fire-and-forget the same message to one connection per peer.
+    /// Send `msg` to one connection per peer, in order and without spawning,
+    /// so successive watch and unwatch messages cannot overtake each other.
     async fn send_to_all(&self, msg: SyncMessage) {
         let conns: Vec<Authenticated<Conn, Async>> = self
             .connections
@@ -499,12 +513,12 @@ where
             .values()
             .map(|conns| conns.first().clone())
             .collect();
-        if conns.is_empty() {
-            return;
-        }
         let wire: Hdl::Message = msg.into();
-        let pushes = conns.into_iter().map(|conn| (conn, wire.clone())).collect();
-        self.spawner.spawn(Async::send_pushes(pushes));
+        for conn in conns {
+            if let Err(e) = conn.send(&wire).await {
+                tracing::warn!(peer = %conn.peer_id(), error = %e, "failed to send to peer");
+            }
+        }
     }
 
     /***********************
@@ -1316,6 +1330,7 @@ where
             .await
             .map_err(IoError::Storage)?;
 
+        self.notify_watchers(id, &[]).await;
         Ok(())
     }
 
@@ -1568,39 +1583,57 @@ where
             return;
         }
         let conns = self.get_authorized_subscriber_conns(id, origin).await;
-
-        // On a heads read failure push with empty heads rather than drop the
-        // data, matching `SyncHandler::heads_for`.
-        let heads = ingest::heads_or_hydrate(
-            &self.sedimentrees,
-            &self.storage,
-            &self.depth_metric,
-            id,
-        )
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(tree = ?id, error = %e, "could not read heads; pushing with none");
-            Vec::new()
-        });
+        let heads = self.current_heads(id).await;
 
         let mut pushes =
             peers::build_pushes(id, &heads, &self.send_counter, &conns, ingested).await;
-        pushes.extend(
-            peers::build_watcher_heads_updates(
-                &self.heads_watches,
-                &self.storage,
-                &self.connections,
-                &self.send_counter,
-                id,
-                &heads,
-                &peers::push_recipients(&pushes, []),
-            )
-            .await,
-        );
+        pushes.extend(self.push_to_watchers(id, &heads, &pushes).await);
+        self.send_wire(pushes);
+    }
+
+    /// Read the current heads for `id`, falling back to empty on a storage
+    /// error (the heads field is advisory).
+    async fn current_heads(&self, id: SedimentreeId) -> Vec<CommitId> {
+        ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(tree = ?id, error = %e, "could not read heads; reporting none");
+                Vec::new()
+            })
+    }
+
+    /// Send `heads` to every watcher of `id` not already covered by `pushes`.
+    async fn push_to_watchers(
+        &self,
+        id: SedimentreeId,
+        heads: &[CommitId],
+        pushes: &peers::Pushes<Conn, Async, SyncMessage>,
+    ) -> peers::Pushes<Conn, Async, SyncMessage> {
+        peers::build_watcher_heads_updates(
+            &self.heads_watches,
+            &self.storage,
+            &self.connections,
+            &self.send_counter,
+            id,
+            heads,
+            &peers::push_recipients(pushes, []),
+        )
+        .await
+    }
+
+    /// Report a local heads change to watchers on a path that carries no
+    /// pushes (batch writes, removal). Peers that are also subscribers may
+    /// hear the same heads again via the following sync; the receiver's
+    /// notifier collapses the repeat.
+    async fn notify_watchers(&self, id: SedimentreeId, heads: &[CommitId]) {
+        let pushes = self.push_to_watchers(id, heads, &Vec::new()).await;
+        self.send_wire(pushes);
+    }
+
+    fn send_wire(&self, pushes: peers::Pushes<Conn, Async, SyncMessage>) {
         if pushes.is_empty() {
             return;
         }
-
         let pushes: Vec<(Authenticated<Conn, Async>, Hdl::Message)> = pushes
             .into_iter()
             .map(|(conn, msg)| (conn, msg.into()))
@@ -1961,6 +1994,7 @@ where
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
     > {
         self.store_sedimentree(id, sedimentree, blobs).await?;
+        self.notify_watchers(id, &self.current_heads(id).await).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
@@ -2028,6 +2062,7 @@ where
         // Storage write first (cancel-safety: storage is the source of truth;
         // a cancel between this and the broadcast self-heals on rehydrate).
         self.store_built_batch(id, commits, fragments).await?;
+        self.notify_watchers(id, &self.current_heads(id).await).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
@@ -2077,6 +2112,7 @@ where
         }
 
         self.store_commits_batch(id, commits).await?;
+        self.notify_watchers(id, &self.current_heads(id).await).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
@@ -2126,6 +2162,7 @@ where
         }
 
         self.store_fragments_batch(id, fragments).await?;
+        self.notify_watchers(id, &self.current_heads(id).await).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await

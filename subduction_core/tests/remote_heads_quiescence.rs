@@ -336,6 +336,8 @@ mod policy_denied_pushes {
     async fn assert_not_notified(message: SyncMessage) -> TestResult {
         let observer = RecordingObserver::default();
         let (locked, handler) = node_with_policy(21, observer.clone(), DenyWrites);
+        // Open the watch gate so only the policy can stop delivery.
+        locked.watch_heads(DOC).await;
         let (transport, _far_end) = ChannelTransport::pair();
         let conn = Authenticated::new_for_test(
             MessageTransport::new(transport),
