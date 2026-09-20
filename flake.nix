@@ -127,6 +127,7 @@
           cargo-watch
           # llvmPackages.bintools
           twiggy
+          typos
           unstable.wasm-bindgen-cli
           wasm-tools
         ];

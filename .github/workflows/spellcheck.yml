@@ -10,11 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  spellcheck:
+  typos:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: matheus23/md-spellcheck-action@v4.2.2
-        with:
-          files-to-check: "**/*.md"
-          words-to-ignore-file: ".github/workflows/dictionary.txt"
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@v1

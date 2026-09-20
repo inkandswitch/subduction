@@ -1,6 +1,6 @@
 //! The core of the [Sedimentree] data partitioning scheme.
 //!
-//! This core library only defines the metadata tracking featrues of Sedimentree.
+//! This core library only defines the metadata tracking features of Sedimentree.
 //! We assume that the actual data described by this metadata is not legible to the Sedimentree
 //! (regardless of whether or not it's encrypted).
 //!
