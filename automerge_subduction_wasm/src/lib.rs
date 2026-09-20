@@ -35,7 +35,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(clippy::missing_const_for_fn)] // wasm_bindgen doens't like const
+#![allow(clippy::missing_const_for_fn)] // wasm_bindgen doesn't like const
 #![allow(ambiguous_glob_reexports)] // Intentional: umbrella crate for JS consumers
 
 #[cfg(feature = "std")]

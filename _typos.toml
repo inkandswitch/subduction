@@ -1,0 +1,21 @@
+[files]
+extend-exclude = ["*.lock", "*.svg", ".ignore/", "target/"]
+
+[default]
+check-filename = true
+# Hex digests and base64 blobs
+extend-ignore-re = ["[0-9a-f]{32,}", "[A-Za-z0-9+/]{40,}={0,2}"]
+
+[default.extend-words]
+# Project terminology
+requestors = "requestors"
+REQUESTORS = "REQUESTORS"
+# Wire schema headers
+SUH = "SUH"
+SUR = "SUR"
+# Local names: `ba` = b∪a, `anc` = ancestor, `strat` = strategy, "mis-wired"
+anc = "anc"
+ba = "ba"
+befores = "befores"
+mis = "mis"
+strat = "strat"

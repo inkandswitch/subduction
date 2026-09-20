@@ -121,7 +121,7 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
     #[inline]
     pub const fn shard_at(&self, index: usize) -> Option<&Mutex<Map<K, V>>> {
         if index < N {
-            #[allow(clippy::indexing_slicing)] // checked above + no `get` on array to avoid nighly
+            #[allow(clippy::indexing_slicing)] // checked above + no `get` on array to avoid nightly
             Some(&self.shards[index])
         } else {
             None
