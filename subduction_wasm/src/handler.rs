@@ -45,7 +45,7 @@ const TS_FRAME_HANDLER: &str = r#"
 export interface FrameHandler {
     /** Called with the CBOR payload (no SUK envelope) for each inbound keyhive frame. */
     onMessage(payload: Uint8Array, peerId: PeerId): void;
-    /** Called when a peer's last connection drops. */
+    /** Called once when a peer's last connection is gone, including via `disconnectFromPeer` / `disconnectAll`. */
     onPeerDisconnect(peerId: PeerId): void;
 }
 "#;
@@ -185,9 +185,14 @@ impl WasmComposedHandler {
     }
 }
 
-impl RemoteHeadsNotifier for WasmComposedHandler {
-    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        self.sync.notify_remote_heads(id, peer, heads);
+impl RemoteHeadsNotifier<Local> for WasmComposedHandler {
+    fn notify_remote_heads(
+        &self,
+        id: SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) -> LocalBoxFuture<'_, ()> {
+        self.sync.notify_remote_heads(id, peer, heads)
     }
 }
 
