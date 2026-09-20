@@ -503,8 +503,9 @@ where
         }
     }
 
-    /// Send `msg` to one connection per peer, in order and without spawning,
-    /// so successive watch and unwatch messages cannot overtake each other.
+    /// Send `msg` on one connection per peer (a watch is per peer, not per
+    /// connection), in order and without spawning so successive watch and
+    /// unwatch messages cannot overtake each other.
     async fn send_to_all(&self, msg: SyncMessage) {
         let conns: Vec<Authenticated<Conn, Async>> = self
             .connections

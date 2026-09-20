@@ -950,11 +950,7 @@ fn encode_sync_diff(buf: &mut Vec<u8>, diff: &SyncDiff) {
 }
 
 fn encode_remove_subscriptions(buf: &mut Vec<u8>, unsub: &RemoveSubscriptions) {
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(unsub.ids.len() as u16).to_be_bytes());
-    for id in &unsub.ids {
-        buf.extend_from_slice(id.as_bytes());
-    }
+    encode_ids(buf, &unsub.ids);
 }
 
 fn encode_data_request_rejected(buf: &mut Vec<u8>, rejected: &DataRequestRejected) {
@@ -1200,17 +1196,8 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 }
 
 fn decode_remove_subscriptions(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
-    let mut offset = 0;
-
-    let count = read_u16(payload, &mut offset)? as usize;
-
-    let mut ids = Vec::with_capacity(count);
-    for _ in 0..count {
-        ids.push(SedimentreeId::new(read_array::<32>(payload, &mut offset)?));
-    }
-
     Ok(SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
-        ids,
+        ids: decode_ids(payload)?,
     }))
 }
 
@@ -1242,7 +1229,8 @@ fn encode_ids(buf: &mut Vec<u8>, ids: &[SedimentreeId]) {
 fn decode_ids(payload: &[u8]) -> Result<Vec<SedimentreeId>, DecodeError> {
     let mut offset = 0;
     let count = read_u16(payload, &mut offset)? as usize;
-    let mut ids = Vec::with_capacity(count);
+    // Cap allocation by what the payload can actually hold.
+    let mut ids = Vec::with_capacity(count.min(payload.len().saturating_sub(offset) / 32));
     for _ in 0..count {
         ids.push(SedimentreeId::new(read_array::<32>(payload, &mut offset)?));
     }
