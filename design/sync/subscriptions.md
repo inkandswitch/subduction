@@ -297,6 +297,101 @@ sequenceDiagram
     Note over S: Yes — remove from all subscription sets
 ```
 
+## Heads Watches
+
+A heads watch is the heads-only counterpart of a push subscription. Where a
+subscription delivers every commit and fragment, a watch delivers only the
+peer's current heads for a sedimentree, as a snapshot on establishment and a
+`HeadsUpdate` on every change. The application uses watches to learn where a
+peer is without holding the peer's data: lazy loading, convergence indicators,
+presence-style awareness.
+
+| | Push subscription | Heads watch |
+|---|---|---|
+| Established by | `BatchSyncRequest { subscribe: true }` | `WatchHeads { ids }` |
+| Initial state | the batch sync response | `WatchHeadsResponse` snapshot |
+| Delivers | `LooseCommit` / `Fragment` with `sender_heads` | `HeadsUpdate { id, heads }` |
+| Admission check | `authorize_fetch` via the sync | `authorize_fetch` per id |
+| Fan-out filter | `filter_authorized_fetch` | `filter_authorized_fetch` |
+| Removed by | `RemoveSubscriptions` | `UnwatchHeads` |
+| Cleared on disconnect | yes | yes |
+| Propagates upstream | yes | no |
+
+```mermaid
+sequenceDiagram
+    participant A as Watcher
+    participant B as Peer
+
+    A->>B: WatchHeads { ids: [doc-123] }
+    Note over B: authorize_fetch(A, doc-123)
+    Note over B: record A as watcher of doc-123
+    B->>A: WatchHeadsResponse { [doc-123: Watching(heads)] }
+    Note left of A: Notify heads observer (snapshot)
+
+    Note over B: doc-123 changes
+    B->>A: HeadsUpdate { id: doc-123, heads }
+    Note left of A: Notify heads observer (only on change)
+```
+
+### Default Deny
+
+Heads reach the application's `RemoteHeadsObserver` _only_ for sedimentrees the
+application has passed to `watch_heads`. Neither syncing a tree nor being
+pushed one implies a watch, and a `HeadsUpdate` for an unwatched tree is
+dropped before it is recorded. This keeps the observer from learning the
+existence and `CommitId`s of documents the application never asked about,
+which a relay would otherwise surface for every tree transiting it.
+
+The gate is the application's own intent, not a per-peer confirmation: a peer
+that refused the watch and then sends heads for a watched tree is not leaking
+anything of ours, and a peer that sends heads for an unwatched tree is ignored
+whatever it claims.
+
+### Establishment
+
+`WatchHeads` is fire-and-forget. The peer answers with one outcome per id:
+
+| Outcome | Meaning | Watcher's action |
+|---|---|---|
+| `Watching(heads)` | Recorded; `heads` is the peer's current view, empty if it holds nothing for the tree | Deliver the snapshot (if still watched) |
+| `Unauthorized` | `authorize_fetch` refused | Log |
+| `AtCapacity` | The peer already holds `MAX_WATCHERS_PER_PEER` watches for us | Log |
+
+A watch on a tree the peer does not hold yet is still recorded; the empty
+snapshot says "nothing here", and the first commit arrives as a change. There
+is no request id: the response names the trees, and watching is idempotent, so
+a duplicate response is harmless.
+
+`watch_heads(id)` sends `WatchHeads` to every connected peer and re-sends it to
+each peer that connects later, so a watch outlives any one session. The
+watcher's intent is the only state that survives a disconnect; the peer's
+record of the watch is cleared with the rest of its session.
+
+### Delivery and Deduplication
+
+On a heads change, a node sends `HeadsUpdate` to each watcher that will not
+learn the heads another way in the same round:
+
+```text
+heads_only_targets(T) = watchers(T)
+                        \ push_recipients(T)      -- heads ride the push as sender_heads
+                        \ { originator if acked }  -- heads ride the 1.5-RTT ack
+```
+
+Both fan-out paths (`Subduction` for local writes and requester-side ingest,
+`SyncHandler` for inbound pushes) build the watcher updates in the same helper
+as the pushes, so per-peer send counters are stamped in order and no path is
+missed. A peer that both subscribes and watches therefore sees each change
+exactly once.
+
+### Limits
+
+`MAX_WATCHERS_PER_PEER` bounds the entries one peer may hold; past it, further
+`WatchHeads` ids are answered `AtCapacity` and not recorded. Watchers are
+re-checked against `filter_authorized_fetch` at fan-out, so a revoked peer
+stops hearing heads without a disconnect.
+
+
 ## Design Rationale
 
 ### Why Bundle Subscribe with Batch Sync?

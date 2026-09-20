@@ -21,6 +21,8 @@ use sedimentree_core::{
 
 use crate::peer::id::PeerId;
 
+pub mod watches;
+
 /// A remote peer's heads for a sedimentree, with a monotonic counter
 /// for ordering in the face of out-of-order delivery.
 ///
@@ -53,9 +55,13 @@ impl RemoteHeads {
 /// Observer for remote heads notifications.
 ///
 /// Called with `(sedimentree_id, peer_id, heads)` when a peer's heads for a
-/// sedimentree change. Heads arrive on `HeadsUpdate`, `sender_heads`, and
+/// watched sedimentree change. Only sedimentrees passed to
+/// [`Subduction::watch_heads`] are reported; syncing or being pushed to does
+/// not imply a watch. Heads arrive on `HeadsUpdate`, `sender_heads`, and
 /// `responder_heads`; repeats are suppressed so an observer that syncs in
 /// response terminates.
+///
+/// [`Subduction::watch_heads`]: crate::subduction::Subduction::watch_heads
 ///
 /// # Contract
 ///

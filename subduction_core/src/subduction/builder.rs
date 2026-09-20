@@ -82,7 +82,9 @@ use crate::{
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    remote_heads::{NoRemoteHeadsObserver, RemoteHeadsNotifier, RemoteHeadsObserver},
+    remote_heads::{
+        NoRemoteHeadsObserver, RemoteHeadsNotifier, RemoteHeadsObserver, watches::HeadsWatches,
+    },
     spawn::Spawn,
     storage::{powerbox::StoragePowerbox, traits::Storage},
     timeout::Timeout,
@@ -396,10 +398,13 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
     SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, SHARDS>
 {
     /// Set the [`RemoteHeadsObserver`] invoked when a remote peer's heads for
-    /// a sedimentree change. Heads arrive on `HeadsUpdate`, `sender_heads`,
-    /// and `responder_heads`; the observer is called only when they differ
-    /// from the last report for that `(peer, sedimentree)`. See
-    /// [`RemoteHeadsObserver`] for the callback's obligations.
+    /// a watched sedimentree change (see [`Subduction::watch_heads`]). Heads
+    /// arrive on `HeadsUpdate`, `sender_heads`, and `responder_heads`; the
+    /// observer is called only when they differ from the last report for that
+    /// `(peer, sedimentree)`. See [`RemoteHeadsObserver`] for the callback's
+    /// obligations.
+    ///
+    /// [`Subduction::watch_heads`]: crate::subduction::Subduction::watch_heads
     ///
     /// Defaults to [`NoRemoteHeadsObserver`], which discards all
     /// notifications.
@@ -705,11 +710,13 @@ impl<
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
+        let heads_watches = Arc::new(HeadsWatches::new());
 
         let mut handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
+            heads_watches.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
             self.heads_observer,
@@ -729,6 +736,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             self.storage,
             send_counter,
             nonce_cache,
@@ -832,6 +840,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
+        let heads_watches = Arc::new(HeadsWatches::new());
 
         Subduction::new(
             handler,
@@ -840,6 +849,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             self.storage,
             self.send_counter.unwrap_or_default(),
             nonce_cache,
@@ -943,11 +953,13 @@ impl<
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
+        let heads_watches = Arc::new(HeadsWatches::new());
 
         let mut sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
+            heads_watches.clone(),
             self.storage.clone(),
             self.depth_metric.clone(),
             self.heads_observer,
@@ -968,6 +980,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             self.storage,
             send_counter,
             nonce_cache,

@@ -165,6 +165,11 @@ enum Message {
     BatchSyncRequest(BatchSyncRequest),
     BatchSyncResponse(BatchSyncResponse),
     RemoveSubscriptions(RemoveSubscriptions),
+    DataRequestRejected(DataRequestRejected),
+    HeadsUpdate { id, heads },
+    WatchHeads(WatchHeads),
+    WatchHeadsResponse(WatchHeadsResponse),
+    UnwatchHeads(UnwatchHeads),
 }
 ```
 
@@ -474,6 +479,9 @@ All sync messages use the envelope format with schema `SUM\x00`:
 | `0x06` | RemoveSubscriptions            |
 | `0x07` | DataRequestRejected            |
 | `0x08` | HeadsUpdate                    |
+| `0x09` | WatchHeads                     |
+| `0x0A` | WatchHeadsResponse             |
+| `0x0B` | UnwatchHeads                   |
 
 Tags `0x02`/`0x03` once carried an explicit blob-pull request/response. That
 mechanism was removed — blobs travel inline with their `LooseCommit` /
@@ -568,6 +576,42 @@ Requested fingerprints are 8 bytes each.
 ║      32B      ║
 ╚═══════════════╝
 ```
+
+### HeadsUpdate (Tag 0x08)
+
+```
+╔═══════════════╦═════════╦═══════╦══════════════╗
+║ SedimentreeId ║ Counter ║ Count ║ CommitIds... ║
+║      32B      ║   8B    ║  4B   ║   N × 32B    ║
+╚═══════════════╩═════════╩═══════╩══════════════╝
+```
+
+Sent as the ack after ingesting pushed data, and on every change to a
+sedimentree the receiver watches (see [Heads Watches](./sync/subscriptions.md#heads-watches)).
+
+### WatchHeads (Tag 0x09) / UnwatchHeads (Tag 0x0B)
+
+```
+╔═══════╦════════════════════╗
+║ Count ║ SedimentreeIds...  ║
+║  2B   ║      N × 32B       ║
+╚═══════╩════════════════════╝
+```
+
+### WatchHeadsResponse (Tag 0x0A)
+
+```
+╔═══════╦══════════════════════════════════════════════════════╗
+║ Count ║ Results...                                           ║
+║  2B   ║ N × (SedimentreeId 32B + Outcome 1B + [RemoteHeads]) ║
+╚═══════╩══════════════════════════════════════════════════════╝
+```
+
+| Outcome | Meaning                                                   |
+|---------|-----------------------------------------------------------|
+| `0x00`  | Watching — followed by `RemoteHeads` (counter + heads)    |
+| `0x01`  | Unauthorized — the requester may not fetch this tree      |
+| `0x02`  | AtCapacity — the peer holds as many watches as it accepts |
 
 ## Future Considerations
 

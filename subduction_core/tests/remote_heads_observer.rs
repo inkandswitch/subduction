@@ -75,6 +75,7 @@ async fn builder_observer_receives_heads_updates() -> TestResult {
     subduction.add_connection(conn.authenticated()).await?;
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
+    subduction.watch_heads(sedimentree_id).await;
     let heads = RemoteHeads {
         counter: 1,
         heads: vec![CommitId::new([7u8; 32])],
@@ -122,6 +123,7 @@ async fn stale_heads_updates_are_filtered() -> TestResult {
     subduction.add_connection(conn.authenticated()).await?;
 
     let sedimentree_id = SedimentreeId::new([43u8; 32]);
+    subduction.watch_heads(sedimentree_id).await;
     let update = |counter: u8| SyncMessage::HeadsUpdate {
         id: sedimentree_id,
         heads: RemoteHeads {

@@ -618,11 +618,11 @@ fn sync_message_corrupted_total_size_rejected() {
 }
 
 /// A `SUM\x00`-prefixed envelope with a tag byte outside the
-/// supported range (0x00–0x08) yields `InvalidEnumTag`.
+/// supported range (0x00–0x0B) yields `InvalidEnumTag`.
 #[test]
 fn sync_message_unknown_tag_rejected() {
     bolero::check!().with_arbitrary::<u8>().for_each(|bad_tag| {
-        if *bad_tag <= 0x08 {
+        if *bad_tag <= 0x0B {
             return;
         }
         let mut bytes = Vec::with_capacity(9);

@@ -77,7 +77,8 @@ use crate::{
         manager::{Command, ConnectionManager, QueuedDispatch, RunManager},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
+            SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest, UnwatchHeads,
+            WatchHeads,
         },
         stats::{SendCount, SyncStats},
     },
@@ -87,12 +88,12 @@ use crate::{
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    remote_heads::{RemoteHeads, RemoteHeadsNotifier},
+    remote_heads::{RemoteHeads, RemoteHeadsNotifier, watches::HeadsWatches},
     spawn::Spawn,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::{Timeout, call::CallTimeout},
 };
-use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeSet, sync::Arc, vec, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::{Mutex, SemaphoreGuardArc};
 use core::{marker::PhantomData, time::Duration};
@@ -196,6 +197,11 @@ pub struct Subduction<
     default_roundtrip_timeout: Duration,
 
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+
+    /// Heads watches in both directions; shared with the [`SyncHandler`].
+    ///
+    /// [`SyncHandler`]: crate::handler::sync::SyncHandler
+    heads_watches: Arc<HeadsWatches>,
     nonce_tracker: Arc<NonceCache>,
 
     /// Backoff state per connection, keyed by [`ConnectionId`].
@@ -270,12 +276,14 @@ where
     /// let sedimentrees = Arc::new(BoundedShardedMap::new());
     /// let connections = Arc::new(Mutex::new(Map::new()));
     /// let subscriptions = Arc::new(Mutex::new(Map::new()));
+    /// let heads_watches = Arc::new(HeadsWatches::new());
     /// let storage = StoragePowerbox::new(storage, Arc::new(policy));
     ///
     /// let handler = Arc::new(SyncHandler::new(
     ///     sedimentrees.clone(),
     ///     connections.clone(),
     ///     subscriptions.clone(),
+    ///     heads_watches.clone(),
     ///     storage.clone(),
     ///     depth_metric.clone(),
     /// ));
@@ -287,6 +295,7 @@ where
     ///     sedimentrees,
     ///     connections,
     ///     subscriptions,
+    ///     heads_watches,
     ///     storage,
     ///     nonce_cache,
     ///     depth_metric,
@@ -301,6 +310,7 @@ where
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+        heads_watches: Arc<HeadsWatches>,
         storage: StoragePowerbox<Store, Auth>,
         send_counter: PeerCounter,
         nonce_cache: NonceCache,
@@ -350,6 +360,7 @@ where
             connections,
             multiplexers: Arc::new(Mutex::new(Map::new())),
             subscriptions,
+            heads_watches,
             storage,
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
@@ -427,6 +438,73 @@ where
             .await
             .get(peer_id)
             .map(|ne| ne.head.clone())
+    }
+
+    /***********************
+     * HEADS WATCHES        *
+     ***********************/
+
+    /// Ask every current and future peer to report its heads for `id`.
+    ///
+    /// Each peer answers with its current heads (delivered to the
+    /// [`RemoteHeadsObserver`]) and then sends a `HeadsUpdate` on every
+    /// change. The watch is re-sent to peers that reconnect. Idempotent.
+    ///
+    /// Heads for a sedimentree reach the observer _only_ while it is watched:
+    /// neither syncing nor being pushed to implies a watch.
+    ///
+    /// [`RemoteHeadsObserver`]: crate::remote_heads::RemoteHeadsObserver
+    pub async fn watch_heads(&self, id: SedimentreeId) {
+        if !self.heads_watches.watch(id).await {
+            return;
+        }
+        tracing::debug!(tree = ?id, "watching heads");
+        self.send_to_all(WatchHeads { ids: vec![id] }.into()).await;
+    }
+
+    /// Stop watching `id`. Peers are told to stop sending `HeadsUpdate`s and
+    /// any in-flight report for `id` is dropped at delivery.
+    pub async fn unwatch_heads(&self, id: SedimentreeId) {
+        if !self.heads_watches.unwatch(id).await {
+            return;
+        }
+        tracing::debug!(tree = ?id, "unwatching heads");
+        self.send_to_all(UnwatchHeads { ids: vec![id] }.into())
+            .await;
+    }
+
+    /// Whether the application is watching heads for `id`.
+    pub async fn is_watching_heads(&self, id: SedimentreeId) -> bool {
+        self.heads_watches.is_watched(id).await
+    }
+
+    /// Re-send the application's watches to a peer that just connected.
+    async fn replay_watches(&self, conn: &Authenticated<Conn, Async>) {
+        let ids = self.heads_watches.watched().await;
+        if ids.is_empty() {
+            return;
+        }
+        tracing::debug!(peer = %conn.peer_id(), trees = ids.len(), "replaying heads watches");
+        let msg: Hdl::Message = SyncMessage::from(WatchHeads { ids }).into();
+        self.spawner
+            .spawn(Async::send_pushes(vec![(conn.clone(), msg)]));
+    }
+
+    /// Fire-and-forget the same message to one connection per peer.
+    async fn send_to_all(&self, msg: SyncMessage) {
+        let conns: Vec<Authenticated<Conn, Async>> = self
+            .connections
+            .lock()
+            .await
+            .values()
+            .map(|conns| conns.first().clone())
+            .collect();
+        if conns.is_empty() {
+            return;
+        }
+        let wire: Hdl::Message = msg.into();
+        let pushes = conns.into_iter().map(|conn| (conn, wire.clone())).collect();
+        self.spawner.spawn(Async::send_pushes(pushes));
     }
 
     /***********************
@@ -651,6 +729,7 @@ where
         Self::cancel_detached_muxes(removed_muxes).await;
         self.subscriptions.lock().await.clear();
         self.outgoing_subscriptions.lock().await.clear();
+        self.heads_watches.remove_all_peers().await;
         // Send counters survive on purpose; see `PeerCounter`.
 
         for peer_id in peers_torn_down {
@@ -766,6 +845,7 @@ where
             return Err(AddConnectionError::SendToClosedChannel);
         }
 
+        self.replay_watches(&conn).await;
         Ok(true)
     }
 
@@ -956,6 +1036,7 @@ where
     ) {
         Self::cancel_detached_muxes(muxes).await;
         peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+        self.heads_watches.remove_peer(*peer_id).await;
 
         // GC only — invalidation happens on next arrival
         // (`clear_stale_outgoing_claims`); this bounds the map.
@@ -1487,9 +1568,6 @@ where
             return;
         }
         let conns = self.get_authorized_subscriber_conns(id, origin).await;
-        if conns.is_empty() {
-            return;
-        }
 
         // On a heads read failure push with empty heads rather than drop the
         // data, matching `SyncHandler::heads_for`.
@@ -1505,12 +1583,28 @@ where
             Vec::new()
         });
 
-        let pushes: Vec<(Authenticated<Conn, Async>, Hdl::Message)> =
-            peers::build_pushes(id, &heads, &self.send_counter, &conns, ingested)
-                .await
-                .into_iter()
-                .map(|(conn, msg)| (conn, msg.into()))
-                .collect();
+        let mut pushes =
+            peers::build_pushes(id, &heads, &self.send_counter, &conns, ingested).await;
+        pushes.extend(
+            peers::build_watcher_heads_updates(
+                &self.heads_watches,
+                &self.storage,
+                &self.connections,
+                &self.send_counter,
+                id,
+                &heads,
+                &peers::push_recipients(&pushes, []),
+            )
+            .await,
+        );
+        if pushes.is_empty() {
+            return;
+        }
+
+        let pushes: Vec<(Authenticated<Conn, Async>, Hdl::Message)> = pushes
+            .into_iter()
+            .map(|(conn, msg)| (conn, msg.into()))
+            .collect();
         self.spawner.spawn(Async::send_pushes(pushes));
     }
 
@@ -2292,9 +2386,11 @@ where
                     .await?;
                     self.minimize_tree(id).await;
                     self.push_to_subscribers(id, to_ask, &ingested).await;
-                    self.handler
-                        .notify_remote_heads(id, *to_ask, responder_heads)
-                        .await;
+                    if self.heads_watches.is_watched(id).await {
+                        self.handler
+                            .notify_remote_heads(id, *to_ask, responder_heads)
+                            .await;
+                    }
 
                     // Update received stats (count what was offered, not verified)
                     stats.commits_received += commits_to_receive;
@@ -2526,9 +2622,11 @@ where
                                 .await?;
                                 self.minimize_tree(id).await;
                                 self.push_to_subscribers(id, peer_id, &ingested).await;
-                                self.handler
-                                    .notify_remote_heads(id, *peer_id, responder_heads)
-                                    .await;
+                                if self.heads_watches.is_watched(id).await {
+                                    self.handler
+                                        .notify_remote_heads(id, *peer_id, responder_heads)
+                                        .await;
+                                }
 
                                 // Update received stats
                                 stats.commits_received += commits_to_receive;
@@ -4071,11 +4169,13 @@ mod tests {
             Arc::new(BoundedShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let heads_watches = Arc::new(HeadsWatches::new());
         let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
         let handler = Arc::new(SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
+            heads_watches.clone(),
             storage.clone(),
             CountLeadingZeroBytes,
             TestSpawn,
@@ -4098,6 +4198,7 @@ mod tests {
             sedimentrees.clone(),
             connections,
             subscriptions,
+            heads_watches,
             storage.clone(),
             PeerCounter::default(),
             NonceCache::default(),

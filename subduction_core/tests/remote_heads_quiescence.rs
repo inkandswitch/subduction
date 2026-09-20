@@ -5,7 +5,9 @@
 //! unchanged heads would restart the loop.
 //!
 //! Unit tests of the filter itself live in `subduction_core::remote_heads`;
-//! these tests exercise the wiring through a running node.
+//! these tests exercise the wiring through a running node. Each watches the
+//! tree first, since only watched trees reach the observer (see
+//! `tests/heads_watch.rs`).
 
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -226,6 +228,7 @@ async fn repeated_sync_of_converged_trees_stops_notifying() -> TestResult {
         Blob::new(b"only commit".to_vec()),
     )
     .await?;
+    a.watch_heads(doc).await;
 
     a.sync_with_peer(&peer_id(2), doc, true, CallTimeout::TimeoutMillis(500))
         .await?;
@@ -265,6 +268,9 @@ async fn changed_heads_still_notify() -> TestResult {
             Blob::new(vec![i; 16]),
         )
         .await?;
+        if i == 1 {
+            a.watch_heads(doc).await;
+        }
         a.sync_with_peer(&peer_id(4), doc, true, CallTimeout::TimeoutMillis(500))
             .await?;
     }
@@ -293,6 +299,7 @@ async fn disconnect_through_the_api_clears_filter_state() -> TestResult {
         Blob::new(b"before".to_vec()),
     )
     .await?;
+    a.watch_heads(doc).await;
     a.sync_with_peer(&peer_id(6), doc, true, CallTimeout::TimeoutMillis(500))
         .await?;
     let before = observer.count();

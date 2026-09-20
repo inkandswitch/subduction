@@ -39,7 +39,7 @@ use crate::{
         Connection,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
-            SyncResult,
+            SyncResult, UnwatchHeads, WatchHeads, WatchHeadsResponse, WatchOutcome, WatchResult,
         },
     },
     peer::id::PeerId,
@@ -58,6 +58,7 @@ use crate::{
     remote_heads::{
         FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsNotifier,
         RemoteHeadsObserver,
+        watches::{HeadsWatches, MAX_WATCHERS_PER_PEER, WatchRefused},
     },
 };
 
@@ -89,6 +90,7 @@ pub struct SyncHandler<
     sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+    heads_watches: Arc<HeadsWatches>,
     storage: StoragePowerbox<Store, Auth>,
     depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
@@ -133,6 +135,7 @@ impl<
             sedimentrees: self.sedimentrees.clone(),
             connections: self.connections.clone(),
             subscriptions: self.subscriptions.clone(),
+            heads_watches: self.heads_watches.clone(),
             storage: self.storage.clone(),
             depth_metric: self.depth_metric.clone(),
             heads_notifier: self.heads_notifier.clone(),
@@ -166,6 +169,7 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+        heads_watches: Arc<HeadsWatches>,
         storage: StoragePowerbox<Store, Auth>,
         depth_metric: Metric,
         spawner: Sp,
@@ -174,6 +178,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             storage,
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
@@ -199,11 +204,12 @@ impl<
     /// Create a new `SyncHandler` with a custom remote heads observer.
     ///
     /// See [`RemoteHeadsObserver`] for the callback's obligations.
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub fn with_remote_heads_observer(
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+        heads_watches: Arc<HeadsWatches>,
         storage: StoragePowerbox<Store, Auth>,
         depth_metric: Metric,
         remote_heads_observer: R,
@@ -213,6 +219,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             storage,
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
@@ -564,13 +571,93 @@ impl<
                 None
             }
             SyncMessage::HeadsUpdate { id, heads } => {
-                tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
-                self.heads_notifier.notify(id, from, heads).await;
+                if self.heads_watches.is_watched(id).await {
+                    tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
+                    self.heads_notifier.notify(id, from, heads).await;
+                } else {
+                    tracing::trace!(peer = %from, tree = ?id, "heads for an unwatched sedimentree; ignoring");
+                }
+                None
+            }
+            SyncMessage::WatchHeads(WatchHeads { ids }) => {
+                self.recv_watch_heads(from, ids, conn).await;
+                None
+            }
+            SyncMessage::WatchHeadsResponse(WatchHeadsResponse { results }) => {
+                self.recv_watch_heads_response(from, results).await;
+                None
+            }
+            SyncMessage::UnwatchHeads(UnwatchHeads { ids }) => {
+                self.heads_watches.remove_watcher(from, &ids).await;
+                tracing::debug!(peer = %from, trees = ids.len(), "removed heads watches");
                 None
             }
         };
 
         Ok(fanout)
+    }
+
+    /// Deliver each confirmed snapshot, gated on the application still
+    /// watching that tree so an unsolicited confirmation opens nothing.
+    async fn recv_watch_heads_response(&self, from: PeerId, results: Vec<WatchResult>) {
+        for WatchResult { id, outcome } in results {
+            match outcome {
+                WatchOutcome::Watching(heads) => {
+                    if self.heads_watches.is_watched(id).await {
+                        self.heads_notifier.notify(id, from, heads).await;
+                    } else {
+                        tracing::trace!(peer = %from, tree = ?id, "watch confirmed for an unwatched sedimentree; ignoring");
+                    }
+                }
+                WatchOutcome::Unauthorized => {
+                    tracing::debug!(peer = %from, tree = ?id, "peer refused heads watch: unauthorized");
+                }
+                WatchOutcome::AtCapacity => {
+                    tracing::warn!(peer = %from, tree = ?id, "peer refused heads watch: at capacity");
+                }
+            }
+        }
+    }
+
+    /// Record `from` as a watcher of each authorized id and answer with the
+    /// current heads. Refusals are per id, so one unauthorized tree does not
+    /// fail the rest.
+    async fn recv_watch_heads(
+        &self,
+        from: PeerId,
+        ids: Vec<SedimentreeId>,
+        conn: &Authenticated<Conn, Async>,
+    ) {
+        let mut results = Vec::with_capacity(ids.len());
+        for id in ids {
+            let outcome = if self
+                .storage
+                .policy()
+                .authorize_fetch(from, id)
+                .await
+                .is_err()
+            {
+                tracing::debug!(peer = %from, tree = ?id, "policy rejected heads watch");
+                WatchOutcome::Unauthorized
+            } else {
+                match self.heads_watches.add_watcher(from, id).await {
+                    Ok(()) => WatchOutcome::Watching(RemoteHeads {
+                        counter: self.send_counter.next(from).await,
+                        heads: self.heads_for(id).await,
+                    }),
+                    Err(WatchRefused::AtCapacity) => {
+                        tracing::warn!(peer = %from, tree = ?id, cap = MAX_WATCHERS_PER_PEER, "heads watch refused: peer at capacity");
+                        WatchOutcome::AtCapacity
+                    }
+                }
+            };
+            results.push(WatchResult { id, outcome });
+        }
+
+        let resp: SyncMessage = WatchHeadsResponse { results }.into();
+        if let Err(e) = conn.send(&resp).await {
+            tracing::info!(peer = %from, error = %e, "peer disconnected while sending WatchHeadsResponse");
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -646,10 +733,12 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        // Report heads only after the message is verified, authorized, and
-        // stored, so the observer never sees heads for data we rejected or do
-        // not yet hold.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
+        // Report heads only for a watched sedimentree, and only after the
+        // message is verified, authorized, and stored, so the observer never
+        // sees heads for trees it did not ask about or data we rejected.
+        if self.heads_watches.is_watched(id).await {
+            self.heads_notifier.notify(id, *from, sender_heads).await;
+        }
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -665,9 +754,13 @@ impl<
             };
 
             let conns = self.get_authorized_subscriber_conns(id, from).await;
-            let pushes = self
+            let mut pushes = self
                 .build_loose_commit_pushes(id, &signed_for_wire, &blob, &heads, conns)
                 .await;
+            pushes.extend(
+                self.watcher_heads_updates(id, &heads, &pushes, [*from])
+                    .await,
+            );
 
             Some(FanOut {
                 ack: Some((conn.clone(), ack_msg)),
@@ -801,8 +894,10 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        // Heads reported after verification and storage; see `recv_commit`.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
+        // Gated and ordered as in `recv_commit`.
+        if self.heads_watches.is_watched(id).await {
+            self.heads_notifier.notify(id, *from, sender_heads).await;
+        }
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -816,9 +911,13 @@ impl<
             };
 
             let conns = self.get_authorized_subscriber_conns(id, from).await;
-            let pushes = self
+            let mut pushes = self
                 .build_fragment_pushes(id, &signed_for_wire, &blob, &heads, conns)
                 .await;
+            pushes.extend(
+                self.watcher_heads_updates(id, &heads, &pushes, [*from])
+                    .await,
+            );
 
             Some(FanOut {
                 ack: Some((conn.clone(), ack_msg)),
@@ -1165,13 +1264,15 @@ impl<
         if ingested.is_empty() {
             return Ok(None);
         }
-        let conns = self.get_authorized_subscriber_conns(id, from).await;
-        if conns.is_empty() {
-            return Ok(None);
-        }
 
         let heads = self.heads_for(id).await;
-        let pushes = peers::build_pushes(id, &heads, &self.send_counter, &conns, &ingested).await;
+        let conns = self.get_authorized_subscriber_conns(id, from).await;
+        let mut pushes =
+            peers::build_pushes(id, &heads, &self.send_counter, &conns, &ingested).await;
+        pushes.extend(self.watcher_heads_updates(id, &heads, &pushes, []).await);
+        if pushes.is_empty() {
+            return Ok(None);
+        }
         Ok(Some(FanOut { ack: None, pushes }))
     }
 
@@ -1249,6 +1350,26 @@ impl<
             &self.connections,
             sedimentree_id,
             exclude_peer,
+        )
+        .await
+    }
+
+    /// `HeadsUpdate`s for watchers not already covered by `pushes` or `also`.
+    async fn watcher_heads_updates(
+        &self,
+        id: SedimentreeId,
+        heads: &[CommitId],
+        pushes: &peers::Pushes<Conn, Async, SyncMessage>,
+        also: impl IntoIterator<Item = PeerId>,
+    ) -> peers::Pushes<Conn, Async, SyncMessage> {
+        peers::build_watcher_heads_updates(
+            &self.heads_watches,
+            &self.storage,
+            &self.connections,
+            &self.send_counter,
+            id,
+            heads,
+            &peers::push_recipients(pushes, also),
         )
         .await
     }

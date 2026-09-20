@@ -24,7 +24,7 @@ use crate::{
     connection::{Connection, message::SyncMessage},
     peer::{counter::PeerCounter, id::PeerId},
     policy::storage::StoragePolicy,
-    remote_heads::RemoteHeads,
+    remote_heads::{RemoteHeads, watches::HeadsWatches},
     storage::{powerbox::StoragePowerbox, traits::Storage},
 };
 
@@ -159,6 +159,84 @@ pub(crate) async fn build_pushes<Conn: Clone, Async: FutureForm>(
         }
     }
     out
+}
+
+/// Build one `HeadsUpdate` per peer watching `id` that will not learn these
+/// heads another way this round: `exclude` names the peers already getting
+/// them on a push or an ack. Watchers are re-checked against the fetch policy
+/// so a revoked peer stops hearing heads without a disconnect.
+///
+/// Both fan-out paths (`Subduction` and `SyncHandler`) use this alongside
+/// [`build_pushes`] so watcher delivery cannot drift from push delivery.
+pub(crate) async fn build_watcher_heads_updates<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,
+    WireMsg: Encode + Decode,
+    Auth: StoragePolicy<Async>,
+>(
+    watches: &HeadsWatches,
+    storage: &StoragePowerbox<Store, Auth>,
+    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
+    send_counter: &PeerCounter,
+    id: SedimentreeId,
+    heads: &[CommitId],
+    exclude: &Set<PeerId>,
+) -> Pushes<Conn, Async, SyncMessage> {
+    let candidates: Vec<PeerId> = watches
+        .watchers_of(id)
+        .await
+        .into_iter()
+        .filter(|peer| !exclude.contains(peer))
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut authorized = Vec::with_capacity(candidates.len());
+    for peer in candidates {
+        if !storage
+            .policy()
+            .filter_authorized_fetch(peer, alloc::vec![id])
+            .await
+            .is_empty()
+        {
+            authorized.push(peer);
+        }
+    }
+
+    let conns: Vec<Authenticated<Conn, Async>> = {
+        let guard = connections.lock().await;
+        authorized
+            .into_iter()
+            .filter_map(|peer| guard.get(&peer).map(|conns| conns.first().clone()))
+            .collect()
+    };
+
+    let mut out = Vec::with_capacity(conns.len());
+    for conn in conns {
+        let msg = SyncMessage::HeadsUpdate {
+            id,
+            heads: RemoteHeads {
+                counter: send_counter.next(conn.peer_id()).await,
+                heads: heads.to_vec(),
+            },
+        };
+        out.push((conn, msg));
+    }
+    out
+}
+
+/// Peers already covered by a set of pushes, plus `also`.
+pub(crate) fn push_recipients<Conn: Clone, Async: FutureForm, WireMsg>(
+    pushes: &Pushes<Conn, Async, WireMsg>,
+    also: impl IntoIterator<Item = PeerId>,
+) -> Set<PeerId> {
+    pushes
+        .iter()
+        .map(|(conn, _)| conn.peer_id())
+        .chain(also)
+        .collect()
 }
 
 /// Push frames addressed to one peer's connection, in send order.
