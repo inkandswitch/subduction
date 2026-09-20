@@ -239,7 +239,8 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
     /// Forget what was reported about `id` for every peer, so the next report
     /// of `id` is delivered even if unchanged.
     pub async fn forget_tree(&self, id: SedimentreeId) {
-        let filters: Vec<Arc<Mutex<PeerFilter>>> = self.peers.lock().await.values().cloned().collect();
+        let filters: Vec<Arc<Mutex<PeerFilter>>> =
+            self.peers.lock().await.values().cloned().collect();
         for filter in filters {
             filter.lock().await.reported.remove(&id);
         }

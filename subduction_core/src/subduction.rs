@@ -63,6 +63,7 @@ pub mod request;
 pub mod dispatch_completion;
 pub(crate) mod ingest;
 pub(crate) mod peers;
+use ingest::HeadsChanged;
 pub use peers::{SendPushes, upstream_peers};
 pub(crate) mod spawn_guard;
 
@@ -476,7 +477,8 @@ where
         }
         tracing::debug!(tree = ?id, "unwatching heads");
         self.handler.forget_remote_heads(id).await;
-        self.send_to_all(UnwatchHeads { ids: vec![id] }.into()).await;
+        self.send_to_all(UnwatchHeads { ids: vec![id] }.into())
+            .await;
     }
 
     /// Whether the application is watching heads for `id`.
@@ -1087,24 +1089,6 @@ where
         peers::add_subscription(&self.subscriptions, peer_id, sedimentree_id).await;
     }
 
-    /// Get connections for subscribers authorized to receive updates for a sedimentree.
-    ///
-    /// This is used when forwarding updates: we only send to subscribers who have Pull access.
-    async fn get_authorized_subscriber_conns(
-        &self,
-        sedimentree_id: SedimentreeId,
-        exclude_peer: &PeerId,
-    ) -> Vec<Authenticated<Conn, Async>> {
-        peers::get_authorized_subscriber_conns(
-            &self.subscriptions,
-            &self.storage,
-            &self.connections,
-            sedimentree_id,
-            exclude_peer,
-        )
-        .await
-    }
-
     /*********
      * BLOBS *
      *********/
@@ -1331,7 +1315,8 @@ where
             .await
             .map_err(IoError::Storage)?;
 
-        self.notify_watchers(id, &[]).await;
+        self.propagate(HeadsChanged::removed(id), &self.peer_id())
+            .await;
         Ok(())
     }
 
@@ -1436,21 +1421,13 @@ where
         let commit_head = verified_meta.payload().head();
         tracing::debug!(commit = ?commit_head, tree = ?id, "adding commit to sedimentree");
 
-        let signed_for_wire = verified_meta.signed().clone();
-        let blob = verified_meta.blob().clone();
-
-        self.insert_commit_locally(&putter, verified_meta)
+        let changed = self
+            .insert_commit_locally(&putter, verified_meta)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
         self.minimize_tree(id).await;
-
-        self.push_to_subscribers(
-            id,
-            &self_id,
-            &ingest::Ingested::commit(signed_for_wire, blob),
-        )
-        .await;
+        self.propagate_if_changed(changed, &self_id).await;
 
         let mut maybe_requested_fragment = None;
         let depth = self.depth_metric.to_depth(commit_head);
@@ -1545,93 +1522,41 @@ where
         let fragment_digest = Digest::hash(verified_meta.payload());
 
         tracing::debug!(digest = ?fragment_digest, tree = ?id, "adding fragment to sedimentree");
-        let signed_for_wire = verified_meta.signed().clone();
-        let blob = verified_meta.blob().clone();
-
-        self.insert_fragment_locally(&putter, verified_meta)
+        let changed = self
+            .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
         self.minimize_tree(id).await;
-
-        self.push_to_subscribers(
-            id,
-            &self_id,
-            &ingest::Ingested::fragment(signed_for_wire, blob),
-        )
-        .await;
+        self.propagate_if_changed(changed, &self_id).await;
 
         Ok(())
     }
 
-    /// Push `ingested` items for `id` to every subscriber that is authorized
-    /// to fetch it, excluding `origin` (the peer the data came from, or this
-    /// node for local writes). `SyncHandler` has the inbound equivalent; see
-    /// `design/sync/subscriptions.md` § Push Invariant.
+    /// Spend a [`HeadsChanged`] witness: tell authorized subscribers (other
+    /// than `origin`, the peer the data came from or this node for local
+    /// writes) and watchers. See `design/sync/subscriptions.md` § Push
+    /// Invariant and § Heads Watches.
     ///
     /// Frames are built here (so per-peer send counters are stamped in
-    /// order) and sent on a spawned task so a slow subscriber cannot stall
-    /// the caller. Best effort: a failed send is logged and the transport is
+    /// order) and sent on a spawned task so a slow peer cannot stall the
+    /// caller. Best effort: a failed send is logged and the transport is
     /// left for the read loop's canonical teardown, so the `on_peer_disconnect`
     /// hook still fires.
-    pub(crate) async fn push_to_subscribers(
-        &self,
-        id: SedimentreeId,
-        origin: &PeerId,
-        ingested: &ingest::Ingested,
-    ) {
-        if ingested.is_empty() {
-            return;
-        }
-        let conns = self.get_authorized_subscriber_conns(id, origin).await;
-        let heads = self.current_heads(id).await;
-
-        let mut pushes =
-            peers::build_pushes(id, &heads, &self.send_counter, &conns, ingested).await;
-        pushes.extend(self.push_to_watchers(id, &heads, &pushes).await);
-        self.send_wire(pushes);
-    }
-
-    /// Read the current heads for `id`, falling back to empty on a storage
-    /// error (the heads field is advisory).
-    async fn current_heads(&self, id: SedimentreeId) -> Vec<CommitId> {
-        ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(tree = ?id, error = %e, "could not read heads; reporting none");
-                Vec::new()
-            })
-    }
-
-    /// Send `heads` to every watcher of `id` not already covered by `pushes`.
-    async fn push_to_watchers(
-        &self,
-        id: SedimentreeId,
-        heads: &[CommitId],
-        pushes: &peers::Pushes<Conn, Async, SyncMessage>,
-    ) -> peers::Pushes<Conn, Async, SyncMessage> {
-        peers::build_watcher_heads_updates(
-            &self.heads_watches,
+    pub(crate) async fn propagate(&self, change: HeadsChanged, origin: &PeerId) {
+        let pushes = peers::propagate(
+            change,
+            origin,
+            None,
+            &self.sedimentrees,
             &self.storage,
+            &self.depth_metric,
             &self.connections,
+            &self.subscriptions,
+            &self.heads_watches,
             &self.send_counter,
-            id,
-            heads,
-            &peers::push_recipients(pushes, []),
         )
-        .await
-    }
-
-    /// Report a local heads change to watchers on a path that carries no
-    /// pushes (batch writes, removal). Peers that are also subscribers may
-    /// hear the same heads again via the following sync; the receiver's
-    /// notifier collapses the repeat.
-    async fn notify_watchers(&self, id: SedimentreeId, heads: &[CommitId]) {
-        let pushes = self.push_to_watchers(id, heads, &Vec::new()).await;
-        self.send_wire(pushes);
-    }
-
-    fn send_wire(&self, pushes: peers::Pushes<Conn, Async, SyncMessage>) {
+        .await;
         if pushes.is_empty() {
             return;
         }
@@ -1640,6 +1565,13 @@ where
             .map(|(conn, msg)| (conn, msg.into()))
             .collect();
         self.spawner.spawn(Async::send_pushes(pushes));
+    }
+
+    /// [`propagate`](Self::propagate) if anything changed.
+    pub(crate) async fn propagate_if_changed(&self, change: Option<HeadsChanged>, origin: &PeerId) {
+        if let Some(change) = change {
+            self.propagate(change, origin).await;
+        }
     }
 
     // ── Batch / Bulk Ingestion ──────────────────────────────────────────
@@ -1669,8 +1601,21 @@ where
         id: SedimentreeId,
         commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+        // Local write: not propagated until the next sync.
+        let _local_only = self.store_commits_batch_inner(id, commits).await?;
+        Ok(())
+    }
+
+    async fn store_commits_batch_inner(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
+    ) -> Result<
+        Option<HeadsChanged>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
         if commits.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         let putter = self.storage.local_putter::<Async>(id);
@@ -1695,17 +1640,18 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+        let changed = self
+            .with_tree_hydrated(id, move |tree| {
+                for commit in commit_payloads {
+                    tree.add_commit(commit);
+                }
+            })
+            .await
+            .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
 
         tracing::info!(count, "bulk-insert of commits complete, tree minimized");
-        Ok(())
+        Ok(Some(changed))
     }
 
     /// Bulk-insert fragments without per-fragment minimization or broadcasting.
@@ -1732,8 +1678,21 @@ where
         id: SedimentreeId,
         fragments: Vec<FragmentBatchItem>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+        // Local write: not propagated until the next sync.
+        let _local_only = self.store_fragments_batch_inner(id, fragments).await?;
+        Ok(())
+    }
+
+    async fn store_fragments_batch_inner(
+        &self,
+        id: SedimentreeId,
+        fragments: Vec<FragmentBatchItem>,
+    ) -> Result<
+        Option<HeadsChanged>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
         if fragments.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         let putter = self.storage.local_putter::<Async>(id);
@@ -1767,16 +1726,17 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.with_tree_hydrated(id, move |tree| {
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+        let changed = self
+            .with_tree_hydrated(id, move |tree| {
+                for fragment in fragment_payloads {
+                    tree.add_fragment(fragment);
+                }
+            })
+            .await
+            .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
         tracing::info!(count, "bulk-insert of fragments complete, tree minimized");
-        Ok(())
+        Ok(Some(changed))
     }
 
     /// Persist already-built [`LooseCommit`] and [`Fragment`] payloads
@@ -1813,8 +1773,22 @@ where
         commits: Vec<(LooseCommit, Blob)>,
         fragments: Vec<(Fragment, Blob)>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+        // Local write: not propagated until the next sync.
+        let _local_only = self.store_built_batch_inner(id, commits, fragments).await?;
+        Ok(())
+    }
+
+    async fn store_built_batch_inner(
+        &self,
+        id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> Result<
+        Option<HeadsChanged>,
+        WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
+    > {
         if commits.is_empty() && fragments.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         let putter = self.storage.local_putter::<Async>(id);
@@ -1855,16 +1829,17 @@ where
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+        let changed = self
+            .with_tree_hydrated(id, move |tree| {
+                for commit in commit_payloads {
+                    tree.add_commit(commit);
+                }
+                for fragment in fragment_payloads {
+                    tree.add_fragment(fragment);
+                }
+            })
+            .await
+            .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
 
         tracing::info!(
@@ -1872,7 +1847,7 @@ where
             fragment_count,
             "bulk-insert of commits and fragments complete, tree minimized"
         );
-        Ok(())
+        Ok(Some(changed))
     }
 
     /// Handle receiving a batch sync response from a peer.
@@ -1891,11 +1866,11 @@ where
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<Async, Store, Conn, Hdl::Message>> {
-        let ingested =
+        let changed =
             ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
                 .await?;
         self.minimize_tree(id).await;
-        self.push_to_subscribers(id, from, &ingested).await;
+        self.propagate_if_changed(changed, from).await;
         Ok(())
     }
 
@@ -1922,6 +1897,18 @@ where
         sedimentree: Sedimentree,
         blobs: Vec<Blob>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
+        // Local write: not propagated until the next sync.
+        let _local_only = self.store_sedimentree_inner(id, sedimentree, blobs).await?;
+        Ok(())
+    }
+
+    async fn store_sedimentree_inner(
+        &self,
+        id: SedimentreeId,
+        sedimentree: Sedimentree,
+        blobs: Vec<Blob>,
+    ) -> Result<HeadsChanged, WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>>
+    {
         use sedimentree_core::collections::Map;
 
         let putter = self.storage.local_putter::<Async>(id);
@@ -1960,9 +1947,7 @@ where
 
         self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        Ok(())
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))
     }
 
     /// Persist a whole sedimentree **and** propagate it to peers — the
@@ -1994,8 +1979,8 @@ where
         PerPeerSync<Conn, Async, <Conn as Connection<Async, Hdl::Message>>::SendError>,
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
     > {
-        self.store_sedimentree(id, sedimentree, blobs).await?;
-        self.notify_watchers(id, &self.current_heads(id).await).await;
+        let changed = self.store_sedimentree_inner(id, sedimentree, blobs).await?;
+        self.propagate(changed, &self.peer_id()).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
@@ -2062,8 +2047,8 @@ where
 
         // Storage write first (cancel-safety: storage is the source of truth;
         // a cancel between this and the broadcast self-heals on rehydrate).
-        self.store_built_batch(id, commits, fragments).await?;
-        self.notify_watchers(id, &self.current_heads(id).await).await;
+        let changed = self.store_built_batch_inner(id, commits, fragments).await?;
+        self.propagate_if_changed(changed, &self.peer_id()).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
@@ -2112,8 +2097,8 @@ where
             return Ok(PerPeerSync::default());
         }
 
-        self.store_commits_batch(id, commits).await?;
-        self.notify_watchers(id, &self.current_heads(id).await).await;
+        let changed = self.store_commits_batch_inner(id, commits).await?;
+        self.propagate_if_changed(changed, &self.peer_id()).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
@@ -2162,8 +2147,8 @@ where
             return Ok(PerPeerSync::default());
         }
 
-        self.store_fragments_batch(id, fragments).await?;
-        self.notify_watchers(id, &self.current_heads(id).await).await;
+        let changed = self.store_fragments_batch_inner(id, fragments).await?;
+        self.propagate_if_changed(changed, &self.peer_id()).await;
         let per_peer = self
             .sync_with_all_peers(id, true, timeout)
             .await
@@ -2410,7 +2395,7 @@ where
                     // items by author and writes each batch in a single `save_batch`.
                     // `requesting` is handled separately below, so the ingester's
                     // copy is left empty.
-                    let ingested = ingest::recv_batch_sync_response(
+                    let changed = ingest::recv_batch_sync_response(
                         &self.sedimentrees,
                         &self.storage,
                         to_ask,
@@ -2423,7 +2408,7 @@ where
                     )
                     .await?;
                     self.minimize_tree(id).await;
-                    self.push_to_subscribers(id, to_ask, &ingested).await;
+                    self.propagate_if_changed(changed, to_ask).await;
                     if self.heads_watches.is_watched(id).await {
                         self.handler
                             .notify_remote_heads(id, *to_ask, responder_heads)
@@ -2646,7 +2631,7 @@ where
 
                                 // Ingest in one batched pass; see `sync_with_peer`.
                                 // `requesting` is handled separately below.
-                                let ingested = ingest::recv_batch_sync_response(
+                                let changed = ingest::recv_batch_sync_response(
                                     &self.sedimentrees,
                                     &self.storage,
                                     peer_id,
@@ -2659,7 +2644,7 @@ where
                                 )
                                 .await?;
                                 self.minimize_tree(id).await;
-                                self.push_to_subscribers(id, peer_id, &ingested).await;
+                                self.propagate_if_changed(changed, peer_id).await;
                                 if self.heads_watches.is_watched(id).await {
                                     self.handler
                                         .notify_remote_heads(id, *peer_id, responder_heads)
@@ -2926,7 +2911,7 @@ where
         putter: &Putter<Async, Store>,
         verified_commits: Vec<VerifiedMeta<LooseCommit>>,
         verified_fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> Result<(), Store::Error> {
+    ) -> Result<HeadsChanged, Store::Error> {
         let id = putter.sedimentree_id();
         tracing::debug!(tree = ?id, "adding sedimentree");
 
@@ -2961,7 +2946,7 @@ where
             )
             .await?;
 
-        Ok(())
+        Ok(HeadsChanged::heads_only(id))
     }
 
     /// Send requested data back to a peer (fire-and-forget for bidirectional sync).
@@ -3184,7 +3169,7 @@ where
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<Option<HeadsChanged>, Store::Error> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -3199,7 +3184,7 @@ where
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<Option<HeadsChanged>, Store::Error> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -3234,16 +3219,20 @@ where
     /// (storage is the source of truth). The mutation runs against the
     /// [`MinimizedSedimentree`] wrapper, which it marks dirty; callers
     /// re-minimize (e.g. via [`minimize_tree`](Self::minimize_tree)) afterward.
-    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree) -> R, R>(
+    /// Mutate the resident tree for `id`, hydrating it first if evicted.
+    /// Returns the witness the caller must propagate or deliberately keep
+    /// local.
+    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree)>(
         &self,
         id: SedimentreeId,
         mutate: F,
-    ) -> Result<R, IoError<Async, Store, Conn, Hdl::Message>> {
+    ) -> Result<HeadsChanged, IoError<Async, Store, Conn, Hdl::Message>> {
         let access = self.storage.hydration_access();
         self.sedimentrees
             .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access, id), mutate)
             .await
-            .map_err(IoError::Storage)
+            .map_err(IoError::Storage)?;
+        Ok(HeadsChanged::heads_only(id))
     }
 }
 

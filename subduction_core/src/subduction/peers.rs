@@ -15,12 +15,14 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     collections::{Map, Set},
+    depth::DepthMetric,
     id::SedimentreeId,
     loose_commit::id::CommitId,
 };
 
 use crate::{
     authenticated::{Authenticated, Direction},
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{Connection, message::SyncMessage},
     peer::{counter::PeerCounter, id::PeerId},
     policy::storage::StoragePolicy,
@@ -28,8 +30,9 @@ use crate::{
     storage::{powerbox::StoragePowerbox, traits::Storage},
 };
 
-use super::ingest::Ingested;
+use super::ingest::{self, HeadsChanged, Ingested};
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
+use sedimentree_core::sedimentree::minimized::MinimizedSedimentree;
 
 /// Record that `peer_id` is subscribed to `sedimentree_id`.
 pub(crate) async fn add_subscription(
@@ -161,6 +164,90 @@ pub(crate) async fn build_pushes<Conn: Clone, Async: FutureForm>(
     out
 }
 
+/// Turn a [`HeadsChanged`] witness into the frames that tell everyone who
+/// should know: the 1.5-RTT ack to `ack_to` (the peer whose push caused the
+/// change, if any), one push per ingested item to each authorized
+/// subscriber other than `origin`, and a `HeadsUpdate` to each watcher not
+/// already covered by one of those. Per-peer send counters are stamped here,
+/// in order; the caller sends the frames off the dispatch path.
+///
+/// This is the only consumer of `HeadsChanged`, so every tree mutation is
+/// propagated the same way.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn propagate<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg> + PartialEq + Clone + 'static,
+    WireMsg: Encode + Decode,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>(
+    change: HeadsChanged,
+    origin: &PeerId,
+    ack_to: Option<&Authenticated<Conn, Async>>,
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    storage: &StoragePowerbox<Store, Auth>,
+    depth_metric: &Metric,
+    connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
+    subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
+    watches: &HeadsWatches,
+    send_counter: &PeerCounter,
+) -> Pushes<Conn, Async, SyncMessage> {
+    let HeadsChanged {
+        id,
+        ingested,
+        heads,
+    } = change;
+
+    // On a heads read failure report empty heads rather than drop the
+    // frames; the heads field is advisory.
+    let heads = match heads {
+        Some(heads) => heads,
+        None => ingest::heads_or_hydrate(sedimentrees, storage, depth_metric, id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(tree = ?id, error = %e, "could not read heads; reporting none");
+                Vec::new()
+            }),
+    };
+
+    let mut out = Vec::new();
+    if let Some(conn) = ack_to {
+        out.push((
+            conn.clone(),
+            SyncMessage::HeadsUpdate {
+                id,
+                heads: RemoteHeads {
+                    counter: send_counter.next(conn.peer_id()).await,
+                    heads: heads.clone(),
+                },
+            },
+        ));
+    }
+
+    if !ingested.is_empty() {
+        let conns =
+            get_authorized_subscriber_conns(subscriptions, storage, connections, id, origin).await;
+        out.extend(build_pushes(id, &heads, send_counter, &conns, &ingested).await);
+    }
+
+    let covered = push_recipients(&out, []);
+    out.extend(
+        build_watcher_heads_updates(
+            watches,
+            storage,
+            connections,
+            send_counter,
+            id,
+            &heads,
+            &covered,
+        )
+        .await,
+    );
+    out
+}
+
 /// Build one `HeadsUpdate` per peer watching `id` that will not learn these
 /// heads another way this round: `exclude` names the peers already getting
 /// them on a push or an ack. Watchers are re-checked against the fetch policy
@@ -277,15 +364,27 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> SendPushes<Conn, WireMsg
             for (conn, msg) in pushes {
                 by_peer.entry(conn.peer_id()).or_default().push((conn, msg));
             }
-            futures::future::join_all(by_peer.into_values().map(|frames| async move {
-                for (conn, msg) in frames {
-                    if let Err(e) = conn.send(&msg).await {
-                        tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
-                        break;
+            let per_peer =
+                futures::future::join_all(by_peer.into_values().map(|frames| async move {
+                    let total = frames.len() as u64;
+                    let mut sent = 0u64;
+                    for (conn, msg) in frames {
+                        if let Err(e) = conn.send(&msg).await {
+                            tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
+                            break;
+                        }
+                        sent += 1;
                     }
-                }
-            }))
-            .await;
+                    (sent, total - sent)
+                }))
+                .await;
+
+            let (ok, failed) = per_peer
+                .iter()
+                .fold((0, 0), |(ok, failed), (s, f)| (ok + s, failed + f));
+            tracing::trace!(ok, failed, "pushes sent");
+            #[cfg(feature = "metrics")]
+            crate::metrics::subscription_pushes(ok, failed);
         })
     }
 }
@@ -402,5 +501,175 @@ mod tests {
                     assert!(seen.insert((p, head)), "duplicate (peer, item) frame");
                 }
             });
+    }
+    /// Allows fetches only for the listed peers.
+    struct AllowFetchFor(Set<PeerId>);
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("fetch refused")]
+    struct FetchRefused;
+
+    impl StoragePolicy<Sendable> for AllowFetchFor {
+        type FetchDisallowed = FetchRefused;
+        type PutDisallowed = core::convert::Infallible;
+
+        fn authorize_fetch(
+            &self,
+            peer: PeerId,
+            _id: SedimentreeId,
+        ) -> futures::future::BoxFuture<'_, Result<(), FetchRefused>> {
+            let ok = self.0.contains(&peer);
+            Box::pin(async move { ok.then_some(()).ok_or(FetchRefused) })
+        }
+
+        fn authorize_put(
+            &self,
+            _requestor: PeerId,
+            _author: crate::VerifiedAuthor,
+            _id: SedimentreeId,
+        ) -> futures::future::BoxFuture<'_, Result<(), core::convert::Infallible>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn filter_authorized_fetch(
+            &self,
+            peer: PeerId,
+            ids: Vec<SedimentreeId>,
+        ) -> futures::future::BoxFuture<'_, Vec<SedimentreeId>> {
+            let ok = self.0.contains(&peer);
+            Box::pin(async move { if ok { ids } else { Vec::new() } })
+        }
+    }
+
+    /// `heads_only_targets = (watchers ∩ connected ∩ may_fetch) \ exclude`,
+    /// one `HeadsUpdate` per peer carrying the same heads; watchers with no
+    /// connection are dropped from the table.
+    #[test]
+    #[cfg(feature = "bolero")]
+    fn prop_watcher_heads_updates_is_watchers_minus_exclude() {
+        use crate::storage::memory::MemoryStorage;
+
+        let id = SedimentreeId::new([1u8; 32]);
+        let heads = alloc::vec![CommitId::new([0xAA; 32])];
+        let peer = |s: &u8| PeerId::new([s % 6; 32]);
+
+        bolero::check!()
+            .with_arbitrary::<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)>()
+            .for_each(|(watchers, connected, allowed, exclude)| {
+                let watches = HeadsWatches::new();
+                for p in watchers.iter().map(peer) {
+                    futures::executor::block_on(watches.add_watcher(p, id)).expect("below cap");
+                }
+                let connections = Mutex::new(
+                    connected
+                        .iter()
+                        .map(peer)
+                        .map(|p| {
+                            (
+                                p,
+                                NonEmpty::new(MockConnection::with_peer_id(p).authenticated()),
+                            )
+                        })
+                        .collect::<Map<_, _>>(),
+                );
+                let allowed: Set<PeerId> = allowed.iter().map(peer).collect();
+                let storage = StoragePowerbox::new(
+                    MemoryStorage::new(),
+                    alloc::sync::Arc::new(AllowFetchFor(allowed.clone())),
+                );
+                let exclude: Set<PeerId> = exclude.iter().map(peer).collect();
+
+                let out = futures::executor::block_on(build_watcher_heads_updates(
+                    &watches,
+                    &storage,
+                    &connections,
+                    &PeerCounter::default(),
+                    id,
+                    &heads,
+                    &exclude,
+                ));
+
+                let connected: Set<PeerId> = connected.iter().map(peer).collect();
+                let want: Set<PeerId> = watchers
+                    .iter()
+                    .map(peer)
+                    .filter(|p| connected.contains(p) && allowed.contains(p) && !exclude.contains(p))
+                    .collect();
+                let got: Set<PeerId> = out.iter().map(|(c, _)| c.peer_id()).collect();
+                assert_eq!(got, want);
+                assert_eq!(out.len(), got.len(), "one frame per peer");
+                for (_, msg) in &out {
+                    let SyncMessage::HeadsUpdate { id: got_id, heads: h } = msg else {
+                        panic!("{msg:?}");
+                    };
+                    assert_eq!((*got_id, &h.heads), (id, &heads));
+                }
+
+                // Disconnected, authorized, non-excluded watchers were pruned.
+                let remaining: Set<PeerId> =
+                    futures::executor::block_on(watches.watchers_of(id)).into_iter().collect();
+                for p in watchers.iter().map(peer) {
+                    if allowed.contains(&p) && !exclude.contains(&p) && !connected.contains(&p) {
+                        assert!(!remaining.contains(&p), "orphan watcher {p} kept");
+                    }
+                }
+            });
+    }
+
+}
+
+#[cfg(all(test, feature = "metrics"))]
+mod metrics_tests {
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use sedimentree_core::id::SedimentreeId;
+
+    use super::*;
+    use crate::{
+        connection::{message::DataRequestRejected, test_utils::FailingSendMockConnection},
+        metrics::names,
+    };
+
+    /// Pins which `send_pushes` outcome feeds which label of
+    /// `subscription_pushes_total`; a swapped classification would corrupt
+    /// the dead-connection push signal while every render-level test passes.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn send_pushes_counts_outcomes() {
+        // Asymmetric counts (2 ok, 1 failed) so a swap cannot pass by symmetry.
+        let ok_a = FailingSendMockConnection::with_peer_id_failing(PeerId::new([1u8; 32]), false)
+            .authenticated();
+        let ok_b = FailingSendMockConnection::with_peer_id_failing(PeerId::new([2u8; 32]), false)
+            .authenticated();
+        let failing = FailingSendMockConnection::with_peer_id_failing(PeerId::new([3u8; 32]), true)
+            .authenticated();
+        let msg = SyncMessage::DataRequestRejected(DataRequestRejected {
+            id: SedimentreeId::new([0u8; 32]),
+        });
+        let pushes = alloc::vec![(ok_a, msg.clone()), (ok_b, msg.clone()), (failing, msg)];
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(Sendable::send_pushes(pushes));
+        });
+
+        let mut counts: Map<String, u64> = Map::new();
+        for (key, _, _, value) in snapshotter.snapshot().into_vec() {
+            let (_, key) = key.into_parts();
+            if key.name() != names::SUBSCRIPTION_PUSHES_TOTAL {
+                continue;
+            }
+            let outcome = key
+                .labels()
+                .find(|label| label.key() == "outcome")
+                .map(|label| label.value().to_owned())
+                .expect("outcome label");
+            if let DebugValue::Counter(n) = value {
+                counts.insert(outcome, n);
+            }
+        }
+
+        assert_eq!(counts.get("ok"), Some(&2));
+        assert_eq!(counts.get("failed"), Some(&1));
     }
 }

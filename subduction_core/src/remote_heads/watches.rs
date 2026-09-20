@@ -90,7 +90,11 @@ impl HeadsWatches {
     ///
     /// [`WatchRefused::AtCapacity`] if `peer` already holds
     /// [`MAX_WATCHERS_PER_PEER`] watches.
-    pub(crate) async fn add_watcher(&self, peer: PeerId, id: SedimentreeId) -> Result<(), WatchRefused> {
+    pub(crate) async fn add_watcher(
+        &self,
+        peer: PeerId,
+        id: SedimentreeId,
+    ) -> Result<(), WatchRefused> {
         let mut state = self.state.lock().await;
         let State {
             watchers,

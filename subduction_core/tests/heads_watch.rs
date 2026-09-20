@@ -420,3 +420,452 @@ async fn watch_is_replayed_on_reconnect() -> TestResult {
     .await;
     Ok(())
 }
+
+/// Every write API reports to watchers. Each row is one `HeadsChanged`
+/// producer; a new write path that forgets `propagate` fails to compile, and a
+/// new API that bypasses `HeadsChanged` shows up here as a missing row.
+mod every_write_path_notifies_watchers {
+    use sedimentree_core::{
+        blob::BlobMeta, fragment::Fragment, loose_commit::LooseCommit, sedimentree::Sedimentree,
+    };
+    use subduction_core::subduction::fragment_batch_item::FragmentBatchItem;
+
+    use super::*;
+
+    type B = Node<OpenPolicy>;
+
+    async fn watched_pair() -> Result<(B, RecordingObserver), testresult::TestError> {
+        let (a, a_obs) = node(30, OpenPolicy);
+        let (b, _) = node(31, OpenPolicy);
+        connect_nodes(&a, 30, &b, 31).await?;
+        a.watch_heads(DOC).await;
+        wait_until(|| a_obs.count() >= 1, "snapshot never arrived").await;
+        Ok((b, a_obs))
+    }
+
+    async fn expect_report<F, Fut>(write: F) -> TestResult
+    where
+        F: FnOnce(B) -> Fut,
+        Fut: core::future::Future<Output = TestResult>,
+    {
+        let (b, a_obs) = watched_pair().await?;
+        let before = a_obs.count();
+        write(b).await?;
+        wait_until(
+            || a_obs.count() > before,
+            "watcher was not told about the change",
+        )
+        .await;
+        Ok(())
+    }
+
+    fn blob(n: u8) -> Blob {
+        Blob::new(vec![n; 8])
+    }
+
+    #[tokio::test]
+    async fn add_commit() -> TestResult {
+        expect_report(|b| async move {
+            b.add_commit(DOC, commit(1), BTreeSet::new(), blob(1))
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_fragment() -> TestResult {
+        expect_report(|b| async move {
+            b.add_fragment(DOC, commit(1), BTreeSet::new(), &[], blob(1))
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_commits_batch() -> TestResult {
+        expect_report(|b| async move {
+            b.add_commits_batch(
+                DOC,
+                vec![(commit(1), BTreeSet::new(), blob(1))],
+                CallTimeout::TimeoutMillis(500),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_fragments_batch() -> TestResult {
+        expect_report(|b| async move {
+            b.add_fragments_batch(
+                DOC,
+                vec![FragmentBatchItem {
+                    head: commit(1),
+                    boundary: BTreeSet::new(),
+                    checkpoints: Vec::new(),
+                    blob: blob(1),
+                }],
+                CallTimeout::TimeoutMillis(500),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_built_batch() -> TestResult {
+        expect_report(|b| async move {
+            let blob = blob(1);
+            let c = LooseCommit::new(DOC, commit(1), BTreeSet::new(), BlobMeta::new(&blob));
+            b.add_built_batch(
+                DOC,
+                vec![(c, blob)],
+                Vec::new(),
+                CallTimeout::TimeoutMillis(500),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_sedimentree() -> TestResult {
+        expect_report(|b| async move {
+            let blob = blob(1);
+            let c = LooseCommit::new(DOC, commit(1), BTreeSet::new(), BlobMeta::new(&blob));
+            let f = Fragment::new(DOC, commit(2), BTreeSet::new(), &[], BlobMeta::new(&blob));
+            b.add_sedimentree(
+                DOC,
+                Sedimentree::new(vec![f], vec![c]),
+                vec![blob],
+                CallTimeout::TimeoutMillis(500),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn remove_sedimentree() -> TestResult {
+        let (b, a_obs) = watched_pair().await?;
+        b.add_commit(DOC, commit(1), BTreeSet::new(), blob(1))
+            .await?;
+        wait_until(|| a_obs.count() >= 2, "commit never reported").await;
+
+        b.remove_sedimentree(DOC).await?;
+        wait_until(
+            || a_obs.heads_for(DOC).last().is_some_and(Vec::is_empty),
+            "removal never reported as empty heads",
+        )
+        .await;
+        Ok(())
+    }
+
+    /// `store_*` is documented as local-only; the watcher hears nothing until
+    /// a later sync. Positive control: `add_commit` on the same pair reports.
+    #[tokio::test]
+    async fn store_is_local_only() -> TestResult {
+        let (b, a_obs) = watched_pair().await?;
+        let before = a_obs.count();
+        b.store_commits_batch(DOC, vec![(commit(1), BTreeSet::new(), blob(1))])
+            .await?;
+        settle().await;
+        assert_eq!(a_obs.count(), before, "{:?}", a_obs.deliveries());
+
+        b.add_commit(DOC, commit(2), BTreeSet::new(), blob(2))
+            .await?;
+        wait_until(|| a_obs.count() > before, "control write not reported").await;
+        Ok(())
+    }
+}
+
+/// Wire-level view from a mock peer: exactly one heads-carrying frame per
+/// change, whichever shape it takes.
+mod on_the_wire {
+    use sedimentree_core::{
+        blob::BlobMeta, crypto::fingerprint::FingerprintSeed, loose_commit::LooseCommit,
+        sedimentree::FingerprintSummary,
+    };
+    use subduction_core::{
+        connection::{
+            message::{
+                BatchSyncRequest, RequestId, SyncMessage, UnwatchHeads, WatchHeads,
+                WatchHeadsResponse, WatchOutcome, WatchResult,
+            },
+            test_utils::{ChannelMockConnection, ChannelMockConnectionHandle},
+        },
+        remote_heads::watches::MAX_WATCHERS_PER_PEER,
+    };
+    use subduction_crypto::signed::Signed;
+
+    use super::*;
+
+    type Mock = ChannelMockConnection<SyncMessage>;
+    type Handle = ChannelMockConnectionHandle<SyncMessage>;
+    type MockNode = Arc<
+        Subduction<
+            'static,
+            Sendable,
+            MemoryStorage,
+            Mock,
+            SyncHandler<
+                Sendable,
+                MemoryStorage,
+                Mock,
+                OpenPolicy,
+                CountLeadingZeroBytes,
+                TokioSpawn,
+                256,
+                RecordingObserver,
+            >,
+            OpenPolicy,
+            MemorySigner,
+            InstantTimeout,
+            TokioSpawn,
+        >,
+    >;
+
+    /// A real node with one mock peer attached.
+    async fn node_with_mock(
+        seed: u8,
+        mock_seed: u8,
+    ) -> Result<(MockNode, Handle), Box<dyn std::error::Error>> {
+        let (sd, _handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+            .signer(signer(seed))
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .timer(InstantTimeout)
+            .heads_observer(RecordingObserver::default())
+            .build::<Sendable, Mock>();
+        tokio::spawn(listener);
+        tokio::spawn(manager);
+
+        let (conn, handle) = Mock::new_with_handle(peer_id(mock_seed));
+        sd.add_connection(conn.authenticated()).await?;
+        Ok((sd, handle))
+    }
+
+    /// Wait for the first frame matching `want`, then let the round settle and
+    /// return everything received.
+    async fn frames_after(
+        handle: &Handle,
+        want: impl Fn(&SyncMessage) -> bool,
+    ) -> Vec<SyncMessage> {
+        let mut frames = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match handle.outbound_rx.try_recv() {
+                Ok(msg) => {
+                    let done = want(&msg);
+                    frames.push(msg);
+                    if done {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "expected frame never arrived: {frames:?}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
+        settle().await;
+        while let Ok(msg) = handle.outbound_rx.try_recv() {
+            frames.push(msg);
+        }
+        frames
+    }
+
+    fn heads_frames(frames: &[SyncMessage]) -> Vec<&SyncMessage> {
+        frames
+            .iter()
+            .filter(|f| matches!(f, SyncMessage::HeadsUpdate { .. }))
+            .collect()
+    }
+
+    fn is_heads_update(f: &SyncMessage) -> bool {
+        matches!(f, SyncMessage::HeadsUpdate { .. })
+    }
+
+    async fn watch(
+        handle: &Handle,
+        ids: Vec<SedimentreeId>,
+    ) -> Result<Vec<WatchResult>, Box<dyn std::error::Error>> {
+        handle.inbound_tx.send(WatchHeads { ids }.into()).await?;
+        let frames =
+            frames_after(handle, |f| matches!(f, SyncMessage::WatchHeadsResponse(_))).await;
+        let resp = frames
+            .into_iter()
+            .find_map(|f| match f {
+                SyncMessage::WatchHeadsResponse(WatchHeadsResponse { results }) => Some(results),
+                _ => None,
+            })
+            .expect("response");
+        Ok(resp)
+    }
+
+    #[tokio::test]
+    async fn one_heads_frame_per_change_in_every_shape() -> TestResult {
+        let (a, b) = node_with_mock(40, 41).await?;
+        let b_peer = peer_id(41);
+
+        let results = watch(&b, vec![DOC]).await?;
+        assert!(matches!(
+            results.as_slice(),
+            [WatchResult { id, outcome: WatchOutcome::Watching(h) }] if *id == DOC && h.heads.is_empty()
+        ));
+
+        // Watch only: a standalone HeadsUpdate.
+        a.add_commit(DOC, commit(1), BTreeSet::new(), Blob::new(vec![1; 8]))
+            .await?;
+        let frames = frames_after(&b, is_heads_update).await;
+        assert_eq!(heads_frames(&frames).len(), 1, "{frames:?}");
+        assert_eq!(
+            frames.len(),
+            1,
+            "no pushes without a subscription: {frames:?}"
+        );
+
+        // Watch + subscribe: heads ride the push, no separate HeadsUpdate.
+        b.inbound_tx
+            .send(SyncMessage::BatchSyncRequest(BatchSyncRequest {
+                id: DOC,
+                req_id: RequestId {
+                    requestor: b_peer,
+                    nonce: 1,
+                },
+                fingerprint_summary: FingerprintSummary::new(
+                    FingerprintSeed::new(1, 2),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+                subscribe: true,
+            }))
+            .await?;
+        frames_after(&b, |f| matches!(f, SyncMessage::BatchSyncResponse(_))).await;
+        a.add_commit(DOC, commit(2), BTreeSet::new(), Blob::new(vec![2; 8]))
+            .await?;
+        let frames = frames_after(&b, |f| matches!(f, SyncMessage::LooseCommit { .. })).await;
+        assert_eq!(frames.len(), 1, "one push and nothing else: {frames:?}");
+        assert!(heads_frames(&frames).is_empty(), "{frames:?}");
+
+        // B originates: the ack is the only heads frame.
+        let blob = Blob::new(vec![3; 8]);
+        let c = LooseCommit::new(DOC, commit(3), BTreeSet::new(), BlobMeta::new(&blob));
+        let signed = Signed::seal::<Sendable, _>(&signer(41), c)
+            .await
+            .into_signed();
+        b.inbound_tx
+            .send(SyncMessage::LooseCommit {
+                id: DOC,
+                commit: signed,
+                blob,
+                sender_heads: RemoteHeads {
+                    counter: 1,
+                    heads: vec![commit(3)],
+                },
+            })
+            .await?;
+        let frames = frames_after(&b, is_heads_update).await;
+        assert_eq!(frames.len(), 1, "exactly the ack: {frames:?}");
+
+        Ok(())
+    }
+
+    /// `UnwatchHeads` stops `HeadsUpdate`s to that peer while another watcher
+    /// (the positive control) keeps receiving them.
+    #[tokio::test]
+    async fn unwatch_stops_the_peer_being_told() -> TestResult {
+        let (a, b) = node_with_mock(42, 43).await?;
+        let (c_conn, c) = Mock::new_with_handle(peer_id(44));
+        a.add_connection(c_conn.authenticated()).await?;
+
+        watch(&b, vec![DOC]).await?;
+        watch(&c, vec![DOC]).await?;
+
+        b.inbound_tx
+            .send(UnwatchHeads { ids: vec![DOC] }.into())
+            .await?;
+        settle().await;
+
+        a.add_commit(DOC, commit(1), BTreeSet::new(), Blob::new(vec![1; 8]))
+            .await?;
+        let c_frames = frames_after(&c, is_heads_update).await;
+        assert_eq!(
+            heads_frames(&c_frames).len(),
+            1,
+            "control watcher: {c_frames:?}"
+        );
+
+        let mut b_frames = Vec::new();
+        while let Ok(f) = b.outbound_rx.try_recv() {
+            b_frames.push(f);
+        }
+        assert!(
+            heads_frames(&b_frames).is_empty(),
+            "unwatched peer still told: {b_frames:?}"
+        );
+        Ok(())
+    }
+
+    /// Past the cap, ids are answered `AtCapacity` and not recorded; unwatching
+    /// frees a slot.
+    #[tokio::test]
+    async fn watches_past_cap_are_refused_until_a_slot_frees() -> TestResult {
+        let (a, b) = node_with_mock(45, 46).await?;
+        let ids: Vec<SedimentreeId> = (0..=MAX_WATCHERS_PER_PEER)
+            .map(|n| {
+                let mut bytes = [0u8; 32];
+                bytes[..8].copy_from_slice(&n.to_le_bytes());
+                SedimentreeId::new(bytes)
+            })
+            .collect();
+        let extra = ids[MAX_WATCHERS_PER_PEER];
+
+        let results = watch(&b, ids.clone()).await?;
+        assert_eq!(results.len(), ids.len());
+        let (watching, refused): (Vec<_>, Vec<_>) = results
+            .iter()
+            .partition(|r| matches!(r.outcome, WatchOutcome::Watching(_)));
+        assert_eq!(watching.len(), MAX_WATCHERS_PER_PEER);
+        assert!(
+            matches!(refused.as_slice(), [WatchResult { id, outcome: WatchOutcome::AtCapacity }] if *id == extra)
+        );
+
+        // Not recorded: a change to the refused tree is not reported.
+        a.add_commit(extra, commit(1), BTreeSet::new(), Blob::new(vec![1; 8]))
+            .await?;
+        settle().await;
+        let mut frames = Vec::new();
+        while let Ok(f) = b.outbound_rx.try_recv() {
+            frames.push(f);
+        }
+        assert!(heads_frames(&frames).is_empty(), "{frames:?}");
+
+        // Free one slot and retry.
+        b.inbound_tx
+            .send(UnwatchHeads { ids: vec![ids[0]] }.into())
+            .await?;
+        let results = watch(&b, vec![extra]).await?;
+        assert!(matches!(
+            results.as_slice(),
+            [WatchResult {
+                outcome: WatchOutcome::Watching(_),
+                ..
+            }]
+        ));
+        a.add_commit(extra, commit(2), BTreeSet::new(), Blob::new(vec![2; 8]))
+            .await?;
+        let frames = frames_after(&b, is_heads_update).await;
+        assert_eq!(heads_frames(&frames).len(), 1, "{frames:?}");
+        Ok(())
+    }
+}

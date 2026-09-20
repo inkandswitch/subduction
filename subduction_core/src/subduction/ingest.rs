@@ -63,6 +63,51 @@ impl Ingested {
     }
 }
 
+/// Proof that the local tree for `id` changed, to be spent on
+/// [`peers::propagate`](super::peers::propagate).
+///
+/// Every path that mutates a tree returns one of these, and only
+/// `propagate` consumes it, so a new write path cannot forget to tell
+/// subscribers and watchers: dropping the witness is a compile-time warning.
+/// The `store_*` family discards it deliberately (local writes are not
+/// propagated until the next sync).
+#[must_use = "a heads change must be propagated to subscribers and watchers"]
+#[derive(Debug)]
+pub(crate) struct HeadsChanged {
+    pub(crate) id: SedimentreeId,
+
+    /// Items to push to subscribers; empty when only the heads changed
+    /// (batch writes, removal).
+    pub(crate) ingested: Ingested,
+
+    /// Heads to report, when the tree can no longer be read for them.
+    pub(crate) heads: Option<Vec<CommitId>>,
+}
+
+impl HeadsChanged {
+    pub(crate) fn new(id: SedimentreeId, ingested: Ingested) -> Self {
+        Self {
+            id,
+            ingested,
+            heads: None,
+        }
+    }
+
+    /// A change with nothing to push; the heads are read from the tree.
+    pub(crate) fn heads_only(id: SedimentreeId) -> Self {
+        Self::new(id, Ingested::default())
+    }
+
+    /// The tree was removed: report empty heads.
+    pub(crate) fn removed(id: SedimentreeId) -> Self {
+        Self {
+            id,
+            ingested: Ingested::default(),
+            heads: Some(Vec::new()),
+        }
+    }
+}
+
 /// Process an incoming batch sync response: verify and store all commits
 /// and fragments from the diff. Returns the items not already present in the
 /// minimized local tree; the rest are written idempotently but not reported,
@@ -83,7 +128,7 @@ pub(crate) async fn recv_batch_sync_response<
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
-) -> Result<Ingested, IoError<Async, Store, Conn, WireMsg>> {
+) -> Result<Option<HeadsChanged>, IoError<Async, Store, Conn, WireMsg>> {
     tracing::info!(
         tree = ?id,
         peer = %from,
@@ -292,14 +337,14 @@ pub(crate) async fn recv_batch_sync_response<
         }
     }
 
-    Ok(ingested)
+    Ok((!ingested.is_empty()).then(|| HeadsChanged::new(id, ingested)))
 }
 
 /// Insert a verified commit into storage and the in-memory tree.
 ///
 /// Persists to storage first (cancel-safe: idempotent CAS writes),
-/// then updates the in-memory tree. Returns whether the commit was
-/// newly added (`false` if already present).
+/// then updates the in-memory tree. Returns the change to propagate, or
+/// `None` if the commit was already present.
 pub(crate) async fn insert_commit_locally<
     Async: FutureForm,
     Store: Storage<Async>,
@@ -308,10 +353,11 @@ pub(crate) async fn insert_commit_locally<
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
-) -> Result<bool, Store::Error> {
+) -> Result<Option<HeadsChanged>, Store::Error> {
     let id = putter.sedimentree_id();
     let commit = verified_meta.payload().clone();
     let head = commit.head();
+    let wire = Ingested::commit(verified_meta.signed().clone(), verified_meta.blob().clone());
 
     tracing::debug!(digest = ?Digest::hash(&commit), "inserting commit locally");
 
@@ -348,7 +394,7 @@ pub(crate) async fn insert_commit_locally<
         )
         .await?;
 
-    Ok(was_added)
+    Ok(was_added.then(|| HeadsChanged::new(id, wire)))
 }
 
 /// Insert a verified fragment into storage and the in-memory tree.
@@ -362,10 +408,11 @@ pub(crate) async fn insert_fragment_locally<
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
-) -> Result<bool, Store::Error> {
+) -> Result<Option<HeadsChanged>, Store::Error> {
     let id = putter.sedimentree_id();
     let fragment = verified_meta.payload().clone();
     let head = fragment.head();
+    let wire = Ingested::fragment(verified_meta.signed().clone(), verified_meta.blob().clone());
 
     // Newness from pre-save tree state (resident or hydrated); see
     // `insert_commit_locally`.
@@ -391,7 +438,7 @@ pub(crate) async fn insert_fragment_locally<
         )
         .await?;
 
-    Ok(was_added)
+    Ok(was_added.then(|| HeadsChanged::new(id, wire)))
 }
 
 /// Re-minimize a sedimentree in the in-memory cache.
