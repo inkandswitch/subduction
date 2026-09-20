@@ -1,11 +1,7 @@
-//! Heads reach the observer only for watched sedimentrees.
-//!
-//! A watch is established by `WatchHeads`, answered with a snapshot, and
-//! followed by a `HeadsUpdate` on every change. Syncing or being pushed to
-//! does not imply a watch, so an application never learns the existence of
-//! trees it did not ask about.
+//! Heads reach the observer only for watched sedimentrees; see
+//! `design/sync/subscriptions.md` § Heads Watches.
 
-#![allow(clippy::expect_used, clippy::panic)]
+#![allow(clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use core::{convert::Infallible, time::Duration};
 use std::{
@@ -195,7 +191,7 @@ async fn wait_until(mut predicate: impl FnMut() -> bool, failure: &str) {
     }
 }
 
-/// Long enough for any in-flight message to have been dispatched.
+/// Settling time for negative assertions on in-process channels.
 async fn settle() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
@@ -219,8 +215,8 @@ where
 const DOC: SedimentreeId = SedimentreeId::new([0xD0; 32]);
 const OTHER: SedimentreeId = SedimentreeId::new([0x0E; 32]);
 
-/// Neither syncing a tree, being pushed one, nor receiving a push ack
-/// reports heads for an unwatched tree.
+/// Covers the three unwatched paths: `responder_heads`, `sender_heads`, and
+/// the push ack.
 #[tokio::test]
 async fn unwatched_trees_never_reach_the_observer() -> TestResult {
     let (a, a_obs) = node(1, OpenPolicy);
@@ -331,6 +327,7 @@ async fn changes_are_reported_once_with_or_without_subscription() -> TestResult 
     Ok(())
 }
 
+/// After `unwatch_heads`, the requester drops any report for the tree.
 #[tokio::test]
 async fn unwatch_stops_delivery() -> TestResult {
     let (a, a_obs) = node(9, OpenPolicy);
@@ -660,21 +657,18 @@ mod on_the_wire {
         let mut frames = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            match handle.outbound_rx.try_recv() {
-                Ok(msg) => {
-                    let done = want(&msg);
-                    frames.push(msg);
-                    if done {
-                        break;
-                    }
+            if let Ok(msg) = handle.outbound_rx.try_recv() {
+                let done = want(&msg);
+                frames.push(msg);
+                if done {
+                    break;
                 }
-                Err(_) => {
-                    assert!(
-                        tokio::time::Instant::now() < deadline,
-                        "expected frame never arrived: {frames:?}"
-                    );
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+            } else {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "expected frame never arrived: {frames:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
         settle().await;
@@ -691,7 +685,7 @@ mod on_the_wire {
             .collect()
     }
 
-    fn is_heads_update(f: &SyncMessage) -> bool {
+    const fn is_heads_update(f: &SyncMessage) -> bool {
         matches!(f, SyncMessage::HeadsUpdate { .. })
     }
 
@@ -704,9 +698,12 @@ mod on_the_wire {
             frames_after(handle, |f| matches!(f, SyncMessage::WatchHeadsResponse(_))).await;
         let resp = frames
             .into_iter()
-            .find_map(|f| match f {
-                SyncMessage::WatchHeadsResponse(WatchHeadsResponse { results }) => Some(results),
-                _ => None,
+            .find_map(|f| {
+                if let SyncMessage::WatchHeadsResponse(WatchHeadsResponse { results }) = f {
+                    Some(results)
+                } else {
+                    None
+                }
             })
             .expect("response");
         Ok(resp)

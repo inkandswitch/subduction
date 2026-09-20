@@ -589,7 +589,7 @@ Requested fingerprints are 8 bytes each.
 Sent as the ack after ingesting pushed data, and on every change to a
 sedimentree the receiver watches (see [Heads Watches](./sync/subscriptions.md#heads-watches)).
 
-### WatchHeads (Tag 0x09) / UnwatchHeads (Tag 0x0B)
+### WatchHeads (Tag 0x09)
 
 ```
 ╔═══════╦════════════════════╗
@@ -597,6 +597,10 @@ sedimentree the receiver watches (see [Heads Watches](./sync/subscriptions.md#he
 ║  2B   ║      N × 32B       ║
 ╚═══════╩════════════════════╝
 ```
+
+### UnwatchHeads (Tag 0x0B)
+
+Same layout as `WatchHeads`.
 
 ### WatchHeadsResponse (Tag 0x0A)
 
@@ -607,11 +611,11 @@ sedimentree the receiver watches (see [Heads Watches](./sync/subscriptions.md#he
 ╚═══════╩══════════════════════════════════════════════════════╝
 ```
 
-| Outcome | Meaning                                                   |
-|---------|-----------------------------------------------------------|
-| `0x00`  | Watching — followed by `RemoteHeads` (counter + heads)    |
-| `0x01`  | Unauthorized — the requester may not fetch this tree      |
-| `0x02`  | AtCapacity — the peer holds as many watches as it accepts |
+| Outcome | Meaning                                                      |
+|---------|--------------------------------------------------------------|
+| `0x00`  | Watching — followed by `RemoteHeads` (counter + heads)       |
+| `0x01`  | Unauthorized — the requester may not fetch this sedimentree  |
+| `0x02`  | AtCapacity — the requester's per-peer watch limit is reached |
 
 ## Future Considerations
 

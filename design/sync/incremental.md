@@ -133,7 +133,7 @@ Sent as WebSocket binary frames with a maximum size of 5 MB. No request ID — t
 | **Consistency**    | Content-addressed deduplication                                                         |
 | **Idempotency**    | Same commit can be received multiple times safely                                       |
 | **Ordering**       | Per-`(peer, sedimentree)` high-water mark on `RemoteHeads`; observer notified only on change |
-| **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver`, for watched trees |
+| **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver`, for watched sedimentrees |
 
 ## Sequence Diagram (Commit)
 

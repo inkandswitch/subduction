@@ -278,9 +278,9 @@ mod tests {
                         }
                     }
 
-                    let watched: Set<SedimentreeId> =
+                    let intent_now: Set<SedimentreeId> =
                         block_on(watches.watched()).into_iter().collect();
-                    assert_eq!(watched, intent);
+                    assert_eq!(intent_now, intent);
                     for t in (0..8).map(tree) {
                         assert_eq!(block_on(watches.is_watched(t)), intent.contains(&t));
                         let got: Set<PeerId> =

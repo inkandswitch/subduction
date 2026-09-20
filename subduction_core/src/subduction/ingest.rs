@@ -85,7 +85,7 @@ pub(crate) struct HeadsChanged {
 }
 
 impl HeadsChanged {
-    pub(crate) fn new(id: SedimentreeId, ingested: Ingested) -> Self {
+    pub(crate) const fn new(id: SedimentreeId, ingested: Ingested) -> Self {
         Self {
             id,
             ingested,

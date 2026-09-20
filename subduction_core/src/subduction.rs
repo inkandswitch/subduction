@@ -207,6 +207,7 @@ pub struct Subduction<
     ///
     /// [`SyncHandler`]: crate::handler::sync::SyncHandler
     heads_watches: Arc<HeadsWatches>,
+
     nonce_tracker: Arc<NonceCache>,
 
     /// Backoff state per connection, keyed by [`ConnectionId`].

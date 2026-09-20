@@ -31,8 +31,10 @@ use crate::{
 };
 
 use super::ingest::{self, HeadsChanged, Ingested};
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
-use sedimentree_core::sedimentree::minimized::MinimizedSedimentree;
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    sedimentree::minimized::MinimizedSedimentree,
+};
 
 /// Record that `peer_id` is subscribed to `sedimentree_id`.
 pub(crate) async fn add_subscription(

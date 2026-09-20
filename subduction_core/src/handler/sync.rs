@@ -536,8 +536,8 @@ impl<
         Ok(fanout)
     }
 
-    /// Deliver each confirmed snapshot, gated on the application still
-    /// watching that tree so an unsolicited confirmation opens nothing.
+    /// Deliver each snapshot, dropping any whose tree the application no longer
+    /// watches, so an unsolicited `WatchHeadsResponse` cannot reach the observer.
     async fn recv_watch_heads_response(&self, from: PeerId, results: Vec<WatchResult>) {
         for WatchResult { id, outcome } in results {
             match outcome {
@@ -686,9 +686,8 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        // Report heads only for a watched sedimentree, and only after the
-        // message is verified, authorized, and stored, so the observer never
-        // sees heads for trees it did not ask about or data we rejected.
+        // Gate on the watch set after verification and storage; see
+        // `RemoteHeadsObserver`.
         if self.heads_watches.is_watched(id).await {
             self.heads_notifier.notify(id, *from, sender_heads).await;
         }

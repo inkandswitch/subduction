@@ -86,9 +86,9 @@ pub enum SyncMessage {
 
     /// The sender's current heads for a sedimentree.
     ///
-    /// Sent whenever a peer has reason to report its heads: as the ack after
-    /// ingesting pushed data (second half of the 1.5 RTT sync), and on every
-    /// change to a sedimentree the receiver is watching via [`WatchHeads`].
+    /// Sent as the ack after ingesting pushed data (second half of the 1.5 RTT
+    /// sync) and on every change to a sedimentree the receiver watches via
+    /// [`WatchHeads`].
     HeadsUpdate {
         /// The sedimentree these heads are for.
         id: SedimentreeId,
@@ -96,7 +96,8 @@ pub enum SyncMessage {
         heads: RemoteHeads,
     },
 
-    /// Ask to be told when the receiver's heads for some sedimentrees change.
+    /// Request a heads snapshot and subsequent [`SyncMessage::HeadsUpdate`]s
+    /// for these sedimentrees.
     WatchHeads(WatchHeads),
 
     /// Answer to a [`WatchHeads`]: per-id outcome with an initial snapshot.
@@ -326,13 +327,9 @@ impl From<DataRequestRejected> for SyncMessage {
     }
 }
 
-/// A request to be told whenever the receiver's heads for these sedimentrees
-/// change.
-///
-/// Answered by a [`WatchHeadsResponse`] carrying the receiver's current heads
-/// for each authorized id; thereafter the receiver sends
-/// [`SyncMessage::HeadsUpdate`] on every change. Not correlated by request id:
-/// the response names the trees, and watching is idempotent.
+/// Request the receiver's current heads and a [`SyncMessage::HeadsUpdate`] on
+/// every later change. Answered by [`WatchHeadsResponse`]; there is no request
+/// id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]

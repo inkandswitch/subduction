@@ -404,8 +404,6 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
     /// `(peer, sedimentree)`. See [`RemoteHeadsObserver`] for the callback's
     /// obligations.
     ///
-    /// [`Subduction::watch_heads`]: crate::subduction::Subduction::watch_heads
-    ///
     /// Defaults to [`NoRemoteHeadsObserver`], which discards all
     /// notifications.
     ///
@@ -416,6 +414,8 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
     /// handler, so it is only available while the observer is unset;
     /// attach an observer to the handler directly (e.g. via
     /// [`SyncHandler::with_remote_heads_observer`]).
+    ///
+    /// [`Subduction::watch_heads`]: crate::subduction::Subduction::watch_heads
     pub fn heads_observer<NewHeadsObserver>(
         self,
         heads_observer: NewHeadsObserver,
