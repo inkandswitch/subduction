@@ -525,7 +525,7 @@ mod tests {
         fn authorize_put(
             &self,
             _requestor: PeerId,
-            _author: crate::VerifiedAuthor,
+            _author: subduction_crypto::verified_author::VerifiedAuthor,
             _id: SedimentreeId,
         ) -> futures::future::BoxFuture<'_, Result<(), core::convert::Infallible>> {
             Box::pin(async { Ok(()) })
@@ -593,21 +593,28 @@ mod tests {
                 let want: Set<PeerId> = watchers
                     .iter()
                     .map(peer)
-                    .filter(|p| connected.contains(p) && allowed.contains(p) && !exclude.contains(p))
+                    .filter(|p| {
+                        connected.contains(p) && allowed.contains(p) && !exclude.contains(p)
+                    })
                     .collect();
                 let got: Set<PeerId> = out.iter().map(|(c, _)| c.peer_id()).collect();
                 assert_eq!(got, want);
                 assert_eq!(out.len(), got.len(), "one frame per peer");
                 for (_, msg) in &out {
-                    let SyncMessage::HeadsUpdate { id: got_id, heads: h } = msg else {
+                    let SyncMessage::HeadsUpdate {
+                        id: got_id,
+                        heads: h,
+                    } = msg
+                    else {
                         panic!("{msg:?}");
                     };
                     assert_eq!((*got_id, &h.heads), (id, &heads));
                 }
 
                 // Disconnected, authorized, non-excluded watchers were pruned.
-                let remaining: Set<PeerId> =
-                    futures::executor::block_on(watches.watchers_of(id)).into_iter().collect();
+                let remaining: Set<PeerId> = futures::executor::block_on(watches.watchers_of(id))
+                    .into_iter()
+                    .collect();
                 for p in watchers.iter().map(peer) {
                     if allowed.contains(&p) && !exclude.contains(&p) && !connected.contains(&p) {
                         assert!(!remaining.contains(&p), "orphan watcher {p} kept");
@@ -615,7 +622,6 @@ mod tests {
                 }
             });
     }
-
 }
 
 #[cfg(all(test, feature = "metrics"))]

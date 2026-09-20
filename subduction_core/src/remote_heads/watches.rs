@@ -34,9 +34,16 @@ pub const MAX_WATCHERS_PER_PEER: usize = 4096;
 ///
 /// [`Subduction`]: crate::subduction::Subduction
 /// [`SyncHandler`]: crate::handler::sync::SyncHandler
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct HeadsWatches {
     state: Mutex<State>,
+    cap: usize,
+}
+
+impl Default for HeadsWatches {
+    fn default() -> Self {
+        Self::with_cap(MAX_WATCHERS_PER_PEER)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -49,8 +56,8 @@ struct State {
 /// Why a peer's watch was not recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum WatchRefused {
-    /// The peer already holds [`MAX_WATCHERS_PER_PEER`] watches here.
-    #[error("peer already holds {MAX_WATCHERS_PER_PEER} heads watches")]
+    /// The peer already holds as many watches here as the cap allows.
+    #[error("peer is at its heads-watch cap")]
     AtCapacity,
 }
 
@@ -59,6 +66,21 @@ impl HeadsWatches {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create empty watch state with a custom per-peer watcher cap.
+    #[must_use]
+    pub fn with_cap(cap: usize) -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            cap,
+        }
+    }
+
+    /// The per-peer watcher cap.
+    #[must_use]
+    pub const fn cap(&self) -> usize {
+        self.cap
     }
 
     /// Record that the application wants heads for `id`. Returns `true` if
@@ -88,8 +110,8 @@ impl HeadsWatches {
     ///
     /// # Errors
     ///
-    /// [`WatchRefused::AtCapacity`] if `peer` already holds
-    /// [`MAX_WATCHERS_PER_PEER`] watches.
+    /// [`WatchRefused::AtCapacity`] if `peer` already holds as many watches as
+    /// the cap allows.
     pub(crate) async fn add_watcher(
         &self,
         peer: PeerId,
@@ -107,7 +129,7 @@ impl HeadsWatches {
         if ids.contains(&peer) {
             return Ok(());
         }
-        if *count >= MAX_WATCHERS_PER_PEER {
+        if *count >= self.cap {
             if ids.is_empty() {
                 watchers.remove(&id);
             }
@@ -177,8 +199,10 @@ impl HeadsWatches {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
+    use futures::executor::block_on;
+
     use super::*;
 
     const fn peer(n: u8) -> PeerId {
@@ -189,92 +213,94 @@ mod tests {
         SedimentreeId::new([n; 32])
     }
 
-    #[tokio::test]
-    async fn remove_peer_keeps_intent() {
-        let watches = HeadsWatches::new();
-        watches.watch(tree(1)).await;
-        watches
-            .add_watcher(peer(1), tree(2))
-            .await
-            .expect("below cap");
-
-        watches.remove_peer(peer(1)).await;
-        assert!(watches.watchers_of(tree(2)).await.is_empty());
-        assert_eq!(watches.watched().await, alloc::vec![tree(1)]);
-    }
-
-    #[tokio::test]
-    async fn watcher_cap_is_per_peer_and_released_on_removal() {
-        let watches = HeadsWatches::new();
-        for n in 0..MAX_WATCHERS_PER_PEER {
-            let mut bytes = [0u8; 32];
-            bytes[..8].copy_from_slice(&n.to_le_bytes());
-            watches
-                .add_watcher(peer(1), SedimentreeId::new(bytes))
-                .await
-                .expect("below cap");
-        }
-        assert_eq!(
-            watches.add_watcher(peer(1), tree(0xFF)).await,
-            Err(WatchRefused::AtCapacity)
-        );
-        assert!(
-            watches.watchers_of(tree(0xFF)).await.is_empty(),
-            "no entry left behind"
-        );
-        assert_eq!(
-            watches.add_watcher(peer(2), tree(0xFF)).await,
-            Ok(()),
-            "other peers unaffected"
-        );
-
-        watches
-            .remove_watcher(peer(1), &[SedimentreeId::new([0u8; 32])])
-            .await;
-        assert_eq!(watches.add_watcher(peer(1), tree(0xFF)).await, Ok(()));
-    }
-
-    /// Reference model over an arbitrary sequence of operations: the count
-    /// used for the cap always equals the number of trees the peer watches.
+    /// Reference model over arbitrary operation sequences and a small cap.
+    /// After every step: `watched()` is the application's intent; the
+    /// watcher table matches a set of `(peer, tree)` pairs; `add_watcher`
+    /// refuses exactly when the pair is new and the peer is at the cap; no
+    /// empty sets or zero counts linger.
     #[test]
-    fn prop_watcher_count_matches_table() {
-        use futures::executor::block_on;
-
+    fn prop_heads_watches_match_model() {
         #[derive(Debug, Clone, bolero::TypeGenerator)]
         enum Op {
+            Watch { tree: u8 },
+            Unwatch { tree: u8 },
             Add { peer: u8, tree: u8 },
             Remove { peer: u8, trees: Vec<u8> },
             RemovePeer { peer: u8 },
+            RemoveAllPeers,
         }
 
-        bolero::check!().with_type::<Vec<Op>>().for_each(|ops| {
-            let watches = HeadsWatches::new();
-            for op in ops.iter().take(64) {
-                match op {
-                    Op::Add { peer: p, tree: t } => {
-                        let _ = block_on(watches.add_watcher(peer(*p % 4), tree(*t % 8)));
-                    }
-                    Op::Remove { peer: p, trees } => {
-                        let ids: Vec<_> = trees.iter().map(|t| tree(*t % 8)).collect();
-                        block_on(watches.remove_watcher(peer(*p % 4), &ids));
-                    }
-                    Op::RemovePeer { peer: p } => block_on(watches.remove_peer(peer(*p % 4))),
-                }
-            }
+        bolero::check!()
+            .with_type::<(u8, Vec<Op>)>()
+            .for_each(|(cap, ops)| {
+                let cap = usize::from(*cap % 5);
+                let watches = HeadsWatches::with_cap(cap);
+                let mut intent: Set<SedimentreeId> = Set::new();
+                let mut table: Set<(PeerId, SedimentreeId)> = Set::new();
 
-            let state = watches.state.try_lock().expect("uncontended");
-            for p in 0..4u8 {
-                let actual = state
-                    .watchers
-                    .values()
-                    .filter(|peers| peers.contains(&peer(p)))
-                    .count();
-                assert_eq!(
-                    state.watcher_counts.get(&peer(p)).copied().unwrap_or(0),
-                    actual
-                );
-            }
-            assert!(state.watchers.values().all(|peers| !peers.is_empty()));
-        });
+                for op in ops.iter().take(64) {
+                    match op {
+                        Op::Watch { tree: t } => {
+                            let t = tree(*t % 8);
+                            assert_eq!(block_on(watches.watch(t)), intent.insert(t));
+                        }
+                        Op::Unwatch { tree: t } => {
+                            let t = tree(*t % 8);
+                            assert_eq!(block_on(watches.unwatch(t)), intent.remove(&t));
+                        }
+                        Op::Add { peer: p, tree: t } => {
+                            let (p, t) = (peer(*p % 4), tree(*t % 8));
+                            let held = table.iter().filter(|(q, _)| *q == p).count();
+                            let expected = if table.contains(&(p, t)) || held < cap {
+                                table.insert((p, t));
+                                Ok(())
+                            } else {
+                                Err(WatchRefused::AtCapacity)
+                            };
+                            assert_eq!(block_on(watches.add_watcher(p, t)), expected);
+                        }
+                        Op::Remove { peer: p, trees } => {
+                            let p = peer(*p % 4);
+                            let ids: Vec<_> = trees.iter().map(|t| tree(*t % 8)).collect();
+                            for t in &ids {
+                                table.remove(&(p, *t));
+                            }
+                            block_on(watches.remove_watcher(p, &ids));
+                        }
+                        Op::RemovePeer { peer: p } => {
+                            let p = peer(*p % 4);
+                            table.retain(|(q, _)| *q != p);
+                            block_on(watches.remove_peer(p));
+                        }
+                        Op::RemoveAllPeers => {
+                            table.clear();
+                            block_on(watches.remove_all_peers());
+                        }
+                    }
+
+                    let watched: Set<SedimentreeId> =
+                        block_on(watches.watched()).into_iter().collect();
+                    assert_eq!(watched, intent);
+                    for t in (0..8).map(tree) {
+                        assert_eq!(block_on(watches.is_watched(t)), intent.contains(&t));
+                        let got: Set<PeerId> =
+                            block_on(watches.watchers_of(t)).into_iter().collect();
+                        let want: Set<PeerId> = table
+                            .iter()
+                            .filter(|(_, u)| *u == t)
+                            .map(|(q, _)| *q)
+                            .collect();
+                        assert_eq!(got, want, "watchers of {t:?}");
+                    }
+
+                    let state = watches.state.try_lock().expect("uncontended");
+                    assert!(state.watchers.values().all(|peers| !peers.is_empty()));
+                    for p in (0..4).map(peer) {
+                        let count = table.iter().filter(|(q, _)| *q == p).count();
+                        assert_eq!(state.watcher_counts.get(&p).copied().unwrap_or(0), count);
+                        assert!(count == 0 || state.watcher_counts.contains_key(&p));
+                    }
+                }
+            });
     }
 }

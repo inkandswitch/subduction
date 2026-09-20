@@ -1737,44 +1737,26 @@ mod tests {
                 });
         }
 
-        /// `sedimentree_id()` is `Some` exactly for single-tree messages;
-        /// multi-tree messages (`RemoveSubscriptions`, the watch family)
-        /// return `None` rather than picking one.
+        /// `sedimentree_id()` returns the payload's id for single-tree messages
+        /// and `None` for messages naming several trees.
         #[test]
-        fn prop_sedimentree_id_iff_single_tree_message() {
+        fn prop_sedimentree_id_matches_payload() {
             bolero::check!()
                 .with_arbitrary::<SyncMessage>()
                 .for_each(|msg| {
-                    let multi = matches!(
-                        msg,
+                    let expected = match msg {
+                        SyncMessage::LooseCommit { id, .. }
+                        | SyncMessage::Fragment { id, .. }
+                        | SyncMessage::HeadsUpdate { id, .. } => Some(*id),
+                        SyncMessage::BatchSyncRequest(req) => Some(req.id),
+                        SyncMessage::BatchSyncResponse(resp) => Some(resp.id),
+                        SyncMessage::DataRequestRejected(rej) => Some(rej.id),
                         SyncMessage::RemoveSubscriptions(_)
-                            | SyncMessage::WatchHeads(_)
-                            | SyncMessage::WatchHeadsResponse(_)
-                            | SyncMessage::UnwatchHeads(_)
-                    );
-                    assert_eq!(msg.sedimentree_id().is_none(), multi);
-                });
-        }
-
-        /// A truncated `WatchHeadsResponse` never decodes to a message that
-        /// claims more results than the payload carried.
-        #[test]
-        #[allow(clippy::indexing_slicing)]
-        fn prop_watch_heads_response_truncation_rejected() {
-            bolero::check!()
-                .with_arbitrary::<(WatchHeadsResponse, u8)>()
-                .for_each(|(resp, cut)| {
-                    let msg = SyncMessage::WatchHeadsResponse(resp.clone());
-                    let encoded = msg.encode();
-                    let keep = ENVELOPE_HEADER_SIZE
-                        + usize::from(*cut) % (encoded.len() - ENVELOPE_HEADER_SIZE + 1);
-                    if keep == encoded.len() {
-                        return;
-                    }
-                    let mut truncated = encoded[..keep].to_vec();
-                    #[allow(clippy::cast_possible_truncation)]
-                    truncated[4..8].copy_from_slice(&(keep as u32).to_be_bytes());
-                    assert!(SyncMessage::try_decode(&truncated).is_err());
+                        | SyncMessage::WatchHeads(_)
+                        | SyncMessage::WatchHeadsResponse(_)
+                        | SyncMessage::UnwatchHeads(_) => None,
+                    };
+                    assert_eq!(msg.sedimentree_id(), expected);
                 });
         }
 

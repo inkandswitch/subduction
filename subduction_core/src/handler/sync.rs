@@ -62,7 +62,7 @@ use crate::{
     remote_heads::{
         FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsNotifier,
         RemoteHeadsObserver,
-        watches::{HeadsWatches, MAX_WATCHERS_PER_PEER, WatchRefused},
+        watches::{HeadsWatches, WatchRefused},
     },
 };
 
@@ -562,9 +562,9 @@ impl<
     /// current heads. Refusals are per id, so one unauthorized tree does not
     /// fail the rest.
     ///
-    /// Work per message is bounded: ids are deduplicated, at most
-    /// [`MAX_WATCHERS_PER_PEER`] are considered, and once the peer is at
-    /// capacity the rest are refused without a policy call or heads read.
+    /// Work per message is bounded: ids are deduplicated, at most the per-peer
+    /// cap are considered, and once the peer is at capacity the rest are
+    /// refused without a policy call or heads read.
     async fn recv_watch_heads(
         &self,
         from: PeerId,
@@ -578,7 +578,7 @@ impl<
         let mut unauthorized = 0usize;
         let mut at_capacity = false;
         for (n, id) in ids.into_iter().enumerate() {
-            let outcome = if at_capacity || n >= MAX_WATCHERS_PER_PEER {
+            let outcome = if at_capacity || n >= self.heads_watches.cap() {
                 WatchOutcome::AtCapacity
             } else if let Err(e) = self.storage.policy().authorize_fetch(from, id).await {
                 tracing::debug!(peer = %from, tree = ?id, error = %e, "policy rejected heads watch");
@@ -603,7 +603,7 @@ impl<
         }
 
         if at_capacity {
-            tracing::warn!(peer = %from, cap = MAX_WATCHERS_PER_PEER, "refusing heads watches: peer at capacity");
+            tracing::warn!(peer = %from, cap = self.heads_watches.cap(), "refusing heads watches: peer at capacity");
         }
         if unauthorized > 0 {
             tracing::debug!(peer = %from, unauthorized, "refused unauthorized heads watches");

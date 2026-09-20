@@ -536,6 +536,29 @@ fn sync_message_truncation_does_not_panic() {
         });
 }
 
+/// A strict prefix of any message, with the size header rewritten to match,
+/// is rejected rather than decoded to a shorter message.
+#[test]
+fn sync_message_strict_prefix_rejected() {
+    bolero::check!()
+        .with_arbitrary::<(SyncMessage, u32)>()
+        .for_each(|(msg, cut)| {
+            let encoded = msg.encode();
+            let header = 9; // schema(4) + total_size(4) + tag(1)
+            let keep = header + (*cut as usize) % (encoded.len() - header + 1);
+            if keep == encoded.len() {
+                return;
+            }
+            let mut truncated = encoded[..keep].to_vec();
+            #[allow(clippy::cast_possible_truncation)]
+            truncated[4..8].copy_from_slice(&(keep as u32).to_be_bytes());
+            assert!(
+                SyncMessage::try_decode(&truncated).is_err(),
+                "strict prefix of {msg:?} decoded"
+            );
+        });
+}
+
 /// Single-bit-flip anywhere in the message must not panic.
 #[test]
 fn sync_message_single_bit_flip_does_not_panic() {
