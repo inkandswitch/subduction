@@ -236,8 +236,7 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
         self.peers.lock().await.remove(&peer);
     }
 
-    /// Forget what was reported about `id` for every peer, so the next report
-    /// of `id` is delivered even if unchanged.
+    /// See [`RemoteHeadsNotifier::forget_remote_heads`].
     pub async fn forget_tree(&self, id: SedimentreeId) {
         let filters: Vec<Arc<Mutex<PeerFilter>>> =
             self.peers.lock().await.values().cloned().collect();
@@ -358,7 +357,8 @@ mod tests {
 
     /// Reference model of the documented rule: delivered iff the counter is
     /// non-zero, advanced for `(peer, tree)`, and the canonical heads differ
-    /// from the last delivery; `remove_peer` forgets that peer's entries.
+    /// from the last delivery; `remove_peer` forgets a peer's entries and
+    /// `forget_tree` a tree's.
     #[test]
     fn prop_observer_sees_exactly_the_changes() {
         use futures::executor::block_on;
@@ -378,6 +378,9 @@ mod tests {
             },
             RemovePeer {
                 peer: u8,
+            },
+            ForgetTree {
+                tree: u8,
             },
         }
 
@@ -400,6 +403,11 @@ mod tests {
                             let pi = usize::from(*peer % PEERS);
                             model.retain(|(p, _), _| *p != pi);
                             block_on(notifier.remove_peer(peers[pi]));
+                        }
+                        Op::ForgetTree { tree } => {
+                            let ti = usize::from(*tree % TREES);
+                            model.retain(|(_, t), _| *t != ti);
+                            block_on(notifier.forget_tree(trees[ti]));
                         }
                         Op::Notify {
                             peer,

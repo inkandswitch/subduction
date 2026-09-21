@@ -173,3 +173,76 @@ async fn stale_heads_updates_are_filtered() -> TestResult {
     listener_task.abort();
     Ok(())
 }
+
+/// Heads for a tree the application never watched are dropped whatever
+/// message carries them, including a `WatchHeadsResponse` nobody asked for.
+/// A watched tree on the same connection anchors the negative.
+#[tokio::test]
+async fn unwatched_heads_are_dropped_at_the_gate() -> TestResult {
+    use subduction_core::connection::message::{WatchHeadsResponse, WatchOutcome, WatchResult};
+
+    let observer = RecordingObserver::default();
+
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .timer(InstantTimeout)
+            .heads_observer(observer.clone())
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+
+    let actor_task = tokio::spawn(actor_fut);
+    let listener_task = tokio::spawn(listener_fut);
+
+    let peer_id = PeerId::new([3u8; 32]);
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    subduction.add_connection(conn.authenticated()).await?;
+
+    let watched = SedimentreeId::new([44u8; 32]);
+    let unwatched = SedimentreeId::new([45u8; 32]);
+    subduction.watch_heads(watched).await;
+
+    let heads = |counter: u64| RemoteHeads {
+        counter,
+        heads: vec![CommitId::new([7u8; 32])],
+    };
+
+    handle
+        .inbound_tx
+        .send(SyncMessage::HeadsUpdate {
+            id: unwatched,
+            heads: heads(1),
+        })
+        .await?;
+    handle
+        .inbound_tx
+        .send(
+            WatchHeadsResponse {
+                results: vec![WatchResult {
+                    id: unwatched,
+                    outcome: WatchOutcome::Watching(heads(2)),
+                }],
+            }
+            .into(),
+        )
+        .await?;
+    handle
+        .inbound_tx
+        .send(SyncMessage::HeadsUpdate {
+            id: watched,
+            heads: heads(3),
+        })
+        .await?;
+
+    wait_until(
+        || !observer.snapshot().is_empty(),
+        "the watched tree's heads never arrived",
+    )
+    .await;
+    assert_eq!(observer.snapshot(), vec![(watched, peer_id, heads(3))]);
+
+    actor_task.abort();
+    listener_task.abort();
+    Ok(())
+}

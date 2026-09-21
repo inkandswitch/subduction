@@ -2,8 +2,8 @@
 //!
 //! [`SyncHandler`] implements the [`Handler`] trait for the standard
 //! Subduction sync protocol. It processes [`SyncMessage`] variants
-//! (commits, fragments, batch sync, heads updates, subscriptions) using
-//! shared state passed at construction time.
+//! (commits, fragments, batch sync, heads updates, subscriptions, heads
+//! watches) using shared state passed at construction time.
 //!
 //! This handler is self-contained: it holds its own [`Arc`] references
 //! to the shared data structures and duplicates the helper methods it
@@ -53,18 +53,18 @@ use crate::{
     },
 };
 
-/// Frames to send after a message is handled, stamped in order.
-type Pushes<Conn, Async> = peers::Pushes<Conn, Async, SyncMessage>;
-
 use super::Handler;
 use crate::{
     peer::counter::PeerCounter,
     remote_heads::{
         FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsNotifier,
         RemoteHeadsObserver,
-        watches::{HeadsWatches, WatchRefused},
+        watches::{HeadsWatches, WatchRefused, Watched},
     },
 };
+
+/// Frames to send after a message is handled, stamped in order.
+type Pushes<Conn, Async> = peers::Pushes<Conn, Async, SyncMessage>;
 
 /// The default sync protocol handler for Subduction.
 ///
@@ -536,6 +536,10 @@ impl<
         Ok(fanout)
     }
 
+    // -----------------------------------------------------------------------
+    // recv_* methods
+    // -----------------------------------------------------------------------
+
     /// Deliver each snapshot, dropping any whose tree the application no longer
     /// watches, so an unsolicited `WatchHeadsResponse` cannot reach the observer.
     async fn recv_watch_heads_response(&self, from: PeerId, results: Vec<WatchResult>) {
@@ -562,9 +566,8 @@ impl<
     /// current heads. Refusals are per id, so one unauthorized tree does not
     /// fail the rest.
     ///
-    /// Work per message is bounded: ids are deduplicated, at most the per-peer
-    /// cap are considered, and once the peer is at capacity the rest are
-    /// refused without a policy call or heads read.
+    /// Work is bounded: ids are deduplicated, at most `cap` are considered, and
+    /// past capacity the rest are refused without a policy call or heads read.
     async fn recv_watch_heads(
         &self,
         from: PeerId,
@@ -578,7 +581,11 @@ impl<
         let mut unauthorized = 0usize;
         let mut at_capacity = false;
         for (n, id) in ids.into_iter().enumerate() {
-            let outcome = if at_capacity || n >= self.heads_watches.cap() {
+            // An id the peer already watches is re-confirmed regardless of the
+            // cap; it was authorized at admission and is re-checked at fan-out.
+            let outcome = if self.heads_watches.is_watcher(from, id).await {
+                self.watching(from, id).await
+            } else if at_capacity || n >= self.heads_watches.cap() {
                 WatchOutcome::AtCapacity
             } else if let Err(e) = self.storage.policy().authorize_fetch(from, id).await {
                 tracing::debug!(peer = %from, tree = ?id, error = %e, "policy rejected heads watch");
@@ -586,13 +593,7 @@ impl<
                 WatchOutcome::Unauthorized
             } else {
                 match self.heads_watches.add_watcher(from, id).await {
-                    Ok(()) => {
-                        let heads = self.heads_for(id).await;
-                        WatchOutcome::Watching(RemoteHeads {
-                            counter: self.send_counter.next(from).await,
-                            heads,
-                        })
-                    }
+                    Ok(Watched::Added | Watched::Already) => self.watching(from, id).await,
                     Err(WatchRefused::AtCapacity) => {
                         at_capacity = true;
                         WatchOutcome::AtCapacity
@@ -615,9 +616,15 @@ impl<
         }
     }
 
-    // -----------------------------------------------------------------------
-    // recv_* methods
-    // -----------------------------------------------------------------------
+    /// A `Watching` outcome carrying the current heads, read before the
+    /// counter is stamped.
+    async fn watching(&self, from: PeerId, id: SedimentreeId) -> WatchOutcome {
+        let heads = self.heads_for(id).await;
+        WatchOutcome::Watching(RemoteHeads {
+            counter: self.send_counter.next(from).await,
+            heads,
+        })
+    }
 
     async fn recv_commit(
         &self,
@@ -692,10 +699,7 @@ impl<
             self.heads_notifier.notify(id, *from, sender_heads).await;
         }
 
-        Ok(match changed {
-            Some(change) => Some(self.propagate(change, from, Some(conn)).await),
-            None => None,
-        })
+        Ok(Some(self.propagate(changed, from, Some(conn)).await))
     }
 
     async fn recv_fragment(
@@ -767,10 +771,7 @@ impl<
             self.heads_notifier.notify(id, *from, sender_heads).await;
         }
 
-        Ok(match changed {
-            Some(change) => Some(self.propagate(change, from, Some(conn)).await),
-            None => None,
-        })
+        Ok(Some(self.propagate(changed, from, Some(conn)).await))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1104,14 +1105,11 @@ impl<
             ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
                 .await?;
         self.minimize_tree(id).await;
-        Ok(match changed {
-            Some(change) => Some(self.propagate(change, from, None).await),
-            None => None,
-        })
+        Ok(Some(self.propagate(changed, from, None).await))
     }
 
-    /// Spend a [`HeadsChanged`] witness: build the ack, pushes, and watcher
-    /// updates it calls for. Sent later, off the dispatch permit.
+    /// [`peers::propagate`] with this handler's state; frames are sent later,
+    /// off the dispatch permit.
     async fn propagate(
         &self,
         change: HeadsChanged,
@@ -1141,7 +1139,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<Option<HeadsChanged>, Store::Error> {
+    ) -> Result<HeadsChanged, Store::Error> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -1149,7 +1147,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<Option<HeadsChanged>, Store::Error> {
+    ) -> Result<HeadsChanged, Store::Error> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 

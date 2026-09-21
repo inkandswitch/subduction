@@ -39,7 +39,7 @@ use sedimentree_core::codec::{
     schema::Schema,
 };
 use subduction_core::{
-    connection::message::{MESSAGE_SCHEMA, SyncMessage},
+    connection::message::{MAX_MESSAGE_TAG, MESSAGE_SCHEMA, SyncMessage},
     handshake::{
         HandshakeMessage,
         challenge::Challenge,
@@ -641,11 +641,11 @@ fn sync_message_corrupted_total_size_rejected() {
 }
 
 /// A `SUM\x00`-prefixed envelope with a tag byte outside the
-/// supported range (0x00–0x0B) yields `InvalidEnumTag`.
+/// supported range yields `InvalidEnumTag`.
 #[test]
 fn sync_message_unknown_tag_rejected() {
     bolero::check!().with_arbitrary::<u8>().for_each(|bad_tag| {
-        if *bad_tag <= 0x0B {
+        if *bad_tag <= MAX_MESSAGE_TAG {
             return;
         }
         let mut bytes = Vec::with_capacity(9);

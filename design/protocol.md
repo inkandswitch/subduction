@@ -598,10 +598,6 @@ sedimentree the receiver watches (see [Heads Watches](./sync/subscriptions.md#he
 ╚═══════╩════════════════════╝
 ```
 
-### UnwatchHeads (Tag 0x0B)
-
-Same layout as `WatchHeads`.
-
 ### WatchHeadsResponse (Tag 0x0A)
 
 ```
@@ -611,11 +607,15 @@ Same layout as `WatchHeads`.
 ╚═══════╩══════════════════════════════════════════════════════╝
 ```
 
-| Outcome | Meaning                                                      |
-|---------|--------------------------------------------------------------|
-| `0x00`  | Watching — followed by `RemoteHeads` (counter + heads)       |
-| `0x01`  | Unauthorized — the requester may not fetch this sedimentree  |
-| `0x02`  | AtCapacity — the requester's per-peer watch limit is reached |
+| Outcome | Meaning                                                                    |
+|---------|----------------------------------------------------------------------------|
+| `0x00`  | Watching — followed by `RemoteHeads`                                       |
+| `0x01`  | Unauthorized — the requester may not fetch this sedimentree                |
+| `0x02`  | AtCapacity — the receiver already holds `MAX_WATCHES_PER_PEER` for the requester |
+
+### UnwatchHeads (Tag 0x0B)
+
+Same layout as `WatchHeads`.
 
 ## Future Considerations
 

@@ -34,9 +34,8 @@ use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use super::error::IoError;
 
-/// Items a batch sync response added to the local tree, in wire form, so
-/// the caller can push them on to its own subscribers (see
-/// [`peers::build_pushes`](super::peers::build_pushes)).
+/// Items added to the local tree, in wire form, carried on [`HeadsChanged`]
+/// so `propagate` can push them to subscribers.
 #[derive(Debug, Default)]
 pub(crate) struct Ingested {
     pub(crate) commits: Vec<(Signed<LooseCommit>, Blob)>,
@@ -63,30 +62,35 @@ impl Ingested {
     }
 }
 
-/// Proof that the local tree for `id` changed, to be spent on
+/// Proof that a local tree was written, to be spent on
 /// [`peers::propagate`](super::peers::propagate).
 ///
-/// Every path that mutates a tree returns one of these, and only
-/// `propagate` consumes it, so a new write path cannot forget to tell
-/// subscribers and watchers: dropping the witness is a compile-time warning.
-/// The `store_*` family discards it deliberately (local writes are not
-/// propagated until the next sync).
+/// Every mutating path returns one; `propagate` is its only consumer, so
+/// dropping it (a `must_use` warning, denied in CI) marks a write path that
+/// forgot subscribers and watchers. `store_*` drops it on purpose: local
+/// writes wait for the next sync.
 #[must_use = "a heads change must be propagated to subscribers and watchers"]
 #[derive(Debug)]
-pub(crate) struct HeadsChanged {
-    pub(crate) id: SedimentreeId,
+pub(crate) enum HeadsChanged {
+    /// Nothing new was written; there is nothing to propagate.
+    Unchanged,
 
-    /// Items to push to subscribers; empty when only the heads changed
-    /// (batch writes, removal).
-    pub(crate) ingested: Ingested,
+    /// The tree for `id` changed.
+    Changed {
+        id: SedimentreeId,
 
-    /// Heads to report, when the tree can no longer be read for them.
-    pub(crate) heads: Option<Vec<CommitId>>,
+        /// Items to push to subscribers; empty when only the heads changed
+        /// (batch writes, removal).
+        ingested: Ingested,
+
+        /// Heads to report when they cannot be read from the tree (removal).
+        heads: Option<Vec<CommitId>>,
+    },
 }
 
 impl HeadsChanged {
     pub(crate) const fn new(id: SedimentreeId, ingested: Ingested) -> Self {
-        Self {
+        Self::Changed {
             id,
             ingested,
             heads: None,
@@ -100,10 +104,19 @@ impl HeadsChanged {
 
     /// The tree was removed: report empty heads.
     pub(crate) fn removed(id: SedimentreeId) -> Self {
-        Self {
+        Self::Changed {
             id,
             ingested: Ingested::default(),
             heads: Some(Vec::new()),
+        }
+    }
+
+    /// `heads_only(id)` if `changed`, else `Unchanged`.
+    pub(crate) fn heads_only_if(changed: bool, id: SedimentreeId) -> Self {
+        if changed {
+            Self::heads_only(id)
+        } else {
+            Self::Unchanged
         }
     }
 }
@@ -128,7 +141,7 @@ pub(crate) async fn recv_batch_sync_response<
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
-) -> Result<Option<HeadsChanged>, IoError<Async, Store, Conn, WireMsg>> {
+) -> Result<HeadsChanged, IoError<Async, Store, Conn, WireMsg>> {
     tracing::info!(
         tree = ?id,
         peer = %from,
@@ -337,14 +350,18 @@ pub(crate) async fn recv_batch_sync_response<
         }
     }
 
-    Ok((!ingested.is_empty()).then(|| HeadsChanged::new(id, ingested)))
+    Ok(if ingested.is_empty() {
+        HeadsChanged::Unchanged
+    } else {
+        HeadsChanged::new(id, ingested)
+    })
 }
 
 /// Insert a verified commit into storage and the in-memory tree.
 ///
 /// Persists to storage first (cancel-safe: idempotent CAS writes),
-/// then updates the in-memory tree. Returns the change to propagate, or
-/// `None` if the commit was already present.
+/// then updates the in-memory tree. Returns `Unchanged` if the commit was
+/// already present.
 pub(crate) async fn insert_commit_locally<
     Async: FutureForm,
     Store: Storage<Async>,
@@ -353,7 +370,7 @@ pub(crate) async fn insert_commit_locally<
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
-) -> Result<Option<HeadsChanged>, Store::Error> {
+) -> Result<HeadsChanged, Store::Error> {
     let id = putter.sedimentree_id();
     let commit = verified_meta.payload().clone();
     let head = commit.head();
@@ -394,7 +411,11 @@ pub(crate) async fn insert_commit_locally<
         )
         .await?;
 
-    Ok(was_added.then(|| HeadsChanged::new(id, wire)))
+    Ok(if was_added {
+        HeadsChanged::new(id, wire)
+    } else {
+        HeadsChanged::Unchanged
+    })
 }
 
 /// Insert a verified fragment into storage and the in-memory tree.
@@ -408,7 +429,7 @@ pub(crate) async fn insert_fragment_locally<
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
-) -> Result<Option<HeadsChanged>, Store::Error> {
+) -> Result<HeadsChanged, Store::Error> {
     let id = putter.sedimentree_id();
     let fragment = verified_meta.payload().clone();
     let head = fragment.head();
@@ -438,7 +459,11 @@ pub(crate) async fn insert_fragment_locally<
         )
         .await?;
 
-    Ok(was_added.then(|| HeadsChanged::new(id, wire)))
+    Ok(if was_added {
+        HeadsChanged::new(id, wire)
+    } else {
+        HeadsChanged::Unchanged
+    })
 }
 
 /// Re-minimize a sedimentree in the in-memory cache.

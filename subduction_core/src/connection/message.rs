@@ -480,6 +480,9 @@ impl RequestedData {
 /// Schema header for `SyncMessage` envelope.
 pub const MESSAGE_SCHEMA: [u8; 4] = *b"SUM\x00";
 
+/// Highest message tag in use; anything above it is rejected as unknown.
+pub const MAX_MESSAGE_TAG: u8 = tags::UNWATCH_HEADS;
+
 /// Minimum size of a Message envelope (schema + `total_size` + tag).
 const ENVELOPE_HEADER_SIZE: usize = 4 + 4 + 1; // 9 bytes
 
@@ -1253,7 +1256,8 @@ fn encode_watch_heads_response(buf: &mut Vec<u8>, resp: &WatchHeadsResponse) {
 fn decode_watch_heads_response(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
     let mut offset = 0;
     let count = read_u16(payload, &mut offset)? as usize;
-    let mut results = Vec::with_capacity(count);
+    // Each result is at least id(32) + tag(1); cap allocation by what fits.
+    let mut results = Vec::with_capacity(count.min(payload.len().saturating_sub(offset) / 33));
     for _ in 0..count {
         let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
         let tag = read_u8(payload, &mut offset)?;

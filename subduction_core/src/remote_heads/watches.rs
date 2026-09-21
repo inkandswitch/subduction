@@ -23,11 +23,11 @@ use sedimentree_core::{
 
 use crate::peer::id::PeerId;
 
-/// How many sedimentrees one peer may watch on this node.
+/// How many watches one peer may hold on this node.
 ///
 /// A watch costs an entry for as long as the peer stays connected, and a
 /// peer may name any id, so the table is bounded per peer.
-pub const MAX_WATCHERS_PER_PEER: usize = 4096;
+pub const MAX_WATCHES_PER_PEER: usize = 4096;
 
 /// Both directions of heads-watch state, shared between [`Subduction`] and
 /// [`SyncHandler`].
@@ -42,7 +42,7 @@ pub struct HeadsWatches {
 
 impl Default for HeadsWatches {
     fn default() -> Self {
-        Self::with_cap(MAX_WATCHERS_PER_PEER)
+        Self::with_cap(MAX_WATCHES_PER_PEER)
     }
 }
 
@@ -53,9 +53,18 @@ struct State {
     watcher_counts: Map<PeerId, usize>,
 }
 
+/// Whether recording a watch created a new entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Watched {
+    /// The watch is new.
+    Added,
+    /// The peer already watched this id.
+    Already,
+}
+
 /// Why a peer's watch was not recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum WatchRefused {
+pub(crate) enum WatchRefused {
     /// The peer already holds as many watches here as the cap allows.
     #[error("peer is at its heads-watch cap")]
     AtCapacity,
@@ -68,7 +77,7 @@ impl HeadsWatches {
         Self::default()
     }
 
-    /// Create empty watch state with a custom per-peer watcher cap.
+    /// Create empty watch state with a custom per-peer watch cap.
     #[must_use]
     pub fn with_cap(cap: usize) -> Self {
         Self {
@@ -77,7 +86,7 @@ impl HeadsWatches {
         }
     }
 
-    /// The per-peer watcher cap.
+    /// The per-peer watch cap.
     #[must_use]
     pub const fn cap(&self) -> usize {
         self.cap
@@ -105,18 +114,18 @@ impl HeadsWatches {
     }
 
     /// Record `peer` as a watcher of `id`, subject to the per-peer cap.
-    /// Idempotent: re-watching an already-watched id is `Ok` and costs
-    /// nothing.
+    /// Idempotent: an id the peer already watches is [`Watched::Already`]
+    /// regardless of the cap.
     ///
     /// # Errors
     ///
-    /// [`WatchRefused::AtCapacity`] if `peer` already holds as many watches as
-    /// the cap allows.
+    /// [`WatchRefused::AtCapacity`] if the id is new and `peer` already holds
+    /// as many watches as the cap allows.
     pub(crate) async fn add_watcher(
         &self,
         peer: PeerId,
         id: SedimentreeId,
-    ) -> Result<(), WatchRefused> {
+    ) -> Result<Watched, WatchRefused> {
         let mut state = self.state.lock().await;
         let State {
             watchers,
@@ -124,20 +133,15 @@ impl HeadsWatches {
             ..
         } = &mut *state;
 
-        let count = watcher_counts.entry(peer).or_default();
-        let ids = watchers.entry(id).or_default();
-        if ids.contains(&peer) {
-            return Ok(());
+        if watchers.get(&id).is_some_and(|ids| ids.contains(&peer)) {
+            return Ok(Watched::Already);
         }
-        if *count >= self.cap {
-            if ids.is_empty() {
-                watchers.remove(&id);
-            }
+        if watcher_counts.get(&peer).copied().unwrap_or(0) >= self.cap {
             return Err(WatchRefused::AtCapacity);
         }
-        ids.insert(peer);
-        *count += 1;
-        Ok(())
+        watchers.entry(id).or_default().insert(peer);
+        *watcher_counts.entry(peer).or_default() += 1;
+        Ok(Watched::Added)
     }
 
     /// Stop sending `peer` heads for `ids`.
@@ -166,6 +170,16 @@ impl HeadsWatches {
                 watcher_counts.remove(&peer);
             }
         }
+    }
+
+    /// Whether `peer` already watches `id`.
+    pub(crate) async fn is_watcher(&self, peer: PeerId, id: SedimentreeId) -> bool {
+        self.state
+            .lock()
+            .await
+            .watchers
+            .get(&id)
+            .is_some_and(|peers| peers.contains(&peer))
     }
 
     /// Peers watching `id`.
@@ -251,9 +265,11 @@ mod tests {
                         Op::Add { peer: p, tree: t } => {
                             let (p, t) = (peer(*p % 4), tree(*t % 8));
                             let held = table.iter().filter(|(q, _)| *q == p).count();
-                            let expected = if table.contains(&(p, t)) || held < cap {
+                            let expected = if table.contains(&(p, t)) {
+                                Ok(Watched::Already)
+                            } else if held < cap {
                                 table.insert((p, t));
-                                Ok(())
+                                Ok(Watched::Added)
                             } else {
                                 Err(WatchRefused::AtCapacity)
                             };
@@ -297,8 +313,11 @@ mod tests {
                     assert!(state.watchers.values().all(|peers| !peers.is_empty()));
                     for p in (0..4).map(peer) {
                         let count = table.iter().filter(|(q, _)| *q == p).count();
-                        assert_eq!(state.watcher_counts.get(&p).copied().unwrap_or(0), count);
-                        assert!(count == 0 || state.watcher_counts.contains_key(&p));
+                        assert_eq!(
+                            state.watcher_counts.get(&p).copied(),
+                            (count > 0).then_some(count),
+                            "count for {p}"
+                        );
                     }
                 }
             });
