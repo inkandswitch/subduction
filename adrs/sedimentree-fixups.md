@@ -3,13 +3,38 @@
 A modification to sedimentree which replaces checkpoint commits with fixup 
 operations.
 
-## Motivation
+## Introduction
 
-An important part of what makes sedimentree useful is that the minimal set of
-fragments and loose commits which contains a commit graph is logairthmic in the
-number of commits in the graph. Unfortunately, in order to compute this minimal
-tree we have to store one in every ~256 commit hashes of the entire history of
-the document on disk. This leads to an O(n) growth in the storage of a document
+The sedimentree data structure and sync protocol has two related problems 
+caused by the fact that it is not possible to compute whether one fragment 
+contains anothe fragment (or loose commit). This document discusses the
+problems and proposes that we replace the checkpoint commits which were 
+intended to solve this problem with a new "fixup" concept.
+
+## Background
+
+Sedimentree works by taking the commit graph of a document and splitting it
+into fragments. A fragment starts from some commit which we call the head and
+walks backwards up the parent links until we reach the "boundary" commits of
+the fragment. We choose the heads and boundaries of the fragment to be commits
+with $n$ leading zeros, where $n$ is the "depth" of the fragment.
+
+The purpose of this construction is to make use of the fact that typical
+commit graphs are relatively deep and narrow. This means that lower depth
+fragments (which have more leading zeros) are more likely to happen as the
+document gets larger and thus the older regions of the document get compacted
+into larger and larger fragments. Nearer the tip of the tree, where things are
+newer, fragments are smaller.
+
+
+##
+
+An important part of what makes sedimentree useful is that the size of the
+minimal set of fragments and loose commits which contain a commit graph is
+logarithmic in the number of commits in the graph. Unfortunately, in order to
+compute this minimal tree we have to store one in every ~256 commit hashes of
+the entire history of the document on disk. This leads to an O(n) growth in the
+storage of a document
 - prohibiting use for very fast moving data (such as the mouse movements of a
 use in a collaborative drawing application).
 
