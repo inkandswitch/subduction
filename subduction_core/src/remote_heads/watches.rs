@@ -40,36 +40,6 @@ pub struct HeadsWatches {
     cap: usize,
 }
 
-impl Default for HeadsWatches {
-    fn default() -> Self {
-        Self::with_cap(MAX_WATCHES_PER_PEER)
-    }
-}
-
-#[derive(Debug, Default)]
-struct State {
-    watched: Set<SedimentreeId>,
-    watchers: Map<SedimentreeId, Set<PeerId>>,
-    watcher_counts: Map<PeerId, usize>,
-}
-
-/// Whether recording a watch created a new entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Watched {
-    /// The watch is new.
-    Added,
-    /// The peer already watched this id.
-    Already,
-}
-
-/// Why a peer's watch was not recorded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum WatchRefused {
-    /// The peer already holds as many watches here as the cap allows.
-    #[error("peer is at its heads-watch cap")]
-    AtCapacity,
-}
-
 impl HeadsWatches {
     /// Create empty watch state.
     #[must_use]
@@ -79,7 +49,7 @@ impl HeadsWatches {
 
     /// Create empty watch state with a custom per-peer watch cap.
     #[must_use]
-    pub fn with_cap(cap: usize) -> Self {
+    pub(crate) fn with_cap(cap: usize) -> Self {
         Self {
             state: Mutex::new(State::default()),
             cap,
@@ -88,7 +58,7 @@ impl HeadsWatches {
 
     /// The per-peer watch cap.
     #[must_use]
-    pub const fn cap(&self) -> usize {
+    pub(crate) const fn cap(&self) -> usize {
         self.cap
     }
 
@@ -210,6 +180,36 @@ impl HeadsWatches {
         state.watcher_counts.clear();
         state.watchers.clear();
     }
+}
+
+impl Default for HeadsWatches {
+    fn default() -> Self {
+        Self::with_cap(MAX_WATCHES_PER_PEER)
+    }
+}
+
+#[derive(Debug, Default)]
+struct State {
+    watched: Set<SedimentreeId>,
+    watchers: Map<SedimentreeId, Set<PeerId>>,
+    watcher_counts: Map<PeerId, usize>,
+}
+
+/// Whether recording a watch created a new entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Watched {
+    /// The watch is new.
+    Added,
+    /// The peer already watched this id.
+    Already,
+}
+
+/// Why a peer's watch was not recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum WatchRefused {
+    /// The peer already holds as many watches here as the cap allows.
+    #[error("peer is at its heads-watch cap")]
+    AtCapacity,
 }
 
 #[cfg(test)]

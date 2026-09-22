@@ -1624,23 +1624,28 @@ where
             verified_commits.push(verified_meta);
         }
 
+        let heads: Vec<CommitId> = commit_payloads.iter().map(LooseCommit::head).collect();
+        let any_new = self
+            .any_new(id, &heads, &[])
+            .await
+            .map_err(WriteError::Io)?;
+
         putter
             .save_batch(verified_commits, Vec::new())
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        let changed = self
-            .with_tree_hydrated(id, move |tree| {
-                commit_payloads
-                    .into_iter()
-                    .fold(false, |added, commit| tree.add_commit(commit) || added)
-            })
-            .await
-            .map_err(WriteError::Io)?;
+        self.with_tree_hydrated(id, move |tree| {
+            for commit in commit_payloads {
+                tree.add_commit(commit);
+            }
+        })
+        .await
+        .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
 
         tracing::info!(count, "bulk-insert of commits complete, tree minimized");
-        Ok(changed)
+        Ok(HeadsChanged::heads_only_if(id, any_new))
     }
 
     /// Bulk-insert fragments without per-fragment minimization or broadcasting.
@@ -1707,24 +1712,27 @@ where
             verified_fragments.push(verified_meta);
         }
 
+        let heads: Vec<CommitId> = fragment_payloads.iter().map(Fragment::head).collect();
+        let any_new = self
+            .any_new(id, &[], &heads)
+            .await
+            .map_err(WriteError::Io)?;
+
         putter
             .save_batch(Vec::new(), verified_fragments)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        let changed = self
-            .with_tree_hydrated(id, move |tree| {
-                fragment_payloads
-                    .into_iter()
-                    .fold(false, |added, fragment| {
-                        tree.add_fragment(fragment) || added
-                    })
-            })
-            .await
-            .map_err(WriteError::Io)?;
+        self.with_tree_hydrated(id, move |tree| {
+            for fragment in fragment_payloads {
+                tree.add_fragment(fragment);
+            }
+        })
+        .await
+        .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
         tracing::info!(count, "bulk-insert of fragments complete, tree minimized");
-        Ok(changed)
+        Ok(HeadsChanged::heads_only_if(id, any_new))
     }
 
     /// Persist already-built [`LooseCommit`] and [`Fragment`] payloads
@@ -1809,24 +1817,28 @@ where
             verified_fragments.push(verified_meta);
         }
 
+        let commit_heads: Vec<CommitId> = commit_payloads.iter().map(LooseCommit::head).collect();
+        let fragment_heads: Vec<CommitId> = fragment_payloads.iter().map(Fragment::head).collect();
+        let any_new = self
+            .any_new(id, &commit_heads, &fragment_heads)
+            .await
+            .map_err(WriteError::Io)?;
+
         putter
             .save_batch(verified_commits, verified_fragments)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        let changed = self
-            .with_tree_hydrated(id, move |tree| {
-                let commits_added = commit_payloads
-                    .into_iter()
-                    .fold(false, |added, commit| tree.add_commit(commit) || added);
-                fragment_payloads
-                    .into_iter()
-                    .fold(commits_added, |added, fragment| {
-                        tree.add_fragment(fragment) || added
-                    })
-            })
-            .await
-            .map_err(WriteError::Io)?;
+        self.with_tree_hydrated(id, move |tree| {
+            for commit in commit_payloads {
+                tree.add_commit(commit);
+            }
+            for fragment in fragment_payloads {
+                tree.add_fragment(fragment);
+            }
+        })
+        .await
+        .map_err(WriteError::Io)?;
         self.minimize_tree(id).await;
 
         tracing::info!(
@@ -1834,7 +1846,7 @@ where
             fragment_count,
             "bulk-insert of commits and fragments complete, tree minimized"
         );
-        Ok(changed)
+        Ok(HeadsChanged::heads_only_if(id, any_new))
     }
 
     /// Handle receiving a batch sync response from a peer.
@@ -2892,6 +2904,9 @@ where
      * PRIVATE METHODS *
      *******************/
 
+    /// Persist and merge a whole tree. Always reports a change: merging a
+    /// tree already present costs one no-op heads round, which receivers
+    /// deduplicate.
     async fn insert_sedimentree_locally(
         &self,
         putter: &Putter<Async, Store>,
@@ -3195,6 +3210,30 @@ where
             .map_err(IoError::Storage)
     }
 
+    /// Whether any of `commits` or `fragments` is absent from the tree for
+    /// `id`, judged against the state *before* a batch is persisted. A tree
+    /// absent from storage is new, so everything in it is.
+    async fn any_new(
+        &self,
+        id: SedimentreeId,
+        commits: &[CommitId],
+        fragments: &[CommitId],
+    ) -> Result<bool, IoError<Async, Store, Conn, Hdl::Message>> {
+        let access = self.storage.hydration_access();
+        self.sedimentrees
+            .with_hydrated_ref(
+                id,
+                || ingest::load_tree::<Async, _>(&access, id),
+                |tree| {
+                    commits.iter().any(|c| !tree.tree().has_loose_commit(*c))
+                        || fragments.iter().any(|f| !tree.tree().has_fragment(*f))
+                },
+            )
+            .await
+            .map(|present| present.unwrap_or(true))
+            .map_err(IoError::Storage)
+    }
+
     /// Mutate the in-memory tree for `id`, hydrating it from storage first if
     /// it is not resident.
     ///
@@ -3206,20 +3245,19 @@ where
     /// [`MinimizedSedimentree`] wrapper, which it marks dirty; callers
     /// re-minimize (e.g. via [`minimize_tree`](Self::minimize_tree)) afterward.
     ///
-    /// `mutate` reports whether it added anything; the returned witness is
-    /// `Unchanged` otherwise.
-    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree) -> bool>(
+    /// Newness cannot be judged here: on a cache miss the tree is loaded from
+    /// storage that already holds the batch. Callers decide with
+    /// [`any_new`](Self::any_new) before persisting.
+    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree)>(
         &self,
         id: SedimentreeId,
         mutate: F,
-    ) -> Result<HeadsChanged, IoError<Async, Store, Conn, Hdl::Message>> {
+    ) -> Result<(), IoError<Async, Store, Conn, Hdl::Message>> {
         let access = self.storage.hydration_access();
-        let changed = self
-            .sedimentrees
+        self.sedimentrees
             .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access, id), mutate)
             .await
-            .map_err(IoError::Storage)?;
-        Ok(HeadsChanged::heads_only_if(changed, id))
+            .map_err(IoError::Storage)
     }
 }
 

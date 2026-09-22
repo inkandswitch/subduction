@@ -196,9 +196,9 @@ pub(crate) async fn propagate<
         return Vec::new();
     };
 
-    // Acks and pushes carry heads as advisory metadata, so they go out with
-    // empty heads on a read failure. Watchers receive nothing: for them the
-    // heads are the payload, and `[]` means the tree was removed.
+    // Pushes carry heads as advisory metadata, so they go out with empty heads
+    // on a read failure. The ack and watcher updates are pure heads messages
+    // and are skipped: for their receivers `[]` means the tree was removed.
     let heads = match heads {
         Some(heads) => Ok(heads),
         None => ingest::heads_or_hydrate(sedimentrees, storage, depth_metric, id).await,
@@ -212,7 +212,7 @@ pub(crate) async fn propagate<
     };
 
     let mut out = Vec::new();
-    if let Some(conn) = ack_to {
+    if let (Some(conn), true) = (ack_to, heads_readable) {
         out.push((
             conn.clone(),
             SyncMessage::HeadsUpdate {
@@ -498,6 +498,7 @@ mod tests {
                 }
             });
     }
+
     /// Allows fetches only for the listed peers.
     struct AllowFetchFor(Set<PeerId>);
 

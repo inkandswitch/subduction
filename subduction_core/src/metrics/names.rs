@@ -131,8 +131,8 @@ pub const OUTBOUND_SEND_BLOCKED_TOTAL: &str = "subduction_outbound_send_blocked_
 pub const SUBSCRIBED_SEDIMENTREES: &str = "subduction_subscribed_sedimentrees";
 /// Frames fanned out after a tree change (subscription pushes, acks, watcher
 /// heads updates), labeled by `outcome` (`ok`/`failed`). Failed frames are
-/// sends into dead connections — the push-path twin of
-/// `subduction_requested_data_send_failures_total`.
+/// sends into dead connections, or frames skipped after one — the push-path
+/// twin of `subduction_requested_data_send_failures_total`.
 pub const SUBSCRIPTION_PUSHES_TOTAL: &str = "subduction_subscription_pushes_total";
 /// Upstream subscription propagation attempts, labeled by `outcome`
 /// (`established`/`rejected`/`failed`). Rejected/failed attempts roll their

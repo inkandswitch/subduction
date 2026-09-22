@@ -318,8 +318,8 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
     ) -> Async::Future<'a, Result<(), Self::HandlerError>> {
         Async::from_future(async move {
             // Ingest + storage run here, on the per-peer dispatch permit. The
-            // subscription fan-out is spawned OFF the permit so a slow
-            // subscriber backpressures a detached task instead of stalling
+            // fan-out (pushes, ack, watcher updates) is spawned OFF the permit so
+            // a slow peer backpressures a detached task instead of stalling
             // inbound dispatch for this peer.
             if let Some(pushes) = self.dispatch(conn, message).await?
                 && !pushes.is_empty()
@@ -432,18 +432,11 @@ impl<
         message: SyncMessage,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<Option<Pushes<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
-        // Note: remote heads arrive via three paths:
-        //
-        // 1. `responder_heads` in `BatchSyncResponse` — handled by
-        //    `Subduction::sync_with_all_peers` via `RemoteHeadsNotifier`.
-        //
-        // 2. `sender_heads` on subscription-push `LooseCommit`/`Fragment`
-        //    messages — reported by `recv_commit` / `recv_fragment` after
-        //    verification, authorization, and storage.
-        //
-        // 3. `HeadsUpdate` messages (post-ingestion ack from the 1.5 RTT
-        //    second half) — handled here in dispatch.
-        let fanout = match message {
+        // Remote heads arrive on four paths, all gated on the watch set:
+        // `responder_heads` (`Subduction::sync_with_*`), `sender_heads`
+        // (`recv_commit` / `recv_fragment`, after storage), `HeadsUpdate` (ack
+        // or watcher update), and `WatchHeadsResponse` snapshots.
+        let pushes = match message {
             SyncMessage::LooseCommit {
                 id,
                 commit,
@@ -533,7 +526,7 @@ impl<
             }
         };
 
-        Ok(fanout)
+        Ok(pushes)
     }
 
     // -----------------------------------------------------------------------
@@ -582,15 +575,18 @@ impl<
         let mut at_capacity = false;
         for (n, id) in ids.into_iter().enumerate() {
             // An id the peer already watches is re-confirmed regardless of the
-            // cap; it was authorized at admission and is re-checked at fan-out.
-            let outcome = if self.heads_watches.is_watcher(from, id).await {
-                self.watching(from, id).await
-            } else if at_capacity || n >= self.heads_watches.cap() {
+            // cap, but never without the policy: a revoked peer must not read
+            // heads by re-sending its watch.
+            let held = self.heads_watches.is_watcher(from, id).await;
+            let outcome = if !held && (at_capacity || n >= self.heads_watches.cap()) {
+                at_capacity = true;
                 WatchOutcome::AtCapacity
             } else if let Err(e) = self.storage.policy().authorize_fetch(from, id).await {
                 tracing::debug!(peer = %from, tree = ?id, error = %e, "policy rejected heads watch");
                 unauthorized += 1;
                 WatchOutcome::Unauthorized
+            } else if held {
+                self.watching(from, id).await
             } else {
                 match self.heads_watches.add_watcher(from, id).await {
                     Ok(Watched::Added | Watched::Already) => self.watching(from, id).await,
@@ -694,8 +690,9 @@ impl<
             .map_err(IoError::Storage)?;
 
         // Gate on the watch set after verification and storage; see
-        // `RemoteHeadsObserver`.
-        if self.heads_watches.is_watched(id).await {
+        // `RemoteHeadsObserver`. Empty `sender_heads` mean the sender could not
+        // read its heads (`peers::propagate`); skip them.
+        if !sender_heads.heads.is_empty() && self.heads_watches.is_watched(id).await {
             self.heads_notifier.notify(id, *from, sender_heads).await;
         }
 
@@ -767,7 +764,7 @@ impl<
             .map_err(IoError::Storage)?;
 
         // Gated and ordered as in `recv_commit`.
-        if self.heads_watches.is_watched(id).await {
+        if !sender_heads.heads.is_empty() && self.heads_watches.is_watched(id).await {
             self.heads_notifier.notify(id, *from, sender_heads).await;
         }
 

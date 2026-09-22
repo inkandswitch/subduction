@@ -77,6 +77,7 @@ pub(crate) enum HeadsChanged {
 
     /// The tree for `id` changed.
     Changed {
+        /// The tree that changed.
         id: SedimentreeId,
 
         /// Items to push to subscribers; empty when only the heads changed
@@ -112,7 +113,7 @@ impl HeadsChanged {
     }
 
     /// `heads_only(id)` if `changed`, else `Unchanged`.
-    pub(crate) fn heads_only_if(changed: bool, id: SedimentreeId) -> Self {
+    pub(crate) fn heads_only_if(id: SedimentreeId, changed: bool) -> Self {
         if changed {
             Self::heads_only(id)
         } else {
@@ -122,9 +123,9 @@ impl HeadsChanged {
 }
 
 /// Process an incoming batch sync response: verify and store all commits
-/// and fragments from the diff. Returns the items not already present in the
-/// minimized local tree; the rest are written idempotently but not reported,
-/// so they are not re-pushed.
+/// and fragments from the diff. Returns a [`HeadsChanged`] carrying the items
+/// not already present in the minimized local tree, or `Unchanged` if none;
+/// the rest are written idempotently and not re-pushed.
 ///
 /// Policy-rejected items are logged and skipped.
 #[allow(clippy::too_many_lines)]

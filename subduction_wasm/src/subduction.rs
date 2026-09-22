@@ -412,7 +412,8 @@ impl WasmSubduction {
         self.core.watch_heads(id.into()).await;
     }
 
-    /// Stop watching a sedimentree's heads.
+    /// Stop watching a sedimentree's heads. A later `watchHeads` delivers the
+    /// snapshot again even if unchanged.
     #[wasm_bindgen(js_name = unwatchHeads)]
     pub async fn unwatch_heads(&self, id: &WasmSedimentreeId) {
         self.core.unwatch_heads(id.into()).await;

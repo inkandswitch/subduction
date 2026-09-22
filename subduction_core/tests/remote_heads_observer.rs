@@ -4,10 +4,8 @@
 //!
 //! Regression guard for the builder silently discarding the observer.
 
-#![allow(clippy::expect_used, clippy::panic)]
-
 use core::time::Duration;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use future_form::Sendable;
 use sedimentree_core::{id::SedimentreeId, loose_commit::id::CommitId};
@@ -18,32 +16,12 @@ use subduction_core::{
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    remote_heads::{RemoteHeads, RemoteHeadsObserver},
+    remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
+    test_utils::heads::{RecordingObserver, settle},
 };
 use testresult::TestResult;
-
-/// Records every notification it receives.
-#[derive(Clone, Debug, Default)]
-struct RecordingObserver {
-    seen: Arc<Mutex<Vec<(SedimentreeId, PeerId, RemoteHeads)>>>,
-}
-
-impl RecordingObserver {
-    fn snapshot(&self) -> Vec<(SedimentreeId, PeerId, RemoteHeads)> {
-        self.seen.lock().expect("observer mutex poisoned").clone()
-    }
-}
-
-impl RemoteHeadsObserver for RecordingObserver {
-    fn on_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        self.seen
-            .lock()
-            .expect("observer mutex poisoned")
-            .push((id, peer, heads));
-    }
-}
 
 /// Poll until `predicate` holds or the deadline passes.
 async fn wait_until(mut predicate: impl FnMut() -> bool, failure: &str) {
@@ -90,12 +68,15 @@ async fn builder_observer_receives_heads_updates() -> TestResult {
         .await?;
 
     wait_until(
-        || !observer.snapshot().is_empty(),
+        || !observer.deliveries().is_empty(),
         "observer set via the builder never received the heads update",
     )
     .await;
 
-    assert_eq!(observer.snapshot(), vec![(sedimentree_id, peer_id, heads)]);
+    assert_eq!(
+        observer.deliveries(),
+        vec![(sedimentree_id, peer_id, heads)]
+    );
 
     actor_task.abort();
     listener_task.abort();
@@ -142,7 +123,7 @@ async fn stale_heads_updates_are_filtered() -> TestResult {
     handle.inbound_tx.send(update(0)).await?;
     handle.inbound_tx.send(update(2)).await?;
     wait_until(
-        || observer.snapshot().len() == 1,
+        || observer.deliveries().len() == 1,
         "fresh heads update (counter 2) never reached the observer",
     )
     .await;
@@ -153,13 +134,13 @@ async fn stale_heads_updates_are_filtered() -> TestResult {
     handle.inbound_tx.send(update(1)).await?;
     handle.inbound_tx.send(update(3)).await?;
     wait_until(
-        || observer.snapshot().len() >= 2,
+        || observer.deliveries().len() >= 2,
         "fresh heads update (counter 3) never reached the observer",
     )
     .await;
 
     let counters: Vec<u64> = observer
-        .snapshot()
+        .deliveries()
         .into_iter()
         .map(|(_, _, heads)| heads.counter)
         .collect();
@@ -236,11 +217,91 @@ async fn unwatched_heads_are_dropped_at_the_gate() -> TestResult {
         .await?;
 
     wait_until(
-        || !observer.snapshot().is_empty(),
+        || !observer.deliveries().is_empty(),
         "the watched tree's heads never arrived",
     )
     .await;
-    assert_eq!(observer.snapshot(), vec![(watched, peer_id, heads(3))]);
+    // Dispatch is concurrent per message, so the anchor may land first.
+    settle().await;
+    assert_eq!(observer.deliveries(), vec![(watched, peer_id, heads(3))]);
+
+    actor_task.abort();
+    listener_task.abort();
+    Ok(())
+}
+
+/// Empty `sender_heads` on a push are ignored (the sender could not read
+/// them); the next non-empty report is delivered.
+#[tokio::test]
+async fn empty_sender_heads_on_a_push_are_ignored() -> TestResult {
+    use sedimentree_core::{
+        blob::{Blob, BlobMeta},
+        loose_commit::LooseCommit,
+    };
+    use std::collections::BTreeSet;
+    use subduction_core::test_utils::make_signer;
+    use subduction_crypto::signed::Signed;
+
+    let observer = RecordingObserver::default();
+
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .timer(InstantTimeout)
+            .heads_observer(observer.clone())
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+
+    let actor_task = tokio::spawn(actor_fut);
+    let listener_task = tokio::spawn(listener_fut);
+
+    let signer = make_signer(9);
+    let peer_id = PeerId::from(signer.verifying_key());
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    subduction.add_connection(conn.authenticated()).await?;
+
+    let id = SedimentreeId::new([46u8; 32]);
+    subduction.watch_heads(id).await;
+
+    let push = |n: u8, heads: Vec<CommitId>| {
+        let signer = signer.clone();
+        async move {
+            let blob = Blob::new(vec![n; 8]);
+            let commit = LooseCommit::new(
+                id,
+                CommitId::new([n; 32]),
+                BTreeSet::new(),
+                BlobMeta::new(&blob),
+            );
+            let sealed = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
+            SyncMessage::LooseCommit {
+                id,
+                commit: sealed,
+                blob,
+                sender_heads: RemoteHeads {
+                    counter: u64::from(n),
+                    heads,
+                },
+            }
+        }
+    };
+
+    handle.inbound_tx.send(push(1, Vec::new()).await).await?;
+    handle
+        .inbound_tx
+        .send(push(2, vec![CommitId::new([2u8; 32])]).await)
+        .await?;
+
+    wait_until(
+        || !observer.deliveries().is_empty(),
+        "the non-empty heads never arrived",
+    )
+    .await;
+    settle().await;
+    assert_eq!(observer.heads(), vec![vec![CommitId::new([2u8; 32])]]);
 
     actor_task.abort();
     listener_task.abort();

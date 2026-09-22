@@ -1229,7 +1229,7 @@ fn encode_ids(buf: &mut Vec<u8>, ids: &[SedimentreeId]) {
 fn decode_ids(payload: &[u8]) -> Result<Vec<SedimentreeId>, DecodeError> {
     let mut offset = 0;
     let count = read_u16(payload, &mut offset)? as usize;
-    // Cap allocation by what the payload can actually hold.
+    // Cap allocation at what the payload can hold.
     let mut ids = Vec::with_capacity(count.min(payload.len().saturating_sub(offset) / 32));
     for _ in 0..count {
         ids.push(SedimentreeId::new(read_array::<32>(payload, &mut offset)?));

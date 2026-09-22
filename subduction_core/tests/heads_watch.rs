@@ -248,9 +248,8 @@ async fn watch_is_replayed_on_reconnect() -> TestResult {
     Ok(())
 }
 
-/// Every write API reports to watchers. Each row spends one `HeadsChanged`
-/// witness; a write path that skips `propagate` gets a `must_use` warning,
-/// and a new API that bypasses `HeadsChanged` shows up here as a missing row.
+/// Every write API reports to watchers, one test per API; add one for each
+/// new write API.
 mod every_write_path_notifies_watchers {
     use super::*;
 
@@ -375,6 +374,83 @@ mod every_write_path_notifies_watchers {
         assert!(
             wait_until(|| async { a_obs.heads_for(DOC).last().is_some_and(Vec::is_empty) }).await,
             "removal never reported as empty heads"
+        );
+        Ok(())
+    }
+
+    /// Newness is judged before a batch is persisted, so a tree evicted from
+    /// memory (hydrated from storage that already holds the batch) still
+    /// reports the change, on every batch API.
+    #[tokio::test]
+    async fn batch_to_an_evicted_tree_still_reports() -> TestResult {
+        let timeout = CallTimeout::TimeoutMillis(500);
+        let batch = |b: Node, n: u8| async move {
+            b.add_commits_batch(DOC, vec![(make_head(n), BTreeSet::new(), blob(n))], timeout)
+                .await?;
+            b.add_fragments_batch(
+                DOC,
+                vec![FragmentBatchItem {
+                    head: make_head(n + 10),
+                    boundary: BTreeSet::new(),
+                    checkpoints: Vec::new(),
+                    blob: blob(n + 10),
+                }],
+                timeout,
+            )
+            .await?;
+            let blob = blob(n + 20);
+            let c = LooseCommit::new(
+                DOC,
+                make_head(n + 20),
+                BTreeSet::new(),
+                BlobMeta::new(&blob),
+            );
+            b.add_built_batch(DOC, vec![(c, blob)], Vec::new(), timeout)
+                .await?;
+            TestResult::Ok(())
+        };
+
+        let (b, a_obs) = watched_pair().await?;
+        batch(b.clone(), 1).await?;
+        assert!(
+            snapshot_arrived(&a_obs, 4).await,
+            "first round: {:?}",
+            a_obs.deliveries()
+        );
+
+        b.sedimentrees().remove(&DOC).await;
+        b.add_commits_batch(DOC, vec![(make_head(2), BTreeSet::new(), blob(2))], timeout)
+            .await?;
+        assert!(
+            snapshot_arrived(&a_obs, 5).await,
+            "commits batch to evicted tree not reported"
+        );
+
+        b.sedimentrees().remove(&DOC).await;
+        b.add_fragments_batch(
+            DOC,
+            vec![FragmentBatchItem {
+                head: make_head(12),
+                boundary: BTreeSet::new(),
+                checkpoints: Vec::new(),
+                blob: blob(12),
+            }],
+            timeout,
+        )
+        .await?;
+        assert!(
+            snapshot_arrived(&a_obs, 6).await,
+            "fragments batch to evicted tree not reported"
+        );
+
+        b.sedimentrees().remove(&DOC).await;
+        let blob = blob(22);
+        let c = LooseCommit::new(DOC, make_head(22), BTreeSet::new(), BlobMeta::new(&blob));
+        b.add_built_batch(DOC, vec![(c, blob)], Vec::new(), timeout)
+            .await?;
+        assert!(
+            snapshot_arrived(&a_obs, 7).await,
+            "built batch to evicted tree not reported"
         );
         Ok(())
     }
@@ -531,64 +607,109 @@ mod on_the_wire {
             .all(|r| matches!(r.outcome, WatchOutcome::Watching(_)))
     }
 
+    /// Heads frames B receives for one change to `DOC`, for every combination
+    /// of B watching, B subscribing, and who originates the change:
+    ///
+    /// | B originates | B subscribes | B watches | frames to B                |
+    /// |--------------|--------------|-----------|----------------------------|
+    /// | yes          | any          | any       | the ack only               |
+    /// | no           | yes          | any       | one push, no `HeadsUpdate` |
+    /// | no           | no           | yes       | one `HeadsUpdate`          |
+    /// | no           | no           | no        | nothing                    |
+    ///
+    /// Never two heads-carrying frames for one change.
     #[tokio::test]
     async fn one_heads_frame_per_change_in_every_shape() -> TestResult {
-        let (a, _, b) = node_with_mock(40, 41, FlagPolicy::allow_all()).await?;
-        let b_peer = make_peer_id(41);
+        let mut seed = 100u8;
+        for (b_originates, subscribes, watches) in [false, true]
+            .into_iter()
+            .flat_map(|o| [false, true].into_iter().map(move |s| (o, s)))
+            .flat_map(|(o, s)| [false, true].into_iter().map(move |w| (o, s, w)))
+        {
+            seed += 2;
+            let (a, _, b) = node_with_mock(seed, seed + 1, FlagPolicy::allow_all()).await?;
+            let b_peer = make_peer_id(seed + 1);
+            let label =
+                format!("originates={b_originates} subscribes={subscribes} watches={watches}");
 
-        let results = watch(&b, vec![DOC]).await?;
-        assert!(matches!(
-            results.as_slice(),
-            [WatchResult { id, outcome: WatchOutcome::Watching(h) }] if *id == DOC && h.heads.is_empty()
-        ));
+            if subscribes {
+                b.inbound_tx
+                    .send(SyncMessage::BatchSyncRequest(BatchSyncRequest {
+                        id: DOC,
+                        req_id: RequestId {
+                            requestor: b_peer,
+                            nonce: 1,
+                        },
+                        fingerprint_summary: FingerprintSummary::new(
+                            FingerprintSeed::new(1, 2),
+                            BTreeSet::new(),
+                            BTreeSet::new(),
+                        ),
+                        subscribe: true,
+                    }))
+                    .await?;
+                frames_after(&b, |f| matches!(f, SyncMessage::BatchSyncResponse(_))).await;
+            }
+            if watches {
+                watch(&b, vec![DOC]).await?;
+            }
+            drain(&b);
 
-        // Watch only: a standalone HeadsUpdate.
-        a.add_commit(DOC, make_head(1), BTreeSet::new(), blob(1))
-            .await?;
-        let frames = frames_after(&b, is_heads_update).await;
-        assert_eq!(frames.len(), 1, "one HeadsUpdate, no pushes: {frames:?}");
+            if b_originates {
+                let blob = blob(1);
+                let c = LooseCommit::new(DOC, make_head(1), BTreeSet::new(), BlobMeta::new(&blob));
+                let signed = Signed::seal::<Sendable, _>(
+                    &subduction_core::test_utils::make_signer(seed + 1),
+                    c,
+                )
+                .await
+                .into_signed();
+                b.inbound_tx
+                    .send(SyncMessage::LooseCommit {
+                        id: DOC,
+                        commit: signed,
+                        blob,
+                        sender_heads: RemoteHeads {
+                            counter: 1,
+                            heads: vec![make_head(1)],
+                        },
+                    })
+                    .await?;
+            } else {
+                a.add_commit(DOC, make_head(1), BTreeSet::new(), blob(1))
+                    .await?;
+            }
 
-        // Watch + subscribe: heads ride the push, no separate HeadsUpdate.
-        b.inbound_tx
-            .send(SyncMessage::BatchSyncRequest(BatchSyncRequest {
-                id: DOC,
-                req_id: RequestId {
-                    requestor: b_peer,
-                    nonce: 1,
-                },
-                fingerprint_summary: FingerprintSummary::new(
-                    FingerprintSeed::new(1, 2),
-                    BTreeSet::new(),
-                    BTreeSet::new(),
-                ),
-                subscribe: true,
-            }))
-            .await?;
-        frames_after(&b, |f| matches!(f, SyncMessage::BatchSyncResponse(_))).await;
-        a.add_commit(DOC, make_head(2), BTreeSet::new(), blob(2))
-            .await?;
-        let frames = frames_after(&b, |f| matches!(f, SyncMessage::LooseCommit { .. })).await;
-        assert_eq!(frames.len(), 1, "one push and nothing else: {frames:?}");
+            let expect_any = b_originates || subscribes || watches;
+            let frames = if expect_any {
+                frames_after(&b, |f| {
+                    matches!(
+                        f,
+                        SyncMessage::HeadsUpdate { .. } | SyncMessage::LooseCommit { .. }
+                    )
+                })
+                .await
+            } else {
+                settle().await;
+                drain(&b)
+            };
 
-        // B originates: the ack is the only heads frame.
-        let blob = blob(3);
-        let c = LooseCommit::new(DOC, make_head(3), BTreeSet::new(), BlobMeta::new(&blob));
-        let signed = Signed::seal::<Sendable, _>(&subduction_core::test_utils::make_signer(41), c)
-            .await
-            .into_signed();
-        b.inbound_tx
-            .send(SyncMessage::LooseCommit {
-                id: DOC,
-                commit: signed,
-                blob,
-                sender_heads: RemoteHeads {
-                    counter: 1,
-                    heads: vec![make_head(3)],
-                },
-            })
-            .await?;
-        let frames = frames_after(&b, is_heads_update).await;
-        assert_eq!(frames.len(), 1, "exactly the ack: {frames:?}");
+            let heads_updates = frames
+                .iter()
+                .filter(|f| matches!(f, SyncMessage::HeadsUpdate { .. }))
+                .count();
+            let pushes = frames
+                .iter()
+                .filter(|f| matches!(f, SyncMessage::LooseCommit { .. }))
+                .count();
+            let expected = match (b_originates, subscribes, watches) {
+                (true, _, _) | (false, false, true) => (1, 0),
+                (false, true, _) => (0, 1),
+                (false, false, false) => (0, 0),
+            };
+            assert_eq!((heads_updates, pushes), expected, "{label}: {frames:?}");
+            assert_eq!(frames.len(), heads_updates + pushes, "{label}: {frames:?}");
+        }
         Ok(())
     }
 
@@ -622,7 +743,7 @@ mod on_the_wire {
         Ok(())
     }
 
-    /// The table, not the per-message index, refuses past the cap; ids the
+    /// `HeadsWatches`, not the per-message index, refuses past the cap; ids the
     /// peer already holds are re-confirmed regardless; unwatching frees a slot.
     #[tokio::test]
     async fn watches_past_cap_are_refused_until_a_slot_frees() -> TestResult {
@@ -669,9 +790,9 @@ mod on_the_wire {
         Ok(())
     }
 
-    /// A watch attempted while refused is answered `Unauthorized`; a watcher
-    /// whose fetch right is revoked hears nothing and hears again when it is
-    /// restored, without re-watching.
+    /// Any watch attempted while refused is answered `Unauthorized`, held or
+    /// not; a watcher whose fetch right is revoked hears nothing and hears
+    /// again when it is restored, without re-watching.
     #[tokio::test]
     async fn revoked_watcher_is_filtered_at_fanout_and_kept() -> TestResult {
         let policy = FlagPolicy::allow_all();
@@ -680,11 +801,14 @@ mod on_the_wire {
         assert!(all_watching(&watch(&b, vec![DOC]).await?));
 
         policy.set_fetch(false);
-        let results = watch(&b, vec![OTHER]).await?;
-        assert!(matches!(
-            results.as_slice(),
-            [WatchResult { id, outcome: WatchOutcome::Unauthorized }] if *id == OTHER
-        ));
+        // Held (DOC) and fresh (OTHER) alike are refused; the held watch is kept.
+        let results = watch(&b, vec![DOC, OTHER]).await?;
+        assert!(
+            results
+                .iter()
+                .all(|r| matches!(r.outcome, WatchOutcome::Unauthorized)),
+            "{results:?}"
+        );
 
         a.add_commit(DOC, make_head(1), BTreeSet::new(), blob(1))
             .await?;
@@ -720,7 +844,6 @@ mod on_the_wire {
         a.watch_heads(DOC).await;
         a.watch_heads(DOC).await;
         a.unwatch_heads(OTHER).await;
-        settle().await;
         let frames = drain(&b);
         assert!(
             matches!(frames.as_slice(), [SyncMessage::WatchHeads(WatchHeads { ids })] if ids == &[DOC]),
@@ -734,7 +857,6 @@ mod on_the_wire {
             a.watch_heads(SedimentreeId::new(bytes)).await;
         }
         let c = attach(&a, make_peer_id(62)).await?;
-        settle().await;
         let sizes: Vec<usize> = drain(&c)
             .iter()
             .filter_map(|f| match f {
@@ -744,12 +866,14 @@ mod on_the_wire {
             .collect();
         assert_eq!(sizes, vec![WATCH_HEADS_BATCH, 1]);
 
-        // Watchers do not survive `disconnect_all`.
+        // Watchers do not survive `disconnect_all`. The old handle stays alive:
+        // mocks compare equal by peer id, so dropping it would tear down the
+        // new connection too.
         drain(&b);
         watch(&b, vec![DOC]).await?;
         a.disconnect_all().await?;
+        let _old_b = b;
         let b = attach(&a, make_peer_id(61)).await?;
-        settle().await;
         drain(&b);
         a.add_commit(DOC, make_head(1), BTreeSet::new(), blob(1))
             .await?;

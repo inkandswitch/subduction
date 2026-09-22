@@ -640,6 +640,26 @@ fn sync_message_corrupted_total_size_rejected() {
         });
 }
 
+/// Every tag up to `MAX_MESSAGE_TAG` is known: an empty payload fails for
+/// some other reason than an unknown tag.
+#[test]
+fn sync_message_every_tag_up_to_max_is_recognized() {
+    for tag in 0..=MAX_MESSAGE_TAG {
+        if tag == 0x02 || tag == 0x03 {
+            continue; // retired
+        }
+        let mut bytes = Vec::with_capacity(9);
+        bytes.extend_from_slice(&MESSAGE_SCHEMA);
+        bytes.extend_from_slice(&9u32.to_be_bytes());
+        bytes.push(tag);
+        let result = SyncMessage::try_decode(&bytes);
+        assert!(
+            !matches!(result, Err(DecodeError::InvalidEnumTag(_))),
+            "tag {tag:#04x} is below MAX_MESSAGE_TAG but decodes as unknown"
+        );
+    }
+}
+
 /// A `SUM\x00`-prefixed envelope with a tag byte outside the
 /// supported range yields `InvalidEnumTag`.
 #[test]

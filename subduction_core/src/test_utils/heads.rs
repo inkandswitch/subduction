@@ -18,10 +18,11 @@ use sedimentree_core::{
 use subduction_crypto::{signer::memory::MemorySigner, verified_author::VerifiedAuthor};
 
 use crate::{
+    authenticated::{Authenticated, Direction},
     connection::{
         Connection,
         message::SyncMessage,
-        test_utils::{InstantTimeout, TokioSpawn},
+        test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -29,9 +30,10 @@ use crate::{
     remote_heads::{RemoteHeads, RemoteHeadsObserver},
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::message::MessageTransport,
 };
 
-use super::make_signer;
+use super::{ChannelConn, make_signer};
 
 /// Settling time for negative assertions on in-process channels.
 pub async fn settle() {
@@ -94,11 +96,6 @@ pub struct FlagPolicy {
     fetch: Arc<AtomicBool>,
     put: Arc<AtomicBool>,
 }
-
-/// The answer [`FlagPolicy`] gives when its flag is off.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("refused by policy")]
-pub struct Refused;
 
 impl FlagPolicy {
     /// Fetches and puts allowed.
@@ -175,6 +172,11 @@ impl StoragePolicy<Sendable> for FlagPolicy {
     }
 }
 
+/// The answer [`FlagPolicy`] gives when its flag is off.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("refused by policy")]
+pub struct Refused;
+
 /// A running node over connection type `Conn` with a [`FlagPolicy`] and a
 /// [`RecordingObserver`].
 pub type WatchedNode<Conn> = Arc<
@@ -197,6 +199,21 @@ pub type WatchedNode<Conn> = Arc<
         MemorySigner,
         InstantTimeout,
         TokioSpawn,
+    >,
+>;
+
+/// The [`SyncHandler`] behind a [`WatchedNode`], for tests that drive
+/// dispatch directly.
+pub type WatchedHandler<Conn> = Arc<
+    SyncHandler<
+        Sendable,
+        MemoryStorage,
+        Conn,
+        FlagPolicy,
+        CountLeadingZeroBytes,
+        TokioSpawn,
+        256,
+        RecordingObserver,
     >,
 >;
 
@@ -223,56 +240,6 @@ where
     let (node, _handler, observer, peer) = spawn_watched_node_with_handler(seed, policy);
     (node, observer, peer)
 }
-
-/// Connect two watched nodes over a channel pair; `dialer` dials `target`.
-///
-/// # Errors
-///
-/// Propagates either node's `add_connection` error.
-pub async fn dial_watched(
-    dialer: &WatchedNode<super::ChannelConn>,
-    dialer_peer: PeerId,
-    target: &WatchedNode<super::ChannelConn>,
-    target_peer: PeerId,
-) -> Result<(), Box<dyn core::error::Error + Send + Sync>> {
-    use crate::{
-        authenticated::{Authenticated, Direction},
-        connection::test_utils::ChannelTransport,
-        transport::message::MessageTransport,
-    };
-
-    let (out, inbound) = ChannelTransport::pair();
-    dialer
-        .add_connection(Authenticated::new_for_test(
-            MessageTransport::new(out),
-            target_peer,
-            Direction::Dialed,
-        ))
-        .await?;
-    target
-        .add_connection(Authenticated::new_for_test(
-            MessageTransport::new(inbound),
-            dialer_peer,
-            Direction::Accepted,
-        ))
-        .await?;
-    Ok(())
-}
-
-/// The [`SyncHandler`] behind a [`WatchedNode`], for tests that drive
-/// dispatch directly.
-pub type WatchedHandler<Conn> = Arc<
-    SyncHandler<
-        Sendable,
-        MemoryStorage,
-        Conn,
-        FlagPolicy,
-        CountLeadingZeroBytes,
-        TokioSpawn,
-        256,
-        RecordingObserver,
-    >,
->;
 
 /// [`spawn_watched_node`], also returning the handler.
 #[must_use]
@@ -313,4 +280,33 @@ where
     tokio::spawn(manager);
 
     (node, handler, observer, peer)
+}
+
+/// Connect two watched nodes over a channel pair; `dialer` dials `target`.
+///
+/// # Errors
+///
+/// Propagates either node's `add_connection` error.
+pub async fn dial_watched(
+    dialer: &WatchedNode<ChannelConn>,
+    dialer_peer: PeerId,
+    target: &WatchedNode<ChannelConn>,
+    target_peer: PeerId,
+) -> Result<(), Box<dyn core::error::Error + Send + Sync>> {
+    let (out, inbound) = ChannelTransport::pair();
+    dialer
+        .add_connection(Authenticated::new_for_test(
+            MessageTransport::new(out),
+            target_peer,
+            Direction::Dialed,
+        ))
+        .await?;
+    target
+        .add_connection(Authenticated::new_for_test(
+            MessageTransport::new(inbound),
+            dialer_peer,
+            Direction::Accepted,
+        ))
+        .await?;
+    Ok(())
 }

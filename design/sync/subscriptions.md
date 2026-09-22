@@ -324,6 +324,7 @@ sequenceDiagram
     participant B as Server
 
     A->>B: WatchHeads { ids: [doc-123] }
+    Note over B: refuse past MAX_WATCHES_PER_PEER
     Note over B: authorize_fetch(A, doc-123)
     Note over B: record A as watcher of doc-123
     B->>A: WatchHeadsResponse { [doc-123: Watching(heads)] }
@@ -375,12 +376,13 @@ is its only consumer, building the ack, the subscription pushes, and a
 the same round:
 
 ```text
-heads_only_targets(T) = (watchers(T) ∩ may_fetch(T))
+heads_only_targets(T) = (watchers(T) ∩ connected ∩ may_fetch(T))
                         \ push_recipients(T)      -- heads ride the push as sender_heads
                         \ { originator if acked }  -- heads ride the 1.5-RTT ack
 ```
 
-`push_recipients(T)` is the [Push Invariant](#push-invariant) set.
+`push_recipients(T)` is the [Push Invariant](#push-invariant) set. A watcher with no connection is
+removed from the table.
 
 Dropping the witness is a `must_use` warning (denied in CI), so a write path
 that skips `propagate` is caught at build time. One function building every
@@ -388,9 +390,11 @@ frame means per-peer send counters are stamped in order, and a peer that both
 subscribes and watches sees each change once. The `store_*` family discards
 the witness deliberately: those writes are local until the next sync.
 
-If the heads cannot be read (a storage error), the ack and pushes go out with
-empty advisory heads but watchers receive nothing: for them the heads are the
-payload, and `[]` means the tree was removed.
+If the heads cannot be read (a storage error), pushes go out with empty
+advisory `sender_heads` but the ack and watcher updates are skipped: for their
+receivers the heads are the payload, and `[]` means the tree was removed. A
+receiver likewise ignores empty `sender_heads` on a push, since a peer that
+just added data cannot have none.
 
 ### Limits
 
