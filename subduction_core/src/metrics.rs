@@ -341,8 +341,9 @@ pub fn set_subscribed_sedimentrees(count: usize) {
     metrics::gauge!(names::SUBSCRIBED_SEDIMENTREES).set(count as f64);
 }
 
-/// Record incremental updates pushed to subscribers: `ok` delivered into
-/// the outbound queue, `failed` rejected by a dead connection.
+/// Record fan-out frames (pushes, acks, watcher heads updates): `ok` delivered
+/// into the outbound queue, `failed` rejected by a dead connection or skipped
+/// after one.
 #[inline]
 pub fn subscription_pushes(ok: u64, failed: u64) {
     if ok > 0 {
@@ -690,7 +691,7 @@ pub fn describe_all() {
     );
     metrics::describe_counter!(
         names::SUBSCRIPTION_PUSHES_TOTAL,
-        "Incremental updates pushed to subscribers, labeled by `outcome` (ok/failed); failed pushes are sends into dead connections."
+        "Frames fanned out after a tree change (subscription pushes, 1.5-RTT acks, watcher heads updates), labeled by `outcome` (ok/failed); failed frames are sends into dead connections or skipped after one."
     );
     metrics::describe_counter!(
         names::SUBSCRIPTION_PROPAGATIONS_TOTAL,

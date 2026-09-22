@@ -39,7 +39,7 @@ use sedimentree_core::codec::{
     schema::Schema,
 };
 use subduction_core::{
-    connection::message::{MESSAGE_SCHEMA, SyncMessage},
+    connection::message::{MAX_MESSAGE_TAG, MESSAGE_SCHEMA, SyncMessage},
     handshake::{
         HandshakeMessage,
         challenge::Challenge,
@@ -536,6 +536,29 @@ fn sync_message_truncation_does_not_panic() {
         });
 }
 
+/// A strict prefix of any message, with the size header rewritten to match,
+/// is rejected rather than decoded to a shorter message.
+#[test]
+fn sync_message_strict_prefix_rejected() {
+    bolero::check!()
+        .with_arbitrary::<(SyncMessage, u32)>()
+        .for_each(|(msg, cut)| {
+            let encoded = msg.encode();
+            let header = 9; // schema(4) + total_size(4) + tag(1)
+            let keep = header + (*cut as usize) % (encoded.len() - header + 1);
+            if keep == encoded.len() {
+                return;
+            }
+            let mut truncated = encoded[..keep].to_vec();
+            #[allow(clippy::cast_possible_truncation)]
+            truncated[4..8].copy_from_slice(&(keep as u32).to_be_bytes());
+            assert!(
+                SyncMessage::try_decode(&truncated).is_err(),
+                "strict prefix of {msg:?} decoded"
+            );
+        });
+}
+
 /// Single-bit-flip anywhere in the message must not panic.
 #[test]
 fn sync_message_single_bit_flip_does_not_panic() {
@@ -617,12 +640,32 @@ fn sync_message_corrupted_total_size_rejected() {
         });
 }
 
+/// Every tag up to `MAX_MESSAGE_TAG` is known: an empty payload fails for
+/// some other reason than an unknown tag.
+#[test]
+fn sync_message_every_tag_up_to_max_is_recognized() {
+    for tag in 0..=MAX_MESSAGE_TAG {
+        if tag == 0x02 || tag == 0x03 {
+            continue; // retired
+        }
+        let mut bytes = Vec::with_capacity(9);
+        bytes.extend_from_slice(&MESSAGE_SCHEMA);
+        bytes.extend_from_slice(&9u32.to_be_bytes());
+        bytes.push(tag);
+        let result = SyncMessage::try_decode(&bytes);
+        assert!(
+            !matches!(result, Err(DecodeError::InvalidEnumTag(_))),
+            "tag {tag:#04x} is below MAX_MESSAGE_TAG but decodes as unknown"
+        );
+    }
+}
+
 /// A `SUM\x00`-prefixed envelope with a tag byte outside the
-/// supported range (0x00–0x08) yields `InvalidEnumTag`.
+/// supported range yields `InvalidEnumTag`.
 #[test]
 fn sync_message_unknown_tag_rejected() {
     bolero::check!().with_arbitrary::<u8>().for_each(|bad_tag| {
-        if *bad_tag <= 0x08 {
+        if *bad_tag <= MAX_MESSAGE_TAG {
             return;
         }
         let mut bytes = Vec::with_capacity(9);

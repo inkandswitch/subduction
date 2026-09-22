@@ -2,8 +2,8 @@
 //!
 //! [`SyncHandler`] implements the [`Handler`] trait for the standard
 //! Subduction sync protocol. It processes [`SyncMessage`] variants
-//! (commits, fragments, batch sync, heads updates, subscriptions) using
-//! shared state passed at construction time.
+//! (commits, fragments, batch sync, heads updates, subscriptions, heads
+//! watches) using shared state passed at construction time.
 //!
 //! This handler is self-contained: it holds its own [`Arc`] references
 //! to the shared data structures and duplicates the helper methods it
@@ -39,7 +39,7 @@ use crate::{
         Connection,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
-            SyncResult,
+            SyncResult, UnwatchHeads, WatchHeads, WatchHeadsResponse, WatchOutcome, WatchResult,
         },
     },
     peer::id::PeerId,
@@ -48,7 +48,8 @@ use crate::{
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     subduction::{
         error::{IoError, ListenError},
-        ingest, peers,
+        ingest::{self, HeadsChanged},
+        peers,
     },
 };
 
@@ -58,8 +59,12 @@ use crate::{
     remote_heads::{
         FilteredHeadsNotifier, NoRemoteHeadsObserver, RemoteHeads, RemoteHeadsNotifier,
         RemoteHeadsObserver,
+        watches::{HeadsWatches, WatchRefused, Watched},
     },
 };
+
+/// Frames to send after a message is handled, stamped in order.
+type Pushes<Conn, Async> = peers::Pushes<Conn, Async, SyncMessage>;
 
 /// The default sync protocol handler for Subduction.
 ///
@@ -89,6 +94,7 @@ pub struct SyncHandler<
     sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+    heads_watches: Arc<HeadsWatches>,
     storage: StoragePowerbox<Store, Auth>,
     depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
@@ -133,6 +139,7 @@ impl<
             sedimentrees: self.sedimentrees.clone(),
             connections: self.connections.clone(),
             subscriptions: self.subscriptions.clone(),
+            heads_watches: self.heads_watches.clone(),
             storage: self.storage.clone(),
             depth_metric: self.depth_metric.clone(),
             heads_notifier: self.heads_notifier.clone(),
@@ -166,6 +173,7 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+        heads_watches: Arc<HeadsWatches>,
         storage: StoragePowerbox<Store, Auth>,
         depth_metric: Metric,
         spawner: Sp,
@@ -174,6 +182,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             storage,
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(NoRemoteHeadsObserver),
@@ -199,11 +208,12 @@ impl<
     /// Create a new `SyncHandler` with a custom remote heads observer.
     ///
     /// See [`RemoteHeadsObserver`] for the callback's obligations.
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub fn with_remote_heads_observer(
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+        heads_watches: Arc<HeadsWatches>,
         storage: StoragePowerbox<Store, Auth>,
         depth_metric: Metric,
         remote_heads_observer: R,
@@ -213,6 +223,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             storage,
             depth_metric,
             heads_notifier: FilteredHeadsNotifier::new(remote_heads_observer),
@@ -307,11 +318,14 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
     ) -> Async::Future<'a, Result<(), Self::HandlerError>> {
         Async::from_future(async move {
             // Ingest + storage run here, on the per-peer dispatch permit. The
-            // subscription fan-out is spawned OFF the permit so a slow
-            // subscriber backpressures a detached task instead of stalling
+            // fan-out (pushes, ack, watcher updates) is spawned OFF the permit so
+            // a slow peer backpressures a detached task instead of stalling
             // inbound dispatch for this peer.
-            if let Some(fanout) = self.dispatch(conn, message).await? {
-                self.spawner.spawn(Async::from_future(fanout.run()));
+            if let Some(pushes) = self.dispatch(conn, message).await?
+                && !pushes.is_empty()
+            {
+                self.spawner
+                    .spawn(<Async as peers::SendPushes<Conn, SyncMessage>>::send_pushes(pushes));
             }
             Ok(())
         })
@@ -363,77 +377,9 @@ impl<
     ) -> Async::Future<'_, ()> {
         Async::from_future(async move { self.heads_notifier.notify(id, peer, heads).await })
     }
-}
 
-/// Deferred subscription fan-out for freshly-ingested commits or fragments,
-/// whether pushed to us or returned to one of our own requests (then with no
-/// ack to send).
-///
-/// Built on the ingest path but **run off it**: [`SyncHandler`]'s `handle`
-/// spawns [`run`](FanOut::run) via the handler's [`Spawn`], so a slow
-/// subscriber backpressures a detached task instead of holding the per-peer
-/// dispatch permit. Per-peer send counters are stamped in order *before* the
-/// spawn; `run` only performs the wire sends.
-#[allow(clippy::type_complexity)]
-struct FanOut<Conn, Async>
-where
-    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Async: FutureForm,
-{
-    /// `HeadsUpdate` ack to the originating peer (1.5-RTT second half).
-    /// `None` when the trigger was a response to our own request.
-    ack: Option<(Authenticated<Conn, Async>, SyncMessage)>,
-    /// Per-subscriber pushes, send counters already stamped in order.
-    pushes: Vec<(Authenticated<Conn, Async>, SyncMessage)>,
-}
-
-impl<Conn, Async> FanOut<Conn, Async>
-where
-    Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Async: FutureForm,
-{
-    /// Ack the originating peer, then fan the update out to subscribers
-    /// concurrently. A send failure is logged, not acted on; the dead transport
-    /// is torn down by the listen loop's canonical path. A slow or absent peer
-    /// just misses the live push and reconciles via batch sync.
-    async fn run(self) {
-        if let Some((ack_conn, ack_msg)) = &self.ack
-            && let Err(e) = ack_conn.send(ack_msg).await
-        {
-            tracing::warn!(peer = %ack_conn.peer_id(), error = %e, "peer disconnected while sending HeadsUpdate");
-        }
-
-        let results = futures::future::join_all(
-            self.pushes
-                .iter()
-                .map(|(conn, msg)| async move { (conn, conn.send(msg).await) }),
-        )
-        .await;
-
-        #[cfg(feature = "metrics")]
-        let mut pushed: u64 = 0;
-        #[cfg(feature = "metrics")]
-        let mut failed: u64 = 0;
-        for (conn, result) in results {
-            match result {
-                Ok(()) => {
-                    #[cfg(feature = "metrics")]
-                    {
-                        pushed += 1;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(peer = %conn.peer_id(), error = %e, "peer disconnected");
-                    #[cfg(feature = "metrics")]
-                    {
-                        failed += 1;
-                    }
-                }
-            }
-        }
-
-        #[cfg(feature = "metrics")]
-        crate::metrics::subscription_pushes(pushed, failed);
+    fn forget_remote_heads(&self, id: SedimentreeId) -> Async::Future<'_, ()> {
+        Async::from_future(async move { self.heads_notifier.forget_tree(id).await })
     }
 }
 
@@ -457,7 +403,7 @@ impl<
         &self,
         conn: &Authenticated<Conn, Async>,
         message: SyncMessage,
-    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<Pushes<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
         let from = conn.peer_id();
 
         let span = tracing::debug_span!(
@@ -485,19 +431,12 @@ impl<
         from: PeerId,
         message: SyncMessage,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
-        // Note: remote heads arrive via three paths:
-        //
-        // 1. `responder_heads` in `BatchSyncResponse` — handled by
-        //    `Subduction::sync_with_all_peers` via `RemoteHeadsNotifier`.
-        //
-        // 2. `sender_heads` on subscription-push `LooseCommit`/`Fragment`
-        //    messages — reported by `recv_commit` / `recv_fragment` after
-        //    verification, authorization, and storage.
-        //
-        // 3. `HeadsUpdate` messages (post-ingestion ack from the 1.5 RTT
-        //    second half) — handled here in dispatch.
-        let fanout = match message {
+    ) -> Result<Option<Pushes<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
+        // Remote heads arrive on four paths, all gated on the watch set:
+        // `responder_heads` (`Subduction::sync_with_*`), `sender_heads`
+        // (`recv_commit` / `recv_fragment`, after storage), `HeadsUpdate` (ack
+        // or watcher update), and `WatchHeadsResponse` snapshots.
+        let pushes = match message {
             SyncMessage::LooseCommit {
                 id,
                 commit,
@@ -564,18 +503,124 @@ impl<
                 None
             }
             SyncMessage::HeadsUpdate { id, heads } => {
-                tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
-                self.heads_notifier.notify(id, from, heads).await;
+                if self.heads_watches.is_watched(id).await {
+                    tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
+                    self.heads_notifier.notify(id, from, heads).await;
+                } else {
+                    tracing::trace!(peer = %from, tree = ?id, "heads for an unwatched sedimentree; ignoring");
+                }
+                None
+            }
+            SyncMessage::WatchHeads(WatchHeads { ids }) => {
+                self.recv_watch_heads(from, ids, conn).await;
+                None
+            }
+            SyncMessage::WatchHeadsResponse(WatchHeadsResponse { results }) => {
+                self.recv_watch_heads_response(from, results).await;
+                None
+            }
+            SyncMessage::UnwatchHeads(UnwatchHeads { ids }) => {
+                self.heads_watches.remove_watcher(from, &ids).await;
+                tracing::debug!(peer = %from, trees = ids.len(), "removed heads watches");
                 None
             }
         };
 
-        Ok(fanout)
+        Ok(pushes)
     }
 
     // -----------------------------------------------------------------------
     // recv_* methods
     // -----------------------------------------------------------------------
+
+    /// Deliver each snapshot, dropping any whose tree the application no longer
+    /// watches, so an unsolicited `WatchHeadsResponse` cannot reach the observer.
+    async fn recv_watch_heads_response(&self, from: PeerId, results: Vec<WatchResult>) {
+        for WatchResult { id, outcome } in results {
+            match outcome {
+                WatchOutcome::Watching(heads) => {
+                    if self.heads_watches.is_watched(id).await {
+                        self.heads_notifier.notify(id, from, heads).await;
+                    } else {
+                        tracing::trace!(peer = %from, tree = ?id, "watch confirmed for an unwatched sedimentree; ignoring");
+                    }
+                }
+                WatchOutcome::Unauthorized => {
+                    tracing::debug!(peer = %from, tree = ?id, "peer refused heads watch: unauthorized");
+                }
+                WatchOutcome::AtCapacity => {
+                    tracing::debug!(peer = %from, tree = ?id, "peer refused heads watch: at capacity");
+                }
+            }
+        }
+    }
+
+    /// Record `from` as a watcher of each authorized id and answer with the
+    /// current heads. Refusals are per id, so one unauthorized tree does not
+    /// fail the rest.
+    ///
+    /// Work is bounded: ids are deduplicated, at most `cap` are considered, and
+    /// past capacity the rest are refused without a policy call or heads read.
+    async fn recv_watch_heads(
+        &self,
+        from: PeerId,
+        ids: Vec<SedimentreeId>,
+        conn: &Authenticated<Conn, Async>,
+    ) {
+        let mut seen = Set::new();
+        let ids: Vec<SedimentreeId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
+
+        let mut results = Vec::with_capacity(ids.len());
+        let mut unauthorized = 0usize;
+        let mut at_capacity = false;
+        for (n, id) in ids.into_iter().enumerate() {
+            // An id the peer already watches is re-confirmed regardless of the
+            // cap, but never without the policy: a revoked peer must not read
+            // heads by re-sending its watch.
+            let held = self.heads_watches.is_watcher(from, id).await;
+            let outcome = if !held && (at_capacity || n >= self.heads_watches.cap()) {
+                at_capacity = true;
+                WatchOutcome::AtCapacity
+            } else if let Err(e) = self.storage.policy().authorize_fetch(from, id).await {
+                tracing::debug!(peer = %from, tree = ?id, error = %e, "policy rejected heads watch");
+                unauthorized += 1;
+                WatchOutcome::Unauthorized
+            } else if held {
+                self.watching(from, id).await
+            } else {
+                match self.heads_watches.add_watcher(from, id).await {
+                    Ok(Watched::Added | Watched::Already) => self.watching(from, id).await,
+                    Err(WatchRefused::AtCapacity) => {
+                        at_capacity = true;
+                        WatchOutcome::AtCapacity
+                    }
+                }
+            };
+            results.push(WatchResult { id, outcome });
+        }
+
+        if at_capacity {
+            tracing::warn!(peer = %from, cap = self.heads_watches.cap(), "refusing heads watches: peer at capacity");
+        }
+        if unauthorized > 0 {
+            tracing::debug!(peer = %from, unauthorized, "refused unauthorized heads watches");
+        }
+
+        let resp: SyncMessage = WatchHeadsResponse { results }.into();
+        if let Err(e) = conn.send(&resp).await {
+            tracing::info!(peer = %from, error = %e, "peer disconnected while sending WatchHeadsResponse");
+        }
+    }
+
+    /// A `Watching` outcome carrying the current heads, read before the
+    /// counter is stamped.
+    async fn watching(&self, from: PeerId, id: SedimentreeId) -> WatchOutcome {
+        let heads = self.heads_for(id).await;
+        WatchOutcome::Watching(RemoteHeads {
+            counter: self.send_counter.next(from).await,
+            heads,
+        })
+    }
 
     async fn recv_commit(
         &self,
@@ -585,7 +630,7 @@ impl<
         blob: Blob,
         sender_heads: RemoteHeads,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<Pushes<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -619,13 +664,11 @@ impl<
             }
         };
 
-        let signed_for_wire = verified.signed().clone();
-
         // Reject like the signature and policy paths above: a mismatched
         // blob is a defective message, not a broken transport. `Err` would
         // tear down the connection and put the client in a
         // reconnect-and-resend loop.
-        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
+        let verified_meta = match VerifiedMeta::new(verified, blob) {
             Ok(vm) => vm,
             Err(e) => {
                 tracing::warn!(
@@ -641,98 +684,19 @@ impl<
             }
         };
 
-        let was_new = self
+        let changed = self
             .insert_commit_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
 
-        // Report heads only after the message is verified, authorized, and
-        // stored, so the observer never sees heads for data we rejected or do
-        // not yet hold.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
-
-        let fanout = if was_new {
-            let heads = self.heads_for(id).await;
-
-            // Ack the originating peer; stamp per-subscriber counters in order
-            // now (before the spawn), then defer the wire sends to `FanOut`.
-            let ack_msg = SyncMessage::HeadsUpdate {
-                id,
-                heads: RemoteHeads {
-                    counter: self.send_counter.next(*from).await,
-                    heads: heads.clone(),
-                },
-            };
-
-            let conns = self.get_authorized_subscriber_conns(id, from).await;
-            let pushes = self
-                .build_loose_commit_pushes(id, &signed_for_wire, &blob, &heads, conns)
-                .await;
-
-            Some(FanOut {
-                ack: Some((conn.clone(), ack_msg)),
-                pushes,
-            })
-        } else {
-            None
-        };
-
-        Ok(fanout)
-    }
-
-    /// Build the per-subscriber `LooseCommit` pushes, stamping each peer's send
-    /// counter in order (per-peer counter order must be preserved). The wire
-    /// sends happen later, off the dispatch permit, in [`FanOut::run`].
-    async fn build_loose_commit_pushes(
-        &self,
-        id: SedimentreeId,
-        commit: &Signed<LooseCommit>,
-        blob: &Blob,
-        heads: &[CommitId],
-        conns: Vec<Authenticated<Conn, Async>>,
-    ) -> Vec<(Authenticated<Conn, Async>, SyncMessage)> {
-        let mut pushes = Vec::with_capacity(conns.len());
-        for conn in conns {
-            let peer_id = conn.peer_id();
-            let msg = SyncMessage::LooseCommit {
-                id,
-                commit: commit.clone(),
-                blob: blob.clone(),
-                sender_heads: RemoteHeads {
-                    counter: self.send_counter.next(peer_id).await,
-                    heads: heads.to_vec(),
-                },
-            };
-            pushes.push((conn, msg));
+        // Gate on the watch set after verification and storage; see
+        // `RemoteHeadsObserver`. Empty `sender_heads` mean the sender could not
+        // read its heads (`peers::propagate`); skip them.
+        if !sender_heads.heads.is_empty() && self.heads_watches.is_watched(id).await {
+            self.heads_notifier.notify(id, *from, sender_heads).await;
         }
-        pushes
-    }
 
-    /// Build the per-subscriber `Fragment` pushes. See
-    /// [`build_loose_commit_pushes`](Self::build_loose_commit_pushes).
-    async fn build_fragment_pushes(
-        &self,
-        id: SedimentreeId,
-        fragment: &Signed<Fragment>,
-        blob: &Blob,
-        heads: &[CommitId],
-        conns: Vec<Authenticated<Conn, Async>>,
-    ) -> Vec<(Authenticated<Conn, Async>, SyncMessage)> {
-        let mut pushes = Vec::with_capacity(conns.len());
-        for conn in conns {
-            let peer_id = conn.peer_id();
-            let msg = SyncMessage::Fragment {
-                id,
-                fragment: fragment.clone(),
-                blob: blob.clone(),
-                sender_heads: RemoteHeads {
-                    counter: self.send_counter.next(peer_id).await,
-                    heads: heads.to_vec(),
-                },
-            };
-            pushes.push((conn, msg));
-        }
-        pushes
+        Ok(Some(self.propagate(changed, from, Some(conn)).await))
     }
 
     async fn recv_fragment(
@@ -743,7 +707,7 @@ impl<
         blob: Blob,
         sender_heads: RemoteHeads,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<Pushes<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -777,10 +741,8 @@ impl<
             }
         };
 
-        let signed_for_wire = verified.signed().clone();
-
         // Reject without disconnecting; see `recv_commit`.
-        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
+        let verified_meta = match VerifiedMeta::new(verified, blob) {
             Ok(vm) => vm,
             Err(e) => {
                 tracing::warn!(
@@ -796,39 +758,17 @@ impl<
             }
         };
 
-        let was_new = self
+        let changed = self
             .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
 
-        // Heads reported after verification and storage; see `recv_commit`.
-        self.heads_notifier.notify(id, *from, sender_heads).await;
+        // Gated and ordered as in `recv_commit`.
+        if !sender_heads.heads.is_empty() && self.heads_watches.is_watched(id).await {
+            self.heads_notifier.notify(id, *from, sender_heads).await;
+        }
 
-        let fanout = if was_new {
-            let heads = self.heads_for(id).await;
-
-            let ack_msg = SyncMessage::HeadsUpdate {
-                id,
-                heads: RemoteHeads {
-                    counter: self.send_counter.next(*from).await,
-                    heads: heads.clone(),
-                },
-            };
-
-            let conns = self.get_authorized_subscriber_conns(id, from).await;
-            let pushes = self
-                .build_fragment_pushes(id, &signed_for_wire, &blob, &heads, conns)
-                .await;
-
-            Some(FanOut {
-                ack: Some((conn.clone(), ack_msg)),
-                pushes,
-            })
-        } else {
-            None
-        };
-
-        Ok(fanout)
+        Ok(Some(self.propagate(changed, from, Some(conn)).await))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1157,22 +1097,35 @@ impl<
         from: &PeerId,
         id: SedimentreeId,
         diff: SyncDiff,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
-        let ingested =
+    ) -> Result<Option<Pushes<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+        let changed =
             ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
                 .await?;
         self.minimize_tree(id).await;
-        if ingested.is_empty() {
-            return Ok(None);
-        }
-        let conns = self.get_authorized_subscriber_conns(id, from).await;
-        if conns.is_empty() {
-            return Ok(None);
-        }
+        Ok(Some(self.propagate(changed, from, None).await))
+    }
 
-        let heads = self.heads_for(id).await;
-        let pushes = peers::build_pushes(id, &heads, &self.send_counter, &conns, &ingested).await;
-        Ok(Some(FanOut { ack: None, pushes }))
+    /// [`peers::propagate`] with this handler's state; frames are sent later,
+    /// off the dispatch permit.
+    async fn propagate(
+        &self,
+        change: HeadsChanged,
+        origin: &PeerId,
+        ack_to: Option<&Authenticated<Conn, Async>>,
+    ) -> Pushes<Conn, Async> {
+        peers::propagate(
+            change,
+            origin,
+            ack_to,
+            &self.sedimentrees,
+            &self.storage,
+            &self.depth_metric,
+            &self.connections,
+            &self.subscriptions,
+            &self.heads_watches,
+            &self.send_counter,
+        )
+        .await
     }
 
     // -----------------------------------------------------------------------
@@ -1183,7 +1136,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<HeadsChanged, Store::Error> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -1191,7 +1144,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<HeadsChanged, Store::Error> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -1236,21 +1189,6 @@ impl<
         }
         #[cfg(feature = "metrics")]
         crate::metrics::set_subscribed_sedimentrees(subscriptions.len());
-    }
-
-    async fn get_authorized_subscriber_conns(
-        &self,
-        sedimentree_id: SedimentreeId,
-        exclude_peer: &PeerId,
-    ) -> Vec<Authenticated<Conn, Async>> {
-        peers::get_authorized_subscriber_conns(
-            &self.subscriptions,
-            &self.storage,
-            &self.connections,
-            sedimentree_id,
-            exclude_peer,
-        )
-        .await
     }
 }
 
@@ -1331,82 +1269,5 @@ impl ResponderDiff {
             requesting_commit_fingerprints: diff.remote_only_commit_fingerprints,
             requesting_fragment_fingerprints: diff.remote_only_fragment_fingerprints,
         }
-    }
-}
-
-#[cfg(all(test, feature = "metrics"))]
-mod tests {
-    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
-    use sedimentree_core::id::SedimentreeId;
-
-    use super::FanOut;
-    use crate::{
-        connection::{message::DataRequestRejected, test_utils::FailingSendMockConnection},
-        metrics::names,
-        peer::id::PeerId,
-    };
-
-    /// Pins which `FanOut::run` arm feeds which `outcome` of
-    /// `subscription_pushes_total` — a swapped classification would corrupt
-    /// the dead-connection push signal while every render-level test still
-    /// passes.
-    #[test]
-    fn fan_out_counts_push_outcomes_by_arm() {
-        // Asymmetric counts (2 ok, 1 failed) so a swapped classification
-        // cannot pass by symmetry.
-        let ok_a = FailingSendMockConnection::with_peer_id_failing(PeerId::new([1u8; 32]), false)
-            .authenticated();
-        let ok_b = FailingSendMockConnection::with_peer_id_failing(PeerId::new([2u8; 32]), false)
-            .authenticated();
-        let failing_conn =
-            FailingSendMockConnection::with_peer_id_failing(PeerId::new([3u8; 32]), true)
-                .authenticated();
-        let ack_conn =
-            FailingSendMockConnection::with_peer_id_failing(PeerId::new([4u8; 32]), false)
-                .authenticated();
-
-        let msg =
-            crate::connection::message::SyncMessage::DataRequestRejected(DataRequestRejected {
-                id: SedimentreeId::new([0u8; 32]),
-            });
-        let fan_out = FanOut {
-            ack: Some((ack_conn, msg.clone())),
-            pushes: vec![
-                (ok_a, msg.clone()),
-                (ok_b, msg.clone()),
-                (failing_conn, msg),
-            ],
-        };
-
-        let recorder = DebuggingRecorder::new();
-        let snapshotter = recorder.snapshotter();
-        metrics::with_local_recorder(&recorder, || {
-            futures::executor::block_on(fan_out.run());
-        });
-
-        let mut ok_count = None;
-        let mut failed_count = None;
-        for (key, _, _, value) in snapshotter.snapshot().into_vec() {
-            let (_, key) = key.into_parts();
-            if key.name() != names::SUBSCRIPTION_PUSHES_TOTAL {
-                continue;
-            }
-            let outcome = key
-                .labels()
-                .find(|label| label.key() == "outcome")
-                .map(|label| label.value().to_owned());
-            match (outcome.as_deref(), value) {
-                (Some("ok"), DebugValue::Counter(n)) => ok_count = Some(n),
-                (Some("failed"), DebugValue::Counter(n)) => failed_count = Some(n),
-                _ => {}
-            }
-        }
-
-        assert_eq!(ok_count, Some(2), "two successful pushes must count as ok");
-        assert_eq!(
-            failed_count,
-            Some(1),
-            "one dead-connection push must count as failed"
-        );
     }
 }

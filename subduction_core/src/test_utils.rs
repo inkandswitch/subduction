@@ -50,6 +50,8 @@ use crate::{
     transport::message::MessageTransport,
 };
 
+pub mod heads;
+
 /// How long [`wait_until`] polls before giving up.
 pub const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
