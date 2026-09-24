@@ -221,12 +221,175 @@ and $approx 255$ loose commits.
 
 The goal of this structure is to enable incremental synchronization with peers
 that can't access the commit graph. Imagine Bob and Alice are connected to some
-relay peer. Initially all three peers have the same document state.
+relay peer. Initially all three peers have the same document state. Then, Alice
+sends a new commit to the relay peer. Bob later begins sync with the relay,
+he sends his cover to the relay which realizes that he is missing the new
+commit and sends that to him in the response.
+
+
+#figure({
+  set text(size: 9pt)
+
+  // Reuse the same miniature shapes in state snapshots and message labels.
+  // Dashed, unfilled shapes denote references rather than available payloads.
+  let commit-icon(metadata: false) = circle(
+    radius: 2.5mm,
+    inset: 0pt,
+    stroke: (paint: orange.darken(25%), thickness: 0.6pt,
+      dash: if metadata { "dashed" } else { "solid" }),
+    fill: if metadata { white } else { orange.lighten(85%) },
+    align(center + horizon, text(size: 8pt)[c]),
+  )
+  let tree(commit: "absent", metadata: false) = grid(
+    columns: (14mm, 6mm), rows: (5mm, 5mm),
+    column-gutter: 1mm, row-gutter: 1mm,
+    [],
+    if commit == "absent" { [] } else {
+      commit-icon(metadata: metadata)
+    },
+    rect(width: 14mm, height: 5mm, radius: 1mm, inset: 0pt,
+      stroke: (paint: green.darken(30%), thickness: 0.6pt,
+        dash: if metadata { "dashed" } else { "solid" }),
+      fill: if metadata { white } else { green.lighten(90%) },
+      align(center + horizon, text(size: 8pt)[F])),
+    [],
+  )
+  let state(x, y, commit: "absent", note: [Stored]) = node(
+    (x, y), align(center, stack(dir: ttb, spacing: 2pt,
+      text(size: 8pt, note), tree(commit: commit))),
+    shape: rect, width: 27mm, inset: 2mm, corner-radius: 1.5mm,
+    stroke: 0.4pt + gray.lighten(50%), fill: white,
+  )
+  let message-label(x, y, title, picture) = node(
+    (x, y), align(center, stack(dir: ttb, spacing: 2pt,
+      text(size: 8pt, title), picture)),
+    shape: rect, inset: 1pt, stroke: none, fill: white,
+  )
+
+  diagram(
+    // Physical coordinates: time runs downward (negative y).
+    node((0mm, 0mm), [*Alice*], stroke: none),
+    node((57mm, 0mm), [*Relay*], stroke: none),
+    node((114mm, 0mm), [*Bob*], stroke: none),
+    ..(0mm, 57mm, 114mm).map(x => edge(
+      (x, -5mm), (x, -141mm),
+      stroke: (paint: gray, thickness: 0.5pt, dash: "dashed"),
+      snap-to: none, layer: -10,
+    )),
+
+    state(0mm, -16mm),
+    state(57mm, -16mm),
+    state(114mm, -16mm),
+
+    state(0mm, -38mm, commit: "present", note: [Creates c]),
+    edge((0mm, -56mm), (57mm, -56mm), "-|>", snap-to: none),
+    message-label(28.5mm, -48mm, [1. Commit payload], commit-icon()),
+    state(57mm, -68mm, commit: "present"),
+
+    edge((114mm, -87mm), (57mm, -87mm), "-|>", snap-to: none),
+    message-label(85.5mm, -77mm, [2. Bob's cover],
+      tree(metadata: true)),
+    state(57mm, -99mm, commit: "present", note: [Bob lacks c]),
+
+    edge((57mm, -117mm), (114mm, -117mm), "-|>", snap-to: none),
+    message-label(85.5mm, -109mm, [3. Commit payload], commit-icon()),
+    state(114mm, -130mm, commit: "present", note: [Synchronized]),
+  )
+},
+  caption: [
+    Incremental sync between Alice, a relay, and Bob. All three initially store
+    fragment F; Alice creates a loose commit c whose parent is in F. Cards on
+    the tracks show local state, with a new card after each received message.
+    Solid shapes mean payloads are available; dashed shapes mean references
+    only. Bob sends his cover containing F; the relay sees that c is missing
+    and responds with c's payload. No separate commit request is needed, and
+    F's payload is never retransmitted. State persists until the next card
+    on a track.
+  ],
+)
+
+This is the ideal scenario where the cover can precisely identify the missing
+commit. In general we will oversend because fragments tend to be redundant,
+but this redundancy will tend to be smaller when commit graphs are more 
+overlapping - i.e. when we're mostly in sync already we don't have too much
+to do. This is good because this is the common case.
 
 === Checkpoint Commits
 
-There is a wrinkle here though. 
+There is a wrinkle here though. To perform incremental sync each peer needs to
+be able to compute the minimal cover of the document. But in general we don't
+have access to the underlying commit graph (the canonical example being e2e
+encrypted relays). If we represent a fragment as just it's head + boundaries
+then we can wind up in scenarios where we can't calculate this minimal cover.
 
+For example, consider this tree where we have two fragments at depth 2 and one
+at depth 4.
+
+#figure([
+  #diagram(
+    node-stroke: 0.7pt,
+    node-fill: white,
+
+    node((0mm, 0mm), align(right)[Commits],
+      width: 24mm, stroke: none),
+    node((0mm, -20mm), align(right)[Depth 2],
+      width: 24mm, stroke: none),
+    node((0mm, -40mm), align(right)[Depth 3],
+      width: 24mm, stroke: none),
+    node((0mm, -60mm), align(right)[Depth 4],
+      width: 24mm, stroke: none),
+
+    // An independent example: columns follow a hidden linear history.
+    // G excludes column 0; A excludes column 1; B excludes column 3.
+    ..("0000a", "00a0", "a8e5", "00a1", "b7c2", "00a2", "c9b2", "0000b")
+      .enumerate().map(((i, hash)) => node(
+        ((30 + 14 * i) * 1mm, 0mm), text(size: 8pt, raw(hash)),
+        shape: rect, width: 13mm, height: 10mm,
+        inset: 0.5mm, corner-radius: 1mm,
+        fill: if i == 0 { gray.lighten(90%) }
+          else if i == 3 { blue.lighten(85%) }
+          else if i == 5 { orange.lighten(85%) }
+          else if i == 7 { green.lighten(85%) }
+          else { white },
+      )),
+
+    node((65mm, -20mm), [A],
+      shape: rect, width: 27mm, height: 12mm, corner-radius: 2mm,
+      stroke: blue, fill: blue.lighten(90%)),
+    node((93mm, -20mm), [B],
+      shape: rect, width: 27mm, height: 12mm, corner-radius: 2mm,
+      stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
+      fill: orange.lighten(90%)),
+    node((86mm, -40mm), text(gray, size: 9pt)[No depth-three fragments],
+      shape: rect, stroke: none),
+    node((86mm, -60mm), [G],
+      shape: rect, width: 97mm, height: 12mm, corner-radius: 2mm,
+      stroke: green.darken(30%), fill: green.lighten(90%)),
+  )
+
+  #v(3mm)
+  #text(size: 9pt)[Head-and-boundary metadata available to the relay:]
+  #align(center, block(width: 100mm)[
+    #set text(size: 9pt)
+    #table(
+      columns: (1fr, 1fr, 1fr), inset: 4pt, stroke: none,
+      [*Fragment*], [*Head*], [*Excluded boundary*],
+      table.hline(stroke: 0.5pt + gray),
+      [A], [`00a1`], [`00a0`],
+      [B], [`00a2`], [`00a1`],
+      [G], [`0000b`], [`0000a`],
+    )
+  ])
+],
+  kind: image,
+  caption: [
+    A and B are contained in G, but this diagram shows membership that the
+    relay cannot inspect. Neither A's nor B's head or boundary appears in G's
+    head-and-boundary metadata. Even knowing that B stops at A's head does not
+    establish that either fragment is inside G. The relay cannot safely omit
+    A or B without additional containment information.
+  ],
+)
 
 === Dangling Loose Commits
 
