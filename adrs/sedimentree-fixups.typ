@@ -119,8 +119,9 @@ will tend to be earlier in the commit graph, and shallower fragments which are
 not contained in deeper fragments will tend to be later in the commit graph.
 Hence the name.
 
-#figure(
-  diagram(
+// Share the geometry between the full and minimal views. Filtering happens
+// after assigning column indices, so removing items never shifts the others.
+#let sedimentree-layers(minimal: false) = diagram(
     node-stroke: 0.7pt,
     node-fill: white,
 
@@ -135,7 +136,9 @@ Hence the name.
     // F1-only | shared by F1/F2 | F2-only | deeper-only | F3 | loose.
     ..("b7c2", "00d4", "a1b3", "a8e5", "f391", "00e6",
        "c9b2", "000f", "d8a2", "00b9", "e4c1", "f6d2")
-      .enumerate().map(((i, hash)) => node(
+      .enumerate()
+      .filter(((i, hash)) => not minimal or i >= 10)
+      .map(((i, hash)) => node(
         ((30 + 10 * i) * 1mm, 0mm), text(size: 7.5pt, raw(hash)),
         shape: rect, width: 9mm, height: 10mm,
         inset: 0.5mm, corner-radius: 1mm,
@@ -144,15 +147,17 @@ Hence the name.
     // Bar edges align with the outer edges of the included commit columns.
     // F1 spans columns 0–3; F2 spans 2–5. Their shared columns overlap
     // on the same depth row, with distinct outlines and blended shading.
-    node((45mm, -20mm), align(left)[F1],
-      shape: rect, width: 39mm, height: 12mm,
-      inset: 3mm, corner-radius: 2mm,
-      stroke: blue, fill: blue.transparentize(90%)),
-    node((65mm, -20mm), align(right)[F2],
-      shape: rect, width: 39mm, height: 12mm,
-      inset: 3mm, corner-radius: 2mm,
-      stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
-      fill: orange.transparentize(90%)),
+    ..if minimal { () } else { (
+      node((45mm, -20mm), align(left)[F1],
+        shape: rect, width: 39mm, height: 12mm,
+        inset: 3mm, corner-radius: 2mm,
+        stroke: blue, fill: blue.transparentize(90%)),
+      node((65mm, -20mm), align(right)[F2],
+        shape: rect, width: 39mm, height: 12mm,
+        inset: 3mm, corner-radius: 2mm,
+        stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
+        fill: orange.transparentize(90%)),
+    ) },
     node((115mm, -20mm), [F3],
       shape: rect, width: 19mm, height: 12mm, corner-radius: 2mm,
       stroke: (paint: purple, thickness: 1pt, dash: "dashed"),
@@ -163,18 +168,32 @@ Hence the name.
     node((65mm, -40mm), [Fragment headed by `000f`],
       shape: rect, width: 79mm, height: 12mm, corner-radius: 2mm,
       stroke: green.darken(30%), fill: green.lighten(90%)),
-  ),
+)
+
+#figure(
+  sedimentree-layers(),
   caption: [
     The same commit graph as above, but shown as a layer diagram. In this
     diagram each layer is a depth. Horizontal alignment represents containment,
-    so that in this diagram you can see which commits F2 and F2 share, and you
+    so that in this diagram you can see which commits F1 and F2 share, and you
     can see that they are both contained in the depth three fragment.
   ],
 )
 
 From this diagram we can see that there is some redundancy here which we can
-exploit.
+exploit. The depth three fragment contains everything in F1 and F2, which in
+turn contain a bunch of loose commits. By removing all these redundant entries
+we can summarize the tree like this:
 
+#figure(
+  sedimentree-layers(minimal: true),
+  caption: [
+    The same layers with redundant entries removed, without moving the remaining
+    items. Commits covered by fragments and fragments F1 and F2 are omitted.
+    F3, the depth-three fragment, and the uncovered loose commits `e4c1` and
+    `f6d2` still represent the entire graph.
+  ],
+)
 
 === Checkpoint Commits
 
