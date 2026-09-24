@@ -4,29 +4,9 @@
 #set page(paper: "a4")
 #set text(size: 11pt)
 
-
-= Sedimentree Fixups
-
-A modification to sedimentree which replaces checkpoint commits with fixup
-operations.
-
-== Introduction
-
-The sedimentree data structure and sync protocol has two related problems
-caused by the fact that it is not possible to compute whether one fragment
-contains anothe fragment (or loose commit). This document discusses the
-problems and proposes that we replace the checkpoint commits which were
-intended to solve this problem with a new "fixup" concept.
-
-== Background
-
-Sedimentree splits a document's commit graph into fragments. A fragment includes
-its head and walks backwards along parent links, stopping before its boundary
-commits, which are excluded. Heads and boundaries have at least $n$ leading
-zeros, where $n$ is the fragment's depth.
-
-#figure(
-  diagram(
+// Keep both graphs in sync; hash-selected commits stay highlighted even
+// when fragment outlines and labels are hidden.
+#let commit-graph(fragments: true) = diagram(
     node-stroke: 0.7pt,
     node-fill: white,
     node-shape: circle,
@@ -35,7 +15,7 @@ zeros, where $n$ is the fragment's depth.
     // Physical coordinates have positive y pointing upward.
     // The root is included by every walk that reaches it, regardless of hash.
     node((0mm, 0mm), [`a1b3`], name: <root>, radius: 4.5mm,
-      fill: gray.lighten(85%)),
+      fill: if fragments { gray.lighten(85%) } else { white }),
     node((0mm, -12mm), [`a8e5`], name: <shared>, radius: 4.5mm),
     node((-22mm, -24mm), [`b7c2`], name: <upper>, radius: 4.5mm),
     node((22mm, -24mm), [`f391`], name: <lower>, radius: 4.5mm),
@@ -52,6 +32,7 @@ zeros, where $n$ is the fragment's depth.
     node((-16mm, -116mm), [`e4c1`], name: <loose-1>, radius: 4.5mm),
     node((16mm, -116mm), [`f6d2`], name: <loose-2>, radius: 4.5mm),
 
+    ..if fragments { (
     node(
       name: <fragment-1>,
       enclose: (<root>, <shared>, <upper>, <head-1>),
@@ -91,6 +72,7 @@ zeros, where $n$ is the fragment's depth.
       shape: rect, stroke: none, fill: none),
     node((48mm, -116mm), text(size: 9pt)[Loose commits],
       shape: rect, stroke: none, fill: none),
+    ) } else { () },
 
     edge(<shared>, <root>, "-|>"),
     edge(<upper>, <shared>, "-|>"),
@@ -104,7 +86,45 @@ zeros, where $n$ is the fragment's depth.
     edge(<head-4>, <recent>, "-|>"),
     edge(<loose-1>, <head-4>, "-|>"),
     edge(<loose-2>, <merge>, "-|>", bend: -45deg),
-  ),
+)
+
+= Sedimentree Fixups
+
+A modification to sedimentree which replaces checkpoint commits with fixup
+operations.
+
+== Introduction
+
+The sedimentree data structure and sync protocol has two related problems
+caused by the fact that it is not possible to compute whether one fragment
+contains anothe fragment (or loose commit). This document discusses the
+problems and proposes that we replace the checkpoint commits which were
+intended to solve this problem with a new "fixup" concept.
+
+== Background
+
+Sedimentree splits a document's commit graph into fragments. A fragment includes
+its head and walks backwards along parent links, stopping before its boundary
+commits, which are excluded. Heads and boundaries have at least $n$ leading
+zeros, where $n$ is the fragment's depth.
+
+For example, consider the following commit graph where we have coloured in the
+fragment boundaries:
+
+
+#figure(
+  commit-graph(fragments: false),
+  caption: [
+    A commit graph with fragment boundaries coloured. Root is at the top and
+    arrows point from child to parent.
+  ],
+)
+
+This can be split into the following fragments:
+
+
+#figure(
+  commit-graph(),
   caption: [
     A commit graph with four fragments. F3 (depth 3) contains F1 and F2
     (depth 2). F4 is a newer depth 2 fragment. Two loose commits are not
@@ -115,7 +135,7 @@ zeros, where $n$ is the fragment's depth.
 We can think of fragments at a particular depth as a "layer". Deeper fragments
 will tend to be earlier in the commit graph, and shallower fragments which are
 not contained in deeper fragments will tend to be later in the commit graph.
-Hence the name.
+Hence the name (sedimentry rocks are older the deeper you go).
 
 // Share the geometry between the full and minimal views. Filtering happens
 // after assigning column indices, so removing items never shifts the others.
@@ -191,48 +211,22 @@ we can summarize the tree like this:
   ],
 )
 
+In commit graphs which are "deep and narrow" (i.e. have much less concurrency
+than history) this summarization can be very efficient. In a completely linear
+history with $n$ commits for example, we would see $O(log_16 n)$ fragments and
+$O(1)$ loose commits. For 1,000,000 commits this would be $approx 40$ fragments
+and $approx 255$ loose commits.
+
+=== Incremental Sync
+
+The goal of this structure is to enable incremental synchronization with peers
+that can't access the commit graph. Imagine Bob and Alice are connected to some
+relay peer. Initially all three peers have the same document state.
+
 === Checkpoint Commits
 
-A sedimentree is an encoding of a commit graph as an increasingly large set of
-"fragments". Each fragment is a region of the commit graph defined by one
-head commit and a number of boundary commits. The commits in the region are
-found by starting at the head and and traversing backwards (following parent
-links), stopping before boundary commits and excluding them. A root reached
-by the traversal is included regardless of its hash.
+There is a wrinkle here though. 
 
-Fragments are defined by the number of leading zero characters in the hex
-encoding of the commit hashes. A depth 2 fragment for example is defined by
-a head commit that starts with two leading zeros and all of the ancestor
-commits that have two leading zeros and are reachable without passing through
-a commit that has two leading zeros.
-
-This definition of a fragment means that peers who have overlapping sets of
-commits will agree on fragments in the overlapping region. This combined with
-the fact that the depth of a fragment is determined by hash hardness means that
-over time the "older" regions of the commit graph will be encoded into larger
-and larger fragments.
-
-When synchronizing with another peer we send them the "minimal" set of
-fragments and loose commits which we think is required to contain the entire
-commit graph. This minimal set is computed by starting with the deepest
-fragments then filtering out any fragments that are contained in those deepest
-fragments, then ascending a depth and repeating the process until we reach
-loose commits.
-
-In order for this logic to work we need to be able to compute the containment
-relationship between two fragments. In order to do _this_ we need to be able
-to compare two fragments at different depths and determine if the lower depth
-contains the shallower depth. Just having the head and boundary commits of the
-respective fragments is not enough information. To solve this problem we also
-encode in each fragment the "checkpoint" commits - these are the hashes of all
-the lowest but one (typically the shallowest depth we use is depth 2) commits
-in a given fragment. With this information we are able to compare two fragments
-at different depths and compute containment by checking if the head and
-boundaries of the shallower fragment are contained in the checkpoint commits of
-the deeper fragment.
-
-This works well - but it requires shipping around the checkpoint commits. We
-truncate these to 12 bits but still, we have quite a bit of extra data.
 
 === Dangling Loose Commits
 
