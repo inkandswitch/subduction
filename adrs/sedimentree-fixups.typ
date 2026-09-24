@@ -107,7 +107,7 @@ it regardless of its hash.
     edge(<loose-2>, <merge>, "-|>", bend: -45deg),
   ),
   caption: [
-    A commit graph with four fragments. F2 and F2 are depth 2 fragments
+    A commit graph with four fragments. F1 and F2 are depth 2 fragments
     contained by a depth 3 fragment. F3 is another depth 2 fragment which is
     causally after the depth 3 fragment and there are two loose commits which
     are not contained in any fragment.
@@ -124,69 +124,57 @@ Hence the name.
     node-stroke: 0.7pt,
     node-fill: white,
 
-    // Physical coordinates keep the layer widths independent of their labels.
-    node((0mm, 0mm), align(right)[Loose commits],
-      width: 28mm, stroke: none),
-    node((0mm, -18mm), align(right)[Depth $n = 2$],
-      width: 28mm, stroke: none),
-    node((0mm, -36mm), align(right)[Depth $n = 3$],
-      width: 28mm, stroke: none),
-    node((0mm, -54mm), align(right)[Depth $n = 4$],
-      width: 28mm, stroke: none),
+    node((0mm, 0mm), align(right)[Commits],
+      width: 24mm, stroke: none),
+    node((0mm, -20mm), align(right)[Depth 2],
+      width: 24mm, stroke: none),
+    node((0mm, -40mm), align(right)[Depth 3],
+      width: 24mm, stroke: none),
 
-    // Each row is a different stretch of history, not the same commits
-    // subdivided at different resolutions. Width suggests relative span only.
-    ..range(8).map(i => node(
-      ((36 + 12 * i) * 1mm, 0mm), [],
-      shape: circle, radius: 2mm, fill: gray.lighten(70%),
-    )),
-    ..range(4).map(i => node(
-      ((42 + 24 * i) * 1mm, -18mm), [Fragment],
-      shape: rect, width: 22mm, height: 12mm, corner-radius: 2mm,
-      stroke: blue, fill: blue.lighten(90%),
-    )),
-    ..range(2).map(i => node(
-      ((54 + 48 * i) * 1mm, -36mm), [Larger fragment],
-      shape: rect, width: 46mm, height: 12mm, corner-radius: 2mm,
-      stroke: green.darken(30%), fill: green.lighten(90%),
-    )),
-    node((78mm, -54mm), [Still larger fragment],
-      shape: rect, width: 94mm, height: 12mm, corner-radius: 2mm,
-      stroke: orange.darken(25%), fill: orange.lighten(90%)),
+    // One column per commit, grouped by containment rather than chronology.
+    // F1-only | shared by F1/F2 | F2-only | deeper-only | F3 | loose.
+    ..("b7c2", "00d4", "a1b3", "a8e5", "f391", "00e6",
+       "c9b2", "000f", "d8a2", "00b9", "e4c1", "f6d2")
+      .enumerate().map(((i, hash)) => node(
+        ((30 + 10 * i) * 1mm, 0mm), text(size: 7.5pt, raw(hash)),
+        shape: rect, width: 9mm, height: 10mm,
+        inset: 0.5mm, corner-radius: 1mm,
+      )),
 
-    node((134mm, 7mm), text(size: 9pt)[Newer], stroke: none),
-    edge((134mm, 0mm), (134mm, -54mm), "-|>", snap-to: none),
-    node((134mm, -62mm), text(size: 9pt)[Older], stroke: none),
+    // Bar edges align with the outer edges of the included commit columns.
+    // F1 spans columns 0–3; F2 spans 2–5. Their shared columns overlap
+    // on the same depth row, with distinct outlines and blended shading.
+    node((45mm, -20mm), align(left)[F1],
+      shape: rect, width: 39mm, height: 12mm,
+      inset: 3mm, corner-radius: 2mm,
+      stroke: blue, fill: blue.transparentize(90%)),
+    node((65mm, -20mm), align(right)[F2],
+      shape: rect, width: 39mm, height: 12mm,
+      inset: 3mm, corner-radius: 2mm,
+      stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
+      fill: orange.transparentize(90%)),
+    node((115mm, -20mm), [F3],
+      shape: rect, width: 19mm, height: 12mm, corner-radius: 2mm,
+      stroke: (paint: purple, thickness: 1pt, dash: "dashed"),
+      fill: purple.lighten(90%)),
+
+    // The deeper fragment spans columns 0–7, including F1, F2, c9b2, and 000f.
+    // F3 starts in column 8, so its boundary 000f is visibly excluded.
+    node((65mm, -40mm), [Fragment headed by `000f`],
+      shape: rect, width: 79mm, height: 12mm, corner-radius: 2mm,
+      stroke: green.darken(30%), fill: green.lighten(90%)),
   ),
   caption: [
-    A schematic stack of sedimentree layers. Recent history tends to remain
-    as loose commits and small, shallow fragments; older history tends to be
-    covered by larger, deeper fragments. Only fragments not contained in deeper
-    fragments are shown. Each row represents a different stretch of history;
-    widths suggest relative commit-graph span, not exact counts or payload sizes.
-    The age ordering is typical, not guaranteed.
+    The same commit graph as above, but shown as a layer diagram. In this
+    diagram each layer is a depth. Horizontal alignment represents containment,
+    so that in this diagram you can see which commits F2 and F2 share, and you
+    can see that they are both contained in the depth three fragment.
   ],
 )
 
-The purpose of this construction is to make use of the fact that typical
-commit graphs are relatively deep and narrow. This means that lower depth
-fragments (which have more leading zeros) are more likely to happen as the
-document gets larger and thus the older regions of the document get compacted
-into larger and larger fragments. Nearer the tip of the tree, where things are
-newer, fragments are smaller.
+From this diagram we can see that there is some redundancy here which we can
+exploit.
 
-An important part of what makes sedimentree useful is that the size of the
-minimal set of fragments and loose commits which contain a commit graph is
-logarithmic in the number of commits in the graph. Unfortunately, in order to
-compute this minimal tree we have to store one in every \~256 commit hashes of
-the entire history of the document on disk. This leads to an O(n) growth in the
-storage of a document
-- prohibiting use for very fast moving data (such as the mouse movements of a
-  use in a collaborative drawing application).
-
-Separately, the computation of the minimal tree is imprecise, which can lead
-to convergence failures between peers running over the sedimentree encoding of
-the commit graph and peers running over the more detailed full commit graph.
 
 === Checkpoint Commits
 
