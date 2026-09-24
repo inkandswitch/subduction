@@ -23,8 +23,7 @@ intended to solve this problem with a new "fixup" concept.
 Sedimentree splits a document's commit graph into fragments. A fragment includes
 its head and walks backwards along parent links, stopping before its boundary
 commits, which are excluded. Heads and boundaries have at least $n$ leading
-zeros, where $n$ is the fragment's depth. A walk that reaches the root includes
-it regardless of its hash.
+zeros, where $n$ is the fragment's depth.
 
 #figure(
   diagram(
@@ -48,7 +47,7 @@ it regardless of its hash.
     node((0mm, -64mm), [`000f`], name: <deep-head>, radius: 4.5mm,
       fill: green.lighten(85%)),
     node((0mm, -86mm), [`d8a2`], name: <recent>, radius: 4.5mm),
-    node((0mm, -100mm), [`00b9`], name: <head-3>, radius: 4.5mm,
+    node((0mm, -100mm), [`00b9`], name: <head-4>, radius: 4.5mm,
       fill: purple.lighten(85%)),
     node((-16mm, -116mm), [`e4c1`], name: <loose-1>, radius: 4.5mm),
     node((16mm, -116mm), [`f6d2`], name: <loose-2>, radius: 4.5mm),
@@ -75,8 +74,8 @@ it regardless of its hash.
       fill: green.transparentize(96%), layer: -3,
     ),
     node(
-      // 000f is F3's boundary, not one of its included commits.
-      enclose: (<recent>, <head-3>),
+      // 000f is F4's boundary, not one of its included commits.
+      enclose: (<recent>, <head-4>),
       shape: rect, corner-radius: 3mm, inset: 3mm,
       stroke: (paint: purple, thickness: 1pt, dash: "dashed"),
       fill: purple.transparentize(94%), layer: -1,
@@ -86,9 +85,9 @@ it regardless of its hash.
       shape: rect, stroke: none, fill: none),
     node((20mm, -6mm), text(orange.darken(25%), size: 9pt)[F2 ($n = 2$)],
       shape: rect, stroke: none, fill: none),
-    node((-59mm, -60mm), text(green.darken(30%), size: 9pt)[Deeper fragment \\ ($n = 3$)],
+    node((-59mm, -60mm), text(green.darken(30%), size: 9pt)[F3 ($n = 3$)],
       shape: rect, stroke: none, fill: none),
-    node((28mm, -92mm), text(purple, size: 9pt)[F3 ($n = 2$)],
+    node((28mm, -92mm), text(purple, size: 9pt)[F4 ($n = 2$)],
       shape: rect, stroke: none, fill: none),
     node((48mm, -116mm), text(size: 9pt)[Loose commits],
       shape: rect, stroke: none, fill: none),
@@ -102,15 +101,14 @@ it regardless of its hash.
     edge(<merge>, <head-2>, "-|>"),
     edge(<deep-head>, <merge>, "-|>"),
     edge(<recent>, <deep-head>, "-|>"),
-    edge(<head-3>, <recent>, "-|>"),
-    edge(<loose-1>, <head-3>, "-|>"),
+    edge(<head-4>, <recent>, "-|>"),
+    edge(<loose-1>, <head-4>, "-|>"),
     edge(<loose-2>, <merge>, "-|>", bend: -45deg),
   ),
   caption: [
-    A commit graph with four fragments. F1 and F2 are depth 2 fragments
-    contained by a depth 3 fragment. F3 is another depth 2 fragment which is
-    causally after the depth 3 fragment and there are two loose commits which
-    are not contained in any fragment.
+    A commit graph with four fragments. F3 (depth 3) contains F1 and F2
+    (depth 2). F4 is a newer depth 2 fragment. Two loose commits are not
+    contained in any fragment.
   ],
 )
 
@@ -133,7 +131,7 @@ Hence the name.
       width: 24mm, stroke: none),
 
     // One column per commit, grouped by containment rather than chronology.
-    // F1-only | shared by F1/F2 | F2-only | deeper-only | F3 | loose.
+    // F1-only | shared by F1/F2 | F2-only | F3-only | F4 | loose.
     ..("b7c2", "00d4", "a1b3", "a8e5", "f391", "00e6",
        "c9b2", "000f", "d8a2", "00b9", "e4c1", "f6d2")
       .enumerate()
@@ -158,14 +156,14 @@ Hence the name.
         stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
         fill: orange.transparentize(90%)),
     ) },
-    node((115mm, -20mm), [F3],
+    node((115mm, -20mm), [F4],
       shape: rect, width: 19mm, height: 12mm, corner-radius: 2mm,
       stroke: (paint: purple, thickness: 1pt, dash: "dashed"),
       fill: purple.lighten(90%)),
 
-    // The deeper fragment spans columns 0–7, including F1, F2, c9b2, and 000f.
-    // F3 starts in column 8, so its boundary 000f is visibly excluded.
-    node((65mm, -40mm), [Fragment headed by `000f`],
+    // F3 spans columns 0–7, including F1, F2, c9b2, and 000f.
+    // F4 starts in column 8, so its boundary 000f is visibly excluded.
+    node((65mm, -40mm), [F3],
       shape: rect, width: 79mm, height: 12mm, corner-radius: 2mm,
       stroke: green.darken(30%), fill: green.lighten(90%)),
 )
@@ -173,15 +171,13 @@ Hence the name.
 #figure(
   sedimentree-layers(),
   caption: [
-    The same commit graph as above, but shown as a layer diagram. In this
-    diagram each layer is a depth. Horizontal alignment represents containment,
-    so that in this diagram you can see which commits F1 and F2 share, and you
-    can see that they are both contained in the depth three fragment.
+    The same graph as a layer diagram, with one row per depth. Aligned spans
+    show containment: F1 and F2 share commits, and F3 contains both fragments.
   ],
 )
 
 From this diagram we can see that there is some redundancy here which we can
-exploit. The depth three fragment contains everything in F1 and F2, which in
+exploit. F3 contains everything in F1 and F2, which in
 turn contain a bunch of loose commits. By removing all these redundant entries
 we can summarize the tree like this:
 
@@ -190,8 +186,8 @@ we can summarize the tree like this:
   caption: [
     The same layers with redundant entries removed, without moving the remaining
     items. Commits covered by fragments and fragments F1 and F2 are omitted.
-    F3, the depth-three fragment, and the uncovered loose commits `e4c1` and
-    `f6d2` still represent the entire graph.
+    F3, F4, and the uncovered loose commits `e4c1` and `f6d2` still represent
+    the entire graph.
   ],
 )
 
