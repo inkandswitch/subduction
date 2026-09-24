@@ -2,6 +2,7 @@
 #import "@preview/catppuccin:1.1.0": catppuccin, flavors
 #import "diagrams.typ": commit-graph, layer-diagram
 #import "sedimentree-examples.typ": example-commits, example-fragments, example-order, example-annotations, checkpoint-commits, checkpoint-fragments
+#import "sedimentree-examples.typ": dangling-commits, dangling-fragments
 #set document(title: "Sedimentree Fixups")
 #set page(paper: "a4")
 #set text(size: 11pt)
@@ -201,61 +202,96 @@ at depth 4.
     commit-text-size: 8pt, highlight-heads: true,
     empty-labels: ("3": [No depth-three fragments]),
   )
-
-  #v(3mm)
-  #text(size: 9pt)[Head-and-boundary metadata available to the relay:]
-  #align(center, block(width: 100mm)[
-    #set text(size: 9pt)
-    #table(
-      columns: (1fr, 1fr, 1fr), inset: 4pt, stroke: none,
-      [*Fragment*], [*Head*], [*Excluded boundary*],
-      table.hline(stroke: 0.5pt + gray),
-      ..checkpoint-fragments.map(f => (
-        [#f.id], raw(f.head), f.boundaries.map(raw).join([, ]),
-      )).flatten(),
-    )
-  ])
 ],
   kind: image,
   caption: [
     A and B are contained in G, but this diagram shows membership that the
     relay cannot inspect. Neither A's nor B's head or boundary appears in G's
-    head-and-boundary metadata. Even knowing that B stops at A's head does not
+    head or boundary. Even knowing that B stops at A's head does not
     establish that either fragment is inside G. The relay cannot safely omit
     A or B without additional containment information.
   ],
 )
 
 In this scenario there is no way to know that `G` actually contains the commits
-for `A` and `B` because all we know about `G` is that it starts at `000a` and
-ends at `000b`, neither of which are mentioned by the boundaries of `A` or `B`.
+for `A` and `B` because all we know about `G` is its head `0000b` and excluded
+boundary `0000a`, neither of which appears in the metadata for `A` or `B`.
 
-To get around this we include in all fragments with $depth > 2$ the boundaries
-of all $depth = 2$ commits. We call these checkpoint commits. If we draw the
-example above with the checkpoint commits you can see that the fact that `G`
-contains `A` and `B` is visible as the boundaries of `A` and `B` are in `G`s
-checkpoint commits (all boundary commits are _at least_ $depth = 2$ so any 
-fragment contains the boundaries of all commits inside it as checkpoint
-commits)
+To get around this, fragments with depth $n > 2$ also record internal commits of
+at least depth 2 as checkpoint commits. The fragment's own head and boundaries
+are already recorded separately. In this example, `G`'s checkpoints identify
+both the heads and boundaries of `A` and `B`. If a shallower fragment's boundary
+coincides with `G`'s own excluded boundary, we use that boundary metadata rather
+than an internal checkpoint.
 
+#figure(
+  layer-diagram(
+    checkpoint-commits, checkpoint-fragments,
+    depths: (2, 3, 4), column-spacing: 14mm, commit-width: 13mm,
+    commit-text-size: 8pt, highlight-heads: true, show-checkpoints: true,
+    empty-labels: ("3": [No depth-three fragments]),
+  ),
+  caption: [
+    The same layers with G's checkpoint metadata shown as white badges.
+    Dotted guides align each badge with its commit column; they are not parent
+    links. A's boundary `00a0` and head `00a1`, and B's boundary `00a1` and head
+    `00a2`, all appear in G's checkpoints. Fragment positions and horizontal
+    spans are unchanged; G's bar is taller to make room for the metadata.
+  ],
+)<fig:checkpoints>
 
+In @fig:checkpoints we can see that the heads of `A` and `B` are in the
+checkpoint commit set and so we know that `A` and `B` are in `G` and can be
+discarded from the minimal cover.
+
+== The Problem
+
+There are two problems with checkpoint commits:
+
+- They don't solve the problem of dangling loose commits
+- They lead to an $O(n)$ bandwidth growth
 
 === Dangling Loose Commits
 
-A relay peer which doesn't have access to the full commit graph can wind up in
-a situation where it has a commit (or chain of commits) which it cannot prove
-are contained within some deeper fragments. One example of where this can
-happen is if some peer is sending commits and then the connection is dropped
-whilst the peer continues generating data. The peer eventually bundles all the
-commits into a fragment and then reconnects to the relay peer and sends the
-fragment. The relay peer now has a fragment which contains the commits it
-received earlier but no way to know this.
+There is an analog to the problem outlined above where we were missing a layer
+of fragments. In order to determine if a loose commit can be discarded from the
+minimal cover we need a path from that commit to a checkpoint commit.
 
-This is problematic for two reasons. Firstly, the relay peer will oversend
-data when syncing with other peers as it cannot prove the commits are not
-needed and it will also disagree with clients that _have_ the clear text on
-what the heads of the sedimentree are, which means we can end up in a scenario
-where the relay continues to send the loose commit to the client.
+Imagine we have this commit graph:
+
+#figure(
+  commit-graph(dangling-commits, fragments: dangling-fragments),
+  caption: [
+    Three commits in a line. Fragment F starts at its head `00d5` and walks
+    back to the root `a1b2`, including all three commits. Arrows point to parents.
+  ],
+)<fig:dangling-graph>
+
+Now let's say that on some relay node we have this cover:
+
+#figure(
+  layer-diagram(
+    dangling-commits, dangling-fragments,
+    visible-commits: ("a1b2", "b3c4"),
+    column-spacing: 14mm, commit-width: 13mm, commit-text-size: 8pt,
+  ),
+  caption: [
+    A cover of the tree which has `a1b2` and `b3c4` even though they are 
+    contained in `F`
+  ],
+)<fig:dangling-layers>
+
+In this situation the minimal cover is actually `F`, but the relay node has no
+way to know this. This scenario can actually happen very easily. This is a
+common sequence of events:
+
+- Alice is incrementally syncing a document as she edits it
+- Alice creates a commit and sends it
+- Alice creates another commit and sends it
+- Alice creates a further commit and realises it is a fragment boundary
+- Alice creates a new fragment and sends the fragment
+
+Alice doesn't send the final commit in the chain for whatever reason.
 
 == Fixups
 

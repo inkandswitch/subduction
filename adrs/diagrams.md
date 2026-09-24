@@ -55,10 +55,38 @@ only example data. The ADR keeps the prose, captions, and figure placement.
 - `minimal: true` hides covered commits and contained fragments while retaining
   their layout bounds. **This uses author-supplied membership**, not an algorithm
   available to a relay with only head-and-boundary metadata.
+- `visible-commits: ("a1b2", "b3c4")` restricts the top row to specific loose
+  entries, for example in a partially redundant relay state. Hidden commits
+  keep their columns and still contribute to fragment membership and bounds.
+  The default `auto` shows all commits; `()` hides all top-row commits. If used
+  with `minimal: true`, only entries surviving both filters are shown.
 - `column-spacing`, `commit-width`, and `commit-text-size` control layer sizing.
   `highlight-heads: true` colours heads in layer diagrams too.
 - Optional per-fragment styling and graph layout fields are documented at the
   top of `diagrams.typ`; the existing examples show their use.
+
+## Showing checkpoint metadata
+
+Add `checkpoints: ("00a0", "00a1", "00a2")` to a fragment's data, then enable
+`show-checkpoints: true` on `layer-diagram`. For example:
+
+```typst
+#import "sedimentree-examples.typ": checkpoint-commits, checkpoint-fragments
+
+#layer-diagram(checkpoint-commits, checkpoint-fragments,
+  depths: (2, 3, 4), column-spacing: 14mm, commit-width: 13mm,
+  show-checkpoints: true)
+```
+
+Checkpoints appear as white metadata badges inside their fragment bar, directly
+below their commit columns. Dotted guides help match the hashes; disable them
+with `checkpoint-guides: false`. Bars with checkpoints grow from 12mm to 18mm
+high, but their centers, horizontal spans, and all other positions stay fixed.
+
+Checkpoint IDs must be unique included members, not excluded boundaries. A
+fragment's own excluded boundaries remain separate metadata. Badges are not
+extra commits or fragments and do not affect minimization. Hiding a redundant
+fragment also hides its badges and guides without changing layout bounds.
 
 ## Checking changes
 
@@ -70,4 +98,6 @@ typst compile --root adrs adrs/tests/diagrams.typ /tmp/diagram-tests.pdf
 ```
 
 The checks cover minimization, excluded boundaries, equal-member fragments,
-empty inputs, generic graph rendering, and matching full/minimal layout bounds.
+empty inputs, generic graph rendering, checkpoint annotations, and matching
+full/minimal layout bounds with and without checkpoints, plus selective
+visibility of loose commits.

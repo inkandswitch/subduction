@@ -80,6 +80,26 @@
   (
     id: "G", depth: 4, head: "0000b", boundaries: ("0000a",),
     members: ("00a0", "a8e5", "00a1", "b7c2", "00a2", "c9b2", "0000b"),
+    // Internal depth-two heads/boundaries. G's own head and excluded boundary
+    // are already carried separately in its metadata.
+    checkpoints: ("00a0", "00a1", "00a2"),
     color: green, stroke: green.darken(30%),
+  ),
+)
+
+// The relay received the first two commits individually before receiving F.
+// Neither loose commit qualifies as a checkpoint, though both belong to F.
+#let dangling-commits = (
+  (id: "a1b2", pos: (0mm, 0mm)),
+  (id: "b3c4", pos: (0mm, -15mm), parents: ("a1b2",)),
+  (id: "00d5", pos: (0mm, -30mm), parents: ("b3c4",)),
+)
+
+#let dangling-fragments = (
+  (
+    id: "F", depth: 2, head: "00d5", boundaries: (),
+    members: ("a1b2", "b3c4", "00d5"), color: green,
+    stroke: green.darken(30%), graph-label-color: green.darken(30%),
+    graph-label-pos: (-24mm, -15mm),
   ),
 )

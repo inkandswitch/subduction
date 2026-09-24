@@ -9,6 +9,8 @@
 //   members: ("hash", ...), color: blue).
 //   members includes the head but EXCLUDES boundaries. Membership is supplied
 //   by the author: these helpers do not infer it from head/boundary metadata.
+//   Optional checkpoints: ("hash", ...) lists internal checkpoint metadata;
+//   these must be unique members, not excluded boundaries.
 //   Optional styling: stroke, bar-fill, bar-align; graph-specific overrides:
 //   graph-inset, graph-stroke, graph-fill, graph-layer, graph-label-pos,
 //   graph-label-color.
@@ -26,6 +28,10 @@
     assert(f.members.all(id => id in ids), message: "Unknown fragment member")
     assert(f.at("boundaries", default: ()).all(id => id not in f.members),
       message: "A fragment must exclude its boundaries")
+    let checkpoints = f.at("checkpoints", default: ())
+    assert(checkpoints.dedup().len() == checkpoints.len(), message: "Duplicate checkpoint")
+    assert(checkpoints.all(id => id in f.members),
+      message: "Checkpoints must be included fragment members")
   }
 }
 
@@ -104,11 +110,16 @@
 // by depth string (e.g. ("3": [No depth-three fragments])).
 // Hidden redundant entries still contribute to layout bounds, so the full
 // and minimal views have IDENTICAL coordinates, size, and centering.
+// show-checkpoints adds aligned metadata badges inside taller bars without
+// moving their centers or columns. Optional dotted guides link those columns.
+// visible-commits can restrict the top row to selected stored loose commits;
+// membership, column positions, and layout bounds are unaffected.
 #let layer-diagram(
   commits, fragments,
-  order: auto, depths: auto, minimal: false,
+  order: auto, depths: auto, minimal: false, visible-commits: auto,
   column-spacing: 10mm, commit-width: 9mm, commit-text-size: 7.5pt,
   highlight-heads: false, empty-labels: (:),
+  show-checkpoints: false, checkpoint-guides: true,
 ) = {
   validate(commits, fragments)
   let ids = commits.map(c => c.id)
@@ -117,6 +128,8 @@
   assert(order.sorted() == ids.sorted(), message: "Column order must contain every commit exactly once")
   assert(depths.dedup().len() == depths.len(), message: "Layer depths must be unique")
   assert(fragments.all(f => f.depth in depths), message: "Missing fragment depth in layers")
+  let visible-commits = if visible-commits == auto { ids } else { visible-commits }
+  assert(visible-commits.all(id => id in ids), message: "Unknown visible commit")
   let cover = if minimal { minimal-cover(commits, fragments) } else { (commits: ids, fragments: fragments.map(f => f.id)) }
   let column-x(i) = 30mm + i * column-spacing
   let row-y(depth) = -(depths.position(d => d == depth) + 1) * 20mm
@@ -132,7 +145,7 @@
         shape: rect, width: commit-width, height: 10mm,
         inset: 0.5mm, corner-radius: 1mm,
         fill: commit-fill(c, fragments, highlight-heads: highlight-heads))
-      if id in cover.commits { item } else { hide(item) }
+      if id in cover.commits and id in visible-commits { item } else { hide(item) }
     }
     for f in fragments {
       let columns = order.enumerate().filter(((i, id)) => id in f.members).map(((i, id)) => i)
@@ -140,11 +153,31 @@
       let last = columns.last()
       assert(last - first + 1 == columns.len(),
         message: "Fragment " + f.id + " is not contiguous: reorder its commit columns")
-      let item = node(((column-x(first) + column-x(last)) / 2, row-y(f.depth)),
-        align(f.at("bar-align", default: center), [#f.id]),
-        shape: rect, width: (last - first) * column-spacing + commit-width,
-        height: 12mm, inset: 3mm, corner-radius: 2mm,
-        stroke: fragment-stroke(f), fill: f.at("bar-fill", default: f.color.lighten(90%)))
+      let checkpoints = if show-checkpoints { f.at("checkpoints", default: ()) } else { () }
+      let has-checkpoints = checkpoints.len() > 0
+      let item = {
+        if has-checkpoints and checkpoint-guides {
+          for id in checkpoints {
+            let x = column-x(order.position(c => c == id))
+            edge((x, -5mm), (x, row-y(f.depth) - 3mm),
+              stroke: (paint: gray.lighten(35%), thickness: 0.5pt, dash: "dotted"),
+              snap-to: none, layer: -5)
+          }
+        }
+        node(((column-x(first) + column-x(last)) / 2, row-y(f.depth)),
+          align(f.at("bar-align", default: center) + if has-checkpoints { top } else { horizon }, [#f.id]),
+          shape: rect, width: (last - first) * column-spacing + commit-width,
+          height: if has-checkpoints { 18mm } else { 12mm },
+          inset: if has-checkpoints { 2mm } else { 3mm }, corner-radius: 2mm,
+          stroke: fragment-stroke(f), fill: f.at("bar-fill", default: f.color.lighten(90%)))
+        for id in checkpoints {
+          node((column-x(order.position(c => c == id)), row-y(f.depth) - 3mm),
+            text(size: commit-text-size, raw(id)),
+            shape: rect, width: commit-width - 2mm, height: 5mm,
+            inset: 0.25mm, corner-radius: 0.7mm,
+            stroke: 0.5pt + gray, fill: white, layer: 1)
+        }
+      }
       if f.id in cover.fragments { item } else { hide(item) }
     }
     for depth in depths {
