@@ -1,6 +1,6 @@
 # Notes for the sedimentree fixups ADR
 
-Discussion notes to support writing `sedimentree-fixups.md`, rather than replacement ADR prose. The working decisions below reflect the discussion; unresolved mechanics are listed separately.
+Discussion notes to support writing `sedimentree-fixups.typ`, rather than replacement ADR prose. The working decisions below reflect the discussion; unresolved mechanics are listed separately.
 
 ## Central architectural tradeoff
 
