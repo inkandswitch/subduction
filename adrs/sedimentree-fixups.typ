@@ -1,92 +1,10 @@
 #import "@preview/fletcher:0.5.8": diagram, node, edge
 #import "@preview/catppuccin:1.1.0": catppuccin, flavors
+#import "diagrams.typ": commit-graph, layer-diagram
+#import "sedimentree-examples.typ": example-commits, example-fragments, example-order, example-annotations, checkpoint-commits, checkpoint-fragments
 #set document(title: "Sedimentree Fixups")
 #set page(paper: "a4")
 #set text(size: 11pt)
-
-// Keep both graphs in sync; hash-selected commits stay highlighted even
-// when fragment outlines and labels are hidden.
-#let commit-graph(fragments: true) = diagram(
-    node-stroke: 0.7pt,
-    node-fill: white,
-    node-shape: circle,
-
-    // The root is at the top: time flows downward, parent arrows upward.
-    // Physical coordinates have positive y pointing upward.
-    // The root is included by every walk that reaches it, regardless of hash.
-    node((0mm, 0mm), [`a1b3`], name: <root>, radius: 4.5mm,
-      fill: if fragments { gray.lighten(85%) } else { white }),
-    node((0mm, -12mm), [`a8e5`], name: <shared>, radius: 4.5mm),
-    node((-22mm, -24mm), [`b7c2`], name: <upper>, radius: 4.5mm),
-    node((22mm, -24mm), [`f391`], name: <lower>, radius: 4.5mm),
-    node((-22mm, -36mm), [`00d4`], name: <head-1>, radius: 4.5mm,
-      fill: blue.lighten(85%)),
-    node((22mm, -36mm), [`00e6`], name: <head-2>, radius: 4.5mm,
-      fill: orange.lighten(85%)),
-    node((0mm, -49.5mm), [`c9b2`], name: <merge>, radius: 4.5mm),
-    node((0mm, -64mm), [`000f`], name: <deep-head>, radius: 4.5mm,
-      fill: green.lighten(85%)),
-    node((0mm, -86mm), [`d8a2`], name: <recent>, radius: 4.5mm),
-    node((0mm, -100mm), [`00b9`], name: <head-4>, radius: 4.5mm,
-      fill: purple.lighten(85%)),
-    node((-16mm, -116mm), [`e4c1`], name: <loose-1>, radius: 4.5mm),
-    node((16mm, -116mm), [`f6d2`], name: <loose-2>, radius: 4.5mm),
-
-    ..if fragments { (
-    node(
-      name: <fragment-1>,
-      enclose: (<root>, <shared>, <upper>, <head-1>),
-      shape: rect, corner-radius: 3mm, inset: 3mm,
-      stroke: (paint: blue, thickness: 1pt),
-      fill: blue.transparentize(94%), layer: -2,
-    ),
-    node(
-      name: <fragment-2>,
-      enclose: (<root>, <shared>, <lower>, <head-2>),
-      shape: rect, corner-radius: 3mm, inset: 4mm,
-      stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
-      fill: orange.transparentize(94%), layer: -1,
-    ),
-    node(
-      // Enclose the commits directly, with room for both inner outlines.
-      enclose: (<root>, <shared>, <upper>, <lower>, <head-1>, <head-2>, <merge>, <deep-head>),
-      shape: rect, corner-radius: 3mm, inset: 9mm,
-      stroke: (paint: green.darken(30%), thickness: 1.2pt),
-      fill: green.transparentize(96%), layer: -3,
-    ),
-    node(
-      // 000f is F4's boundary, not one of its included commits.
-      enclose: (<recent>, <head-4>),
-      shape: rect, corner-radius: 3mm, inset: 3mm,
-      stroke: (paint: purple, thickness: 1pt, dash: "dashed"),
-      fill: purple.transparentize(94%), layer: -1,
-    ),
-    // Separate labels keep the narrow fragment outlines free of text.
-    node((-19mm, -6mm), text(blue, size: 9pt)[F1 ($n = 2$)],
-      shape: rect, stroke: none, fill: none),
-    node((20mm, -6mm), text(orange.darken(25%), size: 9pt)[F2 ($n = 2$)],
-      shape: rect, stroke: none, fill: none),
-    node((-59mm, -60mm), text(green.darken(30%), size: 9pt)[F3 ($n = 3$)],
-      shape: rect, stroke: none, fill: none),
-    node((28mm, -92mm), text(purple, size: 9pt)[F4 ($n = 2$)],
-      shape: rect, stroke: none, fill: none),
-    node((48mm, -116mm), text(size: 9pt)[Loose commits],
-      shape: rect, stroke: none, fill: none),
-    ) } else { () },
-
-    edge(<shared>, <root>, "-|>"),
-    edge(<upper>, <shared>, "-|>"),
-    edge(<lower>, <shared>, "-|>"),
-    edge(<head-1>, <upper>, "-|>"),
-    edge(<head-2>, <lower>, "-|>"),
-    edge(<merge>, <head-1>, "-|>"),
-    edge(<merge>, <head-2>, "-|>"),
-    edge(<deep-head>, <merge>, "-|>"),
-    edge(<recent>, <deep-head>, "-|>"),
-    edge(<head-4>, <recent>, "-|>"),
-    edge(<loose-1>, <head-4>, "-|>"),
-    edge(<loose-2>, <merge>, "-|>", bend: -45deg),
-)
 
 = Sedimentree Fixups
 
@@ -113,7 +31,7 @@ fragment boundaries:
 
 
 #figure(
-  commit-graph(fragments: false),
+  commit-graph(example-commits, fragments: example-fragments, show-fragments: false),
   caption: [
     A commit graph with fragment boundaries coloured. Root is at the top and
     arrows point from child to parent.
@@ -124,7 +42,7 @@ This can be split into the following fragments:
 
 
 #figure(
-  commit-graph(),
+  commit-graph(example-commits, fragments: example-fragments, annotations: example-annotations),
   caption: [
     A commit graph with four fragments. F3 (depth 3) contains F1 and F2
     (depth 2). F4 is a newer depth 2 fragment. Two loose commits are not
@@ -137,59 +55,10 @@ will tend to be earlier in the commit graph, and shallower fragments which are
 not contained in deeper fragments will tend to be later in the commit graph.
 Hence the name (sedimentry rocks are older the deeper you go).
 
-// Share the geometry between the full and minimal views. Filtering happens
-// after assigning column indices, so removing items never shifts the others.
-#let sedimentree-layers(minimal: false) = diagram(
-    node-stroke: 0.7pt,
-    node-fill: white,
-
-    node((0mm, 0mm), align(right)[Commits],
-      width: 24mm, stroke: none),
-    node((0mm, -20mm), align(right)[Depth 2],
-      width: 24mm, stroke: none),
-    node((0mm, -40mm), align(right)[Depth 3],
-      width: 24mm, stroke: none),
-
-    // One column per commit, grouped by containment rather than chronology.
-    // F1-only | shared by F1/F2 | F2-only | F3-only | F4 | loose.
-    ..("b7c2", "00d4", "a1b3", "a8e5", "f391", "00e6",
-       "c9b2", "000f", "d8a2", "00b9", "e4c1", "f6d2")
-      .enumerate()
-      .filter(((i, hash)) => not minimal or i >= 10)
-      .map(((i, hash)) => node(
-        ((30 + 10 * i) * 1mm, 0mm), text(size: 7.5pt, raw(hash)),
-        shape: rect, width: 9mm, height: 10mm,
-        inset: 0.5mm, corner-radius: 1mm,
-      )),
-
-    // Bar edges align with the outer edges of the included commit columns.
-    // F1 spans columns 0–3; F2 spans 2–5. Their shared columns overlap
-    // on the same depth row, with distinct outlines and blended shading.
-    ..if minimal { () } else { (
-      node((45mm, -20mm), align(left)[F1],
-        shape: rect, width: 39mm, height: 12mm,
-        inset: 3mm, corner-radius: 2mm,
-        stroke: blue, fill: blue.transparentize(90%)),
-      node((65mm, -20mm), align(right)[F2],
-        shape: rect, width: 39mm, height: 12mm,
-        inset: 3mm, corner-radius: 2mm,
-        stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
-        fill: orange.transparentize(90%)),
-    ) },
-    node((115mm, -20mm), [F4],
-      shape: rect, width: 19mm, height: 12mm, corner-radius: 2mm,
-      stroke: (paint: purple, thickness: 1pt, dash: "dashed"),
-      fill: purple.lighten(90%)),
-
-    // F3 spans columns 0–7, including F1, F2, c9b2, and 000f.
-    // F4 starts in column 8, so its boundary 000f is visibly excluded.
-    node((65mm, -40mm), [F3],
-      shape: rect, width: 79mm, height: 12mm, corner-radius: 2mm,
-      stroke: green.darken(30%), fill: green.lighten(90%)),
-)
+The commit graph above can be visualized like this:
 
 #figure(
-  sedimentree-layers(),
+  layer-diagram(example-commits, example-fragments, order: example-order),
   caption: [
     The same graph as a layer diagram, with one row per depth. Aligned spans
     show containment: F1 and F2 share commits, and F3 contains both fragments.
@@ -202,7 +71,7 @@ turn contain a bunch of loose commits. By removing all these redundant entries
 we can summarize the tree like this:
 
 #figure(
-  sedimentree-layers(minimal: true),
+  layer-diagram(example-commits, example-fragments, order: example-order, minimal: true),
   caption: [
     The same layers with redundant entries removed, without moving the remaining
     items. Commits covered by fragments and fragments F1 and F2 are omitted.
@@ -326,45 +195,11 @@ For example, consider this tree where we have two fragments at depth 2 and one
 at depth 4.
 
 #figure([
-  #diagram(
-    node-stroke: 0.7pt,
-    node-fill: white,
-
-    node((0mm, 0mm), align(right)[Commits],
-      width: 24mm, stroke: none),
-    node((0mm, -20mm), align(right)[Depth 2],
-      width: 24mm, stroke: none),
-    node((0mm, -40mm), align(right)[Depth 3],
-      width: 24mm, stroke: none),
-    node((0mm, -60mm), align(right)[Depth 4],
-      width: 24mm, stroke: none),
-
-    // An independent example: columns follow a hidden linear history.
-    // G excludes column 0; A excludes column 1; B excludes column 3.
-    ..("0000a", "00a0", "a8e5", "00a1", "b7c2", "00a2", "c9b2", "0000b")
-      .enumerate().map(((i, hash)) => node(
-        ((30 + 14 * i) * 1mm, 0mm), text(size: 8pt, raw(hash)),
-        shape: rect, width: 13mm, height: 10mm,
-        inset: 0.5mm, corner-radius: 1mm,
-        fill: if i == 0 { gray.lighten(90%) }
-          else if i == 3 { blue.lighten(85%) }
-          else if i == 5 { orange.lighten(85%) }
-          else if i == 7 { green.lighten(85%) }
-          else { white },
-      )),
-
-    node((65mm, -20mm), [A],
-      shape: rect, width: 27mm, height: 12mm, corner-radius: 2mm,
-      stroke: blue, fill: blue.lighten(90%)),
-    node((93mm, -20mm), [B],
-      shape: rect, width: 27mm, height: 12mm, corner-radius: 2mm,
-      stroke: (paint: orange.darken(25%), thickness: 1pt, dash: "dashed"),
-      fill: orange.lighten(90%)),
-    node((86mm, -40mm), text(gray, size: 9pt)[No depth-three fragments],
-      shape: rect, stroke: none),
-    node((86mm, -60mm), [G],
-      shape: rect, width: 97mm, height: 12mm, corner-radius: 2mm,
-      stroke: green.darken(30%), fill: green.lighten(90%)),
+  #layer-diagram(
+    checkpoint-commits, checkpoint-fragments,
+    depths: (2, 3, 4), column-spacing: 14mm, commit-width: 13mm,
+    commit-text-size: 8pt, highlight-heads: true,
+    empty-labels: ("3": [No depth-three fragments]),
   )
 
   #v(3mm)
@@ -375,9 +210,9 @@ at depth 4.
       columns: (1fr, 1fr, 1fr), inset: 4pt, stroke: none,
       [*Fragment*], [*Head*], [*Excluded boundary*],
       table.hline(stroke: 0.5pt + gray),
-      [A], [`00a1`], [`00a0`],
-      [B], [`00a2`], [`00a1`],
-      [G], [`0000b`], [`0000a`],
+      ..checkpoint-fragments.map(f => (
+        [#f.id], raw(f.head), f.boundaries.map(raw).join([, ]),
+      )).flatten(),
     )
   ])
 ],
@@ -390,6 +225,20 @@ at depth 4.
     A or B without additional containment information.
   ],
 )
+
+In this scenario there is no way to know that `G` actually contains the commits
+for `A` and `B` because all we know about `G` is that it starts at `000a` and
+ends at `000b`, neither of which are mentioned by the boundaries of `A` or `B`.
+
+To get around this we include in all fragments with $depth > 2$ the boundaries
+of all $depth = 2$ commits. We call these checkpoint commits. If we draw the
+example above with the checkpoint commits you can see that the fact that `G`
+contains `A` and `B` is visible as the boundaries of `A` and `B` are in `G`s
+checkpoint commits (all boundary commits are _at least_ $depth = 2$ so any 
+fragment contains the boundaries of all commits inside it as checkpoint
+commits)
+
+
 
 === Dangling Loose Commits
 
