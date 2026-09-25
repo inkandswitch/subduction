@@ -33,7 +33,13 @@
     graph-label-color: orange.darken(25%),
   ),
   (
-    id: "F3", depth: 3, head: "000f", boundaries: (),
+    id: "F3", depth: 2, head: "000f", boundaries: ("00d4", "00e6"),
+    members: ("c9b2", "000f"),
+    color: teal, stroke: (paint: teal.darken(20%), thickness: 1pt),
+    graph-label-pos: (-23mm, -55mm), graph-label-color: teal.darken(20%),
+  ),
+  (
+    id: "F5", depth: 3, head: "000f", boundaries: (),
     members: ("a1b3", "a8e5", "b7c2", "f391", "00d4", "00e6", "c9b2", "000f"),
     color: green, stroke: green.darken(30%),
     graph-inset: 9mm, graph-layer: -3, graph-label-pos: (-59mm, -60mm),
@@ -48,7 +54,7 @@
   ),
 )
 
-// F1-only | shared by F1/F2 | F2-only | F3-only | F4 | loose.
+// Within F5: F1-only | shared by F1/F2 | F2-only | F3. Then F4 | loose.
 // Every fragment occupies a contiguous span in this order.
 #let example-order = (
   "b7c2", "00d4", "a1b3", "a8e5", "f391", "00e6",

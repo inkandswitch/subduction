@@ -1,5 +1,5 @@
 // Run: typst compile --root adrs adrs/tests/diagrams.typ /tmp/diagram-tests.pdf
-#import "../diagrams.typ": commit-graph, layer-diagram, minimal-cover
+#import "../diagrams.typ": commit-graph, layer-diagram, minimal-cover, commit-fill
 #import "../sedimentree-examples.typ": example-commits, example-fragments, example-order, checkpoint-commits, checkpoint-fragments
 
 #import "../sedimentree-examples.typ": dangling-commits, dangling-fragments
@@ -8,7 +8,23 @@
 
 #let cover = minimal-cover(example-commits, example-fragments)
 #assert.eq(cover.commits, ("e4c1", "f6d2"))
-#assert.eq(cover.fragments, ("F3", "F4"))
+#assert.eq(cover.fragments, ("F5", "F4"))
+
+// The same head has both a shallow fragment and a deeper containing fragment.
+#let f3 = example-fragments.find(f => f.id == "F3")
+#let f5 = example-fragments.find(f => f.id == "F5")
+#assert.eq(f3.depth, 2)
+#assert.eq(f5.depth, 3)
+#assert.eq(f3.head, f5.head)
+#assert.eq(f3.members, ("c9b2", "000f"))
+#assert.eq(f3.boundaries, ("00d4", "00e6"))
+#assert(f3.boundaries.all(id => id not in f3.members))
+#assert(f3.members.all(id => id in f5.members))
+#let shared-head = example-commits.find(c => c.id == "000f")
+#assert.eq(commit-fill(shared-head, example-fragments, highlight-heads: true),
+  f5.color.lighten(85%))
+#assert.eq(commit-fill(shared-head, example-fragments.rev(), highlight-heads: true),
+  f5.color.lighten(85%))
 #assert.eq(minimal-cover(dangling-commits, dangling-fragments),
   (commits: (), fragments: ("F",)))
 

@@ -42,7 +42,8 @@
   if "fill" in c { return c.fill }
   if highlight-heads {
     let heads = fragments.filter(f => f.head == c.id)
-    if heads.len() > 0 { return heads.first().color.lighten(85%) }
+    // A commit can head fragments at several depths; colour it by the deepest.
+    if heads.len() > 0 { return heads.sorted(key: f => f.depth).last().color.lighten(85%) }
   }
   white
 }

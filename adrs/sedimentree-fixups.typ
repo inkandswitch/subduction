@@ -45,8 +45,9 @@ This can be split into the following fragments:
 #figure(
   commit-graph(example-commits, fragments: example-fragments, annotations: example-annotations),
   caption: [
-    A commit graph with four fragments. F3 (depth 3) contains F1 and F2
-    (depth 2). F4 is a newer depth 2 fragment. Two loose commits are not
+    A commit graph with five fragments. F5 (depth 3) contains F1, F2, and F3
+    (depth 2). F3 and F5 share the head `000f`, but F3 stops before its boundaries
+    `00d4` and `00e6`. F4 is a newer depth 2 fragment. Two loose commits are not
     contained in any fragment.
   ],
 )
@@ -62,12 +63,12 @@ The commit graph above can be visualized like this:
   layer-diagram(example-commits, example-fragments, order: example-order),
   caption: [
     The same graph as a layer diagram, with one row per depth. Aligned spans
-    show containment: F1 and F2 share commits, and F3 contains both fragments.
+    show containment: F1 and F2 share commits, and F5 contains F1, F2, and F3.
   ],
 )
 
 From this diagram we can see that there is some redundancy here which we can
-exploit. F3 contains everything in F1 and F2, which in
+exploit. F5 contains everything in F1, F2, and F3, which in
 turn contain a bunch of loose commits. By removing all these redundant entries
 we can summarize the tree like this:
 
@@ -75,8 +76,8 @@ we can summarize the tree like this:
   layer-diagram(example-commits, example-fragments, order: example-order, minimal: true),
   caption: [
     The same layers with redundant entries removed, without moving the remaining
-    items. Commits covered by fragments and fragments F1 and F2 are omitted.
-    F3, F4, and the uncovered loose commits `e4c1` and `f6d2` still represent
+    items. Commits covered by fragments and fragments F1, F2, and F3 are omitted.
+    F5, F4, and the uncovered loose commits `e4c1` and `f6d2` still represent
     the entire graph.
   ],
 )
@@ -293,49 +294,123 @@ common sequence of events:
 
 Alice doesn't send the final commit in the chain for whatever reason.
 
+#figure({
+  set text(size: 9pt)
+
+  let commit-icon(id) = rect(
+    width: 9mm, height: 6mm, radius: 1mm, inset: 0pt,
+    stroke: 0.6pt,
+    fill: if id == "00d5" { green.lighten(85%) } else { white },
+    align(center + horizon, text(size: 7.5pt, raw(id))),
+  )
+  let fragment-icon() = rect(
+    width: 29mm, height: 6mm, radius: 1mm, inset: 0pt,
+    stroke: 0.6pt + green.darken(30%), fill: green.lighten(90%),
+    align(center + horizon)[F],
+  )
+  // Keep the same three columns in every snapshot. F covers all three,
+  // even when the head is not represented as a separate loose commit.
+  let cover(loose: (), fragment: false) = {
+    if loose.len() == 0 and not fragment {
+      text(gray, size: 8pt)[Empty]
+    } else {
+      stack(dir: ttb, spacing: 1mm,
+        grid(columns: (9mm, 9mm, 9mm), rows: (6mm,), column-gutter: 1mm,
+          ..("a1b2", "b3c4", "00d5").map(id =>
+            if id in loose { commit-icon(id) } else { [] }),
+        ),
+        if fragment { fragment-icon() } else { [] },
+      )
+    }
+  }
+  let state(x, y, note, loose: (), fragment: false) = node(
+    (x, y), align(center, stack(dir: ttb, spacing: 2pt,
+      text(size: 8pt, note), cover(loose: loose, fragment: fragment))),
+    shape: rect, width: 37mm, inset: 2mm, corner-radius: 1.5mm,
+    stroke: 0.4pt + gray.lighten(50%), fill: white,
+  )
+  let message(y, title, picture) = {
+    edge((0mm, y), (88mm, y), "-|>", snap-to: none)
+    node((44mm, y + 9mm),
+      align(center, stack(dir: ttb, spacing: 2pt,
+        text(size: 8pt, title), picture)),
+      shape: rect, inset: 1pt, stroke: none, fill: white)
+  }
+
+  diagram(
+    node((0mm, 0mm), [*Alice*], stroke: none),
+    node((88mm, 0mm), [*Relay*], stroke: none),
+    ..(0mm, 88mm).map(x => edge(
+      (x, -5mm), (x, -207mm),
+      stroke: (paint: gray, thickness: 0.5pt, dash: "dashed"),
+      snap-to: none, layer: -10,
+    )),
+    state(0mm, -14mm, [Cover]),
+    state(88mm, -14mm, [Cover]),
+
+    state(0mm, -36mm, [Creates `a1b2`], loose: ("a1b2",)),
+    message(-54mm, [1. Commit payload], commit-icon("a1b2")),
+    state(88mm, -68mm, [Cover], loose: ("a1b2",)),
+
+    state(0mm, -82mm, [Creates `b3c4`], loose: ("a1b2", "b3c4")),
+    message(-100mm, [2. Commit payload], commit-icon("b3c4")),
+    state(88mm, -114mm, [Cover], loose: ("a1b2", "b3c4")),
+
+    state(0mm, -136mm, [Creates `00d5` locally],
+      loose: ("a1b2", "b3c4", "00d5")),
+    state(0mm, -158mm, [Builds F; cover is now F], fragment: true),
+    message(-178mm, [3. Fragment payload], fragment-icon()),
+    state(88mm, -194mm, [Redundant cover],
+      loose: ("a1b2", "b3c4"), fragment: true),
+  )
+},
+  caption: [
+    How dangling loose commits arise. Alice sends `a1b2` and `b3c4` separately,
+    then builds and sends F without sending its head `00d5` as a loose commit.
+    Alice knows F contains all three commits, so her cover is just F. The relay
+    receives F but lacks the commit graph needed to establish containment;
+    it retains `a1b2` and `b3c4` alongside F. Cards show the current cover,
+    not deletion of stored payloads. Time flows downward.
+  ],
+)<fig:dangling-sync>
+
+We're now in a situation where the relay will constantly oversend the loose 
+commits.
+
+=== $O(n)$ Bandwidth Growth
+
+Including checkpoint commits in fragment metadata means that whilst the number
+of fragments required to cover a deep, narrow commit graph is $O(log n)$, the
+checkpoint metadata in that cover grows with $O(n)$.
+
+This is particularly problematic for simple LWW CRDTs. Consider a presence CRDT
+that publishes each user's last seen mouse position. With 1,000 users updating
+once per second, after a day the minimal cover is about 4 MB
+of checkpoint data, even though the current state holds only 1,000 positions.
+A checkpoint-free, logarithmic cover would instead need only a few hundred
+entries in an idealized linear history, roughly 10 kB of identifiers.
+#footnote[
+  Assuming uniformly distributed hashes, the history contains
+  $1000 times 86400 = 86400000$ commits. Two leading hexadecimal zeros select
+  roughly one commit in 256, giving 337,500 checkpoints. At 12 bytes each,
+  these occupy 4,050,000 bytes (4.05 MB, about 3.86 MiB), or 0.375 bits per
+  original commit, before overlap and framing overhead.
+
+  Under the same hexadecimal-depth rule, a linear history of this size has an
+  expected minimal cover of approximately 64 fragments and 255 loose commits.
+  One 32-byte identifier per entry gives
+  $(64 + 255) times 32 = 10208$ bytes (about 10.2 kB). 
+]
+
+Simple LWW CRDTs for this kind of data are something we would very much like to
+support!
+
+
 == Fixups
 
-The solution here is to replace the checkpoint commits with a "fixup"
-operation. The simplest version of this idea is that when a client with access
-to the cleartext receives a sedimentree summary from another peer it can
-send the peer a "fixup" operation describing any redundancies it computed in
-the tree the remote advertised.
-
-In the loose commit example above this would mean that the relay peer would
-send the sedimentree summary to the client and the client would respond with
-a fixup saying "this loose commit is actually contained in this fragment"
-
-=== Propagation
-
-A major problem with fixup operations is that federating relay peers - who do
-not load the commit graph - are unable to help each other resolve redundancy.
-To solve this we will need to store and propagate fixups between peers. The
-most naive version of this would be to store all the fixup operations we have
-ever received and forward them all. This will destroy most of the bandwidth
-benefits of using a sedimentree in the first place.
-
-Instead we should note that most of the time, once a fixup has been applied it
-will not be needed again. Future peers will work with the minimized tree.
-Fixups are mostly required for fixing transient redundancy. We do want fixups
-to propagate through the network, but it's okay for old ones to be lost once
-most of the network has applied the fixup.
-
-=== Fixup Lists
-
-Considering all the above, we define a new part of the  sedimentree data
-structure. As well as the fragments and loose commits (which now do not have
-checkpoint commits) we also have a fixup list. This is a fixed length list of
-fixup operations which describe redundancies in the tree.
-
-Each fixup has, along with the fragments and/or loose commits it applies to,
-a number which we call it's "inactivity". This is used to keep track of fixups
-which have been used recently.
-
-When we merge two sedimentrees we first merge the trees, then we look through
-the fixup list for any fixups which can be applied to the merged tree. For
-every fixup which can be applied we set it's inactivity to zero. Finally,
-we order the fixup list by inactivity, and then by hash, and discard the tail
-of the list if it is longer than the maximum length.
-
-In this manner fixups which are currently useful will be propagated through the
-network and then slowly replaced by new fixups as they are needed.
+The solution I propose in this document is to add the concept of a "fixup". A 
+"fixup" is a small piece of data which says "you can replace fragment `A` with
+`B`". The idea here is that when a peer who has the clear text (or is otherwise
+willing to materialize the commit graph) is synchronizing with a remote peer
+they can detectredundancy in the remote representation of the sedimentree and
+inform the remote with a fixup message.
