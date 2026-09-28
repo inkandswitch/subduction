@@ -44,7 +44,7 @@ use keyhive_core::{
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::{
-        agent::Agent, group::membership_operation::MembershipOperation, identifier::Identifier,
+        group::membership_operation::MembershipOperation, identifier::Identifier,
         individual::op::KeyOp, public::Public,
     },
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
@@ -254,10 +254,10 @@ where
             .map_err(ProtocolError::InvalidIdentifier)?;
         let events = {
             let keyhive = self.keyhive.lock().await;
-            let Some(agent) = keyhive.get_agent(id).await else {
+            if keyhive.get_agent(id).await.is_none() {
                 return Ok(None);
-            };
-            sync_events_for_agent(&keyhive, &agent).await
+            }
+            sync_events_for_agent(&keyhive, id).await
         };
 
         collect_serialized_events(events).map(Some)
@@ -977,23 +977,21 @@ where
         let (our_events, their_events, public_events) = {
             let keyhive = { self.keyhive.lock().await.dupe() };
 
-            let our_agent = keyhive.get_agent(our_id).await;
-            let their_agent = keyhive.get_agent(their_id).await;
-
-            match (our_agent, their_agent) {
-                (Some(ref our_agent), Some(ref their_agent)) => {
-                    let our_events = sync_events_for_agent(&keyhive, our_agent).await;
-                    let their_events = sync_events_for_agent(&keyhive, their_agent).await;
-                    let public_events: Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>> =
-                        if let Some(ref public_agent) = keyhive.get_agent(Public.id()).await {
-                            sync_events_for_agent(&keyhive, public_agent).await
-                        } else {
-                            Map::new()
-                        };
-                    (our_events, their_events, public_events)
-                }
-                _ => return Ok(None),
+            if keyhive.get_agent(our_id).await.is_none()
+                || keyhive.get_agent(their_id).await.is_none()
+            {
+                return Ok(None);
             }
+
+            let our_events = sync_events_for_agent(&keyhive, our_id).await;
+            let their_events = sync_events_for_agent(&keyhive, their_id).await;
+            let public_events: Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>> =
+                if keyhive.get_agent(Public.id()).await.is_some() {
+                    sync_events_for_agent(&keyhive, Public.id()).await
+                } else {
+                    Map::new()
+                };
+            (our_events, their_events, public_events)
         };
 
         let mut result = AgentHashMap::new();
@@ -1299,7 +1297,7 @@ where
 /// Get sync-relevant events for an agent: membership, prekey, and CGKA operations.
 async fn sync_events_for_agent<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>(
     keyhive: &Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>,
-    agent: &Agent<Async, Signer, CRef, Listener>,
+    who: Identifier,
 ) -> Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>
 where
     Async: future_form::FutureForm,
@@ -1313,7 +1311,7 @@ where
     Rng: rand::CryptoRng + rand::RngCore,
 {
     keyhive
-        .static_events_for_agent(agent)
+        .static_events_for_agent(who)
         .await
         .into_iter()
         .collect()
@@ -1429,17 +1427,14 @@ mod tests {
         },
     };
     use future_form::Local;
-    use keyhive_core::{
-        access::Access,
-        principal::{identifier::Identifier, membered::Membered, peer::Peer},
-    };
+    use keyhive_core::{access::Access, principal::membered::Membered};
     use nonempty::nonempty;
 
     /// Helper to create a test protocol instance.
     async fn make_protocol() -> (TestProtocol, SimpleKeyhive) {
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
-        let cc = keyhive.contact_card().await.unwrap();
+        let cc = keyhive.generate_contact_card().await.unwrap();
         let storage = MemoryKeyhiveStorage::new();
         let shared = Arc::new(Mutex::new(keyhive.clone()));
         let protocol = TestProtocol::new(shared, storage, peer_id, cc);
@@ -1718,8 +1713,8 @@ mod tests {
         let bob_id = bob_proto.peer_id.clone();
 
         // Exchange contact cards at the keyhive level
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.generate_contact_card().await.unwrap();
+        let bob_cc = bob_kh.generate_contact_card().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -1779,8 +1774,8 @@ mod tests {
         let bob_id = keyhive_peer_id(&bob_kh);
 
         // Exchange contact cards
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.generate_contact_card().await.unwrap();
+        let bob_cc = bob_kh.generate_contact_card().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -1934,8 +1929,8 @@ mod tests {
         let alice_id = keyhive_peer_id(&alice_kh);
         let bob_id = keyhive_peer_id(&bob_kh);
 
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.generate_contact_card().await.unwrap();
+        let bob_cc = bob_kh.generate_contact_card().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -1986,8 +1981,8 @@ mod tests {
         let alice_id = keyhive_peer_id(&alice_kh);
         let bob_id = keyhive_peer_id(&bob_kh);
 
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.generate_contact_card().await.unwrap();
+        let bob_cc = bob_kh.generate_contact_card().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -2035,11 +2030,11 @@ mod tests {
         let other = make_keyhive().await;
         let member = make_keyhive().await;
         let member_id = keyhive_peer_id(&member);
-        let member_cc = member.contact_card().await.unwrap();
+        let member_cc = member.generate_contact_card().await.unwrap();
         other.receive_contact_card(&member_cc).await.unwrap();
 
         let other_id = keyhive_peer_id(&other);
-        let other_cc = other.contact_card().await.unwrap();
+        let other_cc = other.generate_contact_card().await.unwrap();
         let other_proto = TestProtocol::new(
             Arc::new(Mutex::new(other.clone())),
             MemoryKeyhiveStorage::new(),
@@ -2048,8 +2043,7 @@ mod tests {
         );
 
         // Group-creation delegation.
-        let group = other.generate_group(vec![]).await.unwrap();
-        let group_id = group.lock().await.group_id();
+        let group_id = other.generate_group(vec![]).await.unwrap();
         let before_add: Vec<EventHash> = other_proto
             .get_events_for_agent(&other_id)
             .await
@@ -2063,17 +2057,9 @@ mod tests {
         );
 
         // Add-member delegation, which depends on the group-creation one.
-        let agent = other
-            .get_agent(member_id.to_identifier().unwrap())
-            .await
-            .unwrap();
+        let member_identifier = member_id.to_identifier().unwrap();
         other
-            .add_member(
-                agent,
-                &Membered::Group(group_id, group.clone()),
-                Access::Read,
-                &[],
-            )
+            .add_member(member_identifier, group_id, Access::Read, &[])
             .await
             .unwrap();
         let dependent: Vec<Arc<[u8]>> = other_proto
@@ -2105,7 +2091,7 @@ mod tests {
             Arc::new(Mutex::new(dst_off.clone())),
             storage.clone(),
             keyhive_peer_id(&dst_off),
-            dst_off.contact_card().await.unwrap(),
+            dst_off.generate_contact_card().await.unwrap(),
         );
         let before_off = proto_off.total_ops().await;
         proto_off.ingest_events(&dependent).await.unwrap();
@@ -2122,7 +2108,7 @@ mod tests {
             Arc::new(Mutex::new(dst_on.clone())),
             storage.clone(),
             keyhive_peer_id(&dst_on),
-            dst_on.contact_card().await.unwrap(),
+            dst_on.generate_contact_card().await.unwrap(),
         )
         .with_storage_recovery();
         let before_on = proto_on.total_ops().await;
@@ -2266,7 +2252,7 @@ mod tests {
     async fn ingest_from_storage_via_protocol() {
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
-        let cc = keyhive.contact_card().await.unwrap();
+        let cc = keyhive.generate_contact_card().await.unwrap();
 
         let storage = MemoryKeyhiveStorage::new();
 
@@ -2305,23 +2291,13 @@ mod tests {
         // Alice creates a group and adds Bob as a Read member
         let (group_id, bob_individual_id) = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
-            let group_id = group.lock().await.group_id();
+            let group_id = kh.generate_group(vec![]).await.unwrap();
 
-            // Get Bob's Individual on Alice's keyhive
             let bob_identifier = bob_id.to_identifier().unwrap();
-            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
+            kh.add_member(bob_identifier, group_id, Access::Read, &[])
+                .await
+                .unwrap();
 
-            kh.add_member(
-                bob_agent,
-                &Membered::Group(group_id, group.clone()),
-                Access::Read,
-                &[],
-            )
-            .await
-            .unwrap();
-
-            let bob_identifier: Identifier = bob_identifier;
             (group_id, bob_identifier)
         };
 
@@ -2329,7 +2305,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.get_group(group_id).await.is_none(),
+                !kh.has_group(group_id).await,
                 "Bob should not have the group before sync"
             );
         }
@@ -2348,13 +2324,12 @@ mod tests {
         // After sync: Bob should have the group and his membership
         {
             let kh = bob_kh.lock().await;
-            let group = kh.get_group(group_id).await;
-            assert!(group.is_some(), "Bob should have the group after sync");
+            assert!(
+                kh.has_group(group_id).await,
+                "Bob should have the group after sync"
+            );
 
-            let group_ref = group.unwrap();
-            let members = kh
-                .reachable_members(Membered::Group(group_id, group_ref))
-                .await;
+            let members = kh.reachable_members(group_id).await;
             assert!(
                 members.contains_key(&bob_individual_id),
                 "Bob should be a member of the group"
@@ -2378,36 +2353,23 @@ mod tests {
         // Alice creates group, adds Bob, creates doc owned by group
         let doc_id = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
-            let group_id = group.lock().await.group_id();
+            let group_id = kh.generate_group(vec![]).await.unwrap();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
-            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
-
-            kh.add_member(
-                bob_agent,
-                &Membered::Group(group_id, group.clone()),
-                Access::Read,
-                &[],
-            )
-            .await
-            .unwrap();
-
-            let doc = kh
-                .generate_doc(
-                    vec![Peer::Group(group_id, group.clone())],
-                    nonempty![[0u8; 32]],
-                )
+            kh.add_member(bob_identifier, group_id, Access::Read, &[])
                 .await
                 .unwrap();
-            doc.lock().await.doc_id()
+
+            kh.generate_doc(vec![group_id.into()], nonempty![[0u8; 32]])
+                .await
+                .unwrap()
         };
 
         // Before sync: Bob should not have the document
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.get_document(doc_id).await.is_none(),
+                !kh.has_document(doc_id).await,
                 "Bob should not have the document before sync"
             );
         }
@@ -2426,8 +2388,10 @@ mod tests {
         // After sync: Bob should have the document and it should be reachable
         {
             let kh = bob_kh.lock().await;
-            let doc = kh.get_document(doc_id).await;
-            assert!(doc.is_some(), "Bob should have the document after sync");
+            assert!(
+                kh.has_document(doc_id).await,
+                "Bob should have the document after sync"
+            );
 
             let reachable = kh.reachable_docs().await;
             assert!(
@@ -2465,17 +2429,17 @@ mod tests {
         // Before sync: each peer only has their own group
         {
             let alice = alice_kh.lock().await;
-            assert!(alice.get_group(alice_group_id).await.is_some());
+            assert!(alice.has_group(alice_group_id).await);
             assert!(
-                alice.get_group(bob_group_id).await.is_none(),
+                !alice.has_group(bob_group_id).await,
                 "Alice should not have Bob's group before sync"
             );
         }
         {
             let bob = bob_kh.lock().await;
-            assert!(bob.get_group(bob_group_id).await.is_some());
+            assert!(bob.has_group(bob_group_id).await);
             assert!(
-                bob.get_group(alice_group_id).await.is_none(),
+                !bob.has_group(alice_group_id).await,
                 "Bob should not have Alice's group before sync"
             );
         }
@@ -2503,13 +2467,13 @@ mod tests {
         // Verify both keyhives have both groups
         {
             let alice = alice_kh.lock().await;
-            assert!(alice.get_group(alice_group_id).await.is_some());
-            assert!(alice.get_group(bob_group_id).await.is_some());
+            assert!(alice.has_group(alice_group_id).await);
+            assert!(alice.has_group(bob_group_id).await);
         }
         {
             let bob = bob_kh.lock().await;
-            assert!(bob.get_group(alice_group_id).await.is_some());
-            assert!(bob.get_group(bob_group_id).await.is_some());
+            assert!(bob.has_group(alice_group_id).await);
+            assert!(bob.has_group(bob_group_id).await);
         }
 
         // Verify membership op counts match
@@ -2517,17 +2481,15 @@ mod tests {
             let alice = alice_kh.lock().await;
             let bob = bob_kh.lock().await;
 
-            let alice_self = alice
-                .get_agent(alice_id.to_identifier().unwrap())
-                .await
-                .unwrap();
-            let bob_self = bob
-                .get_agent(bob_id.to_identifier().unwrap())
-                .await
-                .unwrap();
+            let alice_self = alice_id.to_identifier().unwrap();
+            let bob_self = bob_id.to_identifier().unwrap();
 
-            let alice_ops = alice.membership_ops_for_agent(&alice_self).await;
-            let bob_ops = bob.membership_ops_for_agent(&bob_self).await;
+            let alice_ops = alice.membership_ops_for_agent(alice_self).await;
+            let bob_ops = bob.membership_ops_for_agent(bob_self).await;
+            assert!(
+                !alice_ops.is_empty(),
+                "alice should reach membership ops for both groups after sync"
+            );
             assert_eq!(
                 alice_ops.len(),
                 bob_ops.len(),
@@ -2560,20 +2522,12 @@ mod tests {
         // Alice creates group and adds Bob
         let group_id = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
-            let group_id = group.lock().await.group_id();
+            let group_id = kh.generate_group(vec![]).await.unwrap();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
-            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
-
-            kh.add_member(
-                bob_agent,
-                &Membered::Group(group_id, group.clone()),
-                Access::Read,
-                &[],
-            )
-            .await
-            .unwrap();
+            kh.add_member(bob_identifier, group_id, Access::Read, &[])
+                .await
+                .unwrap();
 
             group_id
         };
@@ -2582,7 +2536,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.get_group(group_id).await.is_none(),
+                !kh.has_group(group_id).await,
                 "Bob should not have the group before sync"
             );
         }
@@ -2602,7 +2556,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.get_group(group_id).await.is_some(),
+                kh.has_group(group_id).await,
                 "Bob should have the group after first sync"
             );
 
@@ -2621,10 +2575,9 @@ mod tests {
         // Alice revokes Bob from the group
         {
             let kh = alice_kh.lock().await;
-            let group = kh.get_group(group_id).await.unwrap();
             let bob_identifier = bob_id.to_identifier().unwrap();
 
-            kh.revoke_member(bob_identifier, true, &Membered::Group(group_id, group))
+            kh.revoke_member(bob_identifier, true, group_id)
                 .await
                 .unwrap();
         };
@@ -2700,14 +2653,14 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.get_group(group_id).await.is_none(),
+                !kh.has_group(group_id).await,
                 "Bob should not have the group before sync"
             );
         }
         {
             let kh = carol_kh.lock().await;
             assert!(
-                kh.get_group(group_id).await.is_none(),
+                !kh.has_group(group_id).await,
                 "Carol should not have the group before sync"
             );
         }
@@ -2726,7 +2679,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.get_group(group_id).await.is_some(),
+                kh.has_group(group_id).await,
                 "Bob should have the group after Alice→Bob sync"
             );
         }
@@ -2734,7 +2687,7 @@ mod tests {
         {
             let kh = carol_kh.lock().await;
             assert!(
-                kh.get_group(group_id).await.is_none(),
+                !kh.has_group(group_id).await,
                 "Carol should not have the group before Bob→Carol sync"
             );
         }
@@ -2753,16 +2706,13 @@ mod tests {
         // Verify Carol got the group and her membership
         {
             let kh = carol_kh.lock().await;
-            let group = kh.get_group(group_id).await;
             assert!(
-                group.is_some(),
+                kh.has_group(group_id).await,
                 "Carol should have the group after transitive sync"
             );
 
             let carol_identifier = carol_id.to_identifier().unwrap();
-            let members = kh
-                .reachable_members(Membered::Group(group_id, group.unwrap()))
-                .await;
+            let members = kh.reachable_members(group_id).await;
             assert!(
                 members.contains_key(&carol_identifier),
                 "Carol should be a member of the group"
@@ -3314,7 +3264,7 @@ mod tests {
     async fn fresh_client_gets_complete_deps_after_revocation_chain() {
         use keyhive_core::{
             access::Access,
-            principal::{agent::Agent, membered::Membered, public::Public},
+            principal::{identifier::Identifier, public::Public},
         };
 
         let kh_a = make_keyhive().await;
@@ -3332,16 +3282,12 @@ mod tests {
         let server_id = keyhive_peer_id(&kh_server);
         let c_id = keyhive_peer_id(&kh_c);
 
-        let b_identifier = kh_b.id().into();
-        let b_agent = kh_a.get_agent(b_identifier).await.unwrap();
+        let b_identifier: Identifier = kh_b.id().into();
 
-        let doc = kh_a
+        let doc_id = kh_a
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc_id = doc.lock().await.doc_id();
-        let membered = Membered::Document(doc_id, doc.clone());
-        let public_agent: Agent<_, _, _, _> = Public.individual().into();
 
         let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
         let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
@@ -3394,7 +3340,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered, Access::Edit, &[])
+                .add_member(Public.id(), doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3403,7 +3349,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(Public.id(), true, &membered)
+                .revoke_member(Public.id(), true, doc_id)
                 .await
                 .unwrap();
         }
@@ -3412,7 +3358,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(b_agent, &membered, Access::Edit, &[])
+                .add_member(b_identifier, doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3421,7 +3367,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(b_identifier, true, &membered)
+                .revoke_member(b_identifier, true, doc_id)
                 .await
                 .unwrap();
         }
@@ -3430,14 +3376,14 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered, Access::Edit, &[])
+                .add_member(Public.id(), doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
         sync_a_server!();
         sync_b_server!();
 
-        assert!(server_kh.lock().await.get_document(doc_id).await.is_some());
+        assert!(server_kh.lock().await.has_document(doc_id).await);
 
         let (server_conn_c, c_conn) = create_channel_pair(server_id.clone(), &c_id);
         server_proto
@@ -3467,10 +3413,7 @@ mod tests {
         }
 
         let c = c_kh.lock().await;
-        assert!(
-            c.get_document(doc_id).await.is_some(),
-            "C should have the doc"
-        );
+        assert!(c.has_document(doc_id).await, "C should have the doc");
         drop(c);
 
         let snapshot = c_proto.all_agent_events(&BTreeSet::new()).await.unwrap();
@@ -3502,9 +3445,7 @@ mod tests {
     /// through the protocol.
     #[tokio::test(flavor = "current_thread")]
     async fn all_agent_events_complete_after_protocol_sync() {
-        use keyhive_core::principal::{
-            agent::Agent, identifier::Identifier, membered::Membered, public::Public,
-        };
+        use keyhive_core::principal::{identifier::Identifier, public::Public};
 
         let kh_a = make_keyhive().await;
         let kh_b = make_keyhive().await;
@@ -3519,15 +3460,11 @@ mod tests {
         let server_id = keyhive_peer_id(&kh_server);
 
         let b_identifier: Identifier = kh_b.id().into();
-        let b_agent = kh_a.get_agent(b_identifier).await.unwrap();
 
-        let doc = kh_a
+        let doc_id = kh_a
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc_id = doc.lock().await.doc_id();
-        let membered = Membered::Document(doc_id, doc.clone());
-        let public_agent: Agent<_, _, _, _> = Public.individual().into();
 
         let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
         let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
@@ -3578,7 +3515,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered, Access::Edit, &[])
+                .add_member(Public.id(), doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3587,7 +3524,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(Public.id(), true, &membered)
+                .revoke_member(Public.id(), true, doc_id)
                 .await
                 .unwrap();
         }
@@ -3596,7 +3533,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(b_agent, &membered, Access::Edit, &[])
+                .add_member(b_identifier, doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3605,7 +3542,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(b_identifier, true, &membered)
+                .revoke_member(b_identifier, true, doc_id)
                 .await
                 .unwrap();
         }
@@ -3614,7 +3551,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered, Access::Edit, &[])
+                .add_member(Public.id(), doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3656,9 +3593,7 @@ mod tests {
     /// Doc 4: full chain: make public → revoke → add B → revoke B → make public.
     #[tokio::test(flavor = "current_thread")]
     async fn all_agent_events_complete_multiple_docs() {
-        use keyhive_core::principal::{
-            agent::Agent, identifier::Identifier, membered::Membered, public::Public,
-        };
+        use keyhive_core::principal::{identifier::Identifier, public::Public};
 
         let kh_a = make_keyhive().await;
         let kh_b = make_keyhive().await;
@@ -3673,35 +3608,24 @@ mod tests {
         let server_id = keyhive_peer_id(&kh_server);
 
         let b_identifier: Identifier = kh_b.id().into();
-        let b_agent = kh_a.get_agent(b_identifier).await.unwrap();
 
         // Create all four docs before wrapping in protocols.
         let _doc1 = kh_a
             .generate_doc(vec![], nonempty![[1u8; 32]])
             .await
             .unwrap();
-        let doc2 = kh_a
+        let doc2_id = kh_a
             .generate_doc(vec![], nonempty![[2u8; 32]])
             .await
             .unwrap();
-        let doc3 = kh_a
+        let doc3_id = kh_a
             .generate_doc(vec![], nonempty![[3u8; 32]])
             .await
             .unwrap();
-        let doc4 = kh_a
+        let doc4_id = kh_a
             .generate_doc(vec![], nonempty![[4u8; 32]])
             .await
             .unwrap();
-
-        let doc2_id = doc2.lock().await.doc_id();
-        let doc3_id = doc3.lock().await.doc_id();
-        let doc4_id = doc4.lock().await.doc_id();
-
-        let membered2 = Membered::Document(doc2_id, doc2.clone());
-        let membered3 = Membered::Document(doc3_id, doc3.clone());
-        let membered4 = Membered::Document(doc4_id, doc4.clone());
-
-        let public_agent: Agent<_, _, _, _> = Public.individual().into();
 
         let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
         let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
@@ -3755,7 +3679,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered2, Access::Edit, &[])
+                .add_member(Public.id(), doc2_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3766,7 +3690,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered3, Access::Edit, &[])
+                .add_member(Public.id(), doc3_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3775,7 +3699,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(Public.id(), true, &membered3)
+                .revoke_member(Public.id(), true, doc3_id)
                 .await
                 .unwrap();
         }
@@ -3786,7 +3710,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered4, Access::Edit, &[])
+                .add_member(Public.id(), doc4_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3795,7 +3719,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(Public.id(), true, &membered4)
+                .revoke_member(Public.id(), true, doc4_id)
                 .await
                 .unwrap();
         }
@@ -3804,7 +3728,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(b_agent, &membered4, Access::Edit, &[])
+                .add_member(b_identifier, doc4_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3813,7 +3737,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(b_identifier, true, &membered4)
+                .revoke_member(b_identifier, true, doc4_id)
                 .await
                 .unwrap();
         }
@@ -3822,7 +3746,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered4, Access::Edit, &[])
+                .add_member(Public.id(), doc4_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3857,9 +3781,7 @@ mod tests {
     /// associated with revoked agents.
     #[tokio::test(flavor = "current_thread")]
     async fn all_agent_events_includes_cgka_ops_after_revocation() {
-        use keyhive_core::principal::{
-            agent::Agent, identifier::Identifier, membered::Membered, public::Public,
-        };
+        use keyhive_core::principal::{identifier::Identifier, public::Public};
 
         let kh_a = make_keyhive().await;
         let kh_b = make_keyhive().await;
@@ -3874,15 +3796,11 @@ mod tests {
         let server_id = keyhive_peer_id(&kh_server);
 
         let b_identifier: Identifier = kh_b.id().into();
-        let b_agent = kh_a.get_agent(b_identifier).await.unwrap();
 
-        let doc = kh_a
+        let doc_id = kh_a
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc_id = doc.lock().await.doc_id();
-        let membered = Membered::Document(doc_id, doc.clone());
-        let public_agent: Agent<_, _, _, _> = Public.individual().into();
 
         let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
         let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
@@ -3936,7 +3854,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered, Access::Edit, &[])
+                .add_member(Public.id(), doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3945,7 +3863,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(Public.id(), true, &membered)
+                .revoke_member(Public.id(), true, doc_id)
                 .await
                 .unwrap();
         }
@@ -3954,7 +3872,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(b_agent, &membered, Access::Edit, &[])
+                .add_member(b_identifier, doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }
@@ -3963,7 +3881,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .revoke_member(b_identifier, true, &membered)
+                .revoke_member(b_identifier, true, doc_id)
                 .await
                 .unwrap();
         }
@@ -3972,7 +3890,7 @@ mod tests {
         {
             a_kh.lock()
                 .await
-                .add_member(public_agent.clone(), &membered, Access::Edit, &[])
+                .add_member(Public.id(), doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }

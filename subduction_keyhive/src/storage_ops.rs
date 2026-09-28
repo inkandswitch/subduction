@@ -425,8 +425,8 @@ mod tests {
         let alice = make_keyhive().await;
         let bob = make_keyhive().await;
 
-        let alice_cc = alice.contact_card().await.unwrap();
-        let bob_cc = bob.contact_card().await.unwrap();
+        let alice_cc = alice.generate_contact_card().await.unwrap();
+        let bob_cc = bob.generate_contact_card().await.unwrap();
         alice.receive_contact_card(&bob_cc).await.unwrap();
         bob.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -448,11 +448,11 @@ mod tests {
         // Save alice's real events to storage
         let alice_peer_id = keyhive_peer_id(&alice);
         let alice_id = alice_peer_id.to_identifier().unwrap();
-        let alice_agent = alice
-            .get_agent(alice_id)
-            .await
-            .expect("alice should have herself as agent");
-        let events = alice.static_events_for_agent(&alice_agent).await;
+        assert!(
+            alice.get_agent(alice_id).await.is_some(),
+            "alice should have herself as agent"
+        );
+        let events = alice.static_events_for_agent(alice_id).await;
         assert!(
             !events.is_empty(),
             "contact card exchange should produce events"
