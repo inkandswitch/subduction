@@ -96,7 +96,10 @@ pub struct WasmSignedFragment(Signed<Fragment>);
 #[wasm_refgen(js_ref = JsSignedFragment)]
 #[wasm_bindgen(js_class = SignedFragment)]
 impl WasmSignedFragment {
-    /// Decode a `SignedFragment` from raw bytes.
+    /// Decode a `SignedFragment` from raw bytes without verifying its signature.
+    ///
+    /// This validates the encoding only. Neither this method nor `payload`
+    /// authenticates metadata; use trusted storage or a verified ingress path.
     ///
     /// # Errors
     ///
@@ -116,7 +119,12 @@ impl WasmSignedFragment {
         Uint8Array::from(self.0.as_bytes())
     }
 
-    /// Get the unsigned payload without re-verifying the signature.
+    /// Decode the unsigned payload without verifying the signature.
+    ///
+    /// `tryDecode` does not verify it either. Reading metadata is not signature
+    /// authentication, proof of the blob's causal claims, or permission to
+    /// reclaim history. The returned fragment is independently owned, survives
+    /// disposal of this signed wrapper, and should be freed by the caller.
     ///
     /// # Errors
     ///
