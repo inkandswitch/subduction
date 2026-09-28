@@ -1,6 +1,6 @@
 //! Sedimentree [`Fragment`](sedimentree_core::Fragment).
 
-use alloc::{string::ToString, vec::Vec};
+use alloc::{collections::BTreeSet, string::ToString, vec::Vec};
 use sedimentree_core::fragment::Fragment;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -9,6 +9,7 @@ use wasm_refgen::wasm_refgen;
 use js_sys::Uint8Array;
 
 use crate::{
+    checkpoint::{JsCheckpoint, WasmCheckpoint},
     commit_id::{JsCommitId, WasmCommitId},
     loose_commit::WasmBlobMeta,
     sedimentree_id::WasmSedimentreeId,
@@ -51,6 +52,68 @@ impl WasmFragment {
         .into()
     }
 
+    /// Create a fragment from the 12-byte checkpoints stored on wire.
+    ///
+    /// All wrapper arguments are borrowed/copied, not consumed. Boundaries and
+    /// checkpoints are deduplicated and sorted; no checkpoint is filtered out.
+    ///
+    /// # Errors
+    ///
+    /// Throws an `InvalidFragment` error if there are more than 255 unique
+    /// boundary IDs or 65535 unique checkpoints (the wire-format count limits).
+    #[wasm_bindgen(js_name = fromCheckpointPrefixes)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs Vecs, not slices
+    pub fn from_checkpoint_prefixes(
+        sedimentree_id: &WasmSedimentreeId,
+        head: &WasmCommitId,
+        boundary: Vec<JsCommitId>,
+        checkpoints: Vec<JsCheckpoint>,
+        blob_meta: &WasmBlobMeta,
+    ) -> Result<Self, WasmInvalidFragment> {
+        let boundary: BTreeSet<_> = boundary
+            .iter()
+            .map(|id| WasmCommitId::from(id).into())
+            .collect();
+        let checkpoints: BTreeSet<_> = checkpoints
+            .iter()
+            .map(|checkpoint| WasmCheckpoint::from(checkpoint).into())
+            .collect();
+        validate_counts(boundary.len(), checkpoints.len())?;
+        Ok(Fragment::from_parts(
+            sedimentree_id.into(),
+            head.into(),
+            boundary,
+            checkpoints,
+            blob_meta.into(),
+        )
+        .into())
+    }
+
+    /// Get the checkpoints in ascending byte order.
+    ///
+    /// Each wrapper is independently owned and remains usable after this
+    /// fragment is freed. The caller should free each returned checkpoint.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn checkpoints(&self) -> Vec<WasmCheckpoint> {
+        self.0
+            .checkpoints()
+            .iter()
+            .copied()
+            .map(WasmCheckpoint::from)
+            .collect()
+    }
+
+    /// Get the actual sedimentree ID in the fragment payload.
+    ///
+    /// This is an independently owned copy; the caller should free it.
+    /// Reading it does not authenticate the fragment or verify a signature.
+    #[must_use]
+    #[wasm_bindgen(getter, js_name = sedimentreeId)]
+    pub fn sedimentree_id(&self) -> WasmSedimentreeId {
+        self.0.sedimentree_id().into()
+    }
+
     /// Get the head commit identifier of the fragment.
     #[must_use]
     #[wasm_bindgen(getter)]
@@ -76,6 +139,35 @@ impl WasmFragment {
     pub fn blob_meta(&self) -> WasmBlobMeta {
         self.0.summary().blob_meta().into()
     }
+}
+
+/// A fragment's deduplicated metadata exceeds a wire-format count limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WasmInvalidFragment {
+    /// The boundary count must fit in a single byte.
+    #[error("expected at most 255 unique boundary IDs, got {0}")]
+    TooManyBoundaries(usize),
+    /// The checkpoint count must fit in two bytes.
+    #[error("expected at most 65535 unique checkpoints, got {0}")]
+    TooManyCheckpoints(usize),
+}
+
+impl From<WasmInvalidFragment> for JsValue {
+    fn from(err: WasmInvalidFragment) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("InvalidFragment");
+        err.into()
+    }
+}
+
+fn validate_counts(boundaries: usize, checkpoints: usize) -> Result<(), WasmInvalidFragment> {
+    if boundaries > usize::from(u8::MAX) {
+        return Err(WasmInvalidFragment::TooManyBoundaries(boundaries));
+    }
+    if checkpoints > usize::from(u16::MAX) {
+        return Err(WasmInvalidFragment::TooManyCheckpoints(checkpoints));
+    }
+    Ok(())
 }
 
 impl From<Fragment> for WasmFragment {
