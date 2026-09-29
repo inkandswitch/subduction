@@ -5,9 +5,18 @@
 
 ## Build package
 
+From the repository root:
+
+```sh
+nix build .#subduction-js
 ```
-wasm-pack build --target web --out-dir pkg
-```
+
+This builds and tests the npm package, including the `/debug` variant, and writes
+`result/subduction.tgz`. See [Releasing the JavaScript package](../RELEASING.md)
+for the tag-driven publishing workflow.
+
+For an in-place development build of `subduction_wasm/dist/`, use
+`nix develop` followed by `bodge subduction_wasm` instead.
 
 ## Run tests
 

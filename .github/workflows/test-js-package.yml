@@ -1,0 +1,31 @@
+name: Test JS package
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-js-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+
+      # Exercise exactly the derivation used by the release workflow, including
+      # smoke tests of the packed release/debug entrypoints, not the Wasm suite.
+      - name: Build and smoke-test the npm package with Nix
+        run: nix build .#subduction-js --no-update-lock-file --print-build-logs
