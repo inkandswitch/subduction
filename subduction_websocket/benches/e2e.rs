@@ -81,6 +81,9 @@ use tempfile::TempDir;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::task::TaskTracker;
 
+#[path = "support/cleanup.rs"]
+mod cleanup;
+
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 const TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(10_000);
 
@@ -201,7 +204,7 @@ struct FsServerGuard {
 
 impl Drop for FsServerGuard {
     fn drop(&mut self) {
-        self.rt.block_on(self.server.stop_and_drain());
+        cleanup::drain(&self.rt, self.server.stop_and_drain());
     }
 }
 
@@ -242,7 +245,7 @@ struct ServerGuard {
 
 impl Drop for ServerGuard {
     fn drop(&mut self) {
-        self.rt.block_on(self.server.stop_and_drain());
+        cleanup::drain(&self.rt, self.server.stop_and_drain());
     }
 }
 
@@ -310,7 +313,7 @@ impl Drop for ClientGuard {
 
         client.shutdown();
 
-        self.rt.block_on(async move {
+        cleanup::drain(&self.rt, async move {
             // WS tasks are parked on the tungstenite stream; abort to
             // unpark, then await below so their captured `Arc<WebSocket>`
             // is released before we return.
@@ -1045,9 +1048,14 @@ fn bench_incremental_sync(c: &mut Criterion) {
                     .expect("server add commit");
             }
 
-            // Sync to get client up to date
-            assert_full_sync(client.full_sync_with_all_peers(TIMEOUT).await);
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // The client has no local trees yet, and add_commit only pushes
+            // to subscribers. Explicitly request this tree: full_sync would
+            // enumerate the empty local store and do nothing.
+            assert_sync(
+                client
+                    .sync_with_peer(&server_peer_id, sed_id, true, TIMEOUT)
+                    .await,
+            );
 
             (server, client, sed_id)
         });
