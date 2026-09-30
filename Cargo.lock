@@ -5618,7 +5618,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "async-channel",
  "async-lock",
