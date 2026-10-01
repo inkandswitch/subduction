@@ -107,7 +107,8 @@ fn populate(rt: &Runtime, n: usize, blob_size: usize) -> Populated {
                 (id, head, BTreeSet::new()),
                 verified_blob,
             )
-            .await;
+            .await
+            .expect("valid metadata");
 
             Storage::<Sendable>::save_loose_commit(&storage, id, verified)
                 .await
@@ -301,6 +302,7 @@ fn seal_unique_commit(
         (id, head, BTreeSet::new()),
         verified_blob,
     ))
+    .expect("valid metadata")
 }
 
 /// Write-path cost with full durability: per-item saves vs the

@@ -64,7 +64,8 @@ async fn answer(wire: &Wire, req: BatchSyncRequest, seed: Option<u8>) {
             make_head(seed),
             BTreeSet::new(),
             BlobMeta::new(&blob),
-        );
+        )
+        .expect("valid commit");
         let signed = Signed::seal::<Sendable, _>(&make_signer(200), commit)
             .await
             .into_signed();

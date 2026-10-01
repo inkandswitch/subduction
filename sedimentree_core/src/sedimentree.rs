@@ -1052,7 +1052,7 @@ mod tests {
             bytes[0] = seed;
             bytes
         });
-        LooseCommit::new(sedimentree_id, head, BTreeSet::new(), blob_meta)
+        LooseCommit::new(sedimentree_id, head, BTreeSet::new(), blob_meta).expect("valid metadata")
     }
 
     fn make_fragment(seed: u8) -> Fragment {
@@ -1071,6 +1071,7 @@ mod tests {
             &[],
             blob_meta,
         )
+        .expect("valid metadata")
     }
 
     #[test]
@@ -1150,6 +1151,7 @@ mod tests {
         let sid = make_sedimentree_id(0);
         let blob_meta = make_blob_meta(0);
         Fragment::new(sid, CommitId::new(head_bytes), boundary, &[], blob_meta)
+            .expect("valid metadata")
     }
 
     fn unique_head(id: u8) -> [u8; 32] {
@@ -1312,7 +1314,8 @@ mod tests {
             loose_id,
             BTreeSet::from([CommitId::new(f_head)]),
             blob_meta,
-        );
+        )
+        .expect("valid metadata");
 
         let mut tree = Sedimentree::default();
         tree.add_fragment(f);
@@ -1438,7 +1441,8 @@ mod tests {
                         BTreeSet::from([deeper_boundary_hash]),
                         &checkpoints,
                         BlobMeta::arbitrary(u)?,
-                    );
+                    )
+                    .map_err(|_| arbitrary::Error::IncorrectFormat)?;
                     let shallower = FragmentSummary::new(
                         shallower_start_hash,
                         BTreeSet::from([shallower_boundary_hash]),
@@ -1484,7 +1488,8 @@ mod tests {
                                 .remove(parent_choices.iter().position(|p| p == parent).unwrap());
                             num_parents -= 1;
                         }
-                        let commit = LooseCommit::new(sedimentree_id, head, parents, blob_meta);
+                        let commit = LooseCommit::new(sedimentree_id, head, parents, blob_meta)
+                            .map_err(|_| arbitrary::Error::IncorrectFormat)?;
                         frontier.retain(|p| !commit.parents().contains(p));
                         frontier.push(commit.head());
                         result.push(commit);
@@ -2404,7 +2409,8 @@ mod tests {
             let sedimentree_id = make_sedimentree_id(1);
             let head = commit_id_with_depth(2, 1);
             let blob_meta = make_blob_meta(1);
-            let fragment = Fragment::new(sedimentree_id, head, BTreeSet::new(), &[], blob_meta);
+            let fragment = Fragment::new(sedimentree_id, head, BTreeSet::new(), &[], blob_meta)
+                .expect("valid metadata");
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
@@ -2419,7 +2425,8 @@ mod tests {
             let head = commit_id_with_depth(2, 1);
             let blob_meta = make_blob_meta(1);
             let fragment =
-                Fragment::new(sedimentree_id, head, BTreeSet::from([head]), &[], blob_meta);
+                Fragment::new(sedimentree_id, head, BTreeSet::from([head]), &[], blob_meta)
+                    .expect("valid metadata");
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
@@ -2441,7 +2448,8 @@ mod tests {
                 BTreeSet::from([boundary]),
                 &[head],
                 blob_meta,
-            );
+            )
+            .expect("valid metadata");
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
@@ -2515,6 +2523,7 @@ mod tests {
 
         fn commit(head: CommitId, parents: &[CommitId]) -> LooseCommit {
             LooseCommit::new(SID, head, parents.iter().copied().collect(), blob_meta())
+                .expect("valid metadata")
         }
 
         fn fragment(head: CommitId, boundary: &[CommitId], checkpoints: &[CommitId]) -> Fragment {
@@ -2525,6 +2534,7 @@ mod tests {
                 checkpoints,
                 blob_meta(),
             )
+            .expect("valid metadata")
         }
 
         fn remaining_commit_ids(tree: &Sedimentree) -> BTreeSet<CommitId> {
@@ -3538,9 +3548,13 @@ mod tests {
                 LooseCommit::new(SID, d, BTreeSet::from([c]), blob_meta),
                 LooseCommit::new(SID, e, BTreeSet::from([d]), blob_meta),
                 LooseCommit::new(SID, f, BTreeSet::from([e]), blob_meta),
-            ];
+            ]
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("valid metadata");
 
-            let fragment = Fragment::new(SID, d, BTreeSet::from([a]), &[], blob_meta);
+            let fragment =
+                Fragment::new(SID, d, BTreeSet::from([a]), &[], blob_meta).expect("valid metadata");
 
             // === LOCAL: 6 commits + 1 fragment ===
             let local_tree = Sedimentree::new(alloc::vec![fragment], commits);
@@ -3738,9 +3752,13 @@ mod tests {
                 LooseCommit::new(SID, e, BTreeSet::from([d]), blob_meta),
                 LooseCommit::new(SID, f, BTreeSet::from([e]), blob_meta),
                 LooseCommit::new(SID, g, BTreeSet::from([f]), blob_meta),
-            ];
+            ]
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("valid metadata");
 
-            let fragment = Fragment::new(SID, d, BTreeSet::from([a]), &[], blob_meta);
+            let fragment =
+                Fragment::new(SID, d, BTreeSet::from([a]), &[], blob_meta).expect("valid metadata");
 
             // === ALICE: commits A..F + fragment(D→A) ===
             let alice_commits = all_commits[..6].to_vec(); // A through F

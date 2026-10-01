@@ -593,7 +593,8 @@ mod tests {
             (sid(0x21), CommitId::new([1; 32]), BTreeSet::new()),
             VerifiedBlobMeta::new(Blob::new(vec![1, 2, 3])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         conformance::assert_commit_save_registers_tree_id::<Sendable, _>(&store, commit).await;
 
         let fragment = VerifiedMeta::<Fragment>::seal::<Sendable, _>(
@@ -606,7 +607,8 @@ mod tests {
             ),
             VerifiedBlobMeta::new(Blob::new(vec![4, 5, 6])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&store, fragment).await;
 
         let batch_commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
@@ -614,7 +616,8 @@ mod tests {
             (sid(0x23), CommitId::new([5; 32]), BTreeSet::new()),
             VerifiedBlobMeta::new(Blob::new(vec![7, 8, 9])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         conformance::assert_batch_save_registers_tree_id::<Sendable, _>(
             &store,
             sid(0x23),
@@ -645,7 +648,8 @@ mod tests {
                 (id, CommitId::new([i; 32]), BTreeSet::new()),
                 VerifiedBlobMeta::new(Blob::new(vec![i; 64])),
             )
-            .await;
+            .await
+            .expect("valid metadata");
             Storage::<Sendable>::save_loose_commit(&store, id, commit)
                 .await
                 .expect("save commit");
@@ -660,7 +664,8 @@ mod tests {
             ),
             VerifiedBlobMeta::new(Blob::new(vec![9; 128])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         Storage::<Sendable>::save_fragment(&store, id, fragment)
             .await
             .expect("save fragment");
@@ -715,7 +720,8 @@ mod tests {
             let mut head_bytes = [0u8; 32];
             head_bytes[..2].copy_from_slice(&data_seed.to_le_bytes());
             let head = CommitId::new(head_bytes);
-            let commit = LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta);
+            let commit =
+                LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
             let sealed = Signed::seal::<Sendable, _>(signer, commit).await;
             let verified = sealed
                 .into_signed()

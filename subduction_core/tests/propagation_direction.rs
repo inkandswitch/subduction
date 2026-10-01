@@ -318,7 +318,8 @@ async fn duplicate_items_in_a_response_are_pushed_once() -> TestResult {
 
     // U answers the hub's propagated request with commit C, listed twice.
     let blob = make_blob(1);
-    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob));
+    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob))
+        .expect("valid metadata");
     let signed = Signed::seal::<Sendable, _>(&make_signer(200), commit)
         .await
         .into_signed();
@@ -420,7 +421,8 @@ async fn already_known_items_are_not_re_pushed() -> TestResult {
         .await?;
 
     let blob = make_blob(1);
-    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob));
+    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob))
+        .expect("valid metadata");
     let signed = Signed::seal::<Sendable, _>(&make_signer(201), commit)
         .await
         .into_signed();

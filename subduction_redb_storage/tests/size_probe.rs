@@ -24,6 +24,7 @@
 //! ```text
 //! cargo test -p subduction_redb_storage --test size_probe -- --ignored --nocapture
 //! ```
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
 #![allow(
     clippy::cast_lossless,
     clippy::cast_precision_loss,
@@ -62,7 +63,8 @@ async fn inline_db_size(records: u32, blob_size: usize) -> testresult::TestResul
                 (id, CommitId::new(head), BTreeSet::new()),
                 VerifiedBlobMeta::new(Blob::new(blob)),
             )
-            .await,
+            .await
+            .expect("valid metadata"),
         );
     }
     Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;
@@ -139,7 +141,8 @@ async fn inline_size_amplification_probe() -> testresult::TestResult {
                     (id, CommitId::new(head), BTreeSet::new()),
                     VerifiedBlobMeta::new(Blob::new(blob)),
                 )
-                .await,
+                .await
+                .expect("valid metadata"),
             );
         }
         Storage::<Sendable>::save_batch(&storage, id, commits, Vec::new()).await?;

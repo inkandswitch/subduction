@@ -32,6 +32,19 @@ Depth 2: ███████████████████████�
 | `Fragment`    | A range of commits at a specific depth, bundled with checkpoint metadata           |
 | `Sedimentree` | Complete metadata structure for a document                                         |
 
+### Wire-count validation
+
+`LooseCommit::new`, `Fragment::new`, and `Fragment::from_parts` return `Result`.
+They enforce the existing wire-format limits: 255 unique parents, 255 unique
+boundary IDs, and 65,535 unique 12-byte checkpoints. Full checkpoint IDs are
+truncated and deduplicated before validation. Opaque blob bytes are unchanged.
+
+The limits are exported as `loose_commit::MAX_PARENTS` and
+`fragment::{MAX_BOUNDARIES, MAX_CHECKPOINTS}`. Errors are
+`InvalidLooseCommit::TooManyParents` and
+`InvalidFragment::{TooManyBoundaries, TooManyCheckpoints}`, each carrying the
+actual normalized count.
+
 ### Depth Metric
 
 The `DepthMetric` trait determines how commits are partitioned into layers:
