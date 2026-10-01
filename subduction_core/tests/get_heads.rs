@@ -241,19 +241,19 @@ fn prop_heads_with_fragments_match_sedimentree_heads() {
                     let meta = BlobMeta::new(&blob(n));
                     match item {
                         Item::Commit { head, parents } => {
-                            commits.push(LooseCommit::new(TREE, *head, parents.clone(), meta));
+                            commits.push(
+                                LooseCommit::new(TREE, *head, parents.clone(), meta)
+                                    .expect("bounded commit fixture"),
+                            );
                         }
                         Item::Fragment {
                             head,
                             boundary,
                             checkpoints,
-                        } => frags.push(Fragment::new(
-                            TREE,
-                            *head,
-                            boundary.clone(),
-                            checkpoints,
-                            meta,
-                        )),
+                        } => frags.push(
+                            Fragment::new(TREE, *head, boundary.clone(), checkpoints, meta)
+                                .expect("bounded fragment fixture"),
+                        ),
                     }
                     (frags, commits)
                 },

@@ -117,6 +117,14 @@ pub enum WriteError<
     #[error(transparent)]
     Io(#[from] IoError<Async, Store, Conn, WireMsg>),
 
+    /// Commit metadata exceeds a wire-format limit.
+    #[error(transparent)]
+    InvalidLooseCommit(#[from] sedimentree_core::loose_commit::InvalidLooseCommit),
+
+    /// Fragment metadata exceeds a wire-format limit.
+    #[error(transparent)]
+    InvalidFragment(#[from] sedimentree_core::fragment::InvalidFragment),
+
     /// The storage policy rejected the write.
     #[error("put disallowed: {0}")]
     PutDisallowed(PutErr),

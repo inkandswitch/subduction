@@ -118,35 +118,38 @@ impl<T: HasBlobMeta + Schema + EncodeFields + DecodeFields> VerifiedMeta<T> {
 
     /// Seal a locally-created payload+blob, producing a verified meta.
     ///
-    /// Infallible because [`VerifiedBlobMeta`] guarantees the blob metadata
-    /// matches by construction, and `T` is constructed from that metadata.
+    /// [`VerifiedBlobMeta`] guarantees that blob metadata matches by construction.
+    /// Metadata construction is validated before signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns `T::Error` if the arguments violate the payload's wire-format limits.
     ///
     /// # Arguments
     ///
     /// * `signer` - The signer to use
     /// * `args` - Type-specific arguments (besides `BlobMeta`)
     /// * `verified_blob` - The verified blob with its metadata
-    /// * `ctx` - Encoding context (e.g., `SedimentreeId` for commits/fragments)
     ///
     /// # Example
     ///
     /// ```ignore
     /// let verified_blob = VerifiedBlobMeta::new(blob);
-    /// let verified_meta = VerifiedMeta::seal::<Sendable, _, LooseCommit>(
+    /// let verified_meta = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
     ///     &signer,
-    ///     (digest, parents),
+    ///     (tree_id, head, parents),
     ///     verified_blob,
-    /// ).await;
+    /// ).await?;
     /// ```
     pub async fn seal<Async: FutureForm, Sign: Signer<Async>>(
         signer: &Sign,
         args: T::Args,
         verified_blob: VerifiedBlobMeta,
-    ) -> Self {
+    ) -> Result<Self, T::Error> {
         let (blob_meta, blob) = verified_blob.into_parts();
-        let meta = T::from_args(args, blob_meta);
+        let meta = T::from_args(args, blob_meta)?;
         let verified = Signed::seal::<Async, _>(signer, meta).await;
-        Self { verified, blob }
+        Ok(Self { verified, blob })
     }
 
     /// Reconstruct from trusted storage without any verification.

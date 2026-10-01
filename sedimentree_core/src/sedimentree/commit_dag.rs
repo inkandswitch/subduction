@@ -298,6 +298,7 @@ impl Iterator for ParentsIter<'_> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "bounded test fixtures")]
 mod tests {
     use alloc::collections::BTreeSet;
 
@@ -326,7 +327,7 @@ mod tests {
             bytes[0] = seed;
             bytes
         });
-        LooseCommit::new(sedimentree_id, head, parents, blob_meta)
+        LooseCommit::new(sedimentree_id, head, parents, blob_meta).expect("valid metadata")
     }
 
     /// A mock depth metric that returns predetermined depths for specific identifiers.
@@ -476,7 +477,10 @@ mod tests {
                         parents.insert(parent);
                     }
                     let blob_meta = BlobMeta::arbitrary(u)?;
-                    commits.push(LooseCommit::new(sedimentree_id, head, parents, blob_meta));
+                    commits.push(
+                        LooseCommit::new(sedimentree_id, head, parents, blob_meta)
+                            .map_err(|_| arbitrary::Error::IncorrectFormat)?,
+                    );
                     frontier.push(head);
                 }
 

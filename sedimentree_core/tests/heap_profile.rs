@@ -6,6 +6,7 @@
 
 #![cfg(feature = "std")]
 #![allow(missing_docs)]
+#![allow(clippy::expect_used, reason = "bounded benchmark fixtures")]
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -67,7 +68,7 @@ mod generators {
         let sedimentree_id = make_sedimentree_id(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
         let head = commit_id_from_seed(seed.wrapping_add(2_000_000));
-        LooseCommit::new(sedimentree_id, head, parents, blob_meta)
+        LooseCommit::new(sedimentree_id, head, parents, blob_meta).expect("valid metadata")
     }
 
     fn synthetic_fragment(
@@ -86,6 +87,7 @@ mod generators {
             .collect();
         let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
         Fragment::new(sedimentree_id, head, boundary, &checkpoints, blob_meta)
+            .expect("valid metadata")
     }
 
     fn linear_commit_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {

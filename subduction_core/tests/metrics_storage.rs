@@ -17,6 +17,7 @@
 //! and (with `--features metrics`) under `cargo mutants`.
 
 #![cfg(feature = "metrics")]
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
 
 use std::collections::BTreeSet;
 
@@ -55,7 +56,8 @@ async fn make_verified_commit(
         bytes[..n].copy_from_slice(&data[..n]);
         bytes
     });
-    let commit = LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta);
+    let commit =
+        LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
     let sealed = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     let verified_sig = sealed.into_signed().try_verify()?;
     Ok(VerifiedMeta::new(verified_sig, blob)?)
@@ -71,7 +73,8 @@ async fn make_verified_fragment(
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
     let head = CommitId::new([head_byte; 32]);
-    let fragment = Fragment::new(sed_id, head, BTreeSet::new(), &[], blob_meta);
+    let fragment =
+        Fragment::new(sed_id, head, BTreeSet::new(), &[], blob_meta).expect("valid metadata");
     let sealed = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     let verified_sig = sealed.into_signed().try_verify()?;
     Ok(VerifiedMeta::new(verified_sig, blob)?)
