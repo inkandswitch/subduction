@@ -60,6 +60,24 @@
 //! See the [`subduction`] module for the full **API guide** covering
 //! naming conventions, API levels, and common patterns.
 //!
+//! ## Metadata validity
+//!
+//! Locally published commits and fragments must satisfy Sedimentree's
+//! [wire-format limits](sedimentree_core#wire-format-validity). These limits
+//! ensure that the metadata can be encoded; they do not establish that a
+//! fragment correctly describes application history or is at the right depth.
+//!
+//! Methods accepting raw commit or fragment fields validate them before signing,
+//! storing, or propagating them. Oversized sets return
+//! [`WriteError::InvalidLooseCommit`](subduction::error::WriteError::InvalidLooseCommit)
+//! or [`WriteError::InvalidFragment`](subduction::error::WriteError::InvalidFragment).
+//! Raw batch methods validate the entire batch first: if any item exceeds a
+//! limit, none of the batch is signed or written.
+//!
+//! Validation and persistence are separate steps. Once validation succeeds,
+//! storage can still fail after writing some items on a non-transactional
+//! backend; see [`Storage::save_batch`](storage::traits::Storage::save_batch).
+//!
 //! ## Modules
 //!
 //! - [`subduction`] — Main sync manager, builder, and API guide

@@ -12,6 +12,7 @@
 //! | Document expectations    | Each benchmark group states what it measures and expected complexity |
 
 #![allow(missing_docs, unreachable_pub)]
+#![allow(clippy::expect_used, reason = "bounded benchmark fixtures")]
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
@@ -83,7 +84,7 @@ mod generators {
         let sedimentree_id = sedimentree_id_from_seed(seed);
         let head = commit_id_from_seed(seed.wrapping_add(500_000));
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
-        LooseCommit::new(sedimentree_id, head, parents, blob_meta)
+        LooseCommit::new(sedimentree_id, head, parents, blob_meta).expect("valid metadata")
     }
 
     /// Generate a synthetic fragment with configurable complexity.
@@ -103,6 +104,7 @@ mod generators {
             .collect();
         let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
         Fragment::new(sedimentree_id, head, boundary, &checkpoints, blob_meta)
+            .expect("valid metadata")
     }
 
     /// Generate a linear chain of commits (each has one parent).

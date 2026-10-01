@@ -29,7 +29,8 @@ use subduction_crypto::signed::Signed;
 async fn make_commit(id: SedimentreeId) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(vec![0xAB; 32]);
     let blob_meta = BlobMeta::new(&blob);
-    let commit = LooseCommit::new(id, CommitId::new([0x11; 32]), BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(id, CommitId::new([0x11; 32]), BTreeSet::new(), blob_meta)
+        .expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }

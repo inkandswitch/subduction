@@ -8,6 +8,7 @@
 
 #![cfg(feature = "test_utils")]
 #![allow(clippy::similar_names)]
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
 
 use std::collections::BTreeSet;
 
@@ -197,7 +198,8 @@ fn nested_fragments_three_levels() {
         BTreeSet::from([deep_boundary]),
         &[medium_head, medium_boundary, shallow_head, shallow_boundary],
         make_blob_meta(1),
-    );
+    )
+    .expect("valid metadata");
 
     // Medium fragment contains shallow's head and boundary
     let medium_fragment = sedimentree_core::fragment::Fragment::new(
@@ -206,7 +208,8 @@ fn nested_fragments_three_levels() {
         BTreeSet::from([medium_boundary]),
         &[shallow_head, shallow_boundary],
         make_blob_meta(2),
-    );
+    )
+    .expect("valid metadata");
 
     // Shallow fragment
     let shallow_fragment = sedimentree_core::fragment::Fragment::new(
@@ -215,7 +218,8 @@ fn nested_fragments_three_levels() {
         BTreeSet::from([shallow_boundary]),
         &[],
         make_blob_meta(3),
-    );
+    )
+    .expect("valid metadata");
 
     let tree = sedimentree_core::sedimentree::Sedimentree::new(
         vec![
@@ -263,7 +267,8 @@ fn overlapping_same_depth_both_kept() {
         BTreeSet::from([boundary1]),
         &[],
         make_blob_meta(1),
-    );
+    )
+    .expect("valid metadata");
 
     let fragment2 = sedimentree_core::fragment::Fragment::new(
         sedimentree_id,
@@ -271,7 +276,8 @@ fn overlapping_same_depth_both_kept() {
         BTreeSet::from([boundary2]),
         &[],
         make_blob_meta(2),
-    );
+    )
+    .expect("valid metadata");
 
     let tree = sedimentree_core::sedimentree::Sedimentree::new(
         vec![fragment1.clone(), fragment2.clone()],
@@ -353,7 +359,8 @@ fn collective_support_from_multiple_deep_keeps_shallow() {
         BTreeSet::from([deep1_boundary]),
         &[shallow_head],
         make_blob_meta(1),
-    );
+    )
+    .expect("valid metadata");
 
     // Deep fragment 2 contains shallow's boundary
     let deep2_head = sedimentree_core::test_utils::commit_id_with_depth(3, 20);
@@ -364,7 +371,8 @@ fn collective_support_from_multiple_deep_keeps_shallow() {
         BTreeSet::from([deep2_boundary]),
         &[shallow_boundary],
         make_blob_meta(2),
-    );
+    )
+    .expect("valid metadata");
 
     // Shallow fragment
     let shallow = sedimentree_core::fragment::Fragment::new(
@@ -373,7 +381,8 @@ fn collective_support_from_multiple_deep_keeps_shallow() {
         BTreeSet::from([shallow_boundary]),
         &[],
         make_blob_meta(3),
-    );
+    )
+    .expect("valid metadata");
 
     let tree = sedimentree_core::sedimentree::Sedimentree::new(
         vec![deep1.clone(), deep2.clone(), shallow.clone()],

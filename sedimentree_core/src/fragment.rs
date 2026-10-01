@@ -28,26 +28,52 @@ use crate::{
 /// an arbitrary format or is encrypted), it maintains some basic
 /// metadata about the the content to aid in deduplication and synchronization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Fragment {
     sedimentree_id: SedimentreeId,
     summary: FragmentSummary,
     checkpoints: BTreeSet<Checkpoint>,
 }
 
+/// Maximum number of unique boundary IDs representable by the wire format.
+pub const MAX_BOUNDARIES: usize = u8::MAX as usize;
+/// Maximum number of unique 12-byte checkpoints representable by the wire format.
+pub const MAX_CHECKPOINTS: usize = u16::MAX as usize;
+
+/// A fragment's metadata exceeds a wire-format count limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidFragment {
+    /// The boundary count must fit in one byte.
+    #[error("expected at most {MAX_BOUNDARIES} unique boundary IDs, got {actual}")]
+    TooManyBoundaries {
+        /// Number of unique boundary IDs supplied.
+        actual: usize,
+    },
+    /// The checkpoint count must fit in two bytes.
+    #[error("expected at most {MAX_CHECKPOINTS} unique checkpoints, got {actual}")]
+    TooManyCheckpoints {
+        /// Number of unique checkpoint prefixes supplied.
+        actual: usize,
+    },
+}
+
 impl Fragment {
     /// Constructor for a [`Fragment`].
     ///
     /// The `checkpoints` are raw commit identifiers that fall within the fragment's
-    /// range. They are truncated to 12 bytes internally for compact storage.
-    #[must_use]
+    /// range. They are truncated to 12 bytes and deduplicated before validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidFragment`] if the normalized sets exceed
+    /// [`MAX_BOUNDARIES`] or [`MAX_CHECKPOINTS`].
     pub fn new(
         sedimentree_id: SedimentreeId,
         head: CommitId,
         boundary: BTreeSet<CommitId>,
         checkpoints: &[CommitId],
         blob_meta: BlobMeta,
-    ) -> Self {
+    ) -> Result<Self, InvalidFragment> {
         let truncated_checkpoints: BTreeSet<Checkpoint> =
             checkpoints.iter().map(|d| Checkpoint::new(*d)).collect();
 
@@ -63,15 +89,29 @@ impl Fragment {
     /// Constructor from pre-truncated checkpoints.
     ///
     /// Used by codec decoding where checkpoints are already in truncated form.
-    #[must_use]
-    pub const fn from_parts(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidFragment`] if the sets exceed [`MAX_BOUNDARIES`]
+    /// or [`MAX_CHECKPOINTS`].
+    pub fn from_parts(
         sedimentree_id: SedimentreeId,
         head: CommitId,
         boundary: BTreeSet<CommitId>,
         checkpoints: BTreeSet<Checkpoint>,
         blob_meta: BlobMeta,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, InvalidFragment> {
+        if boundary.len() > MAX_BOUNDARIES {
+            return Err(InvalidFragment::TooManyBoundaries {
+                actual: boundary.len(),
+            });
+        }
+        if checkpoints.len() > MAX_CHECKPOINTS {
+            return Err(InvalidFragment::TooManyCheckpoints {
+                actual: checkpoints.len(),
+            });
+        }
+        Ok(Self {
             sedimentree_id,
             summary: FragmentSummary {
                 head,
@@ -79,7 +119,7 @@ impl Fragment {
                 blob_meta,
             },
             checkpoints,
-        }
+        })
     }
 
     /// Returns true if this fragment supports the given fragment summary.
@@ -166,6 +206,7 @@ impl Fragment {
 
 impl HasBlobMeta for Fragment {
     type Args = (SedimentreeId, CommitId, BTreeSet<CommitId>, Vec<CommitId>);
+    type Error = InvalidFragment;
 
     fn blob_meta(&self) -> BlobMeta {
         self.summary().blob_meta()
@@ -174,7 +215,7 @@ impl HasBlobMeta for Fragment {
     fn from_args(
         (sedimentree_id, head, boundary, checkpoints): Self::Args,
         blob_meta: BlobMeta,
-    ) -> Self {
+    ) -> Result<Self, Self::Error> {
         Self::new(sedimentree_id, head, boundary, &checkpoints, blob_meta)
     }
 }
@@ -187,13 +228,30 @@ impl<'a> arbitrary::Arbitrary<'a> for Fragment {
         let boundary: BTreeSet<CommitId> = u.arbitrary()?;
         let checkpoints: BTreeSet<Checkpoint> = u.arbitrary()?;
         let blob_meta: BlobMeta = u.arbitrary()?;
-        Ok(Self::from_parts(
-            sedimentree_id,
-            head,
-            boundary,
-            checkpoints,
-            blob_meta,
-        ))
+        Self::from_parts(sedimentree_id, head, boundary, checkpoints, blob_meta)
+            .map_err(|_| arbitrary::Error::IncorrectFormat)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Fragment {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename = "Fragment")]
+        struct Fields {
+            sedimentree_id: SedimentreeId,
+            summary: FragmentSummary,
+            checkpoints: BTreeSet<Checkpoint>,
+        }
+        let fields = Fields::deserialize(deserializer)?;
+        Self::from_parts(
+            fields.sedimentree_id,
+            fields.summary.head,
+            fields.summary.boundary,
+            fields.checkpoints,
+            fields.summary.blob_meta,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -264,16 +322,23 @@ impl Schema for Fragment {
 }
 
 impl EncodeFields for Fragment {
+    #[allow(
+        clippy::expect_used,
+        reason = "all construction paths validate wire counts"
+    )]
     fn encode_fields(&self, buf: &mut Vec<u8>) {
         encode::array(self.sedimentree_id.as_bytes(), buf);
         encode::array(self.head().as_bytes(), buf);
         encode::array(self.summary().blob_meta().digest().as_bytes(), buf);
 
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u8(self.boundary().len() as u8, buf);
-
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u16(self.checkpoints().len() as u16, buf);
+        encode::u8(
+            u8::try_from(self.boundary().len()).expect("validated boundary count"),
+            buf,
+        );
+        encode::u16(
+            u16::try_from(self.checkpoints().len()).expect("validated checkpoint count"),
+            buf,
+        );
 
         bijoux::u64::encode(self.summary().blob_meta().size_bytes(), buf);
 
@@ -297,6 +362,10 @@ impl EncodeFields for Fragment {
 impl DecodeFields for Fragment {
     const MIN_SIGNED_SIZE: usize = CODEC_MIN_SIZE;
 
+    #[allow(
+        clippy::expect_used,
+        reason = "decoded u8/u16 counts cannot exceed constructor limits"
+    )]
     fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < CODEC_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
@@ -375,13 +444,15 @@ impl DecodeFields for Fragment {
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
         Ok((
-            Fragment::from_parts(sedimentree_id, head, boundary, checkpoints, blob_meta),
+            Fragment::from_parts(sedimentree_id, head, boundary, checkpoints, blob_meta)
+                .expect("decoded counts fit u8/u16"),
             offset,
         ))
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "bounded test fixtures")]
 mod tests {
     mod digest_consistency {
         use super::super::*;
@@ -401,7 +472,7 @@ mod tests {
                 ]),
                 alloc::collections::BTreeSet::new(),
                 BlobMeta::new(&blob),
-            );
+            )?;
 
             // Determinism: same fragment hashes the same way twice.
             let d1: Digest<Fragment> = Digest::hash(&fragment);
@@ -493,6 +564,7 @@ mod tests {
         let sedimentree_id = SedimentreeId::new([0x42; 32]);
         let blob_meta = make_blob_meta(1);
         Fragment::new(sedimentree_id, head, boundary, checkpoints, blob_meta)
+            .expect("valid metadata")
     }
 
     // ============================================================

@@ -449,7 +449,7 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
         CommitId::new([0xBB; 32]),
         BTreeSet::new(),
         blob_meta,
-    );
+    )?;
     let verified =
         subduction_crypto::signed::Signed::seal::<Sendable, _>(&unauthorized_signer, commit).await;
     let signed_commit = verified.into_signed();
@@ -482,7 +482,7 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
         CommitId::new([0xAA; 32]),
         BTreeSet::new(),
         allowed_blob_meta,
-    );
+    )?;
     let allowed_verified =
         subduction_crypto::signed::Signed::seal::<Sendable, _>(&allowed_signer, allowed_commit)
             .await;

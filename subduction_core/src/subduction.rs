@@ -209,6 +209,10 @@ pub struct Subduction<
     /// claim lifecycle.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
 
+    /// Completion channels for shared missing-document upstream fetches.
+    /// Closing the sender wakes every waiter; no result is sent through it.
+    missing_fetches: Arc<Mutex<Map<SedimentreeId, async_channel::Receiver<()>>>>,
+
     /// Shared monotonic counter for outgoing messages, per peer.
     ///
     /// Shared with all handlers so that every message to a given peer
@@ -354,6 +358,7 @@ where
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
+            missing_fetches: Arc::new(Mutex::new(Map::new())),
             send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
@@ -1253,6 +1258,8 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes.
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors.
     pub async fn store_commit(
         &self,
         id: SedimentreeId,
@@ -1267,7 +1274,8 @@ where
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob).await;
+            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob)
+                .await?;
         let commit_head = verified_meta.payload().head();
 
         self.insert_commit_locally(&putter, verified_meta)
@@ -1310,6 +1318,8 @@ where
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors.
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
@@ -1325,7 +1335,8 @@ where
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob).await;
+            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob)
+                .await?;
 
         let commit_head = verified_meta.payload().head();
         tracing::debug!(commit = ?commit_head, tree = ?id, "adding commit to sedimentree");
@@ -1363,12 +1374,10 @@ where
     /// returns as soon as the write is durable. Propagate later via
     /// [`add_fragment`](Self::add_fragment) or a sync.
     ///
-    /// NOTE this performs no integrity checks; we assume this is a good
-    /// fragment at the right depth.
-    ///
     /// # Errors
     ///
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    /// * [Metadata validation errors](crate#metadata-validity).
     pub async fn store_fragment(
         &self,
         id: SedimentreeId,
@@ -1385,7 +1394,7 @@ where
             (id, head, boundary, checkpoints.to_vec()),
             verified_blob,
         )
-        .await;
+        .await?;
 
         self.insert_fragment_locally(&putter, verified_meta)
             .await
@@ -1411,12 +1420,10 @@ where
     /// peers. For a durable write with no propagation, use
     /// [`store_fragment`](Self::store_fragment).
     ///
-    /// NOTE this performs no integrity checks;
-    /// we assume this is a good fragment at the right depth
-    ///
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs.
+    /// * [Metadata validation errors](crate#metadata-validity).
     pub async fn add_fragment(
         &self,
         id: SedimentreeId,
@@ -1435,7 +1442,7 @@ where
             (id, head, boundary, checkpoints.to_vec()),
             verified_blob,
         )
-        .await;
+        .await?;
         let fragment_digest = Digest::hash(verified_meta.payload());
 
         tracing::debug!(digest = ?fragment_digest, tree = ?id, "adding fragment to sedimentree");
@@ -1523,48 +1530,22 @@ where
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors and
+    /// batch validation semantics.
     pub async fn store_commits_batch(
         &self,
         id: SedimentreeId,
         commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
-        if commits.is_empty() {
-            return Ok(());
-        }
-
-        let putter = self.storage.local_putter::<Async>(id);
-        let count = commits.len();
-        tracing::info!(count, tree = ?id, "bulk-inserting commits into sedimentree");
-
-        // Sign first; defer storage I/O so we can flush via a single
-        // `save_batch` call instead of N `save_commit` round trips.
-        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> = Vec::with_capacity(count);
-        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(count);
-        for (head, parents, blob) in commits {
-            let verified_blob = VerifiedBlobMeta::new(blob);
-            let verified_meta: VerifiedMeta<LooseCommit> =
-                VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob)
-                    .await;
-            commit_payloads.push(verified_meta.payload().clone());
-            verified_commits.push(verified_meta);
-        }
-
-        putter
-            .save_batch(verified_commits, Vec::new())
-            .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
-        self.minimize_tree(id).await;
-
-        tracing::info!(count, "bulk-insert of commits complete, tree minimized");
-        Ok(())
+        // Validate the entire batch before signing or touching storage.
+        let commits = commits
+            .into_iter()
+            .map(|(head, parents, blob)| {
+                LooseCommit::new(id, head, parents, blob.meta()).map(|commit| (commit, blob))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.store_built_batch(id, commits, Vec::new()).await
     }
 
     /// Bulk-insert fragments without per-fragment minimization or broadcasting.
@@ -1586,56 +1567,29 @@ where
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors and
+    /// batch validation semantics.
     pub async fn store_fragments_batch(
         &self,
         id: SedimentreeId,
         fragments: Vec<FragmentBatchItem>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
-        if fragments.is_empty() {
-            return Ok(());
-        }
-
-        let putter = self.storage.local_putter::<Async>(id);
-        let count = fragments.len();
-        tracing::info!(count, tree = ?id, "bulk-inserting fragments into sedimentree");
-
-        // Sign first; defer storage I/O so we can flush via a single
-        // `save_batch` call instead of N `save_fragment` round trips.
-        let mut verified_fragments: Vec<VerifiedMeta<Fragment>> = Vec::with_capacity(count);
-        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(count);
-        for item in fragments {
-            let FragmentBatchItem {
-                head,
-                boundary,
-                checkpoints,
-                blob,
-            } = item;
-            let verified_blob = VerifiedBlobMeta::new(blob);
-            let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Async, _>(
-                &self.signer,
-                (id, head, boundary, checkpoints),
-                verified_blob,
-            )
-            .await;
-            fragment_payloads.push(verified_meta.payload().clone());
-            verified_fragments.push(verified_meta);
-        }
-
-        putter
-            .save_batch(Vec::new(), verified_fragments)
-            .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        self.with_tree_hydrated(id, move |tree| {
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
-        self.minimize_tree(id).await;
-        tracing::info!(count, "bulk-insert of fragments complete, tree minimized");
-        Ok(())
+        // Normalize and validate every fragment before signing or touching storage.
+        let fragments = fragments
+            .into_iter()
+            .map(|item| {
+                Fragment::new(
+                    id,
+                    item.head,
+                    item.boundary,
+                    &item.checkpoints,
+                    item.blob.meta(),
+                )
+                .map(|fragment| (fragment, item.blob))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.store_built_batch(id, Vec::new(), fragments).await
     }
 
     /// Persist already-built [`LooseCommit`] and [`Fragment`] payloads
@@ -3995,8 +3949,78 @@ where
 
             let mut completion = DispatchCompletion::new(sender);
 
+            // A missing document's first response should include what we can
+            // fetch upstream, rather than acknowledge an empty local snapshot.
+            // Authorization precedes both storage inspection and propagation.
+            let mut attempted_upstream = false;
+            if let Some((sed_id, originator)) = propagate
+                && let Ok(fetcher) = subduction
+                    .storage
+                    .get_fetcher::<Self>(originator, sed_id)
+                    .await
+            {
+                // Join an existing fetch even if it has already ingested a
+                // partial result from one of several upstreams.
+                let existing = subduction
+                    .missing_fetches
+                    .lock()
+                    .await
+                    .get(&sed_id)
+                    .cloned();
+                // An existence probe must not clone/minimize a resident tree
+                // or hydrate a cold one just to decide whether to wait.
+                let missing = existing.is_some()
+                    || (subduction
+                        .sedimentrees
+                        .with_entry(&sed_id, |_| ())
+                        .await
+                        .is_none()
+                        && matches!(fetcher.contains_sedimentree_id().await, Ok(false)));
+                if missing {
+                    let (done, start) = {
+                        let mut fetches = subduction.missing_fetches.lock().await;
+                        if let Some(done) = fetches.get(&sed_id).filter(|rx| !rx.is_closed()) {
+                            (done.clone(), None)
+                        } else {
+                            let (finished, done) = async_channel::bounded::<()>(1);
+                            fetches.insert(sed_id, done.clone());
+                            (done, Some(finished))
+                        }
+                    };
+                    if let Some(finished) = start {
+                        let sd = Arc::clone(&subduction);
+                        subduction.spawner.spawn(Async::from_future(async move {
+                            // Detached from the requesting dispatch: a waiter
+                            // timing out must not cancel ingestion or strand
+                            // outgoing-subscription claims.
+                            sd.propagate_subscription(sed_id, originator).await;
+                            sd.missing_fetches.lock().await.remove(&sed_id);
+                            drop(finished);
+                        }));
+                    }
+
+                    // There is no traversal ID / hop budget on the wire, so
+                    // a returning request in a relay cycle is indistinguishable
+                    // from another subscriber. Bound the wait to break such
+                    // cycles, leaving half the normal roundtrip budget for
+                    // computing and delivering the response. Fetching continues
+                    // in the background and late data is pushed normally.
+                    let _ = subduction
+                        .timer
+                        .timeout(
+                            subduction.default_roundtrip_timeout / 2,
+                            Async::from_future(async move {
+                                let _ = done.recv().await;
+                            }),
+                        )
+                        .await;
+                    attempted_upstream = true;
+                }
+            }
+
             let result = handler.handle(&conn, msg).await;
             if result.is_ok()
+                && !attempted_upstream
                 && let Some((sed_id, originator)) = propagate
             {
                 let sd = Arc::clone(&subduction);

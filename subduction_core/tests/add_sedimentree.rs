@@ -68,7 +68,8 @@ fn make_fragment(
         .map(|b| Checkpoint::new(CommitId::new([*b; 32])))
         .collect();
     let blob = make_blob(blob_seed);
-    let fragment = Fragment::from_parts(sed_id, head, boundary, checkpoints, BlobMeta::new(&blob));
+    let fragment = Fragment::from_parts(sed_id, head, boundary, checkpoints, BlobMeta::new(&blob))
+        .expect("valid metadata");
     (fragment, blob)
 }
 
@@ -85,7 +86,8 @@ fn make_loose_commit(
         CommitId::new([blob_seed; 32]),
         parent_set,
         BlobMeta::new(&blob),
-    );
+    )
+    .expect("valid metadata");
     (commit, blob)
 }
 

@@ -478,7 +478,8 @@ async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
             (sed_id, CommitId::new([i; 32]), BTreeSet::new()),
             sedimentree_core::blob::verified::VerifiedBlobMeta::new(Blob::new(vec![i; 32])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         Storage::<Sendable>::save_loose_commit(&bob_storage, sed_id, verified).await?;
     }
 

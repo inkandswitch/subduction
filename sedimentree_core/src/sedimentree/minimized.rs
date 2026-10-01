@@ -148,6 +148,7 @@ impl From<Sedimentree> for MinimizedSedimentree {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "bounded test fixtures")]
 mod tests {
     use alloc::{collections::BTreeSet, vec};
 
@@ -171,6 +172,7 @@ mod tests {
             BTreeSet::new(),
             blob_meta,
         )
+        .expect("valid metadata")
     }
 
     /// A tree whose `minimize` drops a fragment: a deep fragment dominates a

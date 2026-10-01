@@ -96,7 +96,8 @@ fn signed_commit(id: SedimentreeId, head: u8) -> (Signed<LooseCommit>, Blob) {
         CommitId::new([head; 32]),
         BTreeSet::new(),
         BlobMeta::new(&blob),
-    );
+    )
+    .expect("valid metadata");
     let signed = futures::executor::block_on(Signed::seal::<Sendable, _>(
         &MemorySigner::from_bytes(&[7u8; 32]),
         commit,
