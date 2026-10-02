@@ -23,7 +23,7 @@ use crate::{
 use sedimentree_wasm::storage::JsStorage;
 use subduction_core::transport::message::MessageTransport;
 
-use crate::transport::JsTransport;
+use crate::runtime::ManagedTransport;
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
@@ -69,7 +69,7 @@ impl From<WasmInitError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmIoError(
-    #[from] IoError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage>,
+    #[from] IoError<Local, JsStorage, MessageTransport<ManagedTransport>, WireMessage>,
 );
 
 impl From<WasmIoError> for JsValue {
@@ -88,7 +88,7 @@ impl From<WasmIoError> for JsValue {
 #[error(transparent)]
 pub struct WasmWriteError(
     #[from]
-    WriteError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage, JsPolicyDenied>,
+    WriteError<Local, JsStorage, MessageTransport<ManagedTransport>, WireMessage, JsPolicyDenied>,
 );
 
 impl From<WasmWriteError> for JsValue {
@@ -115,6 +115,12 @@ pub enum WasmConnectError {
     AddConnection(#[from] AddConnectionError<JsPolicyDenied>),
 }
 
+impl From<WasmAddConnectionError> for WasmConnectError {
+    fn from(error: WasmAddConnectionError) -> Self {
+        Self::AddConnection(error.0)
+    }
+}
+
 impl From<WasmConnectError> for JsValue {
     fn from(err: WasmConnectError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
@@ -127,7 +133,7 @@ impl From<WasmConnectError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmListenError(
-    #[from] ListenError<Local, JsStorage, MessageTransport<JsTransport>, WireMessage>,
+    #[from] ListenError<Local, JsStorage, MessageTransport<ManagedTransport>, WireMessage>,
 );
 
 impl From<WasmListenError> for JsValue {
@@ -182,6 +188,12 @@ pub enum WasmLongPollConnectError {
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]
     AddConnection(#[from] AddConnectionError<JsPolicyDenied>),
+}
+
+impl From<WasmAddConnectionError> for WasmLongPollConnectError {
+    fn from(error: WasmAddConnectionError) -> Self {
+        Self::AddConnection(error.0)
+    }
 }
 
 impl From<WasmLongPollConnectError> for JsValue {

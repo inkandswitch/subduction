@@ -40,6 +40,62 @@ View Playwright report:
 pnpm run test:report
 ```
 
+## Closing a node
+
+```javascript
+try {
+  // Connect, store, and sync. Observe errors from these operations as usual.
+} finally {
+  try {
+    await node.close();
+  } finally {
+    node.free(); // Release the Wasm wrapper after shutdown.
+  }
+}
+```
+
+`close(): Promise<void>` starts shutdown immediately, before its promise is awaited:
+
+- New asynchronous operations reject with `SubductionClosedError`. Active API calls
+  are cancelled and reject with the same error; callers should observe their promises.
+- The node stops accepting inbound work, disconnects its transports (including
+  handshakes in progress), and awaits its owned manager, listener, dispatch, fan-out,
+  ephemeral-delivery, and long-poll driver tasks.
+- Graceful draining has one shared **five-second deadline**. At expiry, remaining
+  Rust tasks are aborted and joined. Close rejects with `SubductionCloseError` if
+  draining timed out or transport cleanup failed; every transport is attempted even
+  when another fails. The event loop must keep running: synchronous blocking code
+  and Wasm traps cannot be forcibly interrupted.
+- Repeated/concurrent calls observe the same completion or error. Abandoning the
+  close promise does not stop shutdown. `free()` alone initiates best-effort shutdown
+  but cannot await it; prefer explicit close. Do not free a wrapper still borrowed by
+  outstanding API calls.
+
+**Cancellation is not rollback.** Already-started JavaScript promises—especially
+storage writes—can still complete after close. No cancelled Rust operation resumes
+its continuation, but Subduction cannot cancel arbitrary work inside a supplied JS
+storage, signer, policy, or transport. Built-in WebSocket dialing and HTTP requests
+are cancelled and their handlers/timers released. No remote flush, remote storage
+acknowledgement, or permanent durability is implied by close.
+
+The node takes ownership of transports admitted through its connection APIs and
+cleans them up on handshake/registration failure as well as shutdown. A call rejected
+because the node is already closing does not take ownership of its argument. Do not
+share one transport between nodes. For supplied transports, `disconnect()` must stop
+I/O, release transport-owned resources, and wake blocked reads. Tasks started outside
+the node remain the supplier's responsibility. Cleanup callbacks must not await the
+same node's close (that would wait on themselves).
+
+The supplied storage and signer are **not** closed or freed; they may be shared by
+other nodes. The synchronous `storage` and `commitDepth` accessors remain available
+until `free()`. Existing sync results are unchanged. JS promise result types are
+unchanged; the Rust Wasm-binding methods now return `Result<_, JsValue>` to represent
+lifecycle rejection alongside their previous named errors.
+
+`disconnectAll()` only disconnects peers; it leaves the node running and able to
+accept new work. It is not a substitute for `close()`. Per-operation `AbortSignal`
+support and `Symbol.asyncDispose` are not included in this change.
+
 ## Naming Conventions
 
 `wasm-bindgen`-generated types ownership rules can be confusing and cumbersome, with different behavior depending on which side of the Wasm boundary your type was created from. To help keep this straight, we adopt the naming convention:
