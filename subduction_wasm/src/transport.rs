@@ -55,16 +55,16 @@ extern "C" {
     pub type JsTransport;
 
     /// Send raw bytes over the transport.
-    #[wasm_bindgen(method, js_name = sendBytes)]
-    fn js_send_bytes(this: &JsTransport, bytes: &js_sys::Uint8Array) -> Promise;
+    #[wasm_bindgen(method, catch, js_name = sendBytes)]
+    fn js_send_bytes(this: &JsTransport, bytes: &js_sys::Uint8Array) -> Result<Promise, JsValue>;
 
     /// Receive the next message frame as raw bytes.
-    #[wasm_bindgen(method, js_name = recvBytes)]
-    fn js_recv_bytes(this: &JsTransport) -> Promise;
+    #[wasm_bindgen(method, catch, js_name = recvBytes)]
+    fn js_recv_bytes(this: &JsTransport) -> Result<Promise, JsValue>;
 
     /// Disconnect from the peer gracefully.
-    #[wasm_bindgen(method, js_name = disconnect)]
-    fn js_disconnect(this: &JsTransport) -> Promise;
+    #[wasm_bindgen(method, catch, js_name = disconnect)]
+    fn js_disconnect(this: &JsTransport) -> Result<Promise, JsValue>;
 
     /// Register a callback to be invoked when the transport disconnects.
     #[wasm_bindgen(method, js_name = onDisconnect)]
@@ -97,9 +97,12 @@ impl Transport<Local> for JsTransport {
     fn send_bytes(&self, bytes: &[u8]) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let uint8_array = js_sys::Uint8Array::from(bytes);
         async move {
-            JsFuture::from(self.js_send_bytes(&uint8_array))
-                .await
-                .map_err(JsTransportError::Send)?;
+            JsFuture::from(
+                self.js_send_bytes(&uint8_array)
+                    .map_err(JsTransportError::Send)?,
+            )
+            .await
+            .map_err(JsTransportError::Send)?;
             Ok(())
         }
         .boxed_local()
@@ -107,7 +110,7 @@ impl Transport<Local> for JsTransport {
 
     fn recv_bytes(&self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
         async move {
-            let js_value = JsFuture::from(self.js_recv_bytes())
+            let js_value = JsFuture::from(self.js_recv_bytes().map_err(JsTransportError::Recv)?)
                 .await
                 .map_err(JsTransportError::Recv)?;
             let uint8_array = js_sys::Uint8Array::new(&js_value);
@@ -118,7 +121,7 @@ impl Transport<Local> for JsTransport {
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async move {
-            JsFuture::from(self.js_disconnect())
+            JsFuture::from(self.js_disconnect().map_err(JsTransportError::Disconnect)?)
                 .await
                 .map_err(JsTransportError::Disconnect)?;
             Ok(())
@@ -133,9 +136,12 @@ impl Handshake<Local> for JsTransport {
     fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         let array = js_sys::Uint8Array::from(bytes.as_slice());
         async move {
-            JsFuture::from(self.js_send_bytes(&array))
-                .await
-                .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
+            JsFuture::from(
+                self.js_send_bytes(&array)
+                    .map_err(|e| WasmHandshakeError::Transport(e.into()))?,
+            )
+            .await
+            .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
             Ok(())
         }
         .boxed_local()
@@ -143,9 +149,12 @@ impl Handshake<Local> for JsTransport {
 
     fn recv(&mut self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::Error>> {
         async move {
-            let value = JsFuture::from(self.js_recv_bytes())
-                .await
-                .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
+            let value = JsFuture::from(
+                self.js_recv_bytes()
+                    .map_err(|e| WasmHandshakeError::Transport(e.into()))?,
+            )
+            .await
+            .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
 
             let array: js_sys::Uint8Array = value
                 .dyn_into()

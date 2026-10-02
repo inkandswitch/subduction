@@ -10,6 +10,7 @@ use future_form::Local;
 use futures::FutureExt;
 use subduction_core::{
     authenticated::Authenticated,
+    spawn::Spawn,
     timeout::{TimedOut, Timeout},
     transport::{Transport, message::MessageTransport},
 };
@@ -46,9 +47,11 @@ impl Timeout<Local> for JsTimeout {
 
         async move {
             let ms = i32::try_from(dur.as_millis()).unwrap_or(i32::MAX);
+            let mut timer_id = JsValue::UNDEFINED;
             let delay = js_sys::Promise::new(&mut |resolve, _| {
-                timer::set_timeout(&resolve, ms);
+                timer_id = timer::set_timeout(&resolve, ms);
             });
+            let _timer = ClearTimer(timer_id);
             let delay_fut = JsFuture::from(delay);
             pin_mut!(fut, delay_fut);
             match select(fut, delay_fut).await {
@@ -57,6 +60,13 @@ impl Timeout<Local> for JsTimeout {
             }
         }
         .boxed_local()
+    }
+}
+
+struct ClearTimer(JsValue);
+impl Drop for ClearTimer {
+    fn drop(&mut self) {
+        timer::clear_timeout(&self.0);
     }
 }
 
@@ -343,6 +353,7 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
+        spawner: &crate::runtime::WasmSpawn,
     ) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
         let client = make_client(base_url);
@@ -352,9 +363,8 @@ impl WasmLongPoll {
             .await
             .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
 
-        // Spawn background tasks
-        wasm_bindgen_futures::spawn_local(result.poll_task);
-        wasm_bindgen_futures::spawn_local(result.send_task);
+        spawner.spawn(result.poll_task);
+        spawner.spawn(result.send_task);
 
         Ok((result.authenticated, result.session_id))
     }
@@ -364,6 +374,7 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         service_name: Option<String>,
+        spawner: &crate::runtime::WasmSpawn,
     ) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
         let client = make_client(base_url);
@@ -374,9 +385,8 @@ impl WasmLongPoll {
             .await
             .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
 
-        // Spawn background tasks
-        wasm_bindgen_futures::spawn_local(result.poll_task);
-        wasm_bindgen_futures::spawn_local(result.send_task);
+        spawner.spawn(result.poll_task);
+        spawner.spawn(result.send_task);
 
         Ok((result.authenticated, result.session_id))
     }

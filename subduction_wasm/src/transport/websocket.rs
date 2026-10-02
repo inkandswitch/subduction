@@ -48,9 +48,51 @@ pub struct WasmWebSocket {
     /// disconnect or when the browser WebSocket's `onclose` fires.
     inbound_closer: Rc<async_channel::Sender<Vec<u8>>>,
     on_disconnect: OnDisconnect,
+    callbacks: Rc<SocketCallbacks>,
+}
+
+#[derive(Debug)]
+struct SocketCallbacks {
+    socket: WebSocket,
+    _message: Closure<dyn FnMut(MessageEvent)>,
+    _close: Closure<dyn FnMut(Event)>,
+}
+impl SocketCallbacks {
+    fn detach(&self) {
+        self.socket.set_onmessage(None);
+        self.socket.set_onclose(None);
+    }
+}
+impl Drop for SocketCallbacks {
+    fn drop(&mut self) {
+        self.detach();
+        drop(self.socket.close());
+    }
+}
+
+struct OpeningSocket {
+    socket: WebSocket,
+    opened: bool,
+}
+impl Drop for OpeningSocket {
+    fn drop(&mut self) {
+        self.socket.set_onopen(None);
+        self.socket.set_onerror(None);
+        if !self.opened {
+            drop(self.socket.close());
+        }
+    }
 }
 
 impl WasmWebSocket {
+    /// Open a socket with cancellation-safe ownership before authentication.
+    pub(crate) async fn open(address: &Url) -> Result<Self, WebSocketAuthenticatedTransportError> {
+        let ws = WebSocket::new(&address.href())
+            .map_err(WebSocketAuthenticatedTransportError::SocketCreationFailed)?;
+        let ws = Self::wait_for_open(ws).await?;
+        Ok(Self::from_open_socket(ws))
+    }
+
     /// Set up the byte channel and `onmessage` handler on an already-open `WebSocket`.
     fn from_open_socket(ws: WebSocket) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(64);
@@ -58,17 +100,19 @@ impl WasmWebSocket {
         let on_disconnect = OnDisconnect::default();
 
         let msg_writer = inbound_writer.clone();
+        let overflow_socket = ws.clone();
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
                 tracing::debug!("WS received {} bytes", bytes.len());
 
-                let writer = msg_writer.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Err(e) = writer.send(bytes).await {
-                        tracing::error!("failed to send inbound bytes: {e}");
-                    }
-                });
+                // Browser events cannot await backpressure. Do not create an
+                // unbounded queue of detached send futures: close on overflow
+                // and let the application reconnect/resync instead of losing frames.
+                if msg_writer.try_send(bytes).is_err() {
+                    msg_writer.close();
+                    drop(overflow_socket.close());
+                }
             } else {
                 tracing::error!(
                     "unexpected message event (not ArrayBuffer): {:?}",
@@ -89,17 +133,18 @@ impl WasmWebSocket {
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
 
-        // These closures must outlive the Rust struct because the browser
-        // WebSocket JS object retains references to them via onmessage/onclose.
-        // The leak is bounded: one pair per connection.
-        onmessage.forget();
-        onclose.forget();
+        let callbacks = Rc::new(SocketCallbacks {
+            socket: ws.clone(),
+            _message: onmessage,
+            _close: onclose,
+        });
 
         Self {
             socket: ws,
             inbound_reader,
             inbound_closer: inbound_writer,
             on_disconnect,
+            callbacks,
         }
     }
 }
@@ -332,14 +377,19 @@ impl WasmWebSocket {
             let _ = tx.send(Ok(()));
         }
 
+        // Drop detaches handlers before their Closure values are destroyed,
+        // and closes a socket abandoned during dialing (including cancellation).
+        let mut guard = OpeningSocket {
+            socket: ws.clone(),
+            opened: false,
+        };
         // Wait for open or error
         open_rx
             .await
             .map_err(|_| WebSocketAuthenticatedTransportError::Canceled)??;
 
-        // Clear temporary handlers
-        ws.set_onopen(None);
-        ws.set_onerror(None);
+        guard.opened = true;
+        drop(guard);
         drop(onopen);
         drop(onerror);
 
@@ -442,6 +492,7 @@ impl Transport<Local> for WasmWebSocket {
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async {
+            self.callbacks.detach();
             if let Err(e) = self.socket.close() {
                 tracing::debug!("WebSocket::close() failed (may already be closed): {e:?}");
             }

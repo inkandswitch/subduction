@@ -88,7 +88,11 @@ impl HttpClient<future_form::Local> for FetchHttpClient {
             .collect();
 
         async move {
+            let controller = web_sys::AbortController::new()
+                .map_err(|e| FetchHttpError::RequestInit(format!("{e:?}")))?;
+            let cancel = AbortFetch(controller);
             let opts = web_sys::RequestInit::new();
+            opts.set_signal(Some(&cancel.0.signal()));
             opts.set_method("POST");
             opts.set_mode(web_sys::RequestMode::Cors);
 
@@ -157,21 +161,18 @@ impl HttpClient<future_form::Local> for FetchHttpClient {
     }
 }
 
-/// Call `fetch()` on the appropriate global scope (`Window` or `WorkerGlobalScope`).
-fn fetch_global(request: &web_sys::Request) -> Result<js_sys::Promise, wasm_bindgen::JsValue> {
-    let global: js_sys::Object = js_sys::global().unchecked_into();
-
-    // Try Window first (browser main thread)
-    if let Ok(window) = global.clone().dyn_into::<web_sys::Window>() {
-        return Ok(window.fetch_with_request(request));
+// Dropping a Rust HTTP future must cancel its browser request too.
+struct AbortFetch(web_sys::AbortController);
+impl Drop for AbortFetch {
+    fn drop(&mut self) {
+        self.0.abort();
     }
+}
 
-    // Fall back to WorkerGlobalScope (service worker, web worker)
-    if let Ok(worker) = global.dyn_into::<web_sys::WorkerGlobalScope>() {
-        return Ok(worker.fetch_with_request(request));
-    }
-
-    Err(wasm_bindgen::JsValue::from_str(
-        "no global fetch available (not Window or WorkerGlobalScope)",
-    ))
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    /// Use the global fetch in browsers, workers, or Node.js without owning
+    /// (and therefore without closing) an application-wide HTTP client.
+    #[wasm_bindgen(catch, js_name = fetch)]
+    fn fetch_global(request: &web_sys::Request) -> Result<js_sys::Promise, wasm_bindgen::JsValue>;
 }

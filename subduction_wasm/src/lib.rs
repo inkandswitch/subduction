@@ -38,6 +38,7 @@ pub mod memory_signer;
 pub mod peer_id;
 pub mod policy;
 pub mod remote_heads;
+mod runtime;
 pub mod signer;
 pub mod subduction;
 pub mod sync_stats;
