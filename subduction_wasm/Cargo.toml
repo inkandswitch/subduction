@@ -48,6 +48,8 @@ wasm_refgen = { workspace = true }
 version = "0.3.98"
 default-features = false
 features = [
+  "AbortController",
+  "AbortSignal",
   "BinaryType",
   "Crypto",
   "CryptoKey",
