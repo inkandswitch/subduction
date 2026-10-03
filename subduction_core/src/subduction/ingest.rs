@@ -264,32 +264,14 @@ pub(crate) async fn recv_batch_sync_response<
         let fragment_payloads: Vec<Fragment> =
             fragments.iter().map(|v| v.payload().clone()).collect();
 
-        putter
-            .save_batch(commits, fragments)
-            .await
-            .map_err(IoError::Storage)?;
-
-        let local_access = storage.local_fetcher::<Async>(id);
-        for commit in commit_payloads {
-            sedimentrees
-                .with_entry_hydrated(
-                    id,
-                    || load_tree::<Async, _>(&local_access),
-                    |tree| tree.add_commit(commit),
-                )
-                .await
-                .map_err(IoError::Storage)?;
-        }
-        for fragment in fragment_payloads {
-            sedimentrees
-                .with_entry_hydrated(
-                    id,
-                    || load_tree::<Async, _>(&local_access),
-                    |tree| tree.add_fragment(fragment),
-                )
-                .await
-                .map_err(IoError::Storage)?;
-        }
+        super::mutation::complete(
+            sedimentrees,
+            &putter.as_fetcher(),
+            putter.save_batch(commits, fragments),
+            Some(Sedimentree::new(fragment_payloads, commit_payloads)),
+        )
+        .await
+        .map_err(IoError::Storage)?;
     }
 
     Ok(ingested)
@@ -330,23 +312,13 @@ pub(crate) async fn insert_commit_locally<
         .await?
         .unwrap_or(true);
 
-    // Persist before the in-RAM mutation: storage is the source of truth; the
-    // map is a cache that re-hydrates from it.
-    putter.save_commit(verified_meta).await?;
-
-    // Apply to the in-RAM tree, hydrating on a miss in case it was evicted
-    // between the read above and here. On that (rare) miss the loader reloads
-    // post-save state — which already contains the commit — so `add_commit`
-    // is a harmless no-op and the resident tree is the full, correct history.
-    sedimentrees
-        .with_entry_hydrated(
-            id,
-            || load_tree_via_putter::<Async, _>(putter),
-            |tree| {
-                tree.add_commit(commit);
-            },
-        )
-        .await?;
+    super::mutation::complete(
+        sedimentrees,
+        &putter.as_fetcher(),
+        putter.save_commit(verified_meta),
+        Some(Sedimentree::new(Vec::new(), alloc::vec![commit])),
+    )
+    .await?;
 
     Ok(was_added)
 }
@@ -378,18 +350,13 @@ pub(crate) async fn insert_fragment_locally<
         .await?
         .unwrap_or(true);
 
-    // Persist before the in-RAM mutation; see `insert_commit_locally`.
-    putter.save_fragment(verified_meta).await?;
-
-    sedimentrees
-        .with_entry_hydrated(
-            id,
-            || load_tree_via_putter::<Async, _>(putter),
-            |tree| {
-                tree.add_fragment(fragment);
-            },
-        )
-        .await?;
+    super::mutation::complete(
+        sedimentrees,
+        &putter.as_fetcher(),
+        putter.save_fragment(verified_meta),
+        Some(Sedimentree::new(alloc::vec![fragment], Vec::new())),
+    )
+    .await?;
 
     Ok(was_added)
 }
