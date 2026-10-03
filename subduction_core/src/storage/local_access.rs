@@ -1,52 +1,35 @@
-//! Local storage access for trusted internal operations.
+//! Trusted access to the local storage index.
 //!
-//! [`LocalStorageAccess`] provides direct storage access for operations that don't
-//! fit the capability model:
-//!
-//! - **Hydration**: Loading our own data at startup
-//!
-//! This is separate from [`StoragePowerbox`] which only mints capabilities for
-//! peer-authorized access.
+//! Tree-scoped reads use [`Fetcher`](super::fetcher::Fetcher), whether minted
+//! after peer authorization or internally for local reads. This wrapper retains
+//! global ID enumeration and direct access for trusted integrations.
 
-use alloc::{sync::Arc, vec::Vec};
-
+use alloc::sync::Arc;
 use future_form::FutureForm;
-use sedimentree_core::{
-    collections::Set, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
-};
-use subduction_crypto::verified_meta::VerifiedMeta;
+use sedimentree_core::{collections::Set, id::SedimentreeId};
 
 use super::traits::Storage;
 
-/// Direct storage access for trusted local operations.
-///
-/// Use this for:
-/// - Hydration (loading our own data at startup)
-/// - Internal sync operations
-///
-/// This bypasses the capability model — only use from trusted code paths.
+/// Trusted local storage access, independent of any peer's authorization.
+/// Tree contents are read through a tree-scoped fetch capability instead.
 #[derive(Debug)]
 pub struct LocalStorageAccess<Store> {
     storage: Arc<Store>,
 }
 
 impl<Store> LocalStorageAccess<Store> {
-    /// Create a new local storage access wrapper.
+    /// Create trusted access to the local index.
     pub const fn new(storage: Arc<Store>) -> Self {
         Self { storage }
     }
 
-    /// Get the underlying storage Arc.
-    ///
-    /// This is useful when you need to pass the storage to other components.
+    /// Get the underlying storage Arc for trusted integrations.
     #[must_use]
     pub const fn storage(&self) -> &Arc<Store> {
         &self.storage
     }
 
-    // ==================== Hydration Operations ====================
-
-    /// Load all sedimentree IDs from storage.
+    /// Load all registered sedimentree IDs.
     #[must_use]
     pub fn load_all_sedimentree_ids<Async: FutureForm>(
         &self,
@@ -57,7 +40,7 @@ impl<Store> LocalStorageAccess<Store> {
         self.storage.load_all_sedimentree_ids()
     }
 
-    /// Whether a sedimentree ID is registered (single-key existence check).
+    /// Whether an ID is registered, including registered-but-empty trees.
     #[must_use]
     pub fn contains_sedimentree_id<Async: FutureForm>(
         &self,
@@ -67,61 +50,6 @@ impl<Store> LocalStorageAccess<Store> {
         Store: Storage<Async>,
     {
         self.storage.contains_sedimentree_id(sedimentree_id)
-    }
-
-    /// Load all loose commits with their blobs for a sedimentree.
-    ///
-    /// Used for hydration at startup.
-    #[must_use]
-    pub fn load_loose_commits<Async: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Store::Error>>
-    where
-        Store: Storage<Async>,
-    {
-        self.storage.load_loose_commits(sedimentree_id)
-    }
-
-    /// Load all loose-commit payloads (no blobs) for a sedimentree — the
-    /// metadata-only hydration read. See
-    /// [`Storage::load_loose_commit_metas`].
-    #[must_use]
-    pub fn load_loose_commit_metas<Async: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> Async::Future<'_, Result<Vec<LooseCommit>, Store::Error>>
-    where
-        Store: Storage<Async>,
-    {
-        self.storage.load_loose_commit_metas(sedimentree_id)
-    }
-
-    /// Load all fragments with their blobs for a sedimentree.
-    ///
-    /// Used for hydration at startup.
-    #[must_use]
-    pub fn load_fragments<Async: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> Async::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Store::Error>>
-    where
-        Store: Storage<Async>,
-    {
-        self.storage.load_fragments(sedimentree_id)
-    }
-
-    /// Load all fragment payloads (no blobs) for a sedimentree — the
-    /// metadata-only hydration read. See [`Storage::load_fragment_metas`].
-    #[must_use]
-    pub fn load_fragment_metas<Async: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> Async::Future<'_, Result<Vec<Fragment>, Store::Error>>
-    where
-        Store: Storage<Async>,
-    {
-        self.storage.load_fragment_metas(sedimentree_id)
     }
 }
 
