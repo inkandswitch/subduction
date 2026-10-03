@@ -319,7 +319,7 @@ where
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Timer: Send + Sync + 'a,
         Sp: Clone + Send + Sync + 'static,
         'a: 'static,
@@ -2951,11 +2951,11 @@ where
 // for inbound handlers, `Async::doc_sync_task` for per-document cold-start
 // fan-out) and so require bounds the rest of the sync surface does not:
 // `'a: 'static`, `Timer: Send + Sync`, `Sp: Send + Sync + 'static`, and
-// `SpawnDocSync`. Every real deployment uses a `'static` `Subduction`, so this
+// `NodeTasks`. Every real deployment uses a `'static` `Subduction`, so this
 // is not a practical restriction.
 impl<
     Async: SubductionFutureForm<'static, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
-        + SpawnDocSync<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
+        + NodeTasks<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
         + 'static,
     Store: Storage<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'static,
@@ -3518,7 +3518,7 @@ impl<
 /// Similarly, the trait alias helps us avoid repeating the same complex trait bounds everywhere,
 /// and needing to update them in many places if the constraints change.
 ///
-/// Note: [`StartListener`] is _not_ a supertrait here — it is only required
+/// Note: [`NodeTasks`] is _not_ a supertrait here — it is only required
 /// on the constructor methods that build the listener future, keeping the
 /// handler type `Hdl` out of the main `Subduction` struct definition.
 pub trait SubductionFutureForm<
@@ -3555,105 +3555,13 @@ impl<
 {
 }
 
-/// A trait for starting the listener task for Subduction.
-///
-/// This lets us abstract over `Send` and `!Send` futures while keeping
-/// the handler type `Hdl` available for the `#[future_form]` macro to
-/// generate correct `Send` bounds.
-///
-/// `Hdl` is a trait-level (not method-level) generic so the macro can
-/// emit the required `Hdl: Send + Sync` bounds for the `Sendable` impl.
-pub trait StartListener<
-    'a,
-    Store: Storage<Self>,
-    Conn: Connection<Self, WireMsg> + PartialEq + 'a,
-    WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
-    Auth: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sign: Signer<Self>,
-    Metric: DepthMetric,
-    const SHARDS: usize,
->:
-    FutureForm
-    + RunManager<Authenticated<Conn, Self>, WireMsg>
-    + peers::SendPushes<Conn, WireMsg>
-    + Sized where
-    Hdl::HandlerError: Into<ListenError<Self, Store, Conn, WireMsg>>,
-{
-    /// Start the listener task for Subduction.
-    #[allow(clippy::type_complexity)]
-    fn start_listener<
-        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
-    >(
-        subduction: Arc<
-            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
-        >,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>>
-    where
-        Self: Sized,
-        'a: 'static;
-}
-
-#[future_form(
-    Sendable where
-        Conn: Connection<Sendable, WireMsg> + PartialEq + Clone + Send + Sync + 'static,
-        WireMsg: Encode + Decode + Clone + Send + Sync + core::fmt::Debug + 'static,
-        Store: Storage<Sendable> + Send + Sync + 'a,
-        Auth: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
-        Auth::PutDisallowed: Send + 'static,
-        Auth::FetchDisallowed: Send + 'static,
-        Sign: Signer<Sendable> + Send + Sync + 'a,
-        Metric: DepthMetric + Send + Sync + 'a,
-        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier + Send + Sync + 'a,
-        Hdl::HandlerError: Into<ListenError<Sendable, Store, Conn, WireMsg>> + Send + 'static,
-        Store::Error: Send + 'static,
-        Conn::DisconnectionError: Send + 'static,
-        Conn::RecvError: Send + 'static,
-        Conn::SendError: Send + 'static,
-    Local where
-        Conn: Connection<Local, WireMsg> + PartialEq + Clone + 'static,
-        WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-        Store: Storage<Local> + 'a,
-        Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
-        Sign: Signer<Local> + 'a,
-        Metric: DepthMetric + 'a,
-        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'a,
-        Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
-)]
-impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
-    StartListener<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
-where
-    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
-    Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
-    WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
-{
-    fn start_listener<
-        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
-    >(
-        subduction: Arc<
-            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
-        >,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>>
-    where
-        'a: 'static,
-    {
-        Abortable::new(
-            Async::from_future(async move {
-                if let Err(e) = subduction.listen().await {
-                    tracing::info!(error = %e, "subduction listener disconnected");
-                }
-            }),
-            abort_reg,
-        )
-    }
-}
+/// Compatibility name for the shared node-task construction support.
+pub use NodeTasks as StartListener;
+/// Compatibility name for the shared node-task construction support.
+pub use NodeTasks as SpawnDocSync;
 
 /// Result of a single document's sync, as sent back through the fan-out
-/// channel by a spawned [`SpawnDocSync`] task.
+/// channel by a spawned [`NodeTasks`] task.
 #[allow(clippy::type_complexity)]
 pub type DocSyncResult<Async, Store, Conn, WireMsg> = (
     SedimentreeId,
@@ -3676,15 +3584,14 @@ pub type DocSyncResult<Async, Store, Conn, WireMsg> = (
 pub type DispatchOutcomeFor<Conn, Async, Hdl> =
     DispatchOutcome<Conn, Async, <Hdl as Handler<Async, Conn>>::HandlerError>;
 
-/// Builds the `'static` future that syncs one document and reports the result
-/// back through a channel — the per-task unit of the cold-start fan-out in
-/// [`Subduction::full_sync_with_peer`].
+/// Construct node tasks with the appropriate Local or Sendable future bounds.
 ///
-/// This exists as a `#[future_form]`-split trait (mirroring [`StartListener`])
-/// solely so the per-task future can be constructed via `Async::from_future`
-/// with the correct `Send` bounds on `Sendable` and no `Send` requirement on
-/// `Local`. The bounded-channel driver loop itself stays in the generic method.
-pub trait SpawnDocSync<
+/// Listener, dispatch, and document-sync work share this one implementation of
+/// the runtime-form boundary. Their driving loops remain ordinary core methods;
+/// the caller's [`Spawn`] implementation owns and supervises submitted tasks.
+/// This trait does not provide another executor or require storage operations to
+/// run through the network listener.
+pub trait NodeTasks<
     'a,
     Store: Storage<Self>,
     Conn: Connection<Self, WireMsg> + PartialEq + 'a,
@@ -3698,8 +3605,23 @@ pub trait SpawnDocSync<
     FutureForm
     + RunManager<Authenticated<Conn, Self>, WireMsg>
     + peers::SendPushes<Conn, WireMsg>
-    + Sized
+    + Sized where
+    Hdl::HandlerError: Into<ListenError<Self, Store, Conn, WireMsg>>,
 {
+    /// Construct the listener future; construction does not submit it to an executor.
+    #[allow(clippy::type_complexity)]
+    fn start_listener<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>>
+    where
+        'a: 'static;
+
     /// Construct the spawnable future for syncing a single document.
     #[allow(clippy::type_complexity)]
     fn doc_sync_task<
@@ -3768,12 +3690,34 @@ pub trait SpawnDocSync<
         Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
 )]
 impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
-    SpawnDocSync<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
+    NodeTasks<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
 where
     Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
+    fn start_listener<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>>
+    where
+        'a: 'static,
+    {
+        Abortable::new(
+            Async::from_future(async move {
+                if let Err(error) = subduction.listen().await {
+                    tracing::info!(%error, "subduction listener disconnected");
+                }
+            }),
+            abort_reg,
+        )
+    }
+
     fn doc_sync_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
         Sp: Spawn<Self> + Clone + Send + Sync + 'static,
