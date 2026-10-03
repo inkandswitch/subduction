@@ -91,7 +91,7 @@ use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    StartListener, Subduction, SubductionFutureForm, error::ListenError,
+    NodeTasks, Subduction, SubductionFutureForm, error::ListenError,
     listener_future::ListenerFuture,
 };
 
@@ -666,7 +666,7 @@ impl<
     where
         Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS>
             + 'static,
-        Async: StartListener<
+        Async: NodeTasks<
                 'a,
                 Store,
                 Conn,
@@ -807,7 +807,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     where
         Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
             + 'static,
-        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'a,
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
@@ -907,7 +907,7 @@ impl<
     where
         Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
             + 'static,
-        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message>
             + Connection<Async, SyncMessage>
