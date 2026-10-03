@@ -16,10 +16,13 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::{BatchSyncResponse, SyncMessage, SyncResult},
+        message::{
+            BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff, SyncMessage,
+            SyncResult,
+        },
         test_utils::{
             ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn, TokioSpawn,
-            test_signer,
+            TokioTimeout, test_signer,
         },
     },
     peer::id::PeerId,
@@ -340,6 +343,139 @@ async fn multiple_local_adds_succeed_despite_rejecting_policy() {
 
     let ids = subduction.sedimentree_ids().await;
     assert_eq!(ids.len(), 5, "All 5 sedimentrees should be stored");
+}
+
+/// Both sync entry points must finish processing while telling the responder
+/// why no return-direction data follows its request.
+#[allow(clippy::too_many_lines)]
+async fn requested_data_rejection(all_peers: bool) -> TestResult {
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use subduction_core::{metrics::names, remote_heads::RemoteHeads};
+
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder = metrics::set_default_local_recorder(&recorder);
+    metrics::counter!(names::REQUESTED_DATA_SEND_FAILURES_TOTAL).absolute(0);
+
+    let (node, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
+        .spawner(TokioSpawn)
+        .timer(TokioTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let id = SedimentreeId::new([73; 32]);
+    node.store_commit(
+        id,
+        CommitId::new([74; 32]),
+        BTreeSet::new(),
+        Blob::new(b"private".to_vec()),
+    )
+    .await?;
+    let peer = PeerId::new([75; 32]);
+    let (conn, remote) = ChannelMockConnection::new_with_handle(peer);
+    node.add_connection(conn.authenticated()).await?;
+    let listener = tokio::spawn(listener);
+    let manager = tokio::spawn(manager);
+
+    let responder = async {
+        let SyncMessage::BatchSyncRequest(request) = remote.outbound_rx.recv().await? else {
+            panic!("expected a sync request");
+        };
+        assert!(!request.fingerprint_summary.commit_fingerprints().is_empty());
+        remote
+            .inbound_tx
+            .send(SyncMessage::BatchSyncResponse(BatchSyncResponse {
+                id,
+                req_id: request.req_id,
+                result: SyncResult::Ok(SyncDiff {
+                    missing_commits: Vec::new(),
+                    missing_fragments: Vec::new(),
+                    requesting: RequestedData {
+                        commit_fingerprints: request
+                            .fingerprint_summary
+                            .commit_fingerprints()
+                            .iter()
+                            .copied()
+                            .collect(),
+                        fragment_fingerprints: Vec::new(),
+                    },
+                }),
+                responder_heads: RemoteHeads::default(),
+            }))
+            .await?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    };
+    let syncing = async {
+        let (success, stats, errors) = if all_peers {
+            let mut results = node
+                .sync_with_all_peers(id, false, CallTimeout::Default)
+                .await?
+                .into_map();
+            results.remove(&peer).ok_or("peer result missing")?
+        } else {
+            node.sync_with_peer(&peer, id, false, CallTimeout::Default)
+                .await?
+        };
+        assert!(success, "intentional rejection still completes the round");
+        assert!(errors.is_empty());
+        assert_eq!(stats.commits_sent + stats.fragments_sent, 0);
+        Ok::<_, Box<dyn std::error::Error>>(())
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let (response, synced) = futures::join!(responder, syncing);
+        response?;
+        synced
+    })
+    .await??;
+
+    // Processing has finished, so all return-direction messages are queued.
+    // Check the whole queue: a rejection plus leaked data must fail too.
+    let messages: Vec<_> = std::iter::from_fn(|| remote.outbound_rx.try_recv().ok()).collect();
+    assert_eq!(
+        messages.len(),
+        1,
+        "only the rejection should be sent: {messages:?}"
+    );
+    assert!(
+        matches!(messages.first(), Some(SyncMessage::DataRequestRejected(DataRequestRejected { id: rejected })) if *rejected == id)
+    );
+    let failed_sends =
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find_map(|(key, _, _, value)| {
+                let (_, key) = key.into_parts();
+                match value {
+                    DebugValue::Counter(count)
+                        if key.name() == names::REQUESTED_DATA_SEND_FAILURES_TOTAL =>
+                    {
+                        Some(count)
+                    }
+                    DebugValue::Counter(_) | DebugValue::Gauge(_) | DebugValue::Histogram(_) => {
+                        None
+                    }
+                }
+            });
+    assert_eq!(
+        failed_sends,
+        Some(0),
+        "policy rejection is not a send failure"
+    );
+    node.shutdown();
+    listener.await??;
+    manager.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn single_peer_requested_data_rejection_is_reported_without_disclosure() -> TestResult {
+    requested_data_rejection(false).await
+}
+
+#[tokio::test]
+async fn all_peer_requested_data_rejection_is_reported_without_disclosure() -> TestResult {
+    requested_data_rejection(true).await
 }
 
 /// A policy that allows puts only from a specific author (verifying key).
