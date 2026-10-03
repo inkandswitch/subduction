@@ -1529,8 +1529,8 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
     ///   backends `save_batch` may have persisted some commits before
-    ///   surfacing an error; this method then returns early and leaves the
-    ///   in-memory tree behind the on-disk state until rehydrate.
+    ///   surfacing an error. The cached tree is invalidated so its next read
+    ///   rehydrates the actual stored contents; the error does not imply rollback.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -1566,8 +1566,8 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
     ///   backends `save_batch` may have persisted some fragments before
-    ///   surfacing an error; this method then returns early and leaves the
-    ///   in-memory tree behind the on-disk state until rehydrate.
+    ///   surfacing an error. The cached tree is invalidated so its next read
+    ///   rehydrates the actual stored contents; the error does not imply rollback.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
@@ -1616,8 +1616,8 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
     ///   backends `save_batch` may have persisted some items before
-    ///   surfacing an error; this method then returns early and leaves the
-    ///   in-memory tree behind the on-disk state until rehydrate.
+    ///   surfacing an error. The cached tree is invalidated so its next read
+    ///   rehydrates the actual stored contents; the error does not imply rollback.
     /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
     ///   digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
@@ -1833,8 +1833,8 @@ where
     ///   call hits a storage error. On non-transactional
     ///   [`Storage`](crate::storage::traits::Storage) backends `save_batch`
     ///   may have persisted some items before surfacing an error; in that
-    ///   case this method returns early and leaves the in-memory tree
-    ///   behind the on-disk state until rehydrate.
+    ///   case the cached tree is invalidated so its next read rehydrates actual
+    ///   storage contents. The error does not imply rollback.
     /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
     ///   digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).

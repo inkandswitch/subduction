@@ -35,6 +35,7 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 pub struct StoragePowerbox<Store, Auth> {
     storage: Arc<Store>,
     policy: Arc<Auth>,
+    state: Arc<super::state::StorageState>,
 }
 
 impl<Store, Auth> StoragePowerbox<Store, Auth> {
@@ -43,6 +44,7 @@ impl<Store, Auth> StoragePowerbox<Store, Auth> {
         Self {
             storage: Arc::new(storage),
             policy,
+            state: Arc::default(),
         }
     }
 
@@ -94,7 +96,7 @@ impl<Store, Auth> StoragePowerbox<Store, Auth> {
         Auth: StoragePolicy<Async>,
     {
         self.policy.authorize_fetch(peer, sedimentree_id).await?;
-        Ok(Fetcher::new(self.storage.clone(), sedimentree_id))
+        Ok(self.local_fetcher(sedimentree_id))
     }
 
     /// Create a put capability for a remote peer's data.
@@ -122,7 +124,11 @@ impl<Store, Auth> StoragePowerbox<Store, Auth> {
         self.policy
             .authorize_put(requestor, author, sedimentree_id)
             .await?;
-        Ok(Putter::new(self.storage.clone(), sedimentree_id))
+        Ok(Putter::new(
+            self.storage.clone(),
+            sedimentree_id,
+            self.state.tree(sedimentree_id),
+        ))
     }
 
     /// Create a put capability for local operations.
@@ -143,7 +149,11 @@ impl<Store, Auth> StoragePowerbox<Store, Auth> {
     where
         Store: Storage<Async>,
     {
-        Putter::new(self.storage.clone(), sedimentree_id)
+        Putter::new(
+            self.storage.clone(),
+            sedimentree_id,
+            self.state.tree(sedimentree_id),
+        )
     }
 
     /// Read our own tree for hydration, blob access, or application catch-up.
@@ -155,7 +165,7 @@ impl<Store, Auth> StoragePowerbox<Store, Auth> {
     where
         Store: Storage<Async>,
     {
-        Fetcher::new(self.storage.clone(), id)
+        Fetcher::new(self.storage.clone(), id, self.state.tree(id))
     }
 
     /// Access the global local ID index, which is not scoped to one tree.
@@ -170,6 +180,7 @@ impl<Store, Auth> Clone for StoragePowerbox<Store, Auth> {
         Self {
             storage: self.storage.clone(),
             policy: self.policy.clone(),
+            state: self.state.clone(),
         }
     }
 }
