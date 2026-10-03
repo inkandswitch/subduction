@@ -374,6 +374,54 @@ impl<K: Hash + Ord, V, const N: usize> BoundedShardedMap<K, V, N> {
         Ok(result)
     }
 
+    /// Adopt a resident value, or install a loaded value if `valid` still holds.
+    ///
+    /// Validation and inspection run under the shard lock, with no I/O. The
+    /// outer `None` asks the caller to reload; `Some(None)` means a valid absent
+    /// value. A resident value wins over the loaded copy and needs no validation.
+    /// This supports storage scans whose validity can change during an await.
+    pub(crate) async fn install_checked<Valid, Inspect, R>(
+        &self,
+        key: K,
+        loaded: Option<V>,
+        valid: Valid,
+        inspect: Inspect,
+    ) -> Option<Option<R>>
+    where
+        K: Clone,
+        Valid: FnOnce() -> bool,
+        Inspect: FnOnce(&mut V) -> R,
+    {
+        let tick = self.next_tick();
+        let mut shard = self.inner.get_shard_containing(&key).lock().await;
+        if let Some(entry) = shard.get_mut(&key) {
+            if self.per_shard_capacity.is_some() {
+                entry.1 = tick;
+            }
+            return Some(Some(inspect(&mut entry.0)));
+        }
+        if !valid() {
+            return None;
+        }
+        let Some(mut value) = loaded else {
+            return Some(None);
+        };
+        self.evict_if_full_locked(&mut shard, &key);
+        let result = inspect(&mut value);
+        shard.insert(key, (value, tick));
+        Some(Some(result))
+    }
+
+    /// Remove a value and finish its invalidation under the same shard lock.
+    pub(crate) async fn remove_with<Finish>(&self, key: &K, finish: Finish)
+    where
+        Finish: FnOnce(),
+    {
+        let mut shard = self.inner.get_shard_containing(key).lock().await;
+        shard.remove(key);
+        finish();
+    }
+
     /// Remove a key, returning its value if present.
     pub async fn remove(&self, key: &K) -> Option<V> {
         self.inner

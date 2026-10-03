@@ -22,6 +22,7 @@ use super::{fetcher::Fetcher, traits::Storage};
 pub struct Putter<Async: FutureForm, Store: Storage<Async>> {
     storage: Arc<Store>,
     sedimentree_id: SedimentreeId,
+    state: Arc<super::state::TreeState>,
     _marker: PhantomData<Async>,
 }
 
@@ -29,10 +30,15 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
     /// Create a new putter capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(super) const fn new(storage: Arc<Store>, sedimentree_id: SedimentreeId) -> Self {
+    pub(super) const fn new(
+        storage: Arc<Store>,
+        sedimentree_id: SedimentreeId,
+        state: Arc<super::state::TreeState>,
+    ) -> Self {
         Self {
             storage,
             sedimentree_id,
+            state,
             _marker: PhantomData,
         }
     }
@@ -48,7 +54,11 @@ impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
     /// This is useful when you have put access but only need to fetch.
     #[must_use]
     pub fn as_fetcher(&self) -> Fetcher<Async, Store> {
-        Fetcher::new(self.storage.clone(), self.sedimentree_id)
+        Fetcher::new(
+            self.storage.clone(),
+            self.sedimentree_id,
+            self.state.clone(),
+        )
     }
 
     // ==================== Commits ====================
@@ -117,6 +127,7 @@ impl<Async: FutureForm, Store: Storage<Async>> Clone for Putter<Async, Store> {
         Self {
             storage: self.storage.clone(),
             sedimentree_id: self.sedimentree_id,
+            state: self.state.clone(),
             _marker: PhantomData,
         }
     }

@@ -25,6 +25,7 @@ use super::traits::Storage;
 pub struct Fetcher<Async: FutureForm, Store: Storage<Async>> {
     storage: Arc<Store>,
     sedimentree_id: SedimentreeId,
+    pub(crate) state: Arc<super::state::TreeState>,
     _marker: PhantomData<Async>,
 }
 
@@ -32,10 +33,15 @@ impl<Async: FutureForm, Store: Storage<Async>> Fetcher<Async, Store> {
     /// Create a new fetcher capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(super) const fn new(storage: Arc<Store>, sedimentree_id: SedimentreeId) -> Self {
+    pub(super) const fn new(
+        storage: Arc<Store>,
+        sedimentree_id: SedimentreeId,
+        state: Arc<super::state::TreeState>,
+    ) -> Self {
         Self {
             storage,
             sedimentree_id,
+            state,
             _marker: PhantomData,
         }
     }
@@ -132,6 +138,7 @@ impl<Async: FutureForm, Store: Storage<Async>> Clone for Fetcher<Async, Store> {
         Self {
             storage: self.storage.clone(),
             sedimentree_id: self.sedimentree_id,
+            state: self.state.clone(),
             _marker: PhantomData,
         }
     }
