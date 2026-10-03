@@ -28,6 +28,17 @@ Subduction is a peer-to-peer sync protocol that enables efficient synchronizatio
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Storage access
+
+Peer reads use an authorized `Fetcher`; core local reads use the same capability
+minted internally for a specific tree. Hydration reads metadata only, while blob
+access reads complete verified items. Global ID enumeration remains separate.
+
+`LocalStorageAccess` no longer duplicates the four bulk tree-reading methods.
+Trusted integrations that used those methods can call their `Storage` backend
+through `LocalStorageAccess::storage()` instead. Remote reads must still go
+through policy-authorized capabilities.
+
 ## `no_std` Support
 
 This crate is `#![no_std]` compatible. Enable the `std` feature for standard library support.
