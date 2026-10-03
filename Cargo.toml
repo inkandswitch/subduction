@@ -75,6 +75,7 @@ criterion_pprof = { package = "pprof", version = "0.15", default-features = fals
 ] }
 dhat = "0.3"
 ed25519-dalek = { version = "2.1", default-features = false }
+event-listener = { version = "5.4", default-features = false }
 eyre = "0.6"
 from_js_ref = "0.2.0" # no_std by default
 future_form = "0.3.0"
@@ -115,6 +116,7 @@ serde_bytes = { version = "0.11.10", default-features = false, features = [
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 sha1 = { version = "0.10", default-features = false }
 siphasher = { version = "1.0", default-features = false }
+spin = { version = "0.10", default-features = false, features = ["mutex", "spin_mutex"] }
 tempfile = "3.27"
 testresult = "0.4.1"
 thiserror = { version = "2.0", default-features = false }
