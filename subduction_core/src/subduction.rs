@@ -2205,144 +2205,16 @@ where
         let mut conn_errs = Vec::new();
 
         for conn in peer_conns {
-            tracing::info!(peer = %to_ask, "using connection to peer");
-            let seed = FingerprintSeed::random();
-            // A nonexistent tree syncs as empty: we advertise nothing and the
-            // peer sends us everything it has. The hydrated tree is already
-            // minimized for the wire diff.
+            // Refresh per attempt, unlike all-peer sync's shared snapshot.
+            // An unknown tree advertises an empty inventory.
             let tree = self.get_or_hydrate(id).await?.unwrap_or_default();
-            let resolver = tree.fingerprint_resolver(&seed);
-
-            tracing::debug!(
-                tree = ?id,
-                commit_fps = resolver.summary().commit_fingerprints().len(),
-                fragment_fps = resolver.summary().fragment_fingerprints().len(),
-                "sending fingerprint summary"
-            );
-
-            // Mux missing means the peer was torn down between the
-            // connection snapshot and here; report it dropped, don't panic.
-            let Some(mux) = self.mux_for_connection(&conn).await else {
-                tracing::debug!(peer = %to_ask, "multiplexer for peer gone (concurrent teardown); skipping");
-                conn_errs.push((conn.clone(), CallError::ResponseDropped));
-                continue;
-            };
-            let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-            let req_id = managed.next_request_id();
-
-            let result = ManagedCall::<Async, Hdl::Message>::call(
-                &managed,
-                BatchSyncRequest {
-                    id,
-                    req_id,
-                    fingerprint_summary: resolver.summary().clone(),
-                    subscribe,
-                },
-                timeout,
-            )
-            .await;
-
-            match result {
-                Err(e) => conn_errs.push((conn, e)),
-                Ok(BatchSyncResponse {
-                    result,
-                    responder_heads,
-                    ..
-                }) => {
-                    self.handler
-                        .notify_remote_heads(id, conn.peer_id(), responder_heads.clone());
-                    stats.remote_heads = responder_heads;
-                    let SyncDiff {
-                        missing_commits,
-                        missing_fragments,
-                        requesting,
-                    } = match result {
-                        SyncResult::Ok(diff) => diff,
-                        SyncResult::NotFound => {
-                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports sedimentree not found");
-                            continue;
-                        }
-                        SyncResult::Unauthorized => {
-                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports we are unauthorized for sedimentree");
-                            continue;
-                        }
-                    };
-
-                    // Track counts for stats
-                    let commits_to_receive = missing_commits.len();
-                    let fragments_to_receive = missing_fragments.len();
-
-                    // Ingest in one batched pass: `recv_batch_sync_response` groups
-                    // items by author and writes each batch in a single `save_batch`.
-                    // `requesting` is handled separately below, so the ingester's
-                    // copy is left empty.
-                    let ingested = ingest::recv_batch_sync_response(
-                        &self.sedimentrees,
-                        &self.storage,
-                        to_ask,
-                        id,
-                        SyncDiff {
-                            missing_commits,
-                            missing_fragments,
-                            requesting: RequestedData::default(),
-                        },
-                    )
-                    .await?;
-                    self.minimize_tree(id).await;
-                    self.push_to_subscribers(id, to_ask, &ingested).await;
-
-                    // Update received stats (count what was offered, not verified)
-                    stats.commits_received += commits_to_receive;
-                    stats.fragments_received += fragments_to_receive;
-
-                    tracing::debug!(
-                        tree = ?id,
-                        commits_received = commits_to_receive,
-                        requesting_commits = requesting.commit_fingerprints.len(),
-                        requesting_fragments = requesting.fragment_fingerprints.len(),
-                        "received response"
-                    );
-
-                    // Send back data the responder requested (bidirectional sync)
-                    if !requesting.is_empty() {
-                        tracing::debug!(tree = ?id, "calling send_requested_data");
-                        match self
-                            .send_requested_data(&conn, id, &resolver, &requesting)
-                            .await
-                        {
-                            Ok(sent) => {
-                                tracing::debug!(
-                                    commits = sent.commits,
-                                    fragments = sent.fragments,
-                                    "send_requested_data returned"
-                                );
-                                stats.commits_sent += sent.commits;
-                                stats.fragments_sent += sent.fragments;
-                            }
-                            Err(e @ SendRequestedDataError::Unauthorized(_)) => {
-                                let msg: Hdl::Message =
-                                    SyncMessage::from(DataRequestRejected { id }).into();
-                                if let Err(send_err) = conn.send(&msg).await {
-                                    tracing::warn!(peer = %to_ask, error = %send_err, "peer disconnected while sending DataRequestRejected");
-                                }
-                                tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
-                            }
-                            Err(e) => {
-                                tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
-                                #[cfg(feature = "metrics")]
-                                crate::metrics::requested_data_send_failure();
-                            }
-                        }
-                    }
-
-                    // Mutual subscription: we subscribed to them, so also add them
-                    // to our subscriptions so our commits get pushed to them
-                    if subscribe {
-                        self.track_outgoing_subscription(*to_ask, id).await;
-                        self.add_subscription(*to_ask, id).await;
-                        tracing::debug!(peer = %to_ask, tree = ?id, "mutual subscription: added peer to our subscriptions");
-                    }
-
+            match self
+                .sync_connection(&conn, id, &tree, subscribe, timeout, &mut stats)
+                .await?
+            {
+                Err(error) => conn_errs.push((conn, error)),
+                Ok(false) => {}
+                Ok(true) => {
                     had_success = true;
                     break;
                 }
@@ -2441,141 +2313,28 @@ where
                     let mut stats = SyncStats::new();
 
                     for conn in peer_conns {
-                        tracing::debug!(peer = %conn.peer_id(), "using connection to peer");
-                        let seed = FingerprintSeed::random();
-                        let resolver = shared_tree.fingerprint_resolver(&seed);
-
-                        // Mux missing means the peer was torn down between
-                        // the connection snapshot and here; report it
-                        // dropped, don't panic.
-                        let Some(mux) = self.mux_for_connection(conn).await else {
-                            tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
-                            conn_errs.push((
-                                conn.clone(),
-                                CallError::ResponseDropped,
-                            ));
-                            continue;
-                        };
-                        let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-                        let req_id = managed.next_request_id();
-
-                        let result = ManagedCall::<Async, Hdl::Message>::call(
-                                &managed,
-                                BatchSyncRequest {
-                                    id,
-                                    req_id,
-                                    fingerprint_summary: resolver.summary().clone(),
-                                    subscribe,
-                                },
-                                timeout,
-                            )
-                            .await;
-
-                        match result {
-                            Err(e) => conn_errs.push((conn.clone(), e)),
-                            Ok(BatchSyncResponse {
-                                result,
-                                responder_heads,
-                                ..
-                            }) => {
-                                self.handler.notify_remote_heads(
-                                    id,
-                                    *peer_id,
-                                    responder_heads.clone(),
-                                );
-                                stats.remote_heads = responder_heads;
-                                let SyncDiff {
-                                    missing_commits,
-                                    missing_fragments,
-                                    requesting,
-                                } = match result {
-                                    SyncResult::Ok(diff) => diff,
-                                    SyncResult::NotFound => {
-                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports sedimentree not found");
-                                        continue;
-                                    }
-                                    SyncResult::Unauthorized => {
-                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports we are unauthorized for sedimentree");
-                                        continue;
-                                    }
-                                };
-
-                                // Track counts for stats
-                                let commits_to_receive = missing_commits.len();
-                                let fragments_to_receive = missing_fragments.len();
-
-                                tracing::debug!(
-                                    sedimentree_id = ?id,
-                                    commits_received = commits_to_receive,
-                                    fragments_received = fragments_to_receive,
-                                    peer_requesting_commits = requesting.commit_fingerprints.len(),
-                                    peer_requesting_fragments = requesting.fragment_fingerprints.len(),
-                                    "sync_with_all_peers: response received"
-                                );
-
-                                // Ingest in one batched pass; see `sync_with_peer`.
-                                // `requesting` is handled separately below.
-                                let ingested = ingest::recv_batch_sync_response(
-                                    &self.sedimentrees,
-                                    &self.storage,
-                                    peer_id,
-                                    id,
-                                    SyncDiff {
-                                        missing_commits,
-                                        missing_fragments,
-                                        requesting: RequestedData::default(),
-                                    },
-                                )
-                                .await?;
-                                self.minimize_tree(id).await;
-                                self.push_to_subscribers(id, peer_id, &ingested).await;
-
-                                // Update received stats
-                                stats.commits_received += commits_to_receive;
-                                stats.fragments_received += fragments_to_receive;
-
-                                // Send back data the responder requested (bidirectional sync)
-                                if !requesting.is_empty() {
-                                    match self.send_requested_data(conn, id, &resolver, &requesting).await {
-                                        Ok(sent) => {
-                                            stats.commits_sent += sent.commits;
-                                            stats.fragments_sent += sent.fragments;
-                                        }
-                                        Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
-                                            let msg: Hdl::Message = SyncMessage::from(DataRequestRejected { id }).into();
-                                            if let Err(send_err) = conn.send(&msg).await {
-                                                tracing::warn!(peer = %peer_id, error = %send_err, "peer disconnected while sending DataRequestRejected");
-                                            }
-                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
-                                            #[cfg(feature = "metrics")]
-                                            crate::metrics::requested_data_send_failure();
-                                        }
-                                    }
-                                }
-
-                                // Mutual subscription: we subscribed to them, so also add them
-                                // to our subscriptions so our commits get pushed to them
-                                if subscribe {
-                                    self.track_outgoing_subscription(*peer_id, id).await;
-                                    self.add_subscription(*peer_id, id).await;
-                                    tracing::debug!(peer = %peer_id, tree = ?id, "mutual subscription: added peer to our subscriptions");
-                                }
-
+                        match self
+                            .sync_connection(conn, id, &shared_tree, subscribe, timeout, &mut stats)
+                            .await?
+                        {
+                            Err(error) => conn_errs.push((conn.clone(), error)),
+                            Ok(false) => {}
+                            Ok(true) => {
                                 had_success = true;
                                 break;
                             }
                         }
                     }
 
-                    Ok::<(PeerId, bool, SyncStats, Vec<(Authenticated<Conn, Async>, _)>), IoError<Async, Store, Conn, Hdl::Message>>((
-                        *peer_id,
-                        had_success,
-                        stats,
-                        conn_errs,
-                    ))
+                    Ok::<
+                        (
+                            PeerId,
+                            bool,
+                            SyncStats,
+                            Vec<(Authenticated<Conn, Async>, _)>,
+                        ),
+                        IoError<Async, Store, Conn, Hdl::Message>,
+                    >((*peer_id, had_success, stats, conn_errs))
                 }
             })
             .collect();
@@ -2592,6 +2351,114 @@ where
             }
         }
         Ok(PerPeerSync::new(out))
+    }
+
+    /// Process one connection's round. The outer result covers local I/O;
+    /// the inner result preserves per-connection call errors and refusals.
+    /// Callers retain their own inventory lifetime and aggregation policy.
+    #[allow(clippy::type_complexity, clippy::too_many_lines)]
+    async fn sync_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        id: SedimentreeId,
+        tree: &Sedimentree,
+        subscribe: bool,
+        timeout: Option<Duration>,
+        stats: &mut SyncStats,
+    ) -> Result<Result<bool, CallError<Conn::SendError>>, IoError<Async, Store, Conn, Hdl::Message>>
+    {
+        let peer = conn.peer_id();
+        let seed = FingerprintSeed::random();
+        let resolver = tree.fingerprint_resolver(&seed);
+        let Some(mux) = self.mux_for_connection(conn).await else {
+            tracing::debug!(peer = %peer, "multiplexer gone during sync; skipping connection");
+            return Ok(Err(CallError::ResponseDropped));
+        };
+        let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
+        let response = ManagedCall::<Async, Hdl::Message>::call(
+            &managed,
+            BatchSyncRequest {
+                id,
+                req_id: managed.next_request_id(),
+                fingerprint_summary: resolver.summary().clone(),
+                subscribe,
+            },
+            timeout,
+        )
+        .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return Ok(Err(error)),
+        };
+        self.handler
+            .notify_remote_heads(id, peer, response.responder_heads.clone());
+        stats.remote_heads = response.responder_heads;
+        let SyncDiff {
+            missing_commits,
+            missing_fragments,
+            requesting,
+        } = match response.result {
+            SyncResult::Ok(diff) => diff,
+            SyncResult::NotFound => {
+                tracing::debug!(peer = %peer, tree = ?id, "peer reports sedimentree not found");
+                return Ok(Ok(false));
+            }
+            SyncResult::Unauthorized => {
+                tracing::debug!(peer = %peer, tree = ?id, "peer reports we are unauthorized for sedimentree");
+                return Ok(Ok(false));
+            }
+        };
+        let commits_to_receive = missing_commits.len();
+        let fragments_to_receive = missing_fragments.len();
+        // The shared ingester verifies and groups accepted items by author;
+        // return-direction requests belong to this captured resolver instead.
+        let ingested = ingest::recv_batch_sync_response(
+            &self.sedimentrees,
+            &self.storage,
+            &peer,
+            id,
+            SyncDiff {
+                missing_commits,
+                missing_fragments,
+                requesting: RequestedData::default(),
+            },
+        )
+        .await?;
+        self.minimize_tree(id).await;
+        self.push_to_subscribers(id, &peer, &ingested).await;
+        // Existing statistics count offered items, not acceptance.
+        stats.commits_received += commits_to_receive;
+        stats.fragments_received += fragments_to_receive;
+
+        if !requesting.is_empty() {
+            match self
+                .send_requested_data(conn, id, &resolver, &requesting)
+                .await
+            {
+                Ok(sent) => {
+                    stats.commits_sent += sent.commits;
+                    stats.fragments_sent += sent.fragments;
+                }
+                Err(error @ SendRequestedDataError::Unauthorized(_)) => {
+                    let message: Hdl::Message =
+                        SyncMessage::from(DataRequestRejected { id }).into();
+                    if let Err(send_error) = conn.send(&message).await {
+                        tracing::warn!(peer = %peer, error = %send_error, "peer disconnected while sending DataRequestRejected");
+                    }
+                    tracing::warn!(peer = %peer, %error, "policy rejected requested data");
+                }
+                Err(error) => {
+                    tracing::warn!(peer = %peer, %error, "failed to send requested data to peer");
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::requested_data_send_failure();
+                }
+            }
+        }
+        if subscribe {
+            self.track_outgoing_subscription(peer, id).await;
+            self.add_subscription(peer, id).await;
+        }
+        Ok(Ok(true))
     }
 
     /// Sync all known [`Sedimentree`]s with all connected peers.
