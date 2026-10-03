@@ -62,6 +62,7 @@ pub mod request;
 
 pub mod dispatch_completion;
 pub(crate) mod ingest;
+mod mutation;
 pub(crate) mod peers;
 pub use peers::{SendPushes, upstream_peers};
 pub(crate) mod spawn_guard;
@@ -1220,23 +1221,19 @@ where
 
         let destroyer = self.storage.local_destroyer(id);
 
-        // With compound storage, deleting commits/fragments also deletes their blobs.
-        destroyer
-            .delete_loose_commits()
-            .await
-            .map_err(IoError::Storage)?;
-
-        destroyer
-            .delete_fragments()
-            .await
-            .map_err(IoError::Storage)?;
-
-        // Existence is recorded by the id index; remove it so the tree no
-        // longer appears in `sedimentree_ids` / enumeration.
-        destroyer
-            .delete_sedimentree_id()
-            .await
-            .map_err(IoError::Storage)?;
+        mutation::complete(
+            &self.sedimentrees,
+            &self.storage.local_fetcher::<Async>(id),
+            async {
+                // Compound deletion also removes blobs; remove registration last.
+                destroyer.delete_loose_commits().await?;
+                destroyer.delete_fragments().await?;
+                destroyer.delete_sedimentree_id().await
+            },
+            None,
+        )
+        .await
+        .map_err(IoError::Storage)?;
 
         Ok(())
     }
@@ -1650,41 +1647,25 @@ where
         // Sign every commit and fragment first; defer all storage I/O so we
         // can hit the adapter exactly once via `save_batch`.
         let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> = Vec::with_capacity(commit_count);
-        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(commit_count);
         for (commit, blob) in commits {
             let verified_sig = Signed::seal::<Async, _>(&self.signer, commit).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            commit_payloads.push(verified_meta.payload().clone());
             verified_commits.push(verified_meta);
         }
 
         let mut verified_fragments: Vec<VerifiedMeta<Fragment>> =
             Vec::with_capacity(fragment_count);
-        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(fragment_count);
         for (fragment, blob) in fragments {
             let verified_sig = Signed::seal::<Async, _>(&self.signer, fragment).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            fragment_payloads.push(verified_meta.payload().clone());
             verified_fragments.push(verified_meta);
         }
 
-        putter
-            .save_batch(verified_commits, verified_fragments)
+        self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+            .map_err(|error| WriteError::Io(IoError::Storage(error)))?;
         self.minimize_tree(id).await;
 
         tracing::info!(
@@ -2644,21 +2625,13 @@ where
             .map(|v| v.payload().clone())
             .collect();
 
-        putter
-            .save_batch(verified_commits, verified_fragments)
-            .await?;
-
-        let sedimentree = Sedimentree::new(fragments, loose_commits);
-        // Hydrate-on-miss so merging into an evicted tree preserves its full
-        // durable history.
-        let access = self.storage.local_fetcher::<Async>(id);
-        self.sedimentrees
-            .with_entry_hydrated(
-                id,
-                || ingest::load_tree::<Async, _>(&access),
-                |tree| tree.merge(sedimentree),
-            )
-            .await?;
+        mutation::complete(
+            &self.sedimentrees,
+            &putter.as_fetcher(),
+            putter.save_batch(verified_commits, verified_fragments),
+            Some(Sedimentree::new(fragments, loose_commits)),
+        )
+        .await?;
 
         Ok(())
     }
@@ -2919,28 +2892,6 @@ where
         id: SedimentreeId,
     ) -> Result<Option<Sedimentree>, IoError<Async, Store, Conn, Hdl::Message>> {
         ingest::get_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
-            .await
-            .map_err(IoError::Storage)
-    }
-
-    /// Mutate the in-memory tree for `id`, hydrating it from storage first if
-    /// it is not resident.
-    ///
-    /// The write-path counterpart to [`get_or_hydrate`](Self::get_or_hydrate):
-    /// a mutation applied to an evicted tree starts from its full durable
-    /// history rather than an empty default. The caller is responsible for
-    /// having persisted the underlying data to storage *before* calling this
-    /// (storage is the source of truth). The mutation runs against the
-    /// [`MinimizedSedimentree`] wrapper, which it marks dirty; callers
-    /// re-minimize (e.g. via [`minimize_tree`](Self::minimize_tree)) afterward.
-    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree) -> R, R>(
-        &self,
-        id: SedimentreeId,
-        mutate: F,
-    ) -> Result<R, IoError<Async, Store, Conn, Hdl::Message>> {
-        let access = self.storage.local_fetcher::<Async>(id);
-        self.sedimentrees
-            .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access), mutate)
             .await
             .map_err(IoError::Storage)
     }
