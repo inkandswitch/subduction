@@ -19,6 +19,7 @@ bijoux = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
+event-listener = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
 getrandom = { workspace = true }
@@ -27,6 +28,7 @@ nonempty = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }
 serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
+spin = { workspace = true }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"], optional = true }

@@ -196,6 +196,24 @@ impl<K: Hash + Ord, V, const N: usize> BoundedShardedMap<K, V, N> {
         Some(f(&mut entry.0))
     }
 
+    /// Run `f` under the shard lock, passing the entry if it is resident.
+    /// Unlike `with_entry`, this calls `f` even when the key is absent, but never
+    /// inserts a value. A resident entry receives the usual LRU touch.
+    pub(crate) async fn with_optional_entry<F, R>(&self, key: &K, f: F) -> R
+    where
+        F: FnOnce(Option<&mut V>) -> R,
+    {
+        let tick = self.next_tick();
+        let mut shard = self.inner.get_shard_containing(key).lock().await;
+        let entry = shard.get_mut(key).map(|entry| {
+            if self.per_shard_capacity.is_some() {
+                entry.1 = tick;
+            }
+            &mut entry.0
+        });
+        f(entry)
+    }
+
     /// Get-or-insert-default for `key`, then apply `f` to the value.
     ///
     /// Enforces the per-shard capacity for a newly-inserted key (evicting
@@ -374,6 +392,54 @@ impl<K: Hash + Ord, V, const N: usize> BoundedShardedMap<K, V, N> {
         Ok(result)
     }
 
+    /// Adopt a resident value, or install a loaded value if `valid` still holds.
+    ///
+    /// Validation and inspection run under the shard lock, with no I/O. The
+    /// outer `None` asks the caller to reload; `Some(None)` means a valid absent
+    /// value. A resident value wins over the loaded copy and needs no validation.
+    /// This supports storage scans whose validity can change during an await.
+    pub(crate) async fn install_checked<Valid, Inspect, R>(
+        &self,
+        key: K,
+        loaded: Option<V>,
+        valid: Valid,
+        inspect: Inspect,
+    ) -> Option<Option<R>>
+    where
+        K: Clone,
+        Valid: FnOnce() -> bool,
+        Inspect: FnOnce(&mut V) -> R,
+    {
+        let tick = self.next_tick();
+        let mut shard = self.inner.get_shard_containing(&key).lock().await;
+        if let Some(entry) = shard.get_mut(&key) {
+            if self.per_shard_capacity.is_some() {
+                entry.1 = tick;
+            }
+            return Some(Some(inspect(&mut entry.0)));
+        }
+        if !valid() {
+            return None;
+        }
+        let Some(mut value) = loaded else {
+            return Some(None);
+        };
+        self.evict_if_full_locked(&mut shard, &key);
+        let result = inspect(&mut value);
+        shard.insert(key, (value, tick));
+        Some(Some(result))
+    }
+
+    /// Remove a value and finish its invalidation under the same shard lock.
+    pub(crate) async fn remove_with<Finish>(&self, key: &K, finish: Finish)
+    where
+        Finish: FnOnce(),
+    {
+        let mut shard = self.inner.get_shard_containing(key).lock().await;
+        shard.remove(key);
+        finish();
+    }
+
     /// Remove a key, returning its value if present.
     pub async fn remove(&self, key: &K) -> Option<V> {
         self.inner
@@ -439,6 +505,25 @@ mod tests {
             put(&map, n, u32::from(n)).await;
         }
         assert_eq!(map.len().await, 100, "no cap ⇒ nothing evicted");
+    }
+
+    #[tokio::test]
+    async fn optional_entry_handles_absence_without_inserting_and_touches_hits() {
+        let map = single_shard_capped(2);
+        map.with_optional_entry(&sid(1), |entry| assert!(entry.is_none()))
+            .await;
+        assert_eq!(map.len().await, 0);
+
+        put(&map, 1, 10).await;
+        put(&map, 2, 20).await;
+        map.with_optional_entry(&sid(1), |entry| {
+            *entry.expect("resident entry") += 1;
+        })
+        .await;
+        put(&map, 3, 30).await;
+        assert_eq!(map.get_cloned(&sid(1)).await, Some(11));
+        assert!(map.get_cloned(&sid(2)).await.is_none(), "hit refreshed LRU");
+        assert_eq!(map.get_cloned(&sid(3)).await, Some(30));
     }
 
     #[tokio::test]
