@@ -21,6 +21,8 @@ use sedimentree_core::{
 
 use crate::peer::id::PeerId;
 
+pub mod watches;
+
 /// A remote peer's heads for a sedimentree, with a monotonic counter
 /// for ordering in the face of out-of-order delivery.
 ///
@@ -53,9 +55,13 @@ impl RemoteHeads {
 /// Observer for remote heads notifications.
 ///
 /// Called with `(sedimentree_id, peer_id, heads)` when a peer's heads for a
-/// sedimentree change. Heads arrive on `HeadsUpdate`, `sender_heads`, and
+/// watched sedimentree change. Only sedimentrees passed to
+/// [`Subduction::watch_heads`] are reported; syncing or being pushed to does
+/// not imply a watch. Heads arrive on `HeadsUpdate`, `sender_heads`, and
 /// `responder_heads`; repeats are suppressed so an observer that syncs in
 /// response terminates.
+///
+/// [`Subduction::watch_heads`]: crate::subduction::Subduction::watch_heads
 ///
 /// # Contract
 ///
@@ -229,6 +235,15 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
     pub async fn remove_peer(&self, peer: PeerId) {
         self.peers.lock().await.remove(&peer);
     }
+
+    /// See [`RemoteHeadsNotifier::forget_remote_heads`].
+    pub async fn forget_tree(&self, id: SedimentreeId) {
+        let filters: Vec<Arc<Mutex<PeerFilter>>> =
+            self.peers.lock().await.values().cloned().collect();
+        for filter in filters {
+            filter.lock().await.reported.remove(&id);
+        }
+    }
 }
 
 impl<R: RemoteHeadsObserver + core::fmt::Debug> core::fmt::Debug for FilteredHeadsNotifier<R> {
@@ -269,6 +284,11 @@ pub trait RemoteHeadsNotifier<Async: FutureForm> {
         peer: PeerId,
         heads: RemoteHeads,
     ) -> Async::Future<'_, ()>;
+
+    /// Forget what has been reported about `id` for every peer, so the next
+    /// report is delivered even if the heads are unchanged. Called when the
+    /// application stops watching `id`.
+    fn forget_remote_heads(&self, id: SedimentreeId) -> Async::Future<'_, ()>;
 }
 
 #[cfg(test)]
@@ -337,7 +357,8 @@ mod tests {
 
     /// Reference model of the documented rule: delivered iff the counter is
     /// non-zero, advanced for `(peer, tree)`, and the canonical heads differ
-    /// from the last delivery; `remove_peer` forgets that peer's entries.
+    /// from the last delivery; `remove_peer` forgets a peer's entries and
+    /// `forget_tree` a tree's.
     #[test]
     fn prop_observer_sees_exactly_the_changes() {
         use futures::executor::block_on;
@@ -357,6 +378,9 @@ mod tests {
             },
             RemovePeer {
                 peer: u8,
+            },
+            ForgetTree {
+                tree: u8,
             },
         }
 
@@ -379,6 +403,11 @@ mod tests {
                             let pi = usize::from(*peer % PEERS);
                             model.retain(|(p, _), _| *p != pi);
                             block_on(notifier.remove_peer(peers[pi]));
+                        }
+                        Op::ForgetTree { tree } => {
+                            let ti = usize::from(*tree % TREES);
+                            model.retain(|(_, t), _| *t != ti);
+                            block_on(notifier.forget_tree(trees[ti]));
                         }
                         Op::Notify {
                             peer,

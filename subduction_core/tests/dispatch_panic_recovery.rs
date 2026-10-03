@@ -91,6 +91,10 @@ impl RemoteHeadsNotifier<Sendable> for PanicHandler {
     ) -> BoxFuture<'_, ()> {
         Box::pin(async move { self.inner.notify_remote_heads(id, peer, heads).await })
     }
+
+    fn forget_remote_heads(&self, id: SedimentreeId) -> BoxFuture<'_, ()> {
+        Box::pin(async move { self.inner.forget_remote_heads(id).await })
+    }
 }
 
 /// Poll `cond` until it holds or `limit` elapses; returns whether it held.

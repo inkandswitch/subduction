@@ -179,6 +179,10 @@ impl RemoteHeadsNotifier<Sendable> for CliHandler {
     ) -> BoxFuture<'_, ()> {
         self.core.notify_remote_heads(id, peer, heads)
     }
+
+    fn forget_remote_heads(&self, id: sedimentree_core::id::SedimentreeId) -> BoxFuture<'_, ()> {
+        self.core.forget_remote_heads(id)
+    }
 }
 
 impl RemoteHeadsNotifier<Sendable> for CliHandlerOpenPolicy {
@@ -189,6 +193,10 @@ impl RemoteHeadsNotifier<Sendable> for CliHandlerOpenPolicy {
         heads: RemoteHeads,
     ) -> BoxFuture<'_, ()> {
         RemoteHeadsNotifier::notify_remote_heads(self.sync.as_ref(), id, peer, heads)
+    }
+
+    fn forget_remote_heads(&self, id: sedimentree_core::id::SedimentreeId) -> BoxFuture<'_, ()> {
+        RemoteHeadsNotifier::forget_remote_heads(self.sync.as_ref(), id)
     }
 }
 

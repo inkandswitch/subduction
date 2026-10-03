@@ -33,6 +33,7 @@ use subduction_core::{
     multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
+    remote_heads::watches::HeadsWatches,
     spawn::Spawn,
     storage::powerbox::StoragePowerbox,
     subduction::{Subduction, per_peer_sync::PerPeerSync},
@@ -227,6 +228,7 @@ impl WasmSubduction {
 
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let heads_watches = Arc::new(HeadsWatches::new());
         let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
         let powerbox = StoragePowerbox::new(opts_storage, Arc::new(policy));
 
@@ -238,6 +240,7 @@ impl WasmSubduction {
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
+            heads_watches.clone(),
             powerbox.clone(),
             depth_metric.clone(),
             observer.clone(),
@@ -275,6 +278,7 @@ impl WasmSubduction {
             sedimentrees,
             connections,
             subscriptions,
+            heads_watches,
             powerbox,
             send_counter,
             NonceCache::default(),
@@ -397,6 +401,22 @@ impl WasmSubduction {
             )
             .await?;
         Ok(per_peer.into())
+    }
+
+    /// Watch a sedimentree's heads on every current and future peer.
+    ///
+    /// Each peer answers with its current heads and then reports every
+    /// change through `onRemoteHeads`.
+    #[wasm_bindgen(js_name = watchHeads)]
+    pub async fn watch_heads(&self, id: &WasmSedimentreeId) {
+        self.core.watch_heads(id.into()).await;
+    }
+
+    /// Stop watching a sedimentree's heads. A later `watchHeads` delivers the
+    /// snapshot again even if unchanged.
+    #[wasm_bindgen(js_name = unwatchHeads)]
+    pub async fn unwatch_heads(&self, id: &WasmSedimentreeId) {
+        self.core.unwatch_heads(id.into()).await;
     }
 
     /// Remove a Sedimentree and all associated data.
@@ -1772,10 +1792,11 @@ export interface SubductionOptions {
     /** Ephemeral message authorization policy. Defaults to allow-all. */
     ephemeralPolicy?: EphemeralPolicy;
     /**
-     * Called when a remote peer's heads for a sedimentree change:
+     * Called when a remote peer's heads for a watched sedimentree change:
      * `(sedimentreeId, peerId, heads)`, `heads` sorted and deduplicated.
-     * Return quickly and do not call back into Subduction synchronously;
-     * schedule such calls (e.g. `queueMicrotask`).
+     * Only sedimentrees passed to `watchHeads` are reported. Return quickly
+     * and do not call back into Subduction synchronously; schedule such
+     * calls (e.g. `queueMicrotask`).
      */
     onRemoteHeads?: Function;
     /** Callback fired on inbound ephemeral messages. */

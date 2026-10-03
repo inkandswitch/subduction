@@ -97,6 +97,10 @@ impl<Async: FutureForm, SyncH: RemoteHeadsNotifier<Async>, EphH, W> RemoteHeadsN
     ) -> Async::Future<'_, ()> {
         self.sync.notify_remote_heads(id, peer, heads)
     }
+
+    fn forget_remote_heads(&self, id: SedimentreeId) -> Async::Future<'_, ()> {
+        self.sync.forget_remote_heads(id)
+    }
 }
 
 impl<SyncH, EphH, W> ComposedHandler<SyncH, EphH, W> {

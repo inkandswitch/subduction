@@ -219,9 +219,10 @@ WebRTC, relay).
 
 The `responder_heads` on `BatchSyncResponse` and the `sender_heads` on fire-and-forget
 `LooseCommit`/`Fragment` messages both carry `RemoteHeads`. The application receives
-heads notifications via `RemoteHeadsObserver::on_remote_heads(id, peer, heads)`,
-filtered per `(peer, sedimentree)`: delivered only when the counter is newer
-*and* the heads differ from the last delivery.
+heads notifications via `RemoteHeadsObserver::on_remote_heads(id, peer, heads)`
+for sedimentrees it has [watched](./subscriptions.md#heads-watches), filtered per
+`(peer, sedimentree)`: delivered only when the counter is newer *and* the heads
+differ from the last delivery.
 
 [`PeerCounter`]: ../../subduction_core/src/peer/counter.rs
 

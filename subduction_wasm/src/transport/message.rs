@@ -87,7 +87,10 @@ impl WasmMessage {
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 
@@ -107,7 +110,10 @@ impl WasmMessage {
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 
@@ -123,7 +129,10 @@ impl WasmMessage {
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 
@@ -138,7 +147,10 @@ impl WasmMessage {
             | SyncMessage::BatchSyncResponse(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 
@@ -153,7 +165,10 @@ impl WasmMessage {
             | SyncMessage::BatchSyncRequest(_)
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 }

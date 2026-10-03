@@ -84,17 +84,27 @@ pub enum SyncMessage {
     /// Notification that a data request was rejected due to authorization failure.
     DataRequestRejected(DataRequestRejected),
 
-    /// Notification of a peer's current heads for a sedimentree.
+    /// The sender's current heads for a sedimentree.
     ///
-    /// Sent by the responder after ingesting requested data from the
-    /// second half of the 1.5 RTT sync, so the requester learns the
-    /// responder's updated heads.
+    /// Sent as the ack after ingesting pushed data (second half of the 1.5 RTT
+    /// sync) and on every change to a sedimentree the receiver watches via
+    /// [`WatchHeads`].
     HeadsUpdate {
         /// The sedimentree these heads are for.
         id: SedimentreeId,
-        /// The sender's current heads after ingesting data.
+        /// The sender's current heads.
         heads: RemoteHeads,
     },
+
+    /// Request a heads snapshot and subsequent [`SyncMessage::HeadsUpdate`]s
+    /// for these sedimentrees.
+    WatchHeads(WatchHeads),
+
+    /// Answer to a [`WatchHeads`]: per-id outcome with an initial snapshot.
+    WatchHeadsResponse(WatchHeadsResponse),
+
+    /// Stop a previous [`WatchHeads`].
+    UnwatchHeads(UnwatchHeads),
 }
 
 impl SyncMessage {
@@ -108,7 +118,10 @@ impl SyncMessage {
             | SyncMessage::Fragment { .. }
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 
@@ -123,6 +136,9 @@ impl SyncMessage {
             SyncMessage::RemoveSubscriptions(_) => "RemoveSubscriptions",
             SyncMessage::DataRequestRejected(_) => "DataRequestRejected",
             SyncMessage::HeadsUpdate { .. } => "HeadsUpdate",
+            SyncMessage::WatchHeads(_) => "WatchHeads",
+            SyncMessage::WatchHeadsResponse(_) => "WatchHeadsResponse",
+            SyncMessage::UnwatchHeads(_) => "UnwatchHeads",
         }
     }
 
@@ -136,7 +152,10 @@ impl SyncMessage {
             | SyncMessage::BatchSyncResponse(BatchSyncResponse { id, .. })
             | SyncMessage::DataRequestRejected(DataRequestRejected { id })
             | SyncMessage::HeadsUpdate { id, .. } => Some(*id),
-            SyncMessage::RemoveSubscriptions(_) => None,
+            SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 }
@@ -236,7 +255,10 @@ impl TryAsBatchSyncResponse for SyncMessage {
             | SyncMessage::Fragment { .. }
             | SyncMessage::LooseCommit { .. }
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 }
@@ -263,7 +285,10 @@ impl TryAsSubscribeRequest for SyncMessage {
             | SyncMessage::Fragment { .. }
             | SyncMessage::LooseCommit { .. }
             | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::HeadsUpdate { .. } => None,
+            | SyncMessage::HeadsUpdate { .. }
+            | SyncMessage::WatchHeads(_)
+            | SyncMessage::WatchHeadsResponse(_)
+            | SyncMessage::UnwatchHeads(_) => None,
         }
     }
 }
@@ -299,6 +324,86 @@ pub struct DataRequestRejected {
 impl From<DataRequestRejected> for SyncMessage {
     fn from(rejection: DataRequestRejected) -> Self {
         SyncMessage::DataRequestRejected(rejection)
+    }
+}
+
+/// Request the receiver's current heads and a [`SyncMessage::HeadsUpdate`] on
+/// every later change. Answered by [`WatchHeadsResponse`]; there is no request
+/// id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct WatchHeads {
+    /// The sedimentrees to watch.
+    pub ids: Vec<SedimentreeId>,
+}
+
+impl From<WatchHeads> for SyncMessage {
+    fn from(watch: WatchHeads) -> Self {
+        SyncMessage::WatchHeads(watch)
+    }
+}
+
+/// The receiver's answer to a [`WatchHeads`], one outcome per requested id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct WatchHeadsResponse {
+    /// One entry per id in the request, in any order.
+    pub results: Vec<WatchResult>,
+}
+
+impl From<WatchHeadsResponse> for SyncMessage {
+    fn from(resp: WatchHeadsResponse) -> Self {
+        SyncMessage::WatchHeadsResponse(resp)
+    }
+}
+
+/// The outcome of watching one sedimentree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct WatchResult {
+    /// The sedimentree this outcome is for.
+    pub id: SedimentreeId,
+
+    /// Whether the watch was recorded.
+    pub outcome: WatchOutcome,
+}
+
+/// Whether a [`WatchHeads`] entry was recorded by the receiver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum WatchOutcome {
+    /// Recorded. Carries the receiver's current heads as the initial
+    /// snapshot; empty if the receiver holds nothing for this sedimentree.
+    Watching(RemoteHeads),
+
+    /// The requester may not fetch this sedimentree.
+    Unauthorized,
+
+    /// The receiver holds as many watches for this peer as it will accept.
+    AtCapacity,
+}
+
+/// Stop sending [`SyncMessage::HeadsUpdate`] for these sedimentrees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct UnwatchHeads {
+    /// The sedimentrees to stop watching.
+    pub ids: Vec<SedimentreeId>,
+}
+
+impl From<UnwatchHeads> for SyncMessage {
+    fn from(unwatch: UnwatchHeads) -> Self {
+        SyncMessage::UnwatchHeads(unwatch)
     }
 }
 
@@ -375,6 +480,9 @@ impl RequestedData {
 /// Schema header for `SyncMessage` envelope.
 pub const MESSAGE_SCHEMA: [u8; 4] = *b"SUM\x00";
 
+/// Highest message tag in use; anything above it is rejected as unknown.
+pub const MAX_MESSAGE_TAG: u8 = tags::UNWATCH_HEADS;
+
 /// Minimum size of a Message envelope (schema + `total_size` + tag).
 const ENVELOPE_HEADER_SIZE: usize = 4 + 4 + 1; // 9 bytes
 
@@ -388,6 +496,9 @@ mod tags {
     pub(super) const REMOVE_SUBSCRIPTIONS: u8 = 0x06;
     pub(super) const DATA_REQUEST_REJECTED: u8 = 0x07;
     pub(super) const HEADS_UPDATE: u8 = 0x08;
+    pub(super) const WATCH_HEADS: u8 = 0x09;
+    pub(super) const WATCH_HEADS_RESPONSE: u8 = 0x0A;
+    pub(super) const UNWATCH_HEADS: u8 = 0x0B;
 }
 
 mod min_sizes {
@@ -401,12 +512,21 @@ mod min_sizes {
     pub(super) const DATA_REQUEST_REJECTED: usize = 32;
     // sed_id(32) + counter(8) + head_count(4)
     pub(super) const HEADS_UPDATE: usize = 32 + 8 + 4;
+    pub(super) const WATCH_HEADS: usize = 2;
+    pub(super) const WATCH_HEADS_RESPONSE: usize = 2;
+    pub(super) const UNWATCH_HEADS: usize = 2;
 }
 
 mod result_tags {
     pub(super) const OK: u8 = 0x00;
     pub(super) const NOT_FOUND: u8 = 0x01;
     pub(super) const UNAUTHORIZED: u8 = 0x02;
+}
+
+mod watch_outcome_tags {
+    pub(super) const WATCHING: u8 = 0x00;
+    pub(super) const UNAUTHORIZED: u8 = 0x01;
+    pub(super) const AT_CAPACITY: u8 = 0x02;
 }
 
 impl SyncMessage {
@@ -469,7 +589,23 @@ impl SyncMessage {
             SyncMessage::RemoveSubscriptions(unsub) => 2 + (unsub.ids.len() * 32),
             SyncMessage::DataRequestRejected(_) => 32,
             SyncMessage::HeadsUpdate { heads, .. } => 32 + remote_heads_size(heads),
+            SyncMessage::WatchHeads(watch) => 2 + (watch.ids.len() * 32),
+            SyncMessage::WatchHeadsResponse(resp) => {
+                2 + resp
+                    .results
+                    .iter()
+                    .map(|r| 32 + 1 + watch_outcome_size(&r.outcome))
+                    .sum::<usize>()
+            }
+            SyncMessage::UnwatchHeads(unwatch) => 2 + (unwatch.ids.len() * 32),
         }
+    }
+}
+
+const fn watch_outcome_size(outcome: &WatchOutcome) -> usize {
+    match outcome {
+        WatchOutcome::Watching(heads) => remote_heads_size(heads),
+        WatchOutcome::Unauthorized | WatchOutcome::AtCapacity => 0,
     }
 }
 
@@ -592,6 +728,18 @@ fn encode_message(msg: &SyncMessage) -> Vec<u8> {
             buf.extend_from_slice(id.as_bytes());
             encode_remote_heads(&mut buf, heads);
         }
+        SyncMessage::WatchHeads(watch) => {
+            buf.push(tags::WATCH_HEADS);
+            encode_ids(&mut buf, &watch.ids);
+        }
+        SyncMessage::WatchHeadsResponse(resp) => {
+            buf.push(tags::WATCH_HEADS_RESPONSE);
+            encode_watch_heads_response(&mut buf, resp);
+        }
+        SyncMessage::UnwatchHeads(unwatch) => {
+            buf.push(tags::UNWATCH_HEADS);
+            encode_ids(&mut buf, &unwatch.ids);
+        }
     }
 
     buf
@@ -660,6 +808,9 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
         tags::REMOVE_SUBSCRIPTIONS => (min_sizes::REMOVE_SUBSCRIPTIONS, "RemoveSubscriptions"),
         tags::DATA_REQUEST_REJECTED => (min_sizes::DATA_REQUEST_REJECTED, "DataRequestRejected"),
         tags::HEADS_UPDATE => (min_sizes::HEADS_UPDATE, "HeadsUpdate"),
+        tags::WATCH_HEADS => (min_sizes::WATCH_HEADS, "WatchHeads"),
+        tags::WATCH_HEADS_RESPONSE => (min_sizes::WATCH_HEADS_RESPONSE, "WatchHeadsResponse"),
+        tags::UNWATCH_HEADS => (min_sizes::UNWATCH_HEADS, "UnwatchHeads"),
         _ => {
             return Err(InvalidEnumTag {
                 tag,
@@ -685,6 +836,13 @@ fn decode_message(bytes: &[u8]) -> Result<SyncMessage, DecodeError> {
         tags::REMOVE_SUBSCRIPTIONS => decode_remove_subscriptions(payload),
         tags::DATA_REQUEST_REJECTED => decode_data_request_rejected(payload),
         tags::HEADS_UPDATE => decode_heads_update(payload),
+        tags::WATCH_HEADS => Ok(SyncMessage::WatchHeads(WatchHeads {
+            ids: decode_ids(payload)?,
+        })),
+        tags::WATCH_HEADS_RESPONSE => decode_watch_heads_response(payload),
+        tags::UNWATCH_HEADS => Ok(SyncMessage::UnwatchHeads(UnwatchHeads {
+            ids: decode_ids(payload)?,
+        })),
         _ => Err(InvalidEnumTag {
             tag,
             type_name: "Message",
@@ -792,11 +950,7 @@ fn encode_sync_diff(buf: &mut Vec<u8>, diff: &SyncDiff) {
 }
 
 fn encode_remove_subscriptions(buf: &mut Vec<u8>, unsub: &RemoveSubscriptions) {
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(unsub.ids.len() as u16).to_be_bytes());
-    for id in &unsub.ids {
-        buf.extend_from_slice(id.as_bytes());
-    }
+    encode_ids(buf, &unsub.ids);
 }
 
 fn encode_data_request_rejected(buf: &mut Vec<u8>, rejected: &DataRequestRejected) {
@@ -1042,17 +1196,8 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 }
 
 fn decode_remove_subscriptions(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
-    let mut offset = 0;
-
-    let count = read_u16(payload, &mut offset)? as usize;
-
-    let mut ids = Vec::with_capacity(count);
-    for _ in 0..count {
-        ids.push(SedimentreeId::new(read_array::<32>(payload, &mut offset)?));
-    }
-
     Ok(SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
-        ids,
+        ids: decode_ids(payload)?,
     }))
 }
 
@@ -1071,6 +1216,70 @@ fn decode_data_request_rejected(payload: &[u8]) -> Result<SyncMessage, DecodeErr
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
 
     Ok(SyncMessage::DataRequestRejected(DataRequestRejected { id }))
+}
+
+fn encode_ids(buf: &mut Vec<u8>, ids: &[SedimentreeId]) {
+    #[allow(clippy::cast_possible_truncation)]
+    buf.extend_from_slice(&(ids.len() as u16).to_be_bytes());
+    for id in ids {
+        buf.extend_from_slice(id.as_bytes());
+    }
+}
+
+fn decode_ids(payload: &[u8]) -> Result<Vec<SedimentreeId>, DecodeError> {
+    let mut offset = 0;
+    let count = read_u16(payload, &mut offset)? as usize;
+    // Cap allocation at what the payload can hold.
+    let mut ids = Vec::with_capacity(count.min(payload.len().saturating_sub(offset) / 32));
+    for _ in 0..count {
+        ids.push(SedimentreeId::new(read_array::<32>(payload, &mut offset)?));
+    }
+    Ok(ids)
+}
+
+fn encode_watch_heads_response(buf: &mut Vec<u8>, resp: &WatchHeadsResponse) {
+    #[allow(clippy::cast_possible_truncation)]
+    buf.extend_from_slice(&(resp.results.len() as u16).to_be_bytes());
+    for result in &resp.results {
+        buf.extend_from_slice(result.id.as_bytes());
+        match &result.outcome {
+            WatchOutcome::Watching(heads) => {
+                buf.push(watch_outcome_tags::WATCHING);
+                encode_remote_heads(buf, heads);
+            }
+            WatchOutcome::Unauthorized => buf.push(watch_outcome_tags::UNAUTHORIZED),
+            WatchOutcome::AtCapacity => buf.push(watch_outcome_tags::AT_CAPACITY),
+        }
+    }
+}
+
+fn decode_watch_heads_response(payload: &[u8]) -> Result<SyncMessage, DecodeError> {
+    let mut offset = 0;
+    let count = read_u16(payload, &mut offset)? as usize;
+    // Each result is at least id(32) + tag(1); cap allocation by what fits.
+    let mut results = Vec::with_capacity(count.min(payload.len().saturating_sub(offset) / 33));
+    for _ in 0..count {
+        let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
+        let tag = read_u8(payload, &mut offset)?;
+        let outcome = match tag {
+            watch_outcome_tags::WATCHING => {
+                WatchOutcome::Watching(decode_remote_heads(payload, &mut offset)?)
+            }
+            watch_outcome_tags::UNAUTHORIZED => WatchOutcome::Unauthorized,
+            watch_outcome_tags::AT_CAPACITY => WatchOutcome::AtCapacity,
+            _ => {
+                return Err(InvalidEnumTag {
+                    tag,
+                    type_name: "WatchOutcome",
+                }
+                .into());
+            }
+        };
+        results.push(WatchResult { id, outcome });
+    }
+    Ok(SyncMessage::WatchHeadsResponse(WatchHeadsResponse {
+        results,
+    }))
 }
 
 fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, DecodeError> {
@@ -1526,6 +1735,29 @@ mod tests {
                     } else {
                         assert_eq!(result, None);
                     }
+                });
+        }
+
+        /// `sedimentree_id()` returns the payload's id for single-tree messages
+        /// and `None` for messages naming several trees.
+        #[test]
+        fn prop_sedimentree_id_matches_payload() {
+            bolero::check!()
+                .with_arbitrary::<SyncMessage>()
+                .for_each(|msg| {
+                    let expected = match msg {
+                        SyncMessage::LooseCommit { id, .. }
+                        | SyncMessage::Fragment { id, .. }
+                        | SyncMessage::HeadsUpdate { id, .. } => Some(*id),
+                        SyncMessage::BatchSyncRequest(req) => Some(req.id),
+                        SyncMessage::BatchSyncResponse(resp) => Some(resp.id),
+                        SyncMessage::DataRequestRejected(rej) => Some(rej.id),
+                        SyncMessage::RemoveSubscriptions(_)
+                        | SyncMessage::WatchHeads(_)
+                        | SyncMessage::WatchHeadsResponse(_)
+                        | SyncMessage::UnwatchHeads(_) => None,
+                    };
+                    assert_eq!(msg.sedimentree_id(), expected);
                 });
         }
 

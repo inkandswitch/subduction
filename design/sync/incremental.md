@@ -19,14 +19,14 @@ sequenceDiagram
     Note over A: Local change occurs
 
     A->>S: LooseCommit { id, commit, blob, sender_heads }
-    Note over S: Store commit, notify heads observer
+    Note over S: Store commit, notify heads observer if watched
     Note over S: Forward to subscribed + authorized peers
     S->>A: HeadsUpdate { id, heads }
     S->>B: LooseCommit { id, commit, blob, sender_heads }
     S->>C: LooseCommit { id, commit, blob, sender_heads }
 
-    Note over B: Store commit + blob, notify heads observer
-    Note over C: Store commit + blob, notify heads observer
+    Note over B: Store commit + blob, notify heads observer if watched
+    Note over C: Store commit + blob, notify heads observer if watched
 ```
 
 Changes propagate only to peers who have subscribed to that sedimentree.
@@ -133,7 +133,7 @@ Sent as WebSocket binary frames with a maximum size of 5 MB. No request ID — t
 | **Consistency**    | Content-addressed deduplication                                                         |
 | **Idempotency**    | Same commit can be received multiple times safely                                       |
 | **Ordering**       | Per-`(peer, sedimentree)` high-water mark on `RemoteHeads`; observer notified only on change |
-| **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver`                   |
+| **Heads tracking** | Application notified of remote peer's heads via `RemoteHeadsObserver`, for watched sedimentrees |
 
 ## Sequence Diagram (Commit)
 
