@@ -9,10 +9,11 @@
 //! keyhive, etc.) and [`Subduction`] itself, so that every message to a
 //! given peer draws from the same monotonic sequence.
 //!
-//! A peer's counter is never reset, even on full disconnect: receivers keep
-//! a never-reset high-water mark (see `FilteredHeadsNotifier`), so a
-//! restarted sequence would be dropped as stale. Embedders with a wall
-//! clock should seed the counter ([`PeerCounter::with_seed`] +
+//! A peer's counter is never reset, even on full disconnect. Receivers keep a
+//! high-water mark per `(peer, sedimentree)` and clear it only when they
+//! observe the disconnect ([`FilteredHeadsNotifier::remove_peer`]), so a
+//! sender that restarted its sequence unobserved would be dropped as stale.
+//! Embedders with a wall clock should seed the counter ([`PeerCounter::with_seed`] +
 //! `wall_clock_seed`) so a restarted *process* also resumes above previous
 //! values. The default seed is zero: in-process monotonicity only.
 //!

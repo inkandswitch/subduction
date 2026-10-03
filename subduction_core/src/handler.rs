@@ -121,15 +121,22 @@ pub trait Handler<Async: FutureForm, Conn: Clone> {
         message: Self::Message,
     ) -> Async::Future<'a, Result<(), Self::HandlerError>>;
 
-    /// Called when a peer's last connection drops.
+    /// Called once when a peer's last connection is removed, on every
+    /// disconnect path.
     ///
     /// Use this hook to clean up per-peer state such as subscription
     /// maps, presence records, or other resources scoped to a peer's
     /// session lifetime.
     ///
-    /// The listen loop calls this after [`remove_connection`] reports
-    /// that the peer has no remaining connections.
+    /// Fires exactly once per departure, whether the listen loop removed a
+    /// failed connection or the application called [`disconnect`],
+    /// [`disconnect_from_peer`], or [`disconnect_all`]; not while another
+    /// connection to the peer is live. May fire for a peer whose handshake
+    /// was rolled back before any message was seen, so implementations
+    /// should tolerate unknown peers.
     ///
-    /// [`remove_connection`]: crate::subduction::Subduction::remove_connection
+    /// [`disconnect`]: crate::subduction::Subduction::disconnect
+    /// [`disconnect_from_peer`]: crate::subduction::Subduction::disconnect_from_peer
+    /// [`disconnect_all`]: crate::subduction::Subduction::disconnect_all
     fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()>;
 }

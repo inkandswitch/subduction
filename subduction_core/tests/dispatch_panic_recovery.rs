@@ -22,6 +22,7 @@ use std::sync::{
 };
 
 use future_form::Sendable;
+use futures::future::BoxFuture;
 use sedimentree_core::{depth::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     authenticated::Authenticated,
@@ -81,9 +82,14 @@ impl subduction_core::handler::Handler<Sendable, Conn> for PanicHandler {
     }
 }
 
-impl RemoteHeadsNotifier for PanicHandler {
-    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        self.inner.notify_remote_heads(id, peer, heads);
+impl RemoteHeadsNotifier<Sendable> for PanicHandler {
+    fn notify_remote_heads(
+        &self,
+        id: SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(async move { self.inner.notify_remote_heads(id, peer, heads).await })
     }
 }
 

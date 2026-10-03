@@ -237,7 +237,7 @@ impl<
     Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS> + 'static,
     Store: Storage<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
+    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier<Async>,
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone,
@@ -631,8 +631,8 @@ where
     /// * Returns [`Conn::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), Conn::DisconnectionError> {
         // Drain connections and muxes in one `connections` critical
-        // section (outer before inner), then cancel off the lock. This is
-        // the bulk equivalent of `teardown_peer` for every peer at once.
+        // section (outer before inner), then clean up off the lock as
+        // `teardown_peer` does, in bulk.
         let (all_conns, removed_muxes): (Vec<Authenticated<Conn, Async>>, Vec<Arc<Multiplexer>>) = {
             let mut guard = self.connections.lock().await;
             let conns = core::mem::take(&mut *guard)
@@ -646,9 +646,16 @@ where
             (conns, muxes)
         };
 
+        let peers_torn_down: Set<PeerId> = all_conns.iter().map(Authenticated::peer_id).collect();
+
         Self::cancel_detached_muxes(removed_muxes).await;
         self.subscriptions.lock().await.clear();
-        // Send counters survive on purpose; see `teardown_peer`.
+        self.outgoing_subscriptions.lock().await.clear();
+        // Send counters survive on purpose; see `PeerCounter`.
+
+        for peer_id in peers_torn_down {
+            self.handler.on_peer_disconnect(peer_id).await;
+        }
 
         #[cfg(feature = "metrics")]
         for _ in &all_conns {
@@ -935,10 +942,12 @@ where
     /// and its muxes have been detached via
     /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked).
     ///
-    /// Shared post-lock cleanup for [`disconnect`](Self::disconnect) and
-    /// [`disconnect_from_peer`](Self::disconnect_from_peer) so they clean
-    /// up the same state in the same order. Emits `conn_count`
-    /// `connection_closed` metrics.
+    /// Shared post-lock cleanup for [`disconnect`](Self::disconnect),
+    /// [`disconnect_from_peer`](Self::disconnect_from_peer), and
+    /// [`remove_connection`](Self::remove_connection); fires
+    /// [`Handler::on_peer_disconnect`](crate::handler::Handler::on_peer_disconnect)
+    /// and emits `conn_count` `connection_closed` metrics.
+    /// [`disconnect_all`](Self::disconnect_all) does the same in bulk.
     async fn teardown_peer(
         &self,
         peer_id: &PeerId,
@@ -952,9 +961,9 @@ where
         // (`clear_stale_outgoing_claims`); this bounds the map.
         self.outgoing_subscriptions.lock().await.remove(peer_id);
 
-        // The send counter is deliberately not cleared: receivers keep a
-        // never-reset high-water mark, so a restarted sequence would be
-        // dropped as stale.
+        // The send counter is deliberately not cleared; see `PeerCounter`.
+
+        self.handler.on_peer_disconnect(*peer_id).await;
 
         #[cfg(feature = "metrics")]
         for _ in 0..conn_count {
@@ -2244,9 +2253,7 @@ where
                     responder_heads,
                     ..
                 }) => {
-                    self.handler
-                        .notify_remote_heads(id, conn.peer_id(), responder_heads.clone());
-                    stats.remote_heads = responder_heads;
+                    stats.remote_heads = responder_heads.clone();
                     let SyncDiff {
                         missing_commits,
                         missing_fragments,
@@ -2285,6 +2292,9 @@ where
                     .await?;
                     self.minimize_tree(id).await;
                     self.push_to_subscribers(id, to_ask, &ingested).await;
+                    self.handler
+                        .notify_remote_heads(id, *to_ask, responder_heads)
+                        .await;
 
                     // Update received stats (count what was offered, not verified)
                     stats.commits_received += commits_to_receive;
@@ -2470,12 +2480,7 @@ where
                                 responder_heads,
                                 ..
                             }) => {
-                                self.handler.notify_remote_heads(
-                                    id,
-                                    *peer_id,
-                                    responder_heads.clone(),
-                                );
-                                stats.remote_heads = responder_heads;
+                                stats.remote_heads = responder_heads.clone();
                                 let SyncDiff {
                                     missing_commits,
                                     missing_fragments,
@@ -2521,6 +2526,9 @@ where
                                 .await?;
                                 self.minimize_tree(id).await;
                                 self.push_to_subscribers(id, peer_id, &ingested).await;
+                                self.handler
+                                    .notify_remote_heads(id, *peer_id, responder_heads)
+                                    .await;
 
                                 // Update received stats
                                 stats.commits_received += commits_to_receive;
@@ -3116,7 +3124,7 @@ impl<
         + 'static,
     Store: Storage<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'static,
-    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
+    Hdl: Handler<Async, Conn> + RemoteHeadsNotifier<Async>,
     Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone + Send + Sync + 'static,
@@ -3190,9 +3198,7 @@ where
                                     "error dispatching message"
                                 );
 
-                                if self.remove_connection(&conn).await == Some(true) {
-                                    handler.on_peer_disconnect(peer_id).await;
-                                }
+                                self.remove_connection(&conn).await;
                                 tracing::debug!(peer = %peer_id, "removed failed connection");
                             }
                             DispatchOutcome::Completed { result: Ok(()), .. } => {
@@ -3256,9 +3262,7 @@ where
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
                         tracing::warn!(conn = %conn_id, peer = %peer_id, "connection closed, removing");
-                        if self.remove_connection(&conn).await == Some(true) {
-                            handler.on_peer_disconnect(peer_id).await;
-                        }
+                        self.remove_connection(&conn).await;
                     } else {
                         // Must break: a permanently-ready arm above
                         // `msg_queue` would starve dispatch forever.
@@ -3725,7 +3729,7 @@ pub trait StartListener<
     Store: Storage<Self>,
     Conn: Connection<Self, WireMsg> + PartialEq + 'a,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
+    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier<Self>,
     Auth: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sign: Signer<Self>,
     Metric: DepthMetric,
@@ -3763,7 +3767,7 @@ pub trait StartListener<
         Auth::FetchDisallowed: Send + 'static,
         Sign: Signer<Sendable> + Send + Sync + 'a,
         Metric: DepthMetric + Send + Sync + 'a,
-        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier + Send + Sync + 'a,
+        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier<Sendable> + Send + Sync + 'a,
         Hdl::HandlerError: Into<ListenError<Sendable, Store, Conn, WireMsg>> + Send + 'static,
         Store::Error: Send + 'static,
         Conn::DisconnectionError: Send + 'static,
@@ -3776,13 +3780,13 @@ pub trait StartListener<
         Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
         Sign: Signer<Local> + 'a,
         Metric: DepthMetric + 'a,
-        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'a,
+        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier<Local> + 'a,
         Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
 )]
 impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
     StartListener<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
 where
-    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
+    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier<Async>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
@@ -3846,7 +3850,7 @@ pub trait SpawnDocSync<
     Store: Storage<Self>,
     Conn: Connection<Self, WireMsg> + PartialEq + 'a,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
+    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier<Self>,
     Auth: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sign: Signer<Self>,
     Metric: DepthMetric,
@@ -3909,7 +3913,7 @@ pub trait SpawnDocSync<
         Auth::FetchDisallowed: Send + 'static,
         Sign: Signer<Sendable> + Send + Sync + 'static,
         Metric: DepthMetric + Send + Sync + 'static,
-        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier + Send + Sync + 'static,
+        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier<Sendable> + Send + Sync + 'static,
         Hdl::HandlerError: Into<ListenError<Sendable, Store, Conn, WireMsg>> + Send + 'static,
         Conn::DisconnectionError: Send + 'static,
         Conn::RecvError: Send + 'static,
@@ -3921,13 +3925,13 @@ pub trait SpawnDocSync<
         Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'static,
         Sign: Signer<Local> + 'static,
         Metric: DepthMetric + 'static,
-        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'static,
+        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier<Local> + 'static,
         Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
 )]
 impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
     SpawnDocSync<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
 where
-    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
+    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier<Async>,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
