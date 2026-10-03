@@ -2319,12 +2319,18 @@ where
                                 stats.commits_sent += sent.commits;
                                 stats.fragments_sent += sent.fragments;
                             }
+                            Err(e @ SendRequestedDataError::Unauthorized(_)) => {
+                                let msg: Hdl::Message =
+                                    SyncMessage::from(DataRequestRejected { id }).into();
+                                if let Err(send_err) = conn.send(&msg).await {
+                                    tracing::warn!(peer = %to_ask, error = %send_err, "peer disconnected while sending DataRequestRejected");
+                                }
+                                tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
+                            }
                             Err(e) => {
                                 tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
-                                if !matches!(e, SendRequestedDataError::Unauthorized(_)) {
-                                    #[cfg(feature = "metrics")]
-                                    crate::metrics::requested_data_send_failure();
-                                }
+                                #[cfg(feature = "metrics")]
+                                crate::metrics::requested_data_send_failure();
                             }
                         }
                     }
