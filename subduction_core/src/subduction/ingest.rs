@@ -269,12 +269,12 @@ pub(crate) async fn recv_batch_sync_response<
             .await
             .map_err(IoError::Storage)?;
 
-        let local_access = storage.hydration_access();
+        let local_access = storage.local_fetcher::<Async>(id);
         for commit in commit_payloads {
             sedimentrees
                 .with_entry_hydrated(
                     id,
-                    || load_tree::<Async, _>(&local_access, id),
+                    || load_tree::<Async, _>(&local_access),
                     |tree| tree.add_commit(commit),
                 )
                 .await
@@ -284,7 +284,7 @@ pub(crate) async fn recv_batch_sync_response<
             sedimentrees
                 .with_entry_hydrated(
                     id,
-                    || load_tree::<Async, _>(&local_access, id),
+                    || load_tree::<Async, _>(&local_access),
                     |tree| tree.add_fragment(fragment),
                 )
                 .await
@@ -471,12 +471,12 @@ pub(crate) async fn get_or_hydrate<
     #[cfg(feature = "metrics")]
     let hydration = crate::metrics::HydrationGuard::new();
     tracing::debug!(tree = ?id, "sedimentree cache miss; hydrating from storage");
-    let local_access = storage.hydration_access();
+    let local_access = storage.local_fetcher::<Async>(id);
     // Metadata-only: hydration rebuilds the tree from payloads and never
     // needs blob bytes, so this skips blob I/O entirely (a per-item file
     // read on the external-blob backends).
-    let loose_commits = local_access.load_loose_commit_metas::<Async>(id).await?;
-    let fragments = local_access.load_fragment_metas::<Async>(id).await?;
+    let loose_commits = local_access.load_loose_commit_metas().await?;
+    let fragments = local_access.load_fragment_metas().await?;
 
     // Existence is recorded by the sedimentree-id index, not by having
     // commits/fragments: a tree can be registered while empty (e.g. an
@@ -484,7 +484,7 @@ pub(crate) async fn get_or_hydrate<
     // single-key index lookup distinguishes "registered but empty" from
     // "nonexistent" — O(1), without enumerating every id.
     if loose_commits.is_empty() && fragments.is_empty() {
-        if local_access.contains_sedimentree_id::<Async>(id).await? {
+        if local_access.contains_sedimentree_id().await? {
             tracing::trace!(tree = ?id, "sedimentree registered but empty");
             // Cache the empty tree so repeat reads are resident hits rather
             // than repeated storage lookups. Safe to install here (unlike the
@@ -579,14 +579,13 @@ pub(crate) async fn heads_or_hydrate<
 /// in the loader would be redundant — which is why no [`DepthMetric`] is
 /// needed.
 pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
-    access: &crate::storage::local_access::LocalStorageAccess<Store>,
-    id: SedimentreeId,
+    access: &crate::storage::fetcher::Fetcher<Async, Store>,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
     #[cfg(feature = "metrics")]
     let hydration = crate::metrics::HydrationGuard::new();
     // Metadata-only: the rebuilt tree holds no blobs (see `get_or_hydrate`).
-    let loose_commits = access.load_loose_commit_metas::<Async>(id).await?;
-    let fragments = access.load_fragment_metas::<Async>(id).await?;
+    let loose_commits = access.load_loose_commit_metas().await?;
+    let fragments = access.load_fragment_metas().await?;
 
     if loose_commits.is_empty() && fragments.is_empty() {
         // Not-found probes drop the guard without a duration sample.
@@ -608,24 +607,7 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
 async fn load_tree_via_putter<Async: FutureForm, Store: Storage<Async>>(
     putter: &Putter<Async, Store>,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
-    #[cfg(feature = "metrics")]
-    let hydration = crate::metrics::HydrationGuard::new();
-    let fetcher = putter.as_fetcher();
-    // Metadata-only: the rebuilt tree holds no blobs (see `get_or_hydrate`).
-    let loose_commits = fetcher.load_loose_commit_metas().await?;
-    let fragments = fetcher.load_fragment_metas().await?;
-
-    if loose_commits.is_empty() && fragments.is_empty() {
-        // Not-found probes drop the guard without a duration sample.
-        return Ok(None);
-    }
-    #[cfg(feature = "metrics")]
-    hydration.complete();
-    // Full history, not yet minimized: wrap dirty so the next read minimizes.
-    Ok(Some(MinimizedSedimentree::new(Sedimentree::new(
-        fragments,
-        loose_commits,
-    ))))
+    load_tree(&putter.as_fetcher()).await
 }
 
 /// Look up a blob from local storage by its digest.
@@ -644,15 +626,15 @@ pub(crate) async fn get_blob<
     id: SedimentreeId,
     digest: Digest<Blob>,
 ) -> Result<Option<Blob>, Store::Error> {
-    let local_access = storage.hydration_access();
+    let local_access = storage.local_fetcher::<Async>(id);
 
-    for verified in local_access.load_loose_commits::<Async>(id).await? {
+    for verified in local_access.load_loose_commits().await? {
         if verified.payload().blob_meta().digest() == digest {
             return Ok(Some(verified.blob().clone()));
         }
     }
 
-    for verified in local_access.load_fragments::<Async>(id).await? {
+    for verified in local_access.load_fragments().await? {
         if verified.payload().summary().blob_meta().digest() == digest {
             return Ok(Some(verified.blob().clone()));
         }
