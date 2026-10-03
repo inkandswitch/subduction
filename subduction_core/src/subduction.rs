@@ -1057,15 +1057,15 @@ where
         // Read blobs straight from durable storage. Storage is the source of
         // truth, so we do not gate on in-RAM cache residency (an evicted tree
         // must still return its blobs). `None` ⇔ storage holds nothing.
-        let local_access = self.storage.hydration_access();
+        let local_access = self.storage.local_fetcher::<Async>(id);
         let mut results = Vec::new();
 
         // With compound storage, blobs are stored with their commits/fragments
-        for verified in local_access.load_loose_commits::<Async>(id).await? {
+        for verified in local_access.load_loose_commits().await? {
             results.push(verified.blob().clone());
         }
 
-        for verified in local_access.load_fragments::<Async>(id).await? {
+        for verified in local_access.load_fragments().await? {
             results.push(verified.blob().clone());
         }
 
@@ -2482,7 +2482,7 @@ where
     pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
         match self
             .storage
-            .hydration_access()
+            .local_access()
             .load_all_sedimentree_ids::<Async>()
             .await
         {
@@ -2651,11 +2651,11 @@ where
         let sedimentree = Sedimentree::new(fragments, loose_commits);
         // Hydrate-on-miss so merging into an evicted tree preserves its full
         // durable history.
-        let access = self.storage.hydration_access();
+        let access = self.storage.local_fetcher::<Async>(id);
         self.sedimentrees
             .with_entry_hydrated(
                 id,
-                || ingest::load_tree::<Async, _>(&access, id),
+                || ingest::load_tree::<Async, _>(&access),
                 |tree| tree.merge(sedimentree),
             )
             .await?;
@@ -2938,9 +2938,9 @@ where
         id: SedimentreeId,
         mutate: F,
     ) -> Result<R, IoError<Async, Store, Conn, Hdl::Message>> {
-        let access = self.storage.hydration_access();
+        let access = self.storage.local_fetcher::<Async>(id);
         self.sedimentrees
-            .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access, id), mutate)
+            .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access), mutate)
             .await
             .map_err(IoError::Storage)
     }
@@ -4046,15 +4046,15 @@ mod tests {
         );
 
         // Reconstruct purely from storage, exactly as hydration does.
-        let access = storage.hydration_access();
+        let access = storage.local_fetcher::<Sendable>(id);
         let loaded_commits: Vec<LooseCommit> = access
-            .load_loose_commits::<Sendable>(id)
+            .load_loose_commits()
             .await?
             .into_iter()
             .map(|vm| vm.payload().clone())
             .collect();
         let loaded_fragments: Vec<Fragment> = access
-            .load_fragments::<Sendable>(id)
+            .load_fragments()
             .await?
             .into_iter()
             .map(|vm| vm.payload().clone())

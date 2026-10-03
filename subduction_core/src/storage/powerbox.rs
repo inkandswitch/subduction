@@ -3,7 +3,8 @@
 //! The [`StoragePowerbox`] wraps a storage backend and policy, enforcing that all
 //! operations go through capabilities ([`Fetcher`]/[`Putter`]/[`Destroyer`]).
 //!
-//! For startup hydration only, use [`hydration_access`][StoragePowerbox::hydration_access].
+//! Trusted local tree reads use [`local_fetcher`][StoragePowerbox::local_fetcher].
+//! Global ID enumeration uses [`local_access`][StoragePowerbox::local_access].
 
 use alloc::sync::Arc;
 
@@ -25,7 +26,8 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 /// - [`get_putter`][Self::get_putter] for authorized writes
 /// - [`local_destroyer`][Self::local_destroyer] for local cleanup
 ///
-/// For startup hydration, use [`hydration_access`][Self::hydration_access] (crate-internal).
+/// Trusted local reads use [`local_fetcher`][Self::local_fetcher]; global ID
+/// enumeration uses [`local_access`][Self::local_access]. Both are crate-internal.
 ///
 /// The powerbox holds both the storage backend and the authorization policy,
 /// making it the single trust boundary for capability minting.
@@ -144,16 +146,21 @@ impl<Store, Auth> StoragePowerbox<Store, Auth> {
         Putter::new(self.storage.clone(), sedimentree_id)
     }
 
-    /// Get direct storage access for hydration (startup data loading).
-    ///
-    /// This bypasses the capability model and should only be used from
-    /// [`hydrate`][crate::subduction::Subduction::hydrate] to rebuild
-    /// in-memory state from storage.
-    ///
-    /// All other access should go through [`get_fetcher`](Self::get_fetcher)
-    /// or [`get_putter`](Self::get_putter).
+    /// Read our own tree for hydration, blob access, or application catch-up.
+    /// Never use this instead of authorizing a remote fetch.
+    pub(crate) fn local_fetcher<Async: FutureForm>(
+        &self,
+        id: SedimentreeId,
+    ) -> Fetcher<Async, Store>
+    where
+        Store: Storage<Async>,
+    {
+        Fetcher::new(self.storage.clone(), id)
+    }
+
+    /// Access the global local ID index, which is not scoped to one tree.
     #[must_use]
-    pub(crate) fn hydration_access(&self) -> LocalStorageAccess<Store> {
+    pub(crate) fn local_access(&self) -> LocalStorageAccess<Store> {
         LocalStorageAccess::new(self.storage.clone())
     }
 }
