@@ -21,8 +21,8 @@ use subduction_core::{
             SyncResult,
         },
         test_utils::{
-            ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn, TokioSpawn,
-            TokioTimeout, test_signer,
+            ChannelMockConnection, InstantTimeout, MockConnection, TokioSpawn, TokioTimeout,
+            test_signer,
         },
     },
     peer::id::PeerId,
@@ -165,7 +165,7 @@ async fn local_add_sedimentree_bypasses_put_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -189,7 +189,7 @@ async fn local_add_commit_bypasses_put_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -213,7 +213,7 @@ async fn local_adds_bypass_id_specific_policy() -> TestResult {
                 MemoryStorage::new(),
                 Arc::new(AllowSpecificIdPolicy { allowed_id }),
             )
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -246,7 +246,7 @@ async fn local_add_stores_data_despite_rejecting_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -327,7 +327,7 @@ async fn multiple_local_adds_succeed_despite_rejecting_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 

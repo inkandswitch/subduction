@@ -149,6 +149,7 @@ where
             ComposedHandlerError::Sync(listen_err) => match listen_err {
                 ListenError::IoError(io_err) => ListenError::IoError(match io_err {
                     IoError::Storage(e) => IoError::Storage(e),
+                    IoError::StorageInterrupted => IoError::StorageInterrupted,
                     IoError::ConnSend(e) => IoError::ConnSend(e.into()),
                     IoError::ConnRecv(e) => IoError::ConnRecv(e.into()),
                     IoError::ConnCall(e) => IoError::ConnCall(e.map_send(Into::into)),

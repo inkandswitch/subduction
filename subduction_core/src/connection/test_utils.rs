@@ -800,12 +800,12 @@ pub fn new_test_subduction() -> (
                 MockConnection,
                 OpenPolicy,
                 CountLeadingZeroBytes,
-                TestSpawn,
+                TokioSpawn,
             >,
             OpenPolicy,
             MemorySigner,
             InstantTimeout,
-            TestSpawn,
+            TokioSpawn,
             CountLeadingZeroBytes,
         >,
     >,
@@ -815,7 +815,7 @@ pub fn new_test_subduction() -> (
     let (sd, _handler, listener, manager) = SubductionBuilder::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-        .spawner(TestSpawn)
+        .spawner(TokioSpawn)
         .timer(InstantTimeout)
         .build::<Sendable, MockConnection>();
 

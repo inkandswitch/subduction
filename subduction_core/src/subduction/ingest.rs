@@ -79,7 +79,7 @@ pub(crate) async fn recv_batch_sync_response<
     const SHARDS: usize,
 >(
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
-    storage: &StoragePowerbox<Store, Auth>,
+    storage: &StoragePowerbox<Store, Auth, Async>,
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
@@ -123,7 +123,7 @@ pub(crate) async fn recv_batch_sync_response<
 
         #[allow(clippy::map_entry)]
         if !putter_cache.contains_key(&author_id) {
-            match storage.get_putter::<Async>(*from, author, id).await {
+            match storage.get_putter(*from, author, id).await {
                 Ok(p) => {
                     putter_cache.insert(author_id, p);
                 }
@@ -173,7 +173,7 @@ pub(crate) async fn recv_batch_sync_response<
 
         #[allow(clippy::map_entry)]
         if !putter_cache.contains_key(&author_id) {
-            match storage.get_putter::<Async>(*from, author, id).await {
+            match storage.get_putter(*from, author, id).await {
                 Ok(p) => {
                     putter_cache.insert(author_id, p);
                 }
@@ -255,19 +255,10 @@ pub(crate) async fn recv_batch_sync_response<
                 .filter(|v| seen_fragments.insert(v.payload().head()))
                 .map(|v| (v.signed().clone(), v.blob().clone())),
         );
-        let commit_payloads: Vec<LooseCommit> =
-            commits.iter().map(|v| v.payload().clone()).collect();
-        let fragment_payloads: Vec<Fragment> =
-            fragments.iter().map(|v| v.payload().clone()).collect();
-
-        super::mutation::complete(
-            sedimentrees,
-            &putter.as_fetcher(),
-            putter.save_batch(commits, fragments),
-            Some(Sedimentree::new(fragment_payloads, commit_payloads)),
-        )
-        .await
-        .map_err(IoError::Storage)?;
+        putter
+            .save_batch(commits, fragments)
+            .await
+            .map_err(IoError::from)?;
     }
 
     Ok(ingested)
@@ -286,7 +277,7 @@ pub(crate) async fn insert_commit_locally<
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
-) -> Result<bool, Store::Error> {
+) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
     let commit = verified_meta.payload().clone();
     let head = commit.head();
 
@@ -304,13 +295,7 @@ pub(crate) async fn insert_commit_locally<
     .await?
     .unwrap_or(true);
 
-    super::mutation::complete(
-        sedimentrees,
-        &putter.as_fetcher(),
-        putter.save_commit(verified_meta),
-        Some(Sedimentree::new(Vec::new(), alloc::vec![commit])),
-    )
-    .await?;
+    putter.save_commit(verified_meta).await?;
 
     Ok(was_added)
 }
@@ -326,7 +311,7 @@ pub(crate) async fn insert_fragment_locally<
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
-) -> Result<bool, Store::Error> {
+) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
     let fragment = verified_meta.payload().clone();
     let head = fragment.head();
 
@@ -338,13 +323,7 @@ pub(crate) async fn insert_fragment_locally<
     .await?
     .unwrap_or(true);
 
-    super::mutation::complete(
-        sedimentrees,
-        &putter.as_fetcher(),
-        putter.save_fragment(verified_meta),
-        Some(Sedimentree::new(alloc::vec![fragment], Vec::new())),
-    )
-    .await?;
+    putter.save_fragment(verified_meta).await?;
 
     Ok(was_added)
 }
@@ -401,7 +380,7 @@ pub(crate) async fn get_or_hydrate<
     const SHARDS: usize,
 >(
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
-    storage: &StoragePowerbox<Store, Auth>,
+    storage: &StoragePowerbox<Store, Auth, Async>,
     depth_metric: &Metric,
     id: SedimentreeId,
 ) -> Result<Option<Sedimentree>, Store::Error> {
@@ -420,7 +399,7 @@ pub(crate) async fn get_or_hydrate<
 
     #[cfg(feature = "metrics")]
     crate::metrics::sedimentree_cache_miss();
-    read_cached(sedimentrees, &storage.local_fetcher::<Async>(id), |tree| {
+    read_cached(sedimentrees, &storage.local_fetcher(id), |tree| {
         tree.minimized(depth_metric).clone()
     })
     .await
@@ -445,7 +424,7 @@ pub(crate) async fn heads_or_hydrate<
     const SHARDS: usize,
 >(
     sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
-    storage: &StoragePowerbox<Store, Auth>,
+    storage: &StoragePowerbox<Store, Auth, Async>,
     depth_metric: &Metric,
     id: SedimentreeId,
 ) -> Result<Option<Vec<CommitId>>, Store::Error> {
@@ -571,11 +550,11 @@ pub(crate) async fn get_blob<
     Store: Storage<Async>,
     Auth: StoragePolicy<Async>,
 >(
-    storage: &StoragePowerbox<Store, Auth>,
+    storage: &StoragePowerbox<Store, Auth, Async>,
     id: SedimentreeId,
     digest: Digest<Blob>,
 ) -> Result<Option<Blob>, Store::Error> {
-    let local_access = storage.local_fetcher::<Async>(id);
+    let local_access = storage.local_fetcher(id);
 
     for verified in local_access.load_loose_commits().await? {
         if verified.payload().blob_meta().digest() == digest {

@@ -87,7 +87,14 @@ pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
     commits: Arc<Sharded<Digest<LooseCommit>, LooseCommit>>,
     fragments: Arc<Sharded<Digest<Fragment>, Fragment>>,
+    #[cfg(test)]
+    commit_settlement: Arc<spin::Mutex<Option<CommitSettlement>>>,
 }
+#[cfg(test)]
+type CommitSettlement = (
+    async_channel::Sender<()>,
+    async_channel::Receiver<Result<(), MemoryStorageError>>,
+);
 
 impl Default for MemoryStorage {
     fn default() -> Self {
@@ -104,7 +111,35 @@ impl MemoryStorage {
             ids: Arc::new(Mutex::new(Set::new())),
             commits: Arc::new(Sharded::new()),
             fragments: Arc::new(Sharded::new()),
+            #[cfg(test)]
+            commit_settlement: Arc::new(spin::Mutex::new(None)),
         }
+    }
+}
+
+#[cfg(test)]
+impl MemoryStorage {
+    // Test the real capability/runner boundary without a second storage wrapper.
+    pub(crate) fn gate_next_commit(
+        &self,
+    ) -> (
+        async_channel::Receiver<()>,
+        async_channel::Sender<Result<(), MemoryStorageError>>,
+    ) {
+        let (started, receiver) = async_channel::bounded(1);
+        let (release, released) = async_channel::bounded(1);
+        *self.commit_settlement.lock() = Some((started, released));
+        (receiver, release)
+    }
+    async fn settle_test_commit(&self) -> Result<(), MemoryStorageError> {
+        let gate = self.commit_settlement.lock().take();
+        if let Some((started, released)) = gate {
+            let _ = started.try_send(());
+            if let Ok(result) = released.recv().await {
+                return result;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -184,6 +219,8 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
                 .or_default()
                 .entry(digest)
                 .or_insert((commit_id, signed, blob));
+            #[cfg(test)]
+            self.settle_test_commit().await?;
             Ok(())
         })
     }

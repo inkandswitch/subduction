@@ -69,7 +69,7 @@ pub(crate) async fn get_authorized_subscriber_conns<
     Auth: StoragePolicy<Async>,
 >(
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
-    storage: &StoragePowerbox<Store, Auth>,
+    storage: &StoragePowerbox<Store, Auth, Async>,
     connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
     sedimentree_id: SedimentreeId,
     exclude_peer: &PeerId,

@@ -24,7 +24,8 @@ use crate::{
 
 /// Apply one authorized storage operation and maintain its cached contents.
 /// `Some(update)` adds persisted items; `None` invalidates after deletion.
-/// This does not claim rollback or cancellation-independent execution.
+/// The node runner owns this whole future; API callers only wait for its result.
+/// Losing the driver closes observation rather than claiming rollback.
 #[allow(
     clippy::expect_used,
     reason = "completion is consumed only after an entry is adopted or validated"
@@ -34,13 +35,13 @@ pub(crate) async fn complete<Async, Store, Work, R, const SHARDS: usize>(
     fetcher: &Fetcher<Async, Store>,
     work: Work,
     update: Option<Sedimentree>,
+    mut guard: crate::storage::state::MutationGuard,
 ) -> Result<R, Store::Error>
 where
     Async: FutureForm,
     Store: Storage<Async>,
     Work: Future<Output = Result<R, Store::Error>>,
 {
-    let mut guard = fetcher.state.begin();
     let id = fetcher.sedimentree_id();
     let result = match work.await {
         Ok(result) => result,

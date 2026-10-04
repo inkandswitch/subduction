@@ -14,15 +14,31 @@ use spin::Mutex;
 /// Shared, weakly registered tree state. Readers and mutations keep their tree
 /// alive; idle entries are reclaimed when another capability is minted.
 #[derive(Debug, Default)]
-pub(crate) struct StorageState(Mutex<Map<SedimentreeId, Weak<TreeState>>>);
+pub(crate) struct StorageState {
+    trees: Mutex<Map<SedimentreeId, Weak<TreeState>>>,
+    closed: core::sync::atomic::AtomicBool,
+    changed: event_listener::Event,
+}
 impl StorageState {
-    pub(crate) fn tree(&self, id: SedimentreeId) -> Arc<TreeState> {
-        let mut trees = self.0.lock();
+    pub(crate) fn close(&self) {
+        self.closed
+            .store(true, core::sync::atomic::Ordering::Release);
+        self.changed.notify(usize::MAX);
+    }
+    pub(crate) fn closed(&self) -> bool {
+        self.closed.load(core::sync::atomic::Ordering::Acquire)
+    }
+    pub(crate) fn tree(self: &Arc<Self>, id: SedimentreeId) -> Arc<TreeState> {
+        let mut trees = self.trees.lock();
         if let Some(tree) = trees.get(&id).and_then(Weak::upgrade) {
             return tree;
         }
         trees.retain(|_, tree| tree.strong_count() != 0);
-        let tree = Arc::new(TreeState::default());
+        let tree = Arc::new(TreeState {
+            owner: self.clone(),
+            revision: Mutex::default(),
+            changed: event_listener::Event::new(),
+        });
         trees.insert(id, Arc::downgrade(&tree));
         tree
     }
@@ -35,12 +51,19 @@ struct Revision {
 }
 
 /// Mutation and scan coordination for a single tree.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct TreeState {
+    owner: Arc<StorageState>,
     revision: Mutex<Revision>,
     changed: event_listener::Event,
 }
 impl TreeState {
+    pub(crate) fn closed(&self) -> bool {
+        self.owner.closed()
+    }
+    pub(crate) fn close(&self) {
+        self.owner.close();
+    }
     pub(crate) fn begin(self: &Arc<Self>) -> MutationGuard {
         let mut state = self.revision.lock();
         state.active += 1;
@@ -71,8 +94,8 @@ impl TreeState {
 }
 
 /// Mark settlement under the cache completion lock, then drop outside it to
-/// wake readers. Owned execution is added separately; dropping unfinished work
-/// currently releases waiters, not arbitrary external backend effects.
+/// wake readers. Losing an unfinished driver closes observation: arbitrary
+/// external backend effects can continue, so another scan cannot certify freshness.
 pub(crate) struct MutationGuard {
     tree: Arc<TreeState>,
     finished: bool,
@@ -89,6 +112,9 @@ impl MutationGuard {
 }
 impl Drop for MutationGuard {
     fn drop(&mut self) {
+        if !self.finished {
+            self.tree.close();
+        }
         self.finish();
         self.tree.changed.notify(usize::MAX);
     }

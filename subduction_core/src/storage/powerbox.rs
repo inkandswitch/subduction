@@ -1,186 +1,129 @@
-//! Storage powerbox for capability-gated access.
+//! Mint authorized storage capabilities and share their node execution context.
 //!
-//! The [`StoragePowerbox`] wraps a storage backend and policy, enforcing that all
-//! operations go through capabilities ([`Fetcher`]/[`Putter`]/[`Destroyer`]).
-//!
-//! Trusted local tree reads use [`local_fetcher`][StoragePowerbox::local_fetcher].
-//! Global ID enumeration uses [`local_access`][StoragePowerbox::local_access].
-
-use alloc::sync::Arc;
-
-use future_form::FutureForm;
-use sedimentree_core::id::SedimentreeId;
+//! Trusted tree reads use `local_fetcher`; global ID enumeration remains separate.
+//! A standalone powerbox executes writes inline. Node construction installs one
+//! typed submission function shared even by previously minted capabilities. There
+//! is no Local/Sendable switch or backend observation/execution supertrait.
 
 use super::{
-    destroyer::Destroyer, fetcher::Fetcher, local_access::LocalStorageAccess, putter::Putter,
+    destroyer::Destroyer,
+    fetcher::Fetcher,
+    local_access::LocalStorageAccess,
+    mutation::{Runner, Submission},
+    putter::Putter,
     traits::Storage,
 };
 use crate::{peer::id::PeerId, policy::storage::StoragePolicy};
+use alloc::sync::Arc;
+use future_form::{FutureForm, Sendable};
+use sedimentree_core::id::SedimentreeId;
 use subduction_crypto::verified_author::VerifiedAuthor;
 
-/// A powerbox that wraps storage and policy, only allowing access through capabilities.
+/// The authorization and execution boundary for storage capabilities.
 ///
-/// This struct enforces the capability pattern at compile time: the underlying
-/// storage is not directly accessible. Peer-facing operations must go through:
-/// - [`get_fetcher`][Self::get_fetcher] for authorized reads
-/// - [`get_putter`][Self::get_putter] for authorized writes
-/// - [`local_destroyer`][Self::local_destroyer] for local cleanup
-///
-/// Trusted local reads use [`local_fetcher`][Self::local_fetcher]; global ID
-/// enumeration uses [`local_access`][Self::local_access]. Both are crate-internal.
-///
-/// The powerbox holds both the storage backend and the authorization policy,
-/// making it the single trust boundary for capability minting.
-#[derive(Debug)]
-pub struct StoragePowerbox<Store, Auth> {
+/// Standalone writes are inline and cancellation does not imply rollback. A
+/// node installs its tracked runner before admission, owning persistence and
+/// cache completion independently of capability waiters. See
+/// [`Subduction::new`](crate::subduction::Subduction::new).
+pub struct StoragePowerbox<Store: Storage<Async>, Auth, Async: FutureForm = Sendable> {
     storage: Arc<Store>,
     policy: Arc<Auth>,
-    state: Arc<super::state::StorageState>,
+    pub(crate) state: Arc<super::state::StorageState>,
+    submission: Submission<Async, Store>,
 }
-
-impl<Store, Auth> StoragePowerbox<Store, Auth> {
-    /// Create a new powerbox wrapping the given storage and policy.
+impl<Store: Storage<Async>, Auth, Async: FutureForm> StoragePowerbox<Store, Auth, Async> {
+    /// Construct a standalone powerbox. Its capabilities execute writes inline
+    /// until node construction installs an owned runner.
     pub fn new(storage: Store, policy: Arc<Auth>) -> Self {
         Self {
             storage: Arc::new(storage),
             policy,
             state: Arc::default(),
+            submission: Arc::new(spin::Mutex::new(None)),
         }
     }
-
-    /// Get a reference to the policy.
-    ///
-    /// This is useful for connection policy decisions outside of storage access.
+    /// Install once, before the node is exposed or any managed work is admitted.
+    pub(crate) fn install_runner(&self, runner: Arc<Runner<Async, Store>>) {
+        let mut slot = self.submission.lock();
+        assert!(
+            slot.is_none(),
+            "a storage powerbox cannot belong to two nodes"
+        );
+        *slot = Some(runner);
+    }
+    /// Reference to the policy.
     #[must_use]
     pub fn policy(&self) -> &Auth {
         &self.policy
     }
-
-    /// Get a clone of the policy Arc.
-    ///
-    /// This is useful when you need shared ownership of the policy.
+    /// Shared ownership of the policy.
     #[must_use]
     pub fn policy_arc(&self) -> Arc<Auth> {
         self.policy.clone()
     }
-
-    /// Create a destroyer for local cleanup operations.
-    ///
-    /// Use this for compaction, garbage collection, and other local-only
-    /// delete operations. Never hand this capability to peers.
+    /// Mint a local-only deletion capability. Never hand this to peers.
     #[must_use]
-    pub fn local_destroyer<Async: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> Destroyer<Async, Store>
-    where
-        Store: Storage<Async>,
-    {
-        Destroyer::new(self.storage.clone(), sedimentree_id)
+    pub fn local_destroyer(&self, id: SedimentreeId) -> Destroyer<Async, Store> {
+        Destroyer::new(self.local_fetcher(id), self.submission.clone())
     }
-
-    /// Create a fetch capability for a peer to access a sedimentree.
-    ///
-    /// Checks authorization via the policy before minting the capability.
+    /// Authorize a peer before minting its read capability.
     ///
     /// # Errors
-    ///
-    /// Returns the policy's `FetchDisallowed` error if authorization fails.
-    pub async fn get_fetcher<Async: FutureForm>(
+    /// Returns the policy's fetch denial.
+    pub async fn get_fetcher(
         &self,
         peer: PeerId,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> Result<Fetcher<Async, Store>, Auth::FetchDisallowed>
     where
-        Store: Storage<Async>,
         Auth: StoragePolicy<Async>,
     {
-        self.policy.authorize_fetch(peer, sedimentree_id).await?;
-        Ok(self.local_fetcher(sedimentree_id))
+        self.policy.authorize_fetch(peer, id).await?;
+        Ok(self.local_fetcher(id))
     }
-
-    /// Create a put capability for a remote peer's data.
-    ///
-    /// Requires a [`VerifiedAuthor`] — the compiler enforces that the
-    /// author's signing key has been cryptographically verified before
-    /// authorization.
-    ///
-    /// For local operations (the node writing its own data), use
-    /// [`local_putter`](Self::local_putter) instead.
+    /// Authorize verified authorship before minting a remote write capability.
     ///
     /// # Errors
-    ///
-    /// Returns the policy's `PutDisallowed` error if authorization fails.
-    pub async fn get_putter<Async: FutureForm>(
+    /// Returns the policy's put denial.
+    pub async fn get_putter(
         &self,
         requestor: PeerId,
         author: VerifiedAuthor,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> Result<Putter<Async, Store>, Auth::PutDisallowed>
     where
-        Store: Storage<Async>,
         Auth: StoragePolicy<Async>,
     {
-        self.policy
-            .authorize_put(requestor, author, sedimentree_id)
-            .await?;
-        Ok(Putter::new(
-            self.storage.clone(),
-            sedimentree_id,
-            self.state.tree(sedimentree_id),
-        ))
+        self.policy.authorize_put(requestor, author, id).await?;
+        Ok(self.local_putter(id))
     }
-
-    /// Create a put capability for local operations.
-    ///
-    /// The node trusts itself — no policy check is performed. Use this
-    /// for locally-authored data (e.g., [`add_commit`], [`add_fragment`]).
-    ///
-    /// For remote data, use [`get_putter`](Self::get_putter) which
-    /// requires a [`VerifiedAuthor`].
-    ///
-    /// [`add_commit`]: crate::subduction::Subduction::add_commit
-    /// [`add_fragment`]: crate::subduction::Subduction::add_fragment
-    #[must_use]
-    pub(crate) fn local_putter<Async: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> Putter<Async, Store>
-    where
-        Store: Storage<Async>,
-    {
-        Putter::new(
-            self.storage.clone(),
-            sedimentree_id,
-            self.state.tree(sedimentree_id),
-        )
+    /// The node trusts its own writes; remote writes must use `get_putter`.
+    pub(crate) fn local_putter(&self, id: SedimentreeId) -> Putter<Async, Store> {
+        Putter::new(self.local_fetcher(id), self.submission.clone())
     }
-
-    /// Read our own tree for hydration, blob access, or application catch-up.
-    /// Never use this instead of authorizing a remote fetch.
-    pub(crate) fn local_fetcher<Async: FutureForm>(
-        &self,
-        id: SedimentreeId,
-    ) -> Fetcher<Async, Store>
-    where
-        Store: Storage<Async>,
-    {
+    /// Trusted tree-scoped local reads, never a replacement for remote policy.
+    pub(crate) fn local_fetcher(&self, id: SedimentreeId) -> Fetcher<Async, Store> {
         Fetcher::new(self.storage.clone(), id, self.state.tree(id))
     }
-
-    /// Access the global local ID index, which is not scoped to one tree.
-    #[must_use]
+    /// The global ID index is not scoped to one tree.
     pub(crate) fn local_access(&self) -> LocalStorageAccess<Store> {
         LocalStorageAccess::new(self.storage.clone())
     }
 }
-
-impl<Store, Auth> Clone for StoragePowerbox<Store, Auth> {
+impl<Store: Storage<Async>, Auth, Async: FutureForm> Clone for StoragePowerbox<Store, Auth, Async> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
             policy: self.policy.clone(),
             state: self.state.clone(),
+            submission: self.submission.clone(),
         }
+    }
+}
+impl<Store: Storage<Async>, Auth, Async: FutureForm> core::fmt::Debug
+    for StoragePowerbox<Store, Auth, Async>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StoragePowerbox").finish_non_exhaustive()
     }
 }
