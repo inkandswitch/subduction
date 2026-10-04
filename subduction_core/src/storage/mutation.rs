@@ -45,6 +45,60 @@ pub(crate) enum Operation {
     DeleteTree,
 }
 impl Operation {
+    pub(crate) fn items(&self) -> Option<Vec<crate::stored::StoredItem>> {
+        use crate::{
+            storage::state::{MAX_PENDING_BYTES, MAX_PENDING_ITEMS},
+            stored::{StoredItem, item_size},
+        };
+        let (count, bytes) = match self {
+            Self::Commit(v) => (1, item_size(v)),
+            Self::Fragment(v) => (1, item_size(v)),
+            Self::Batch(commits, fragments) => (
+                commits.len().saturating_add(fragments.len()),
+                commits
+                    .iter()
+                    .map(item_size)
+                    .chain(fragments.iter().map(item_size))
+                    .fold(0usize, usize::saturating_add),
+            ),
+            Self::Register => return Some(Vec::new()),
+            Self::DeleteCommit(_)
+            | Self::DeleteCommits
+            | Self::DeleteFragment(_)
+            | Self::DeleteFragments
+            | Self::DeleteId
+            | Self::DeleteTree => return None,
+        };
+        // Do not clone a batch just to discover it exceeds the queue budget.
+        if count > MAX_PENDING_ITEMS || bytes > MAX_PENDING_BYTES {
+            return None;
+        }
+        match self {
+            Self::Commit(v) => Some(alloc::vec![StoredItem::Commit(Arc::new(v.clone()))]),
+            Self::Fragment(v) => Some(alloc::vec![StoredItem::Fragment(Arc::new(v.clone()))]),
+            Self::Batch(commits, fragments) => Some(
+                commits
+                    .iter()
+                    .cloned()
+                    .map(|v| StoredItem::Commit(Arc::new(v)))
+                    .chain(
+                        fragments
+                            .iter()
+                            .cloned()
+                            .map(|v| StoredItem::Fragment(Arc::new(v))),
+                    )
+                    .collect(),
+            ),
+            Self::Register
+            | Self::DeleteCommit(_)
+            | Self::DeleteCommits
+            | Self::DeleteFragment(_)
+            | Self::DeleteFragments
+            | Self::DeleteId
+            | Self::DeleteTree => None,
+        }
+    }
+
     pub(crate) fn update(&self) -> Option<Sedimentree> {
         match self {
             Self::Commit(v) => Some(Sedimentree::new(

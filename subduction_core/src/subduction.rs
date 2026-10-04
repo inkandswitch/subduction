@@ -64,6 +64,7 @@ pub mod dispatch_completion;
 pub(crate) mod ingest;
 mod mutation;
 pub(crate) mod peers;
+mod stored;
 pub use peers::{SendPushes, upstream_peers};
 pub(crate) mod spawn_guard;
 
@@ -1046,6 +1047,21 @@ where
     ) -> Result<Option<Blob>, Store::Error> {
         tracing::debug!(?id, ?digest, "Looking for blob");
         ingest::get_blob(&self.storage, id, digest).await
+    }
+
+    /// Watch local stored contents with gap-free catch-up and automatic recovery.
+    /// Does not start peer sync or require a listener. `StorageChecked` does not
+    /// end the stream. Dropping it cancels observation, not admitted writes;
+    /// shutdown or forced driver loss yields a terminal closed error.
+    #[must_use]
+    pub fn watch_stored(self: &Arc<Self>, id: SedimentreeId) -> crate::stored::StoredUpdates
+    where
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Timer: Send + Sync + 'a,
+        Sp: Send + Sync + 'static,
+        'a: 'static,
+    {
+        Async::start_stored(self.clone(), id)
     }
 
     /// Get all blobs associated with a given sedimentree ID from local storage.
@@ -3548,6 +3564,19 @@ pub trait NodeTasks<
         spawner: Sp,
     );
 
+    /// Start a storage-only coordinator using the existing tracked spawner.
+    /// Register before scheduling; the driver retains storage, not the node.
+    #[allow(clippy::type_complexity)]
+    fn start_stored<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        node: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
+        id: SedimentreeId,
+    ) -> crate::stored::StoredUpdates
+    where
+        'a: 'static;
+
     /// Construct the listener future; construction does not submit it to an executor.
     #[allow(clippy::type_complexity)]
     fn start_listener<
@@ -3650,12 +3679,20 @@ where
             let guard = fetcher.state.begin();
             let _task = spawner.spawn(Async::from_future(async move {
                 let update = operation.update();
+                // Avoid notification clones when nobody observes this tree.
+                // A watcher joining mid-write waits for settlement, then scans.
+                let items = if guard.observed() {
+                    operation.items()
+                } else {
+                    None
+                };
                 let result = mutation::complete(
                     &cache,
                     &fetcher,
                     operation.persist::<Async, Store>(fetcher.storage(), fetcher.sedimentree_id()),
                     update,
                     guard,
+                    items,
                 )
                 .await
                 .map_err(crate::storage::mutation::MutationError::Storage);
@@ -3663,6 +3700,32 @@ where
             }));
             receiver
         }));
+    }
+
+    fn start_stored<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        node: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
+        id: SedimentreeId,
+    ) -> crate::stored::StoredUpdates
+    where
+        'a: 'static,
+    {
+        let watch = node.storage.state.watch(id);
+        let fetcher = node.storage.local_fetcher(id);
+        // Acknowledged delivery prevents taking a second notification while
+        // this one-slot channel is occupied (also supported without std).
+        let (sender, receiver) = async_channel::bounded(1);
+        let terminal = Arc::new(spin::Mutex::new(None));
+        let output = stored::Output {
+            sender,
+            terminal: terminal.clone(),
+        };
+        let abort = node
+            .spawner
+            .spawn(Async::from_future(stored::run(fetcher, watch, output)));
+        crate::stored::StoredUpdates::new(receiver, terminal, abort)
     }
 
     fn start_listener<

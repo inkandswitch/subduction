@@ -88,12 +88,20 @@ pub struct MemoryStorage {
     commits: Arc<Sharded<Digest<LooseCommit>, LooseCommit>>,
     fragments: Arc<Sharded<Digest<Fragment>, Fragment>>,
     #[cfg(test)]
-    commit_settlement: Arc<spin::Mutex<Option<CommitSettlement>>>,
+    commit_settlement: Arc<spin::Mutex<Option<TestGate>>>,
+    #[cfg(test)]
+    scan_settlement: Arc<spin::Mutex<Option<TestGate>>>,
 }
 #[cfg(test)]
-type CommitSettlement = (
+type TestGate = (
     async_channel::Sender<()>,
     async_channel::Receiver<Result<(), MemoryStorageError>>,
+);
+
+#[cfg(test)]
+type TestControl = (
+    async_channel::Receiver<()>,
+    async_channel::Sender<Result<(), MemoryStorageError>>,
 );
 
 impl Default for MemoryStorage {
@@ -113,6 +121,8 @@ impl MemoryStorage {
             fragments: Arc::new(Sharded::new()),
             #[cfg(test)]
             commit_settlement: Arc::new(spin::Mutex::new(None)),
+            #[cfg(test)]
+            scan_settlement: Arc::new(spin::Mutex::new(None)),
         }
     }
 }
@@ -120,19 +130,22 @@ impl MemoryStorage {
 #[cfg(test)]
 impl MemoryStorage {
     // Test the real capability/runner boundary without a second storage wrapper.
-    pub(crate) fn gate_next_commit(
-        &self,
-    ) -> (
-        async_channel::Receiver<()>,
-        async_channel::Sender<Result<(), MemoryStorageError>>,
-    ) {
+    pub(crate) fn gate_next_commit(&self) -> TestControl {
+        Self::prepare_test_gate(&self.commit_settlement)
+    }
+    pub(crate) fn gate_next_scan(&self) -> TestControl {
+        Self::prepare_test_gate(&self.scan_settlement)
+    }
+    fn prepare_test_gate(slot: &spin::Mutex<Option<TestGate>>) -> TestControl {
         let (started, receiver) = async_channel::bounded(1);
         let (release, released) = async_channel::bounded(1);
-        *self.commit_settlement.lock() = Some((started, released));
+        *slot.lock() = Some((started, released));
         (receiver, release)
     }
-    async fn settle_test_commit(&self) -> Result<(), MemoryStorageError> {
-        let gate = self.commit_settlement.lock().take();
+    async fn settle_test_gate(
+        slot: &spin::Mutex<Option<TestGate>>,
+    ) -> Result<(), MemoryStorageError> {
+        let gate = slot.lock().take();
         if let Some((started, released)) = gate {
             let _ = started.try_send(());
             if let Ok(result) = released.recv().await {
@@ -220,7 +233,7 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
                 .entry(digest)
                 .or_insert((commit_id, signed, blob));
             #[cfg(test)]
-            self.settle_test_commit().await?;
+            Self::settle_test_gate(&self.commit_settlement).await?;
             Ok(())
         })
     }
@@ -255,6 +268,8 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
                         .collect()
                 })
             };
+            #[cfg(test)]
+            Self::settle_test_gate(&self.scan_settlement).await?;
             raw.into_iter()
                 .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed, blob))
                 .collect::<Result<Vec<_>, _>>()

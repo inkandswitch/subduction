@@ -62,6 +62,33 @@ capability minting no longer takes a future-form turbofish. Put/delete methods
 return `MutationError` to distinguish backend failures from interrupted drivers.
 No protocol messages or sync success semantics change.
 
+## Watching locally stored data
+
+`Arc<Subduction>::watch_stored(id)` returns one ongoing `StoredUpdates` stream:
+verified metadata/blob items, an initial `StorageChecked`, and later stored
+changes. Missed or uncertain changes produce `RescanRequired`, replay of current
+contents, and another `StorageChecked`. Markers do not end iteration.
+
+```rust,ignore
+use futures::StreamExt;
+let mut updates = node.watch_stored(id);
+while let Some(event) = updates.next().await {
+    handle_stored_event(event?);
+}
+```
+
+Watching starts no peer work and needs no listener. Closing/dropping a stream
+unregisters it when its cancelled driver is dropped and releases queued data;
+it does not cancel admitted writes or other watchers. Shutdown and lost mutation
+ownership terminate observation instead of certifying potentially late effects.
+Notification queues allow at most 256 items/4 MiB plus one delivery slot. Full
+snapshot reads and individual replayed items can exceed that budget.
+
+Identity, recovery, and ownership limits are centralized in
+[SYNC_COMPLETION.md](../SYNC_COMPLETION.md). Only core storage-only watching is
+implemented at this stage; peer loading and managed Tokio/JS adapters remain
+planned.
+
 ## `no_std` Support
 
 This crate is `#![no_std]` compatible. Enable the `std` feature for standard library support.
