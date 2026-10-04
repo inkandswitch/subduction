@@ -121,6 +121,7 @@ pub mod policy;
 pub mod remote_heads;
 pub mod spawn;
 pub mod storage;
+pub mod stored;
 pub mod subduction;
 pub mod timeout;
 pub mod timestamp;

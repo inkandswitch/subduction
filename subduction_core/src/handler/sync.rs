@@ -988,7 +988,10 @@ impl<
 
             // Retry the full read if a mutation invalidated its cache handoff.
             loop {
-                let attempt = fetcher.coordination().prepare_read().await;
+                let read = fetcher
+                    .coordination()
+                    .prepare_cache_read(&self.sedimentrees)
+                    .await;
                 // Slow path (cache miss): full storage scan, which also warms
                 // the cache so subsequent requests for this tree take the
                 // fast path.
@@ -1039,7 +1042,7 @@ impl<
                 // cache nothing; the response correctly advertises no local
                 // items.
                 //
-                // `get_or_insert_with` adopts a concurrently-installed value
+                // The read handle adopts a concurrently-installed value
                 // if one appeared and records an LRU access; the built tree
                 // is already minimal, so it is wrapped clean.
                 let loaded = if loose_commits.is_empty() && fragments.is_empty() {
@@ -1049,11 +1052,7 @@ impl<
                         Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
                     Some(MinimizedSedimentree::already_minimal(built))
                 };
-                let Some(adopted) = self
-                    .sedimentrees
-                    .install_checked(id, loaded, || attempt.is_current(), |tree| tree.clone())
-                    .await
-                else {
+                let Some(adopted) = read.install(loaded, |tree| tree.clone()).await else {
                     crate::spawn::yield_once().await;
                     continue;
                 };

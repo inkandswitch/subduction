@@ -537,7 +537,7 @@ where
         {
             return Ok(Some(result));
         }
-        let attempt = fetcher.coordination().prepare_read().await;
+        let read = fetcher.coordination().prepare_cache_read(cache).await;
         let mut loaded = load_tree(fetcher).await?;
         if loaded.is_none() && fetcher.contains_sedimentree_id().await? {
             loaded = Some(MinimizedSedimentree::default());
@@ -545,13 +545,10 @@ where
         if let Some(tree) = loaded.as_mut() {
             prepare(tree);
         }
-        if let Some(result) = cache
-            .install_checked(
-                id,
-                loaded,
-                || attempt.is_current(),
-                |tree| inspect.take().expect("unconsumed inspect")(tree),
-            )
+        if let Some(result) = read
+            .install(loaded, |tree| {
+                inspect.take().expect("unconsumed inspect")(tree)
+            })
             .await
         {
             return Ok(result);
