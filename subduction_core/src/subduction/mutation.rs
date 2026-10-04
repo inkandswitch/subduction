@@ -36,6 +36,7 @@ pub(crate) async fn complete<Async, Store, Work, R, const SHARDS: usize>(
     work: Work,
     update: Option<Sedimentree>,
     mut guard: crate::storage::state::MutationGuard,
+    items: Option<alloc::vec::Vec<crate::stored::StoredItem>>,
 ) -> Result<R, Store::Error>
 where
     Async: FutureForm,
@@ -48,12 +49,12 @@ where
         Err(error) => {
             // Failed writes and deletes may have changed storage. Release the
             // mutation revision with removal, before a stale scan can install.
-            cache.remove_with(&id, || guard.finish()).await;
+            cache.remove_with(&id, || guard.finish(None)).await;
             return Err(error);
         }
     };
     let Some(update) = update else {
-        cache.remove_with(&id, || guard.finish()).await;
+        cache.remove_with(&id, || guard.finish(None)).await;
         return Ok(result);
     };
     let mut update = Some(update);
@@ -63,7 +64,7 @@ where
         if cache
             .with_entry(&id, |tree| {
                 tree.merge(update.take().expect("unconsumed update"));
-                guard.finish();
+                guard.finish(items.as_deref());
             })
             .await
             .is_some()
@@ -74,7 +75,7 @@ where
         let loaded = match ingest::load_tree(fetcher).await {
             Ok(tree) => tree.unwrap_or_default(),
             Err(error) => {
-                cache.remove_with(&id, || guard.finish()).await;
+                cache.remove_with(&id, || guard.finish(None)).await;
                 return Err(error);
             }
         };
@@ -85,7 +86,7 @@ where
                 || fetcher.state.unchanged(revision),
                 |tree| {
                     tree.merge(update.take().expect("unconsumed update"));
-                    guard.finish();
+                    guard.finish(items.as_deref());
                 },
             )
             .await
