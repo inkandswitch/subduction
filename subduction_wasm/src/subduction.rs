@@ -34,8 +34,7 @@ use subduction_core::{
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
     spawn::Spawn,
-    storage::powerbox::StoragePowerbox,
-    subduction::{Subduction, per_peer_sync::PerPeerSync},
+    subduction::{NodeTasks, Subduction, per_peer_sync::PerPeerSync},
     timeout::call::CallTimeout,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
@@ -228,7 +227,22 @@ impl WasmSubduction {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
-        let powerbox = StoragePowerbox::new(opts_storage, Arc::new(policy));
+        let powerbox = <Local as NodeTasks<
+            'static,
+            JsStorage,
+            WasmConn,
+            WireMessage,
+            WasmComposedHandler,
+            JsPolicy,
+            JsSigner,
+            WasmHashMetric,
+            WASM_SHARD_COUNT,
+        >>::storage_powerbox(
+            opts_storage,
+            Arc::new(policy),
+            sedimentrees.clone(),
+            WasmSpawn,
+        );
 
         let observer = match opts.on_remote_heads() {
             Some(f) => JsRemoteHeadsObserver::with_callback(f),

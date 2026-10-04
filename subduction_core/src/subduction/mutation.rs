@@ -24,19 +24,20 @@ use crate::{
 /// `Some(update)` merges persisted items into an existing cache entry;
 /// `None` invalidates after deletion. Missing entries stay uncached: a later
 /// read will load them from storage. Completion never reads storage or retries.
-/// This does not claim rollback or cancellation-independent execution.
+/// The node runner owns this whole future; API callers only wait for its result.
+/// Losing the driver closes observation rather than claiming rollback.
 pub(crate) async fn complete<Async, Store, Work, R, const SHARDS: usize>(
     cache: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     fetcher: &Fetcher<Async, Store>,
     work: Work,
     update: Option<Sedimentree>,
+    mut mutation: crate::storage::state::TrackedMutation,
 ) -> Result<R, Store::Error>
 where
     Async: FutureForm,
     Store: Storage<Async>,
     Work: Future<Output = Result<R, Store::Error>>,
 {
-    let mut mutation = fetcher.coordination().track_mutation();
     let id = fetcher.sedimentree_id();
     let result = match work.await {
         Ok(result) => result,

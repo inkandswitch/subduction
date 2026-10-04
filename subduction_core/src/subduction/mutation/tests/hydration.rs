@@ -19,8 +19,7 @@ impl<F: Fn()> DepthMetric for InspectDepth<F> {
 /// A cold tree with a fragment covering a loose commit. Minimization must
 /// actually consult the metric and remove the covered commit.
 async fn cold_tree() -> (StoragePowerbox<MemoryStorage, OpenPolicy>, Arc<Cache>) {
-    let cache = Arc::new(Cache::new());
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let (storage, cache) = managed(MemoryStorage::new(), TokioSpawn);
     // Leading zero bytes make this commit a fragment-range boundary.
     let commit = item(0).await;
     let blob = Blob::new(vec![3]);
@@ -38,7 +37,7 @@ async fn cold_tree() -> (StoragePowerbox<MemoryStorage, OpenPolicy>, Arc<Cache>)
     )
     .expect("fragment blob");
     storage
-        .local_putter::<Sendable>(ID)
+        .local_putter(ID)
         .save_batch(vec![commit], vec![fragment])
         .await
         .expect("seed cold storage");
@@ -66,7 +65,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
                 .is_some()
         );
     });
-    let tree = ingest::get_or_hydrate::<Sendable, _, _, _, 1>(&cache, &storage, &metric, ID)
+    let tree = ingest::get_or_hydrate(&cache, &storage, &metric, ID)
         .await
         .expect("hydrate")
         .expect("exists");
@@ -76,7 +75,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
     assert!(!cache.get_cloned(&ID).await.expect("installed").is_dirty());
 
     let before = calls.get();
-    let resident = ingest::get_or_hydrate::<Sendable, _, _, _, 1>(&cache, &storage, &metric, ID)
+    let resident = ingest::get_or_hydrate(&cache, &storage, &metric, ID)
         .await
         .expect("resident read")
         .expect("exists");
@@ -87,7 +86,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
 #[tokio::test]
 async fn mutation_during_cold_minimization_forces_a_reload() {
     let (storage, cache) = cold_tree().await;
-    let fetcher = storage.local_fetcher::<Sendable>(ID);
+    let fetcher = storage.local_fetcher(ID);
     let incoming = item(2).await;
     let first = Cell::new(true);
     let metric = InspectDepth(|| {
@@ -98,10 +97,7 @@ async fn mutation_during_cold_minimization_forces_a_reload() {
                 &cache,
                 &fetcher,
                 async {
-                    storage
-                        .local_putter::<Sendable>(ID)
-                        .save_commit(incoming.clone())
-                        .await?;
+                    persist(&fetcher, incoming.clone()).await?;
                     Err::<(), _>(failure())
                 },
                 Some(Sedimentree::default()),
@@ -111,7 +107,7 @@ async fn mutation_during_cold_minimization_forces_a_reload() {
             assert!(result.is_err());
         }
     });
-    let tree = ingest::get_or_hydrate::<Sendable, _, _, _, 1>(&cache, &storage, &metric, ID)
+    let tree = ingest::get_or_hydrate(&cache, &storage, &metric, ID)
         .await
         .expect("hydrate after retry")
         .expect("exists");
@@ -133,7 +129,7 @@ async fn mutation_during_cold_minimization_forces_a_reload() {
 #[tokio::test]
 async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
     let (storage, cache) = cold_tree().await;
-    let fetcher = storage.local_fetcher::<Sendable>(ID);
+    let fetcher = storage.local_fetcher(ID);
     let incoming = item(2).await;
     let first = Cell::new(true);
     let calls = Cell::new(0);
@@ -143,9 +139,7 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
             complete(
                 &cache,
                 &fetcher,
-                storage
-                    .local_putter::<Sendable>(ID)
-                    .save_commit(incoming.clone()),
+                persist(&fetcher, incoming.clone()),
                 Some(Sedimentree::new(
                     Vec::new(),
                     vec![incoming.payload().clone()],
@@ -167,7 +161,7 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
                 .expect("concurrent installation must not wait on the cache lock");
         }
     });
-    let tree = ingest::get_or_hydrate::<Sendable, _, _, _, 1>(&cache, &storage, &metric, ID)
+    let tree = ingest::get_or_hydrate(&cache, &storage, &metric, ID)
         .await
         .expect("adopt resident entry")
         .expect("exists");
