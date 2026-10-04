@@ -3,25 +3,30 @@
 
 mod hydration;
 
-use super::*;
 use crate::{
+    collections::bounded_sharded_map::BoundedShardedMap,
     connection::test_utils::{TokioSpawn, test_signer},
     policy::open::OpenPolicy,
     storage::{
+        fetcher::Fetcher,
         memory::{MemoryStorage, MemoryStorageError},
         powerbox::StoragePowerbox,
+        traits::Storage,
     },
-    subduction::ingest,
+    subduction::{NodeTasks, ingest},
     test_utils::probe_storage::ProbeStorage,
 };
 use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec, vec::Vec};
-use future_form::Sendable;
-use futures::FutureExt;
+use core::future::Future;
+use future_form::{FutureForm, Sendable};
+use futures::{FutureExt, StreamExt};
 use sedimentree_core::{
     blob::Blob,
     codec::error::{DecodeError, InvalidEnumTag},
     depth::CountLeadingZeroBytes,
+    id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
+    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 
@@ -38,17 +43,218 @@ where
     Store: Storage<Async>,
     Work: Future<Output = Result<R, Store::Error>>,
 {
-    super::complete(
-        cache,
-        fetcher,
-        work,
-        update,
-        fetcher.coordination().track_mutation(),
-    )
-    .await
+    fetcher
+        .coordination()
+        .track_mutation()
+        .persist(cache, work, update, None)
+        .await
 }
 
 type Cache = BoundedShardedMap<SedimentreeId, MinimizedSedimentree, 1>;
+type WatchedNode = crate::subduction::Subduction<
+    'static,
+    Sendable,
+    MemoryStorage,
+    crate::connection::test_utils::MockConnection,
+    crate::handler::sync::SyncHandler<
+        Sendable,
+        MemoryStorage,
+        crate::connection::test_utils::MockConnection,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        crate::connection::test_utils::TokioSpawn,
+        1,
+    >,
+    OpenPolicy,
+    subduction_crypto::signer::memory::MemorySigner,
+    crate::connection::test_utils::InstantTimeout,
+    crate::connection::test_utils::TokioSpawn,
+    CountLeadingZeroBytes,
+    1,
+>;
+fn watched_node(backend: MemoryStorage) -> Arc<WatchedNode> {
+    use crate::{
+        connection::test_utils::{InstantTimeout, MockConnection, TokioSpawn},
+        subduction::builder::SubductionBuilder,
+    };
+    let (node, _handler, _listener, _manager) = SubductionBuilder::<_, _, _, _, _, _, 1>::new()
+        .signer(test_signer())
+        .storage(backend, Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
+    node
+}
+async fn observed_event(stream: &mut crate::stored::StoredUpdates) -> crate::stored::StoredEvent {
+    tokio::time::timeout(core::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("stream wakes")
+        .expect("ongoing stream")
+        .expect("event")
+}
+
+#[tokio::test]
+async fn watching_waits_for_cancelled_mutations_to_settle_then_publishes_or_recovers() {
+    use crate::stored::{StoredEvent, StoredItem};
+    for (fail, resident) in [(false, false), (false, true), (true, false), (true, true)] {
+        let backend = MemoryStorage::new();
+        let node = watched_node(backend.clone());
+        let putter = node.storage.local_putter(ID);
+        putter
+            .save_commit(item(1).await)
+            .await
+            .expect("stored seed");
+        if resident {
+            assert!(node.get_commits(ID).await.is_some());
+        }
+        assert_eq!(node.sedimentrees.get_cloned(&ID).await.is_some(), resident);
+        let mut stream = Sendable::start_stored(node.clone(), ID);
+        assert!(matches!(
+            observed_event(&mut stream).await,
+            StoredEvent::Item(_)
+        ));
+        assert!(matches!(
+            observed_event(&mut stream).await,
+            StoredEvent::StorageChecked
+        ));
+        let (started, release) = backend.gate_next_commit();
+        let mut waiter = Box::pin(putter.save_commit(item(2).await));
+        assert!(waiter.as_mut().now_or_never().is_none());
+        started
+            .recv()
+            .await
+            .expect("backend effect before settlement");
+        assert!(
+            stream.next().now_or_never().is_none(),
+            "no publication before settlement"
+        );
+        drop(waiter);
+        release
+            .send(if fail { Err(failure()) } else { Ok(()) })
+            .await
+            .expect("settle");
+        if fail {
+            assert!(matches!(
+                observed_event(&mut stream).await,
+                StoredEvent::RescanRequired
+            ));
+            let mut count = 0;
+            loop {
+                match observed_event(&mut stream).await {
+                    StoredEvent::Item(_) => count += 1,
+                    StoredEvent::StorageChecked => break,
+                    StoredEvent::PeerSynced { .. } | StoredEvent::RescanRequired => {
+                        panic!("ordered recovery")
+                    }
+                }
+            }
+            assert_eq!(
+                count, 2,
+                "recover partial effects, not just successful calls"
+            );
+            assert!(node.sedimentrees.get_cloned(&ID).await.is_none());
+        } else {
+            let StoredEvent::Item(StoredItem::Commit(v)) = observed_event(&mut stream).await else {
+                panic!("settled item")
+            };
+            assert_eq!(v.payload().head(), CommitId::new([2; 32]));
+            let cached = node.sedimentrees.get_cloned(&ID).await;
+            if resident {
+                assert_eq!(cached.expect("resident").loose_commits().count(), 2);
+            } else {
+                assert!(cached.is_none(), "publication must not populate the cache");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn catch_up_waits_for_active_mutation_even_when_backend_bytes_are_already_visible() {
+    use crate::stored::StoredEvent;
+    let backend = MemoryStorage::new();
+    let node = watched_node(backend.clone());
+    let (started, release) = backend.gate_next_commit();
+    let putter = node.storage.local_putter(ID);
+    let mut waiter = Box::pin(putter.save_commit(item(1).await));
+    assert!(waiter.as_mut().now_or_never().is_none());
+    started.recv().await.expect("unsettled effect");
+    let mut stream = Sendable::start_stored(node.clone(), ID);
+    assert!(stream.next().now_or_never().is_none());
+    drop(waiter);
+    release.send(Ok(())).await.expect("settle");
+    assert!(matches!(
+        observed_event(&mut stream).await,
+        StoredEvent::Item(_)
+    ));
+    assert!(matches!(
+        observed_event(&mut stream).await,
+        StoredEvent::StorageChecked
+    ));
+}
+
+#[tokio::test]
+async fn scan_started_before_a_write_retries_instead_of_certifying_an_empty_view() {
+    use crate::stored::StoredEvent;
+    let backend = MemoryStorage::new();
+    let node = watched_node(backend.clone());
+    let (started, release) = backend.gate_next_scan();
+    let mut stream = Sendable::start_stored(node.clone(), ID);
+    started.recv().await.expect("old empty scan captured");
+    node.storage
+        .local_putter(ID)
+        .save_commit(item(1).await)
+        .await
+        .expect("concurrent mutation");
+    release.send(Ok(())).await.expect("return old scan");
+    assert!(
+        matches!(observed_event(&mut stream).await, StoredEvent::Item(_)),
+        "the old scan must retry before StorageChecked"
+    );
+    assert!(matches!(
+        observed_event(&mut stream).await,
+        StoredEvent::StorageChecked
+    ));
+}
+
+#[tokio::test]
+async fn failed_snapshot_is_terminal_for_its_watch_not_mutation_admission() {
+    use crate::stored::LoadError;
+    let backend = MemoryStorage::new();
+    let node = watched_node(backend.clone());
+    let (started, release) = backend.gate_next_scan();
+    let mut stream = Sendable::start_stored(node.clone(), ID);
+    started.recv().await.expect("scan captured");
+    release.send(Err(failure())).await.expect("read fails");
+    assert!(matches!(
+        stream.next().await,
+        Some(Err(LoadError::Operation(_)))
+    ));
+    assert!(stream.next().await.is_none());
+    node.storage
+        .local_putter(ID)
+        .save_commit(item(1).await)
+        .await
+        .expect("node still admits writes");
+}
+
+#[tokio::test]
+async fn aborted_watch_driver_wakes_pending_read_and_does_not_end_mutation_admission() {
+    use crate::stored::{LoadError, StoredEvent};
+    let node = watched_node(MemoryStorage::new());
+    let mut stream = Sendable::start_stored(node.clone(), ID);
+    assert!(matches!(
+        observed_event(&mut stream).await,
+        StoredEvent::StorageChecked
+    ));
+    stream.abort_handle().abort();
+    assert!(matches!(stream.next().await, Some(Err(LoadError::Closed))));
+    node.storage
+        .local_putter(ID)
+        .save_commit(item(1).await)
+        .await
+        .expect("other work still admitted");
+}
+
 const ID: SedimentreeId = SedimentreeId::new([83; 32]);
 
 async fn item(n: u8) -> VerifiedMeta<LooseCommit> {
@@ -125,7 +331,6 @@ async fn successful_resident_write_updates_cache_without_reading_storage() {
         .await
         .expect("warm cache")
         .expect("stored tree");
-    let attempt = fetcher.coordination().prepare_read().await;
     let incoming = item(2).await;
     let update = Sedimentree::new(Vec::new(), vec![incoming.payload().clone()]);
     backend.fail(ID);
@@ -142,7 +347,6 @@ async fn successful_resident_write_updates_cache_without_reading_storage() {
             .count(),
         2
     );
-    assert!(!attempt.is_current());
     assert!(
         fetcher
             .coordination()
@@ -282,7 +486,7 @@ async fn pre_failure_scan_cannot_reinstall_after_invalidation() {
     let (storage, cache) = managed(MemoryStorage::new(), TokioSpawn);
     save(&cache, &storage, 1).await;
     let fetcher = storage.local_fetcher(ID);
-    let attempt = fetcher.coordination().prepare_read().await;
+    let read = fetcher.coordination().prepare_cache_read(&cache).await;
     let old = ingest::load_tree(&fetcher).await.expect("scan");
     assert!(
         complete(
@@ -297,9 +501,7 @@ async fn pre_failure_scan_cannot_reinstall_after_invalidation() {
         .await
         .is_err()
     );
-    let stale = cache
-        .install_checked(ID, old, || attempt.is_current(), |_| ())
-        .await;
+    let stale = read.install(old, |_| ()).await;
     assert!(stale.is_none(), "stale scan must retry, not reinstall");
     assert!(cache.get_cloned(&ID).await.is_none());
     assert_eq!(
@@ -315,17 +517,10 @@ async fn scan_adopts_a_concurrently_completed_cache_entry() {
     let (storage, cache) = managed(MemoryStorage::new(), TokioSpawn);
     save(&cache, &storage, 1).await;
     let fetcher = storage.local_fetcher(ID);
-    let attempt = fetcher.coordination().prepare_read().await;
+    let read = fetcher.coordination().prepare_cache_read(&cache).await;
     let old = ingest::load_tree(&fetcher).await.expect("scan");
     save(&cache, &storage, 2).await;
-    let adopted = cache
-        .install_checked(
-            ID,
-            old,
-            || attempt.is_current(),
-            |tree| tree.loose_commits().count(),
-        )
-        .await;
+    let adopted = read.install(old, |tree| tree.loose_commits().count()).await;
     assert_eq!(
         adopted,
         Some(Some(2)),
