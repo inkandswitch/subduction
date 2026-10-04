@@ -307,15 +307,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
         self,
         storage: Store,
         policy: Arc<Auth>,
-    ) -> SubductionBuilder<
-        Sign,
-        Sp,
-        StoragePowerbox<Store, Auth>,
-        Timer,
-        Metric,
-        HeadsObserver,
-        SHARDS,
-    > {
+    ) -> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS> {
         let Self {
             signer,
             spawner,
@@ -334,7 +326,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
         SubductionBuilder {
             signer,
             spawner,
-            storage: StoragePowerbox::new(storage, policy),
+            storage: (storage, policy),
             timer,
             heads_observer,
             discovery_id,
@@ -601,7 +593,7 @@ impl<
     Metric: DepthMetric,
     HeadsObserver: RemoteHeadsObserver,
     const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, HeadsObserver, SHARDS>
+> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -712,11 +704,12 @@ impl<
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
+        let storage = StoragePowerbox::new(self.storage.0, self.storage.1);
         let mut handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
-            self.storage.clone(),
+            storage.clone(),
             self.depth_metric.clone(),
             self.heads_observer,
             self.spawner.clone(),
@@ -735,7 +728,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
-            self.storage,
+            storage,
             send_counter,
             nonce_cache,
             self.timer,
@@ -750,15 +743,7 @@ impl<
 }
 
 impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
-    SubductionBuilder<
-        Sign,
-        Sp,
-        StoragePowerbox<Store, Auth>,
-        Timer,
-        Metric,
-        NoRemoteHeadsObserver,
-        SHARDS,
-    >
+    SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, NoRemoteHeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with a custom [`Handler`].
     ///
@@ -846,7 +831,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             sedimentrees,
             connections,
             subscriptions,
-            self.storage,
+            StoragePowerbox::new(self.storage.0, self.storage.1),
             self.send_counter.unwrap_or_default(),
             nonce_cache,
             self.timer,
@@ -867,7 +852,7 @@ impl<
     Metric: DepthMetric,
     HeadsObserver: RemoteHeadsObserver,
     const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, HeadsObserver, SHARDS>
+> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with a composed [`Handler`].
     ///
@@ -950,11 +935,12 @@ impl<
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
+        let storage = StoragePowerbox::new(self.storage.0, self.storage.1);
         let mut sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
-            self.storage.clone(),
+            storage.clone(),
             self.depth_metric.clone(),
             self.heads_observer,
             self.spawner.clone(),
@@ -974,7 +960,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
-            self.storage,
+            storage,
             send_counter,
             nonce_cache,
             self.timer,

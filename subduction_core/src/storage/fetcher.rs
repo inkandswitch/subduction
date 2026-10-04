@@ -46,6 +46,10 @@ impl<Async: FutureForm, Store: Storage<Async>> Fetcher<Async, Store> {
         }
     }
 
+    pub(crate) fn storage(&self) -> &Store {
+        &self.storage
+    }
+
     /// Get the sedimentree ID this capability grants access to.
     #[must_use]
     pub const fn sedimentree_id(&self) -> SedimentreeId {

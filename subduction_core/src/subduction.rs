@@ -163,7 +163,7 @@ pub struct Subduction<
     timer: Timer,
     depth_metric: Metric,
     sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
-    storage: StoragePowerbox<Store, Auth>,
+    storage: StoragePowerbox<Store, Auth, Async>,
 
     /// Active connections, keyed by peer ID.
     ///
@@ -268,7 +268,14 @@ where
     /// `Arc` clones of whatever shared state it needs.
     ///
     /// For the standard sync protocol, pass a [`SyncHandler`] constructed
-    /// from the same `Arc`s.
+    /// from the same `Arc`s. Construction installs mutation ownership before
+    /// returning; no standalone write may still be running on this powerbox.
+    /// Backends and errors need `'static` only for this node-owned task path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this powerbox already belongs to a node. Use a fresh powerbox
+    /// for each node, sharing a cloned backend handle if needed.
     ///
     /// # Example
     ///
@@ -307,7 +314,7 @@ where
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth>,
+        storage: StoragePowerbox<Store, Auth, Async>,
         send_counter: PeerCounter,
         nonce_cache: NonceCache,
         timer: Timer,
@@ -326,6 +333,7 @@ where
         'a: 'static,
     {
         tracing::info!("initializing Subduction instance");
+        Async::install_mutation_runner(&storage, sedimentrees.clone(), spawner.clone());
 
         let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(4096);
@@ -580,6 +588,7 @@ where
     /// await), the listener drains its outstanding spawned `Handler::handle`
     /// dispatch tasks before exiting. Idempotent.
     pub fn shutdown(&self) {
+        self.storage.state.close();
         self.manager_channel.close();
         self.msg_queue.close();
     }
@@ -1058,7 +1067,7 @@ where
         // Read blobs straight from durable storage. Storage is the source of
         // truth, so we do not gate on in-RAM cache residency (an evicted tree
         // must still return its blobs). `None` ⇔ storage holds nothing.
-        let local_access = self.storage.local_fetcher::<Async>(id);
+        let local_access = self.storage.local_fetcher(id);
         let mut results = Vec::new();
 
         // With compound storage, blobs are stored with their commits/fragments
@@ -1213,27 +1222,13 @@ where
         &self,
         id: SedimentreeId,
     ) -> Result<(), IoError<Async, Store, Conn, Hdl::Message>> {
-        // Drop the in-RAM cache entry (if resident) and delete from durable
-        // storage unconditionally. We must NOT gate storage deletion on RAM
-        // residency: with the LRU cache, an existing tree may have been
-        // evicted from memory, yet still needs deleting from disk.
-        self.sedimentrees.remove(&id).await;
-
-        let destroyer = self.storage.local_destroyer(id);
-
-        mutation::complete(
-            &self.sedimentrees,
-            &self.storage.local_fetcher::<Async>(id),
-            async {
-                // Compound deletion also removes blobs; remove registration last.
-                destroyer.delete_loose_commits().await?;
-                destroyer.delete_fragments().await?;
-                destroyer.delete_sedimentree_id().await
-            },
-            None,
-        )
-        .await
-        .map_err(IoError::Storage)?;
+        // Delete independently of residency. Invalidation and registration
+        // removal belong to the owned mutation, not its cancellable waiter.
+        self.storage
+            .local_destroyer(id)
+            .delete_tree()
+            .await
+            .map_err(IoError::from)?;
 
         Ok(())
     }
@@ -1274,7 +1269,7 @@ where
         Option<FragmentRequested>,
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
     > {
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
@@ -1284,7 +1279,7 @@ where
 
         self.insert_commit_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1335,7 +1330,7 @@ where
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
     > {
         let self_id = self.peer_id();
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
@@ -1350,7 +1345,7 @@ where
 
         self.insert_commit_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1391,7 +1386,7 @@ where
         blob: Blob,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
         let verified_blob = VerifiedBlobMeta::new(blob);
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Async, _>(
             &self.signer,
@@ -1402,7 +1397,7 @@ where
 
         self.insert_fragment_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1439,7 +1434,7 @@ where
         let verified_blob = VerifiedBlobMeta::new(blob);
 
         let self_id = self.peer_id();
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Async, _>(
             &self.signer,
@@ -1455,7 +1450,7 @@ where
 
         self.insert_fragment_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1634,7 +1629,7 @@ where
             return Ok(());
         }
 
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
         let commit_count = commits.len();
         let fragment_count = fragments.len();
         tracing::info!(
@@ -1665,7 +1660,7 @@ where
 
         self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
             .await
-            .map_err(|error| WriteError::Io(IoError::Storage(error)))?;
+            .map_err(|error| WriteError::Io(IoError::from(error)))?;
         self.minimize_tree(id).await;
 
         tracing::info!(
@@ -1725,7 +1720,7 @@ where
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
         use sedimentree_core::collections::Map;
 
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         // Index blobs by digest for matching with commits/fragments
         let blobs_by_digest: Map<Digest<Blob>, Blob> =
@@ -1761,7 +1756,7 @@ where
 
         self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         Ok(())
     }
@@ -2606,7 +2601,7 @@ where
         putter: &Putter<Async, Store>,
         verified_commits: Vec<VerifiedMeta<LooseCommit>>,
         verified_fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> Result<(), Store::Error> {
+    ) -> Result<(), crate::storage::mutation::MutationError<Store::Error>> {
         let id = putter.sedimentree_id();
         tracing::debug!(tree = ?id, "adding sedimentree");
 
@@ -2614,24 +2609,9 @@ where
         // `Storage::save_batch` contract — no explicit
         // `save_sedimentree_id` call needed here.
 
-        // Extract payloads for the in-memory tree before moving the verified
-        // metas into a single `save_batch` call.
-        let loose_commits: Vec<LooseCommit> = verified_commits
-            .iter()
-            .map(|v| v.payload().clone())
-            .collect();
-        let fragments: Vec<Fragment> = verified_fragments
-            .iter()
-            .map(|v| v.payload().clone())
-            .collect();
-
-        mutation::complete(
-            &self.sedimentrees,
-            &putter.as_fetcher(),
-            putter.save_batch(verified_commits, verified_fragments),
-            Some(Sedimentree::new(fragments, loose_commits)),
-        )
-        .await?;
+        putter
+            .save_batch(verified_commits, verified_fragments)
+            .await?;
 
         Ok(())
     }
@@ -2669,7 +2649,7 @@ where
             "sending requested commits and fragments to peer"
         );
 
-        let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
+        let fetcher = match self.storage.get_fetcher(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
                 tracing::debug!(
@@ -2856,7 +2836,7 @@ where
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -2871,7 +2851,7 @@ where
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -3385,6 +3365,7 @@ impl<
 > Drop for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     fn drop(&mut self) {
+        self.storage.state.close();
         self.abort_manager_handle.abort();
         self.abort_listener_handle.abort();
     }
@@ -3559,6 +3540,14 @@ pub trait NodeTasks<
     + Sized where
     Hdl::HandlerError: Into<ListenError<Self, Store, Conn, WireMsg>>,
 {
+    /// Construct the powerbox's typed mutation submission function. The
+    /// existing spawner owns the entire persistence/cache completion unit.
+    fn install_mutation_runner<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
+        storage: &StoragePowerbox<Store, Auth, Self>,
+        cache: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        spawner: Sp,
+    );
+
     /// Construct the listener future; construction does not submit it to an executor.
     #[allow(clippy::type_complexity)]
     fn start_listener<
@@ -3634,6 +3623,7 @@ pub trait NodeTasks<
         Conn: Connection<Local, WireMsg> + PartialEq + Clone + 'static,
         WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
         Store: Storage<Local> + 'static,
+        Store::Error: 'static,
         Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'static,
         Sign: Signer<Local> + 'static,
         Metric: DepthMetric + 'static,
@@ -3647,6 +3637,34 @@ where
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
+    fn install_mutation_runner<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
+        storage: &StoragePowerbox<Store, Auth, Self>,
+        cache: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        spawner: Sp,
+    ) {
+        storage.install_runner(Arc::new(move |fetcher, operation| {
+            let (sender, receiver) = async_channel::bounded(1);
+            let cache = cache.clone();
+            // Admission covers submission too. A rejected, never-polled future
+            // must close validity even if its waiter disappears immediately.
+            let guard = fetcher.state.begin();
+            let _task = spawner.spawn(Async::from_future(async move {
+                let update = operation.update();
+                let result = mutation::complete(
+                    &cache,
+                    &fetcher,
+                    operation.persist::<Async, Store>(fetcher.storage(), fetcher.sedimentree_id()),
+                    update,
+                    guard,
+                )
+                .await
+                .map_err(crate::storage::mutation::MutationError::Storage);
+                drop(sender.try_send(result));
+            }));
+            receiver
+        }));
+    }
+
     fn start_listener<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
         Sp: Spawn<Self> + Clone + Send + Sync + 'static,
@@ -3725,7 +3743,7 @@ where
             if let Some((sed_id, originator)) = propagate
                 && let Ok(fetcher) = subduction
                     .storage
-                    .get_fetcher::<Self>(originator, sed_id)
+                    .get_fetcher(originator, sed_id)
                     .await
             {
                 // Join an existing fetch even if it has already ingested a
@@ -3822,7 +3840,7 @@ mod tests {
     use crate::{
         collections::bounded_sharded_map::BoundedShardedMap,
         connection::test_utils::{
-            FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
+            FailingSendMockConnection, InstantTimeout, TokioSpawn, test_signer,
         },
         handler::sync::SyncHandler,
         nonce_cache::NonceCache,
@@ -3887,7 +3905,7 @@ mod tests {
             subscriptions.clone(),
             storage.clone(),
             CountLeadingZeroBytes,
-            TestSpawn,
+            TokioSpawn,
         ));
 
         let (subduction, _listener_fut, _actor_fut) = Subduction::<
@@ -3913,7 +3931,7 @@ mod tests {
             InstantTimeout,
             Duration::from_secs(30),
             CountLeadingZeroBytes,
-            TestSpawn,
+            TokioSpawn,
         );
 
         let id = SedimentreeId::new([0x5A; 32]);
@@ -3946,7 +3964,7 @@ mod tests {
         );
 
         // Reconstruct purely from storage, exactly as hydration does.
-        let access = storage.local_fetcher::<Sendable>(id);
+        let access = storage.local_fetcher(id);
         let loaded_commits: Vec<LooseCommit> = access
             .load_loose_commits()
             .await?

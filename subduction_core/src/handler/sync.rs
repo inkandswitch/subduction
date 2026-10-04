@@ -89,7 +89,7 @@ pub struct SyncHandler<
     sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-    storage: StoragePowerbox<Store, Auth>,
+    storage: StoragePowerbox<Store, Auth, Async>,
     depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
@@ -166,7 +166,7 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth>,
+        storage: StoragePowerbox<Store, Auth, Async>,
         depth_metric: Metric,
         spawner: Sp,
     ) -> Self {
@@ -202,7 +202,7 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth>,
+        storage: StoragePowerbox<Store, Auth, Async>,
         depth_metric: Metric,
         remote_heads_observer: R,
         spawner: Sp,
@@ -581,7 +581,7 @@ impl<
             "receiving commit"
         );
 
-        let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
+        let putter = match self.storage.get_putter(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -620,7 +620,7 @@ impl<
         let was_new = self
             .insert_commit_locally(&putter, verified_meta)
             .await
-            .map_err(IoError::Storage)?;
+            .map_err(IoError::from)?;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -733,7 +733,7 @@ impl<
             "receiving fragment"
         );
 
-        let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
+        let putter = match self.storage.get_putter(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -769,7 +769,7 @@ impl<
         let was_new = self
             .insert_fragment_locally(&putter, verified_meta)
             .await
-            .map_err(IoError::Storage)?;
+            .map_err(IoError::from)?;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -811,7 +811,7 @@ impl<
         #[cfg(feature = "metrics")]
         self.requestor_tally.record(peer_id).await;
 
-        let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
+        let fetcher = match self.storage.get_fetcher(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
                 tracing::debug!(
@@ -1173,7 +1173,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -1181,7 +1181,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 

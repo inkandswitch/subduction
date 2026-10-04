@@ -1,142 +1,107 @@
-//! Put capability for authorized write access to sedimentrees.
-
-use core::marker::PhantomData;
-
-use alloc::{sync::Arc, vec::Vec};
-
+//! Authorized writes use the powerbox's shared mutation submission boundary.
+use super::{
+    fetcher::Fetcher,
+    mutation::{self, MutationError, Operation, Submission},
+    traits::Storage,
+};
+use alloc::vec::Vec;
 use future_form::FutureForm;
 use sedimentree_core::{fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit};
 use subduction_crypto::verified_meta::VerifiedMeta;
 
-use super::{fetcher::Fetcher, traits::Storage};
-
-/// A capability granting put access to a specific sedimentree's data.
-///
-/// This type bundles:
-/// - Proof that put access was authorized
-/// - The storage backend to write to
-///
-/// Created via [`Subduction::authorize_put`][crate::subduction::Subduction].
-///
-/// A `Putter` also grants fetch access (put implies fetch).
+/// Verified-author write capability for one tree; put also grants fetch access.
+/// Node-managed writes own persistence and cache completion after submission.
+/// Standalone capabilities run inline. Cancellation is never rollback.
 pub struct Putter<Async: FutureForm, Store: Storage<Async>> {
-    storage: Arc<Store>,
-    sedimentree_id: SedimentreeId,
-    state: Arc<super::state::TreeState>,
-    _marker: PhantomData<Async>,
+    fetcher: Fetcher<Async, Store>,
+    submission: Submission<Async, Store>,
 }
-
 impl<Async: FutureForm, Store: Storage<Async>> Putter<Async, Store> {
-    /// Create a new putter capability.
-    ///
-    /// This should only be called after authorization has been verified.
     pub(super) const fn new(
-        storage: Arc<Store>,
-        sedimentree_id: SedimentreeId,
-        state: Arc<super::state::TreeState>,
+        fetcher: Fetcher<Async, Store>,
+        submission: Submission<Async, Store>,
     ) -> Self {
         Self {
-            storage,
-            sedimentree_id,
-            state,
-            _marker: PhantomData,
+            fetcher,
+            submission,
         }
     }
-
-    /// Get the sedimentree ID this capability grants access to.
+    /// Tree to which authorization applies.
     #[must_use]
     pub const fn sedimentree_id(&self) -> SedimentreeId {
-        self.sedimentree_id
+        self.fetcher.sedimentree_id()
     }
-
-    /// Downgrade to a fetch-only capability.
-    ///
-    /// This is useful when you have put access but only need to fetch.
+    /// Downgrade to read access.
     #[must_use]
     pub fn as_fetcher(&self) -> Fetcher<Async, Store> {
-        Fetcher::new(
-            self.storage.clone(),
-            self.sedimentree_id,
-            self.state.clone(),
-        )
+        self.fetcher.clone()
     }
-
-    // ==================== Commits ====================
-
-    /// Save a commit with verified blob metadata.
-    ///
-    /// Takes [`VerifiedMeta<LooseCommit>`] to enforce at compile time that:
-    /// 1. The signature has been verified
-    /// 2. The blob content matches the claimed metadata
-    ///
-    /// The commit and blob are stored atomically.
-    #[must_use]
-    pub fn save_commit(
+    /// Save verified metadata and its blob.
+    /// # Errors
+    /// Returns a backend failure or interrupted mutation driver.
+    pub async fn save_commit(
         &self,
         verified: VerifiedMeta<LooseCommit>,
-    ) -> Async::Future<'_, Result<(), Store::Error>> {
-        self.storage
-            .save_loose_commit(self.sedimentree_id, verified)
+    ) -> Result<(), MutationError<Store::Error>> {
+        mutation::apply(
+            &self.submission,
+            self.as_fetcher(),
+            Operation::Commit(verified),
+        )
+        .await
+        .map(|_| ())
     }
-
-    // ==================== Fragments ====================
-
-    /// Save a fragment with verified blob metadata.
-    ///
-    /// Takes [`VerifiedMeta<Fragment>`] to enforce at compile time that:
-    /// 1. The signature has been verified
-    /// 2. The blob content matches the claimed metadata
-    ///
-    /// The fragment and blob are stored atomically.
-    #[must_use]
-    pub fn save_fragment(
+    /// Save a verified fragment and blob.
+    /// # Errors
+    /// Returns a backend failure or interrupted mutation driver.
+    pub async fn save_fragment(
         &self,
         verified: VerifiedMeta<Fragment>,
-    ) -> Async::Future<'_, Result<(), Store::Error>> {
-        self.storage.save_fragment(self.sedimentree_id, verified)
+    ) -> Result<(), MutationError<Store::Error>> {
+        mutation::apply(
+            &self.submission,
+            self.as_fetcher(),
+            Operation::Fragment(verified),
+        )
+        .await
+        .map(|_| ())
     }
-
-    // ==================== Batch Operations ====================
-
-    /// Save a batch of commits and fragments with their blobs.
-    ///
-    /// Returns the count of items saved.
-    #[must_use]
-    pub fn save_batch(
+    /// Save one backend batch, returning its stored item count.
+    /// # Errors
+    /// Returns a backend failure or interrupted mutation driver; effects may be partial.
+    pub async fn save_batch(
         &self,
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> Async::Future<'_, Result<usize, Store::Error>> {
-        self.storage
-            .save_batch(self.sedimentree_id, commits, fragments)
+    ) -> Result<usize, MutationError<Store::Error>> {
+        mutation::apply(
+            &self.submission,
+            self.as_fetcher(),
+            Operation::Batch(commits, fragments),
+        )
+        .await
     }
-
-    // ==================== Bookkeeping ====================
-
-    /// Register this sedimentree ID as having data stored.
-    ///
-    /// This is bookkeeping to track which sedimentrees exist.
-    #[must_use]
-    pub fn save_sedimentree_id(&self) -> Async::Future<'_, Result<(), Store::Error>> {
-        self.storage.save_sedimentree_id(self.sedimentree_id)
+    /// Register an empty tree in the ID index.
+    /// # Errors
+    /// Returns a backend failure or interrupted mutation driver.
+    pub async fn save_sedimentree_id(&self) -> Result<(), MutationError<Store::Error>> {
+        mutation::apply(&self.submission, self.as_fetcher(), Operation::Register)
+            .await
+            .map(|_| ())
     }
 }
-
 impl<Async: FutureForm, Store: Storage<Async>> Clone for Putter<Async, Store> {
     fn clone(&self) -> Self {
         Self {
-            storage: self.storage.clone(),
-            sedimentree_id: self.sedimentree_id,
-            state: self.state.clone(),
-            _marker: PhantomData,
+            fetcher: self.fetcher.clone(),
+            submission: self.submission.clone(),
         }
     }
 }
-
 impl<Async: FutureForm, Store: Storage<Async>> core::fmt::Debug for Putter<Async, Store> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Putter")
-            .field("sedimentree_id", &self.sedimentree_id)
+            .field("sedimentree_id", &self.sedimentree_id())
             .finish_non_exhaustive()
     }
 }
