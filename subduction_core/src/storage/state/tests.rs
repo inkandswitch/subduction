@@ -8,7 +8,7 @@ const ID: SedimentreeId = SedimentreeId::new([91; 32]);
 
 #[tokio::test]
 async fn a_mutation_invalidates_an_attempt_even_after_completion() {
-    let coordination = StorageState::default().tree(ID);
+    let coordination = Arc::new(StorageState::default()).tree(ID);
     let attempt = coordination.prepare_read().await;
     assert!(attempt.is_current());
 
@@ -25,7 +25,7 @@ async fn a_mutation_invalidates_an_attempt_even_after_completion() {
 
 #[tokio::test]
 async fn preparation_waits_for_all_mutations_and_wakes_every_reader() {
-    let coordination = StorageState::default().tree(ID);
+    let coordination = Arc::new(StorageState::default()).tree(ID);
     let mut first = coordination.track_mutation();
     let mut second = coordination.track_mutation();
     let read = coordination.prepare_read();
@@ -56,7 +56,7 @@ async fn preparation_waits_for_all_mutations_and_wakes_every_reader() {
 
 #[tokio::test]
 async fn completion_before_first_poll_does_not_leave_preparation_waiting() {
-    let coordination = StorageState::default().tree(ID);
+    let coordination = Arc::new(StorageState::default()).tree(ID);
     let mut mutation = coordination.track_mutation();
     let read = coordination.prepare_read();
     mutation.complete();
@@ -70,7 +70,7 @@ async fn completion_before_first_poll_does_not_leave_preparation_waiting() {
 
 #[tokio::test]
 async fn completion_is_idempotent_and_notifies_after_the_handle_is_dropped() {
-    let coordination = StorageState::default().tree(ID);
+    let coordination = Arc::new(StorageState::default()).tree(ID);
     let mut mutation = coordination.track_mutation();
     let waiting = coordination.prepare_read();
     futures::pin_mut!(waiting);
@@ -99,7 +99,7 @@ async fn completion_is_idempotent_and_notifies_after_the_handle_is_dropped() {
 
 #[tokio::test]
 async fn an_attempt_keeps_its_tree_registered_and_ignores_other_trees() {
-    let registry = StorageState::default();
+    let registry = Arc::new(StorageState::default());
     // The temporary coordination handle is dropped, but the attempt must keep
     // the same tree state alive for subsequent handles from this registry.
     let attempt = registry.tree(ID).prepare_read().await;
@@ -119,18 +119,51 @@ async fn an_attempt_keeps_its_tree_registered_and_ignores_other_trees() {
 #[tokio::test]
 async fn fetcher_clones_and_put_capabilities_share_coordination() {
     use crate::{
+        collections::bounded_sharded_map::BoundedShardedMap,
+        connection::{
+            message::SyncMessage,
+            test_utils::{MockConnection, TokioSpawn},
+        },
+        handler::sync::SyncHandler,
         policy::open::OpenPolicy,
-        storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+        storage::memory::MemoryStorage,
+        subduction::NodeTasks,
     };
     use future_form::Sendable;
+    use sedimentree_core::depth::CountLeadingZeroBytes;
+    use subduction_crypto::signer::memory::MemorySigner;
 
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-    let fetcher = storage.local_fetcher::<Sendable>(ID);
+    type Hdl = SyncHandler<
+        Sendable,
+        MemoryStorage,
+        MockConnection,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        TokioSpawn,
+        1,
+    >;
+    let storage = <Sendable as NodeTasks<
+        'static,
+        MemoryStorage,
+        MockConnection,
+        SyncMessage,
+        Hdl,
+        OpenPolicy,
+        MemorySigner,
+        CountLeadingZeroBytes,
+        1,
+    >>::storage_powerbox(
+        MemoryStorage::new(),
+        Arc::new(OpenPolicy),
+        Arc::new(BoundedShardedMap::new()),
+        TokioSpawn,
+    );
+    let fetcher = storage.local_fetcher(ID);
     let clone = fetcher.clone();
     let attempt = fetcher.coordination().prepare_read().await;
     drop(fetcher);
     let mut mutation = storage
-        .local_putter::<Sendable>(ID)
+        .local_putter(ID)
         .as_fetcher()
         .coordination()
         .track_mutation();

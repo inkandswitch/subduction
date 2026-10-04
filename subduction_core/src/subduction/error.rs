@@ -56,6 +56,10 @@ pub enum IoError<
     #[error(transparent)]
     Storage(Store::Error),
 
+    /// Admission closed or the owned storage driver was lost; not rollback.
+    #[error("storage mutation interrupted")]
+    StorageInterrupted,
+
     /// An error occurred while sending data on the connection.
     #[error(transparent)]
     ConnSend(Conn::SendError),
@@ -71,6 +75,22 @@ pub enum IoError<
     /// The blob content doesn't match the claimed metadata.
     #[error(transparent)]
     BlobMismatch(#[from] BlobMismatch),
+}
+
+impl<Async, Store, Conn, WireMsg> From<crate::storage::mutation::MutationError<Store::Error>>
+    for IoError<Async, Store, Conn, WireMsg>
+where
+    Async: FutureForm + ?Sized,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+{
+    fn from(error: crate::storage::mutation::MutationError<Store::Error>) -> Self {
+        match error {
+            crate::storage::mutation::MutationError::Storage(error) => Self::Storage(error),
+            crate::storage::mutation::MutationError::Closed => Self::StorageInterrupted,
+        }
+    }
 }
 
 /// An error that can occur while handling a batch sync request.

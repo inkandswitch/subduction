@@ -49,10 +49,12 @@
 //!
 //! # Limits
 //!
-//! This does not make storage operations atomic or keep cancelled writes running.
-//! Dropping an unfinished guard releases waiting readers, but cannot guarantee
-//! that a backend has stopped work it started elsewhere. Changes made directly
-//! through an unrelated storage handle are not tracked here either.
+//! This does not make storage operations atomic. The node runs admitted writes
+//! in its own tasks, so dropping an API waiter does not abandon cache maintenance.
+//! If the executor drops an unfinished task, its guard marks the shared state
+//! closed: backend work may still be running, so readers cannot assume it has
+//! finished. Changes made directly through an unrelated storage handle are not
+//! tracked here either.
 
 use alloc::sync::{Arc, Weak};
 use sedimentree_core::{collections::Map, id::SedimentreeId};
@@ -61,15 +63,31 @@ use spin::Mutex;
 /// Shared, weakly registered tree state. Readers and mutations keep their tree
 /// alive; idle entries are reclaimed when another capability is minted.
 #[derive(Debug, Default)]
-pub(crate) struct StorageState(Mutex<Map<SedimentreeId, Weak<TreeState>>>);
+pub(crate) struct StorageState {
+    trees: Mutex<Map<SedimentreeId, Weak<TreeState>>>,
+    closed: core::sync::atomic::AtomicBool,
+    changed: event_listener::Event,
+}
 impl StorageState {
-    pub(crate) fn tree(&self, id: SedimentreeId) -> TreeCoordination {
-        let mut trees = self.0.lock();
+    pub(crate) fn close(&self) {
+        self.closed
+            .store(true, core::sync::atomic::Ordering::Release);
+        self.changed.notify(usize::MAX);
+    }
+    pub(crate) fn closed(&self) -> bool {
+        self.closed.load(core::sync::atomic::Ordering::Acquire)
+    }
+    pub(crate) fn tree(self: &Arc<Self>, id: SedimentreeId) -> TreeCoordination {
+        let mut trees = self.trees.lock();
         if let Some(state) = trees.get(&id).and_then(Weak::upgrade) {
             return TreeCoordination { state };
         }
         trees.retain(|_, tree| tree.strong_count() != 0);
-        let state = Arc::new(TreeState::default());
+        let state = Arc::new(TreeState {
+            owner: self.clone(),
+            revision: Mutex::default(),
+            changed: event_listener::Event::new(),
+        });
         trees.insert(id, Arc::downgrade(&state));
         TreeCoordination { state }
     }
@@ -81,8 +99,9 @@ struct Revision {
     active: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct TreeState {
+    owner: Arc<StorageState>,
     revision: Mutex<Revision>,
     changed: event_listener::Event,
 }
@@ -95,6 +114,14 @@ pub(crate) struct TreeCoordination {
     state: Arc<TreeState>,
 }
 impl TreeCoordination {
+    /// Whether the shared storage mutation driver has been closed.
+    pub(crate) fn closed(&self) -> bool {
+        self.state.owner.closed()
+    }
+    /// Stop accepting mutations through any capability from this powerbox.
+    pub(crate) fn close(&self) {
+        self.state.owner.close();
+    }
     /// Mark a write or delete as pending, before starting its storage work.
     /// This only tracks the operation; it neither authorizes nor performs it.
     pub(crate) fn track_mutation(&self) -> TrackedMutation {
@@ -151,8 +178,8 @@ impl ReadAttempt {
 
 /// A pending write or delete, including the work needed to update its cache.
 /// Call `complete` under the cache lock, then drop this handle after releasing
-/// the lock to wake waiting readers. Dropping unfinished work also releases
-/// readers, but does not guarantee that external backend work has stopped.
+/// the lock to wake waiting readers. Losing an unfinished driver closes
+/// observation: external backend work might still be running.
 #[must_use = "keep the handle until storage and cache work are complete"]
 pub(crate) struct TrackedMutation {
     coordination: TreeCoordination,
@@ -172,6 +199,9 @@ impl TrackedMutation {
 }
 impl Drop for TrackedMutation {
     fn drop(&mut self) {
+        if !self.completed {
+            self.coordination.close();
+        }
         self.complete();
         self.coordination.state.changed.notify(usize::MAX);
     }

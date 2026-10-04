@@ -56,6 +56,7 @@ pub mod id;
 pub mod key;
 pub mod local_access;
 pub mod memory;
+pub mod mutation;
 pub mod powerbox;
 pub mod putter;
 pub(crate) mod state;
