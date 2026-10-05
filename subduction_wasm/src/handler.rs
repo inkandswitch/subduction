@@ -243,6 +243,7 @@ fn convert_sync_listen_error(
         ListenError::IoError(io_err) => ListenError::IoError(match io_err {
             IoError::Storage(e) => IoError::Storage(e),
             IoError::StorageInterrupted => IoError::StorageInterrupted,
+            IoError::Load(error) => IoError::Load(error),
             IoError::ConnSend(e) => IoError::ConnSend(e),
             IoError::ConnRecv(e) => IoError::ConnRecv(e),
             IoError::ConnCall(e) => IoError::ConnCall(e),
