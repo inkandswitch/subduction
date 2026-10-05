@@ -14,6 +14,7 @@ use subduction_core::{
     storage::{memory::MemoryStorage, traits::Storage},
     stored::{LoadError, StoredEvent, StoredItem},
     subduction::{Subduction, builder::SubductionBuilder},
+    timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -445,6 +446,35 @@ async fn uncached_loading_continues_syncing_after_first_supplier() {
 }
 
 #[tokio::test]
+async fn cached_fetch_still_does_not_contact_peers() {
+    let a = node(100, MemoryStorage::new());
+    let b = node(101, MemoryStorage::new());
+    let id = SedimentreeId::new([100; 32]);
+    a.store_commit(
+        id,
+        CommitId::new([1; 32]),
+        BTreeSet::new(),
+        Blob::new(vec![1]),
+    )
+    .await
+    .expect("cached");
+    connect(&a, &b).await;
+    let before = a.send_counter_value(&b.peer_id()).await;
+    assert_eq!(
+        a.fetch_blobs(id, CallTimeout::Default)
+            .await
+            .expect("fetch")
+            .expect("cached")
+            .len(),
+        1
+    );
+    assert_eq!(a.send_counter_value(&b.peer_id()).await, before);
+    assert!(a.get_peer_subscriptions(b.peer_id()).await.is_empty());
+    a.shutdown();
+    b.shutdown();
+}
+
+#[tokio::test]
 async fn slow_cached_delivery_has_no_overall_deadline() {
     let a = node_with_timeout(42, MemoryStorage::new(), Duration::from_millis(30));
     let id = SedimentreeId::new([41; 32]);
@@ -710,6 +740,84 @@ async fn dropping_a_loaded_watcher_leaves_its_subscription_node_owned() {
     stream.close();
     assert!(a.get_peer_subscriptions(b.peer_id()).await.contains(&id));
     assert!(b.get_subscribers(id).await.contains(&a.peer_id()));
+    a.shutdown();
+    b.shutdown();
+}
+
+#[tokio::test]
+async fn collecting_unknown_tree_uses_supplier_readiness_and_establishes_no_subscriptions() {
+    let a = node(60, MemoryStorage::new());
+    let empty_store = MemoryStorage::new();
+    let id = SedimentreeId::new([50; 32]);
+    Storage::<Sendable>::save_batch(&empty_store, id, vec![], vec![])
+        .await
+        .expect("empty candidate");
+    let empty = node(61, empty_store);
+    let supplier = node(62, MemoryStorage::new());
+    let wedged = node(63, MemoryStorage::new());
+    for n in 0..3 {
+        supplier
+            .store_commit(
+                id,
+                CommitId::new([n; 32]),
+                BTreeSet::new(),
+                Blob::new(vec![n]),
+            )
+            .await
+            .expect("seed");
+    }
+    connect(&a, &empty).await;
+    connect(&a, &supplier).await;
+    connect(&a, &wedged).await.pause();
+    let blobs = a
+        .fetch_blobs(id, CallTimeout::TimeoutMillis(1_000))
+        .await
+        .expect("collect")
+        .expect("unknown tree supplied");
+    assert_eq!(blobs.len(), 3, "not the first item or empty peer marker");
+    assert!(
+        a.get_peer_subscriptions(supplier.peer_id())
+            .await
+            .is_empty()
+    );
+    assert!(supplier.get_subscribers(id).await.is_empty());
+    for peer in [a, empty, supplier, wedged] {
+        peer.shutdown();
+    }
+}
+
+#[tokio::test]
+async fn collecting_overflow_recovers_before_returning_and_preserves_timeout_errors() {
+    use subduction_core::subduction::error::IoError;
+    let a = node(64, MemoryStorage::new());
+    let b = node(65, MemoryStorage::new());
+    let id = SedimentreeId::new([51; 32]);
+    for n in 0..260_u32 {
+        let mut head = [0; 32];
+        head[..4].copy_from_slice(&n.to_le_bytes());
+        b.store_commit(
+            id,
+            CommitId::new(head),
+            BTreeSet::new(),
+            Blob::new(n.to_le_bytes().to_vec()),
+        )
+        .await
+        .expect("seed");
+    }
+    let transport = connect(&a, &b).await;
+    let blobs = a
+        .fetch_blobs(id, CallTimeout::TimeoutMillis(5_000))
+        .await
+        .expect("recovery")
+        .expect("available");
+    assert_eq!(blobs.len(), 260);
+    assert!(a.get_peer_subscriptions(b.peer_id()).await.is_empty());
+    transport.pause();
+    assert!(matches!(
+        a.fetch_blobs(SedimentreeId::new([52; 32]), CallTimeout::TimeoutMillis(30))
+            .await,
+        Err(IoError::Load(LoadError::TimedOut))
+    ));
     a.shutdown();
     b.shutdown();
 }
