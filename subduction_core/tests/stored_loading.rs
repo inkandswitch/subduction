@@ -7,6 +7,7 @@ use std::{collections::BTreeSet, time::Duration};
 use subduction_core::{
     connection::test_utils::new_test_subduction,
     stored::{LoadError, StoredEvent, StoredItem, StoredUpdates},
+    timeout::call::CallTimeout,
 };
 async fn next(stream: &mut StoredUpdates) -> StoredEvent {
     tokio::time::timeout(Duration::from_secs(3), stream.next())
@@ -52,6 +53,52 @@ async fn cached_loading_uses_local_contents_without_peer_markers() {
     node.shutdown();
     assert!(matches!(stream.next().await, Some(Err(LoadError::Closed))));
 }
+#[tokio::test]
+async fn collecting_fetch_distinguishes_metadata_identities_not_causal_heads_or_blob_bytes() {
+    let (node, _listener, _manager) = new_test_subduction();
+    let id = SedimentreeId::new([22; 32]);
+    for bytes in [vec![1], vec![2]] {
+        node.store_commit(
+            id,
+            CommitId::new([1; 32]),
+            BTreeSet::new(),
+            Blob::new(bytes),
+        )
+        .await
+        .expect("equivocating metadata");
+    }
+    node.store_fragment(
+        id,
+        CommitId::new([1; 32]),
+        BTreeSet::new(),
+        &[],
+        Blob::new(vec![1]),
+    )
+    .await
+    .expect("other item kind");
+    let blobs = node
+        .fetch_blobs(id, CallTimeout::Default)
+        .await
+        .expect("collect")
+        .expect("available");
+    let mut contents: Vec<_> = blobs
+        .into_iter()
+        .map(|blob| blob.as_slice().to_vec())
+        .collect();
+    contents.sort();
+    assert_eq!(contents, vec![vec![1], vec![1], vec![2]]);
+}
+#[tokio::test]
+async fn collecting_unavailable_tree_returns_none() {
+    let (node, _listener, _manager) = new_test_subduction();
+    assert!(
+        node.fetch_blobs(SedimentreeId::new([23; 32]), CallTimeout::Default)
+            .await
+            .expect("candidate miss")
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn empty_storage_keeps_waiting_until_cancelled() {
     let (node, _listener, _manager) = new_test_subduction();

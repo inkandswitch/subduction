@@ -60,6 +60,10 @@ pub enum IoError<
     #[error("storage mutation interrupted")]
     StorageInterrupted,
 
+    /// Collecting the stored-data loader failed.
+    #[error(transparent)]
+    Load(#[from] crate::stored::LoadError),
+
     /// An error occurred while sending data on the connection.
     #[error(transparent)]
     ConnSend(Conn::SendError),

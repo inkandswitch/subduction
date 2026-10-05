@@ -114,6 +114,10 @@ impl StoredUpdates {
             load_ready: false,
         }
     }
+    pub(crate) const fn initial_load_complete(&self) -> bool {
+        self.load_ready
+    }
+
     /// Cancel the producer; pending reads wake with a closed error. Adapters
     /// can use this without retaining a stream borrow across a foreign await.
     #[must_use]
