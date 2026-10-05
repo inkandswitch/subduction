@@ -650,11 +650,14 @@ where
                 .into_values()
                 .flatten()
                 .collect();
+            // Clear here so that we don't erase new connections established
+            // whilst we're draining old connections.
+            self.subscriptions.lock().await.clear();
+            self.outgoing_subscriptions.lock().await.clear();
             (conns, muxes)
         };
 
         Self::cancel_detached_muxes(removed_muxes).await;
-        self.subscriptions.lock().await.clear();
         // Send counters survive on purpose; see `teardown_peer`.
 
         #[cfg(feature = "metrics")]
@@ -804,6 +807,7 @@ where
         // cannot suppress a propagation for this arrival.
         if newly_present {
             self.clear_stale_outgoing_claims(&peer_id).await;
+            peers::remove_peer_from_subscriptions(&self.subscriptions, peer_id).await;
         }
 
         let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
@@ -953,11 +957,15 @@ where
         conn_count: usize,
     ) {
         Self::cancel_detached_muxes(muxes).await;
-        peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
-
-        // GC only — invalidation happens on next arrival
-        // (`clear_stale_outgoing_claims`); this bounds the map.
-        self.outgoing_subscriptions.lock().await.remove(peer_id);
+        {
+            // It's possible that a new connection to the same peer was added
+            // just before the caller called us, in that case we do nothing
+            let connections = self.connections.lock().await;
+            if !connections.contains_key(peer_id) {
+                peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+                self.outgoing_subscriptions.lock().await.remove(peer_id);
+            }
+        }
 
         // The send counter is deliberately not cleared: receivers keep a
         // never-reset high-water mark, so a restarted sequence would be
