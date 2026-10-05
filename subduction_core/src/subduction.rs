@@ -187,7 +187,8 @@ pub struct Subduction<
     /// [`connections`](Self::connections). Read paths that need only this
     /// lock (response routing, mux lookup) may take it alone; paths that
     /// also need `connections` must take `connections` first.
-    multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
+    #[allow(clippy::type_complexity)]
+    multiplexers: Arc<Mutex<Map<PeerId, Vec<(Authenticated<Conn, Async>, Arc<Multiplexer>)>>>>,
 
     /// Default per-call deadline for roundtrip calls (`BatchSyncRequest` →
     /// `BatchSyncResponse`) when a caller passes `timeout: None`. This is
@@ -208,6 +209,10 @@ pub struct Subduction<
     /// See [`propagate_subscription`](Self::propagate_subscription) for the
     /// claim lifecycle.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
+
+    /// Completion channels for shared missing-document upstream fetches.
+    /// Closing the sender wakes every waiter; no result is sent through it.
+    missing_fetches: Arc<Mutex<Map<SedimentreeId, async_channel::Receiver<()>>>>,
 
     /// Shared monotonic counter for outgoing messages, per peer.
     ///
@@ -354,6 +359,7 @@ where
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
+            missing_fetches: Arc::new(Mutex::new(Map::new())),
             send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
@@ -586,41 +592,9 @@ where
         &self,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<bool, Conn::DisconnectionError> {
-        let peer_id = conn.peer_id();
-        tracing::info!(peer = %peer_id, "disconnecting connection from peer");
-
-        // Detach the muxes inside the same critical section that removes
-        // the connection, so a concurrent `add_connection` can't have its
-        // fresh mux clobbered. Cancel them afterwards, off the lock.
-        let detached = {
-            let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return Ok(false),
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return Ok(false);
-                    }
-                },
-            }
-        };
-
-        if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-        } else {
-            #[cfg(feature = "metrics")]
-            crate::metrics::connection_closed();
+        if self.remove_connection(conn).await.is_none() {
+            return Ok(false);
         }
-        self.refresh_connection_gauge().await;
-
         conn.disconnect().await.map(|()| true)
     }
 
@@ -642,12 +616,19 @@ where
             let muxes = core::mem::take(&mut *self.multiplexers.lock().await)
                 .into_values()
                 .flatten()
+                .map(|(_, mux)| mux)
                 .collect();
+            // Clear the old era while registration is excluded. Clearing
+            // after cancelling muxes could erase a replacement's new claims.
+            self.subscriptions.lock().await.clear();
+            self.outgoing_subscriptions.lock().await.clear();
             (conns, muxes)
         };
 
+        for conn in &all_conns {
+            conn.on_unregistered();
+        }
         Self::cancel_detached_muxes(removed_muxes).await;
-        self.subscriptions.lock().await.clear();
         // Send counters survive on purpose; see `teardown_peer`.
 
         #[cfg(feature = "metrics")]
@@ -697,6 +678,9 @@ where
         };
 
         if let Some((conns, muxes)) = removed {
+            for conn in &conns {
+                conn.on_unregistered();
+            }
             // Removing every connection is by definition removing the last.
             self.teardown_peer(peer_id, muxes, conns.len()).await;
             self.refresh_connection_gauge().await;
@@ -797,26 +781,25 @@ where
         // cannot suppress a propagation for this arrival.
         if newly_present {
             self.clear_stale_outgoing_claims(&peer_id).await;
+            peers::remove_peer_from_subscriptions(&self.subscriptions, peer_id).await;
         }
 
         let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
         let mut multiplexers = self.multiplexers.lock().await;
         match multiplexers.get_mut(&peer_id) {
-            Some(muxes) => muxes.push(mux),
+            Some(muxes) => muxes.push((conn.clone(), mux)),
             None => {
-                multiplexers.insert(peer_id, alloc::vec![mux]);
+                multiplexers.insert(peer_id, alloc::vec![(conn.clone(), mux)]);
             }
         }
 
         true
     }
 
-    /// Reconcile tracking for a connection whose transport has **already
-    /// failed** — e.g. a send returned `Err`, or the per-connection
-    /// receive loop exited and reported the closure via the
-    /// `connection_closed` channel. There is no live transport to close,
-    /// so this only updates in-memory state (connection map, multiplexers,
-    /// subscriptions, metrics).
+    /// Reconcile tracking for a removed connection, including a failed send,
+    /// exited reader, or the bookkeeping half of explicit disconnection.
+    /// This updates in-memory state, cancels that connection's pending calls,
+    /// and notifies its owner, but does not itself await transport closure.
     ///
     /// To proactively shut down a connection you believe is still live,
     /// use [`disconnect`](Self::disconnect), which also closes the
@@ -835,37 +818,46 @@ where
     ) -> Option<bool> {
         let peer_id = conn.peer_id();
 
-        let detached = {
+        let (last, detached) = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return None,
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return None;
-                    }
-                },
+            let last = match connections.remove(&peer_id)?.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    connections.insert(peer_id, remaining);
+                    false
+                }
+                RemoveResult::WasLast(_) => true,
+                RemoveResult::NotFound(original) => {
+                    connections.insert(peer_id, original);
+                    return None;
+                }
+            };
+            let mut multiplexers = self.multiplexers.lock().await;
+            let entries = multiplexers.remove(&peer_id).unwrap_or_default();
+            let mut detached = Vec::new();
+            let mut retained = Vec::new();
+            for (candidate, mux) in entries {
+                if last || &candidate == conn {
+                    detached.push(mux);
+                } else {
+                    retained.push((candidate, mux));
+                }
             }
+            if !retained.is_empty() {
+                multiplexers.insert(peer_id, retained);
+            }
+            (last, detached)
         };
 
-        let last = if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-            Some(true)
+        conn.on_unregistered();
+        if last {
+            self.teardown_peer(&peer_id, detached, 1).await;
         } else {
+            Self::cancel_detached_muxes(detached).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
-            Some(false)
-        };
+        }
         self.refresh_connection_gauge().await;
-        last
+        Some(last)
     }
 
     /// Test-only public access to the crate-internal
@@ -898,6 +890,24 @@ where
             .await
             .remove(peer_id)
             .unwrap_or_default()
+            .into_iter()
+            .map(|(_, mux)| mux)
+            .collect()
+    }
+
+    /// Find the mux belonging to this physical connection, not another
+    /// connection or replacement with the same peer identity.
+    async fn mux_for_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<Arc<Multiplexer>> {
+        self.multiplexers
+            .lock()
+            .await
+            .get(&conn.peer_id())?
+            .iter()
+            .find(|(candidate, _)| candidate == conn)
+            .map(|(_, mux)| mux.clone())
     }
 
     /// Cancel the pending calls on a set of detached multiplexers.
@@ -909,7 +919,7 @@ where
     /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
     async fn cancel_detached_muxes(muxes: Vec<Arc<Multiplexer>>) {
         for mux in muxes {
-            mux.cancel_all_pending().await;
+            mux.close().await;
         }
     }
 
@@ -946,11 +956,16 @@ where
         conn_count: usize,
     ) {
         Self::cancel_detached_muxes(muxes).await;
-        peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
-
-        // GC only — invalidation happens on next arrival
-        // (`clear_stale_outgoing_claims`); this bounds the map.
-        self.outgoing_subscriptions.lock().await.remove(peer_id);
+        {
+            // An old reader's teardown can overlap replacement registration.
+            // Never clear the replacement's peer-scoped state. Registration
+            // invalidates the old era while holding this same outer lock.
+            let connections = self.connections.lock().await;
+            if !connections.contains_key(peer_id) {
+                peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+                self.outgoing_subscriptions.lock().await.remove(peer_id);
+            }
+        }
 
         // The send counter is deliberately not cleared: receivers keep a
         // never-reset high-water mark, so a restarted sequence would be
@@ -1101,10 +1116,7 @@ where
 
                     // Mux missing means the peer was torn down between the
                     // connection snapshot and here; skip rather than panic.
-                    let Some(mux) = ({
-                        let muxes = self.multiplexers.lock().await;
-                        muxes.get(&peer_id).and_then(|v| v.first()).cloned()
-                    }) else {
+                    let Some(mux) = self.mux_for_connection(&conn).await else {
                         tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
                         continue;
                     };
@@ -2210,10 +2222,7 @@ where
 
             // Mux missing means the peer was torn down between the
             // connection snapshot and here; report it dropped, don't panic.
-            let Some(mux) = ({
-                let muxes = self.multiplexers.lock().await;
-                muxes.get(to_ask).and_then(|v| v.first()).cloned()
-            }) else {
+            let Some(mux) = self.mux_for_connection(&conn).await else {
                 tracing::debug!(peer = %to_ask, "multiplexer for peer gone (concurrent teardown); skipping");
                 conn_errs.push((conn.clone(), CallError::ResponseDropped));
                 continue;
@@ -2433,10 +2442,7 @@ where
                         // Mux missing means the peer was torn down between
                         // the connection snapshot and here; report it
                         // dropped, don't panic.
-                        let Some(mux) = ({
-                            let muxes = self.multiplexers.lock().await;
-                            muxes.get(peer_id).and_then(|v| v.first()).cloned()
-                        }) else {
+                        let Some(mux) = self.mux_for_connection(conn).await else {
                             tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
                             conn_errs.push((
                                 conn.clone(),
@@ -3233,8 +3239,8 @@ where
 
                             let mut consumed = false;
                             if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
+                                for (candidate, mux) in &muxes {
+                                    if candidate == &conn && mux.resolve_pending(resp).await {
                                         tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
                                         consumed = true;
                                         break;
@@ -3305,8 +3311,8 @@ where
                             };
                             let mut consumed = false;
                             if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
+                                for (candidate, mux) in &muxes {
+                                    if candidate == &conn && mux.resolve_pending(resp).await {
                                         consumed = true;
                                         break;
                                     }
@@ -3995,8 +4001,78 @@ where
 
             let mut completion = DispatchCompletion::new(sender);
 
+            // A missing document's first response should include what we can
+            // fetch upstream, rather than acknowledge an empty local snapshot.
+            // Authorization precedes both storage inspection and propagation.
+            let mut attempted_upstream = false;
+            if let Some((sed_id, originator)) = propagate
+                && let Ok(fetcher) = subduction
+                    .storage
+                    .get_fetcher::<Self>(originator, sed_id)
+                    .await
+            {
+                // Join an existing fetch even if it has already ingested a
+                // partial result from one of several upstreams.
+                let existing = subduction
+                    .missing_fetches
+                    .lock()
+                    .await
+                    .get(&sed_id)
+                    .cloned();
+                // An existence probe must not clone/minimize a resident tree
+                // or hydrate a cold one just to decide whether to wait.
+                let missing = existing.is_some()
+                    || (subduction
+                        .sedimentrees
+                        .with_entry(&sed_id, |_| ())
+                        .await
+                        .is_none()
+                        && matches!(fetcher.contains_sedimentree_id().await, Ok(false)));
+                if missing {
+                    let (done, start) = {
+                        let mut fetches = subduction.missing_fetches.lock().await;
+                        if let Some(done) = fetches.get(&sed_id).filter(|rx| !rx.is_closed()) {
+                            (done.clone(), None)
+                        } else {
+                            let (finished, done) = async_channel::bounded::<()>(1);
+                            fetches.insert(sed_id, done.clone());
+                            (done, Some(finished))
+                        }
+                    };
+                    if let Some(finished) = start {
+                        let sd = Arc::clone(&subduction);
+                        subduction.spawner.spawn(Async::from_future(async move {
+                            // Detached from the requesting dispatch: a waiter
+                            // timing out must not cancel ingestion or strand
+                            // outgoing-subscription claims.
+                            sd.propagate_subscription(sed_id, originator).await;
+                            sd.missing_fetches.lock().await.remove(&sed_id);
+                            drop(finished);
+                        }));
+                    }
+
+                    // There is no traversal ID / hop budget on the wire, so
+                    // a returning request in a relay cycle is indistinguishable
+                    // from another subscriber. Bound the wait to break such
+                    // cycles, leaving half the normal roundtrip budget for
+                    // computing and delivering the response. Fetching continues
+                    // in the background and late data is pushed normally.
+                    let _ = subduction
+                        .timer
+                        .timeout(
+                            subduction.default_roundtrip_timeout / 2,
+                            Async::from_future(async move {
+                                let _ = done.recv().await;
+                            }),
+                        )
+                        .await;
+                    attempted_upstream = true;
+                }
+            }
+
             let result = handler.handle(&conn, msg).await;
             if result.is_ok()
+                && !attempted_upstream
                 && let Some((sed_id, originator)) = propagate
             {
                 let sd = Arc::clone(&subduction);

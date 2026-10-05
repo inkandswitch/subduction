@@ -16,7 +16,7 @@
 //! [`ManagedConnection::call`]: crate::connection::managed::ManagedConnection::call
 
 use core::{
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -73,6 +73,7 @@ pub struct Multiplexer {
     peer_id: PeerId,
     req_id_counter: AtomicU64,
     pending: Mutex<Map<RequestId, PendingValue>>,
+    closed: AtomicBool,
     default_roundtrip_timeout: Duration,
 }
 
@@ -117,6 +118,7 @@ impl Multiplexer {
                 u64::from_be_bytes(buf)
             }),
             pending: Mutex::new(Map::new()),
+            closed: AtomicBool::new(false),
             default_roundtrip_timeout,
         }
     }
@@ -148,7 +150,9 @@ impl Multiplexer {
     /// The caller should:
     /// 1. Call this to get a `(RequestId, oneshot::Receiver)`
     /// 2. Send the request bytes via the transport's outbound channel
-    /// 3. Await the receiver (with timeout via [`wait_for_response`](Self::wait_for_response))
+    /// 3. Await the receiver with the caller's chosen timeout.
+    ///
+    /// After [`close`](Self::close), returns an already-cancelled receiver.
     pub async fn register_pending(
         &self,
         req_id: RequestId,
@@ -158,7 +162,12 @@ impl Multiplexer {
         let value = (std::time::Instant::now(), tx);
         #[cfg(not(feature = "metrics"))]
         let value = tx;
-        self.pending.lock().await.insert(req_id, value);
+        let mut pending = self.pending.lock().await;
+        if self.closed.load(Ordering::Relaxed) {
+            drop(value);
+            return rx;
+        }
+        pending.insert(req_id, value);
         #[cfg(feature = "metrics")]
         crate::metrics::mux_request_registered();
         rx
@@ -231,6 +240,19 @@ impl Multiplexer {
         tracing::debug!(count = n, peer = %self.peer_id, "cancelled pending call(s) on multiplexer");
     }
 
+    /// Permanently close this physical connection's multiplexer.
+    ///
+    /// Unlike `cancel_all_pending`, also rejects registration from stale
+    /// connection snapshots. Callers holding an old `Arc` cannot create a
+    /// fresh pending request after disconnect has drained the pending map.
+    pub async fn close(&self) {
+        let mut pending = self.pending.lock().await;
+        self.closed.store(true, Ordering::Relaxed);
+        #[cfg(feature = "metrics")]
+        crate::metrics::mux_requests_cancelled(pending.len());
+        pending.clear();
+    }
+
     /// Try to resolve a pending call with an inbound `BatchSyncResponse`.
     ///
     /// Returns `true` if the response matched a pending request and was
@@ -266,6 +288,18 @@ mod tests {
 
     fn test_mux() -> Multiplexer {
         Multiplexer::new(PeerId::new([1u8; 32]), Duration::from_secs(5))
+    }
+
+    #[tokio::test]
+    async fn closed_mux_rejects_late_registration() {
+        let mux = test_mux();
+        let pending = mux.register_pending(mux.next_request_id()).await;
+        mux.close().await;
+        mux.close().await;
+        assert!(pending.await.is_err());
+        let late = mux.register_pending(mux.next_request_id()).await;
+        assert!(late.await.is_err());
+        assert_eq!(mux.pending_len().await, 0);
     }
 
     #[tokio::test]
