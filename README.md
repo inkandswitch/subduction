@@ -91,6 +91,7 @@ graph TD
 | `subduction_hyper`         | WebSocket upgrades for servers built on hyper (axum, tower, raw hyper)                |
 | `subduction_iroh`          | Iroh (QUIC) transport for direct peer-to-peer connections                              |
 | `subduction_websocket`     | WebSocket transport layer for peer-to-peer connections                                 |
+| [`subduction_tokio`](subduction_tokio/README.md) | Owned Tokio clients, erased transport connectors, and supervised reconnection |
 
 ### Platform Bindings
 

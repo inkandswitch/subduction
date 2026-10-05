@@ -1,0 +1,42 @@
+[package]
+name = "subduction_tokio"
+version = "0.1.0"
+description = "Owned Tokio clients, transport connectors, and supervised reconnection for Subduction"
+categories = ["network-programming"]
+keywords = ["subduction", "sync", "tokio"]
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+future_form.workspace = true
+futures = { workspace = true, features = ["std"] }
+ed25519-dalek.workspace = true
+rand = { workspace = true, features = ["std", "std_rng"] }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["system_time"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+subduction_websocket = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["time"] }
+tokio-util.workspace = true
+thiserror = { workspace = true, features = ["std"] }
+
+[features]
+default = []
+websocket = ["dep:subduction_websocket", "subduction_websocket/tokio_client_rustls"]
+
+[dev-dependencies]
+async-channel = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["test_utils"] }
+subduction_websocket = { workspace = true, features = ["tokio_server_rustls"] }
+tokio = { workspace = true, features = ["test-util"] }
+
+[[example]]
+name = "websocket"
+required-features = ["websocket"]
+
+[lints]
+workspace = true
