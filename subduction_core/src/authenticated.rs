@@ -164,6 +164,10 @@ impl<Conn: Connection<Async, WireMsg>, Async: FutureForm, WireMsg: Encode + Deco
     type SendError = Conn::SendError;
     type RecvError = Conn::RecvError;
 
+    fn on_unregistered(&self) {
+        self.inner.on_unregistered();
+    }
+
     fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }

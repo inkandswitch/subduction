@@ -241,7 +241,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> Transport<Sendable> for TokioWeb
     type DisconnectionError = DisconnectionError;
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        async { Ok(()) }.boxed()
+        Transport::<Sendable>::disconnect(&self.socket)
     }
 
     fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
@@ -318,11 +318,12 @@ impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, Sy
                 )
                 .await?;
 
-            // Step 1 of the `Reconnect` contract: close the old
-            // connection's channels. Sender + keepalive exit cleanly;
-            // the listener still leaks until the TCP socket closes
-            // (FIXME: needs CancellationToken plumbing).
-            self.socket.close_channels();
+            // Cancel blocked I/O and release both halves of the old socket.
+            // New managed integrations own retries instead of using this
+            // legacy, detached-task reconnect entry point.
+            if let Err(error) = Transport::<Sendable>::disconnect(&self.socket).await {
+                tracing::warn!(%error, "old WebSocket disconnect failed after cancellation");
+            }
 
             // Extract the inner client from the Authenticated wrapper
             *self = authenticated.into_inner();

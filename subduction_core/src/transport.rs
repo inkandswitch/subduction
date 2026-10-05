@@ -52,6 +52,12 @@ pub trait Transport<Async: FutureForm + ?Sized>: Clone + PartialEq {
     /// Receive the next complete message frame as raw bytes.
     fn recv_bytes(&self) -> Async::Future<'_, Result<Vec<u8>, Self::RecvError>>;
 
+    /// Synchronous notification that the core stopped tracking this connection.
+    ///
+    /// Runtime owners may use this to initiate driver cleanup. It must be
+    /// idempotent and nonblocking; it is not itself graceful disconnection.
+    fn on_unregistered(&self) {}
+
     /// Disconnect from the peer gracefully.
     fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>>;
 }
@@ -73,6 +79,10 @@ where
 
     fn recv_bytes(&self) -> Async::Future<'_, Result<Vec<u8>, Self::RecvError>> {
         T::recv_bytes(self)
+    }
+
+    fn on_unregistered(&self) {
+        T::on_unregistered(self);
     }
 
     fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
