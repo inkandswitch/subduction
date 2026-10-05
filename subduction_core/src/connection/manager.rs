@@ -244,6 +244,11 @@ impl<
 /// This trait enables generic code to call `run()` on `ConnectionManager<Async, Conn, WireMsg, Spawner>`
 /// without knowing whether Async is `Sendable` or `Local`.
 pub trait RunManager<Conn, WireMsg: Encode + Decode>: FutureForm + Sized {
+    /// Build a failure-cleanup task owning its connection. The task uses the
+    /// existing borrowed async disconnect operation and logs any failure.
+    /// Its caller must submit it to the configured, lifecycle-tracked spawner.
+    fn disconnect_task(conn: Conn) -> Self::Future<'static, ()>;
+
     /// Run the manager, processing commands to add/remove connections.
     fn run_manager<Spawner: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, Conn, WireMsg, Spawner>,
@@ -274,6 +279,14 @@ impl<
     Local where Conn: Connection<Local, WireMsg> + Clone + 'static, WireMsg: 'static
 )]
 impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg> for Async {
+    fn disconnect_task(conn: Conn) -> Self::Future<'static, ()> {
+        Async::from_future(async move {
+            if let Err(error) = conn.disconnect().await {
+                tracing::warn!(%error, "failed to disconnect removed connection");
+            }
+        })
+    }
+
     #[allow(clippy::too_many_lines)]
     fn run_manager<Spawner: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, Conn, WireMsg, Spawner>,
