@@ -78,8 +78,8 @@ use crate::{
         managed::{CallError, ManagedCall, ManagedConnection},
         manager::{Command, ConnectionManager, QueuedDispatch, RunManager},
         message::{
-            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
+            BatchSyncRequest, DataRequestRejected, RequestedData, SyncDiff, SyncMessage,
+            SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
         },
         stats::{SendCount, SyncStats},
     },
@@ -1002,18 +1002,6 @@ where
         let _ = conn_count;
     }
 
-    /// Get all connections as a flat list.
-    ///
-    /// This is useful for iterating over all connections to send messages.
-    async fn all_connections(&self) -> Vec<Authenticated<Conn, Async>> {
-        self.connections
-            .lock()
-            .await
-            .values()
-            .flat_map(|ne| ne.iter().cloned())
-            .collect()
-    }
-
     /// Add a subscription for a peer to a sedimentree.
     pub(crate) async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
         peers::add_subscription(&self.subscriptions, peer_id, sedimentree_id).await;
@@ -1140,122 +1128,48 @@ where
     ///
     /// * Returns `IoError` if a storage or network error occurs.
     ///
-    /// # Panics
-    ///
-    /// Panics if a connected peer has no corresponding multiplexer
-    /// (internal invariant: `add_connection` always creates one).
+    /// Collect the same local-first loader used by `load_and_watch`, without
+    /// establishing subscriptions. Requires an Arc receiver to own its scoped
+    /// coordinator. Candidate misses return None; loading errors use `IoError::Load`.
     pub async fn fetch_blobs(
-        &self,
+        self: &Arc<Self>,
         id: SedimentreeId,
         timeout: CallTimeout,
-    ) -> Result<Option<NonEmpty<Blob>>, IoError<Async, Store, Conn, Hdl::Message>> {
-        // Resolve caller policy to the low-level deadline (`None` = uncapped).
-        let timeout = timeout.resolve(self.default_roundtrip_timeout);
-
-        tracing::debug!(tree = ?id, "fetching blobs for sedimentree");
-        if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
-            Ok(Some(maybe_blobs))
-        } else {
-            // No blobs locally. Hydrate (cache or storage) to decide whether
-            // the tree exists; only then ask peers for its data. The hydrated
-            // tree is already minimized for wire use.
-            let tree = self.get_or_hydrate(id).await?;
-            if let Some(tree) = tree {
-                // Requests, not pushes: each responder applies its own fetch
-                // policy, so asking every peer is fine.
-                let conns = self.all_connections().await;
-                for conn in conns {
-                    let peer_id = conn.peer_id();
-                    let seed = FingerprintSeed::random();
-                    let resolver = tree.fingerprint_resolver(&seed);
-
-                    // Mux missing means the peer was torn down between the
-                    // connection snapshot and here; skip rather than panic.
-                    let Some(mux) = self.mux_for_connection(&conn).await else {
-                        tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
-                        continue;
-                    };
-                    let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-                    let req_id = managed.next_request_id();
-                    let BatchSyncResponse {
-                        id,
-                        result,
-                        req_id: resp_batch_id,
-                        ..
-                    } = ManagedCall::<Async, Hdl::Message>::call(
-                        &managed,
-                        BatchSyncRequest {
-                            id,
-                            req_id,
-                            fingerprint_summary: resolver.summary().clone(),
-                            subscribe: false,
-                        },
-                        timeout,
-                    )
-                    .await
-                    .map_err(IoError::ConnCall)?;
-
-                    debug_assert_eq!(req_id, resp_batch_id);
-
-                    let diff = match result {
-                        SyncResult::Ok(diff) => diff,
-                        SyncResult::NotFound => {
-                            tracing::debug!(peer = %conn.peer_id(), tree = ?id, "peer reports sedimentree not found");
-                            continue;
-                        }
-                        SyncResult::Unauthorized => {
-                            tracing::debug!(peer = %conn.peer_id(), tree = ?id, "peer reports we are unauthorized for sedimentree");
-                            continue;
-                        }
-                    };
-
-                    // Send back data the responder requested (bidirectional sync)
-                    if !diff.requesting.is_empty()
-                        && let Err(e) = self
-                            .send_requested_data(&conn, id, &resolver, &diff.requesting)
-                            .await
-                    {
-                        if matches!(e, SendRequestedDataError::Unauthorized(_)) {
-                            let msg: Hdl::Message =
-                                SyncMessage::from(DataRequestRejected { id }).into();
-                            if let Err(send_err) = conn.send(&msg).await {
-                                tracing::info!(
-                                    peer = %conn.peer_id(),
-                                    error = %send_err,
-                                    "peer disconnected while sending DataRequestRejected"
-                                );
-                            }
-                        } else {
-                            // Policy rejections aren't send failures; count
-                            // only transport/preparation errors (matching the
-                            // safety-net path's classification).
-                            #[cfg(feature = "metrics")]
-                            crate::metrics::requested_data_send_failure();
-                        }
-                        tracing::warn!(
-                            peer = %conn.peer_id(),
-                            error = %e,
-                            "failed to send requested data to peer"
-                        );
-                    }
-
-                    if let Err(e) = self
-                        .recv_batch_sync_response(&conn.peer_id(), id, diff)
-                        .await
-                    {
-                        tracing::error!(
-                            peer = %conn.peer_id(),
-                            error = %e,
-                            "error handling batch sync response from peer"
-                        );
+    ) -> Result<Option<NonEmpty<Blob>>, IoError<Async, Store, Conn, Hdl::Message>>
+    where
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Timer: Send + Sync + 'a,
+        Sp: Send + Sync + 'static,
+        'a: 'static,
+    {
+        use crate::stored::{LoadError, StoredEvent, StoredItem};
+        let mut updates = Async::start_stored(self.clone(), id, Some(timeout), false);
+        let mut blobs = Map::new();
+        while let Some(event) = updates.next().await {
+            match event {
+                Ok(StoredEvent::Item(StoredItem::Commit(item))) => {
+                    blobs.insert(
+                        (0_u8, Digest::hash(item.payload()).into_bytes()),
+                        item.blob().clone(),
+                    );
+                }
+                Ok(StoredEvent::Item(StoredItem::Fragment(item))) => {
+                    blobs.insert(
+                        (1_u8, Digest::hash(item.payload()).into_bytes()),
+                        item.blob().clone(),
+                    );
+                }
+                Ok(StoredEvent::RescanRequired) => blobs.clear(),
+                Ok(StoredEvent::StorageChecked | StoredEvent::PeerSynced { .. }) => {
+                    if updates.initial_load_complete() {
+                        return Ok(NonEmpty::from_vec(blobs.into_values().collect()));
                     }
                 }
+                Err(LoadError::Unavailable) => return Ok(None),
+                Err(error) => return Err(IoError::Load(error)),
             }
-
-            let updated = self.get_blobs(id).await.map_err(IoError::Storage)?;
-
-            Ok(updated)
         }
+        Err(IoError::Load(LoadError::Closed))
     }
 
     /// Remove a sedimentree locally and delete all associated data from storage.
@@ -2380,7 +2294,7 @@ where
             Ok(Ok(None) | Err(_))
             | Err(IoError::ConnCall(_) | IoError::ConnSend(_) | IoError::ConnRecv(_)) => Ok(None),
             Err(IoError::StorageInterrupted) => Err(crate::stored::LoadError::Closed),
-            Err(error @ (IoError::Storage(_) | IoError::BlobMismatch(_))) => {
+            Err(error @ (IoError::Storage(_) | IoError::BlobMismatch(_) | IoError::Load(_))) => {
                 Err(crate::stored::LoadError::Operation(error.to_string()))
             }
         }
@@ -3897,8 +3811,9 @@ where
                                             Err(crate::stored::LoadError::Closed)
                                         }
                                         Err(
-                                            error
-                                            @ (IoError::Storage(_) | IoError::BlobMismatch(_)),
+                                            error @ (IoError::Storage(_)
+                                            | IoError::BlobMismatch(_)
+                                            | IoError::Load(_)),
                                         ) => Err(crate::stored::LoadError::Operation(
                                             error.to_string(),
                                         )),

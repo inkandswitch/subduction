@@ -98,6 +98,14 @@ stream to cancel. Stalled connections do not block new ones, even to the same
 peer. Disconnecting cancels that connection's outstanding attempt.
 Managed Tokio/JS adapters remain planned at this stage.
 
+`fetch_blobs()` collects this same loader without establishing subscriptions,
+returning immediately from cached contents or the first completed supplier,
+and returning `None` for candidate misses. Unlike `load_and_watch`, its timeout
+still covers the whole initial load, including delivery, and it retains a limit
+of four concurrent peer attempts. It requires `&Arc<Subduction>` to own
+its scoped coordinator and returns loading failures through `IoError::Load`.
+Inventory deduplicates by item kind/metadata digest and resets on recovery.
+
 ## `no_std` Support
 
 This crate is `#![no_std]` compatible. Enable the `std` feature for standard library support.
