@@ -27,6 +27,8 @@ pub use error::{Error, ErrorKind, PeerIdentityMismatch};
 pub use node::{CloseReport, Connect, Node, NodeBuilder, NodeEvent, NodeHandle, NodeStatus, Unset};
 pub use reconnect::{ConnectionHandle, ConnectionStatus, ReconnectPolicy};
 pub use subduction_core::{
-    handshake::audience::Audience as ExpectedPeer, timeout::call::CallTimeout,
+    handshake::audience::Audience as ExpectedPeer,
+    stored::{LoadError, StoredEvent, StoredItem, StoredUpdates},
+    timeout::call::CallTimeout,
 };
 pub use transport::ErasedTransport;

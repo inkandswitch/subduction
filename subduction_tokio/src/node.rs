@@ -423,6 +423,21 @@ impl NodeHandle {
         self.operation(move |core| Box::pin(async move { core.blobs(id).await }))
             .await
     }
+    /// Load local contents, then sync and subscribe on current and future
+    /// connections, including reconnects. Local replay and writes work offline.
+    /// Missing data or peers do not end the stream. Attempts run concurrently
+    /// without timeouts; close/drop to cancel.
+    ///
+    /// # Errors
+    /// Returns a lifecycle error if admission is closed; loading errors arrive on the stream.
+    pub async fn load_and_watch(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<subduction_core::stored::StoredUpdates, Error> {
+        self.operation(move |core| Box::pin(async move { Ok(core.load_and_watch(id)) }))
+            .await
+    }
+
     /// List locally known trees.
     ///
     /// # Errors
@@ -432,7 +447,8 @@ impl NodeHandle {
             .await
     }
     /// Sync with the existing core completion semantics. `subscribe` establishes
-    /// subscriptions for this connection era; callers must restore them after reconnect.
+    /// subscriptions for this connection era; callers must restore them after reconnect
+    /// unless an active `load_and_watch` stream is following the document.
     ///
     /// # Errors
     /// Returns lifecycle or core ingestion errors. Roundtrip errors are in the report.
