@@ -276,6 +276,7 @@ mod tests {
                 let ingested = Ingested {
                     commits: pool[..n_items].to_vec(),
                     fragments: Vec::new(),
+                    ..Ingested::default()
                 };
                 let conns: Vec<Authenticated<MockConnection, Sendable>> = peers
                     .iter()

@@ -85,9 +85,18 @@ Notification queues allow at most 256 items/4 MiB plus one delivery slot. Full
 snapshot reads and individual replayed items can exceed that budget.
 
 Identity, recovery, and ownership limits are centralized in
-[SYNC_COMPLETION.md](../SYNC_COMPLETION.md). Only core storage-only watching is
-implemented at this stage; peer loading and managed Tokio/JS adapters remain
-planned.
+[SYNC_COMPLETION.md](../SYNC_COMPLETION.md).
+Core `load_and_watch(id)` uses the same stream, reading locally first
+and always syncing/subscribing on all current and future connections concurrently,
+even when cached contents exist. New connections and reconnects trigger fresh
+rounds for as long as the stream remains active. Empty storage or missing peers
+do not terminate it; it keeps waiting for documents and connections. Empty successful rounds
+emit ordered `PeerSynced` markers but cannot alone supply a document. Dropping
+the stream stops its scoped attempts, not established node-owned subscriptions.
+There is no concurrency cap or loading/peer deadline; callers close/drop the
+stream to cancel. Stalled connections do not block new ones, even to the same
+peer. Disconnecting cancels that connection's outstanding attempt.
+Managed Tokio/JS adapters remain planned at this stage.
 
 ## `no_std` Support
 

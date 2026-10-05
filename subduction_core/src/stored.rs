@@ -1,6 +1,7 @@
 //! Ongoing stored-data access for applications, not a durable event log.
 //!
-//! See `SYNC_COMPLETION.md` for validity and lifecycle guarantees. Catch-up and
+//! See [the shared contract](../../SYNC_COMPLETION.md) for validity and lifecycle
+//! guarantees. Catch-up and
 //! recovery markers do not end a stream, and stored bytes remain opaque.
 use crate::peer::id::PeerId;
 use alloc::{boxed::Box, string::String, sync::Arc};
@@ -68,10 +69,11 @@ pub enum StoredEvent {
 /// Terminal watch/loading failure. Unavailability does not prove global absence.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LoadError {
-    /// No current candidate supplied usable data.
+    /// No current candidate supplied usable data for a collecting fetch.
+    /// Ongoing loaders instead keep waiting for future connections and updates.
     #[error("no candidate peer supplied locally available data")]
     Unavailable,
-    /// Initial loading, including delivery backpressure, exhausted its deadline.
+    /// A collecting fetch, including delivery backpressure, exhausted its deadline.
     #[error("initial loading timed out")]
     TimedOut,
     /// The node closed or lost the ability to certify storage observation.
@@ -89,9 +91,12 @@ pub struct StoredUpdates {
     pub(crate) terminal: Arc<spin::Mutex<Option<LoadError>>>,
     abort: AbortHandle,
     ended: bool,
+    load_ready: bool,
 }
 pub(crate) struct StoredMessage {
     pub(crate) event: StoredEvent,
+    // Private collecting-adapter readiness, not a richer public sync outcome.
+    pub(crate) load_ready: bool,
     // Releasing the one delivery slot permits the driver to take another item.
     pub(crate) accepted: futures::channel::oneshot::Sender<()>,
 }
@@ -106,6 +111,7 @@ impl StoredUpdates {
             terminal,
             abort,
             ended: false,
+            load_ready: false,
         }
     }
     /// Cancel the producer; pending reads wake with a closed error. Adapters
@@ -130,6 +136,19 @@ impl Stream for StoredUpdates {
         }
         match self.receiver.as_mut().poll_next(cx) {
             Poll::Ready(Some(message)) => {
+                // A readiness marker can occupy the slot while initial loading
+                // expires or closes awaiting consumption. Do not certify it
+                // after the terminal failure (ordinary queued items may remain).
+                let error = if message.load_ready {
+                    self.terminal.lock().take()
+                } else {
+                    None
+                };
+                if let Some(error) = error {
+                    self.close();
+                    return Poll::Ready(Some(Err(error)));
+                }
+                self.load_ready |= message.load_ready;
                 let _ = message.accepted.send(());
                 Poll::Ready(Some(Ok(message.event)))
             }
@@ -155,5 +174,37 @@ impl core::fmt::Debug for StoredUpdates {
         f.debug_struct("StoredUpdates")
             .field("ended", &self.ended)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::{FutureExt, StreamExt};
+
+    #[test]
+    fn queued_readiness_does_not_survive_terminal_initial_failure() {
+        for error in [LoadError::TimedOut, LoadError::Closed] {
+            let (sender, receiver) = async_channel::bounded(1);
+            let (accepted, _wait) = futures::channel::oneshot::channel();
+            assert!(
+                sender
+                    .try_send(StoredMessage {
+                        event: StoredEvent::StorageChecked,
+                        load_ready: true,
+                        accepted
+                    })
+                    .is_ok()
+            );
+            let (abort, _registration) = AbortHandle::new_pair();
+            let mut updates =
+                StoredUpdates::new(receiver, Arc::new(spin::Mutex::new(Some(error))), abort);
+            assert!(matches!(
+                updates.next().now_or_never(),
+                Some(Some(Err(LoadError::TimedOut | LoadError::Closed)))
+            ));
+            assert!(!updates.load_ready);
+            assert!(matches!(updates.next().now_or_never(), Some(None)));
+        }
     }
 }
