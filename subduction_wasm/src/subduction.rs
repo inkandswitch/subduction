@@ -77,7 +77,7 @@ use sedimentree_wasm::{
     fragment::WasmFragment,
     loose_commit::WasmLooseCommit,
     sedimentree::WasmSedimentree,
-    sedimentree_id::WasmSedimentreeId,
+    sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
     storage::{JsStorage, JsStorageError},
 };
 
@@ -1516,6 +1516,48 @@ impl WasmSubduction {
             .map(|(id, heads)| WasmSedimentreeHeads {
                 id: id.into(),
                 heads: heads.into_iter().map(WasmCommitId::from).collect(),
+                error: None,
+            })
+            .collect()
+    }
+
+    /// Get the current heads for exactly the given sedimentree IDs.
+    ///
+    /// Returns the same heads as `getAllHeads` for each requested ID, but reads
+    /// only the requested trees rather than hydrating every tree in storage.
+    /// Trees are processed one at a time, and a tree that is not already
+    /// resident is not kept in memory afterwards.
+    ///
+    /// - IDs the node doesn't know are omitted from the result.
+    /// - A known tree with no heads yields an empty `heads` array.
+    /// - Duplicate IDs are answered once; results follow first-occurrence order.
+    /// - If reading one tree from storage fails, that entry is still returned
+    ///   with empty `heads` and its `error` set to the failure message; other
+    ///   entries are unaffected. Check `error` before trusting an empty `heads`.
+    /// - Results may predate a write that is in flight concurrently.
+    #[must_use]
+    #[wasm_bindgen(js_name = getHeads)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
+    pub async fn get_heads(&self, ids: Vec<JsSedimentreeId>) -> Vec<WasmSedimentreeHeads> {
+        let ids: Vec<SedimentreeId> = ids
+            .iter()
+            .map(|id| SedimentreeId::from(WasmSedimentreeId::from(id)))
+            .collect();
+        self.core
+            .get_heads(&ids)
+            .await
+            .into_iter()
+            .map(|(id, result)| match result {
+                Ok(heads) => WasmSedimentreeHeads {
+                    id: id.into(),
+                    heads: heads.into_iter().map(WasmCommitId::from).collect(),
+                    error: None,
+                },
+                Err(e) => WasmSedimentreeHeads {
+                    id: id.into(),
+                    heads: Vec::new(),
+                    error: Some(e.to_string()),
+                },
             })
             .collect()
     }
@@ -1540,12 +1582,14 @@ impl WasmSubduction {
 }
 
 /// Heads of a single sedimentree, returned by
-/// [`WasmSubduction::get_all_heads`](WasmSubduction::get_all_heads).
+/// [`WasmSubduction::get_all_heads`](WasmSubduction::get_all_heads) and
+/// [`WasmSubduction::get_heads`](WasmSubduction::get_heads).
 #[wasm_bindgen(js_name = SedimentreeHeads)]
 #[derive(Debug, Clone)]
 pub struct WasmSedimentreeHeads {
     id: WasmSedimentreeId,
     heads: Vec<WasmCommitId>,
+    error: Option<String>,
 }
 
 #[wasm_bindgen(js_class = SedimentreeHeads)]
@@ -1562,6 +1606,14 @@ impl WasmSedimentreeHeads {
     #[wasm_bindgen(getter)]
     pub fn heads(&self) -> Vec<WasmCommitId> {
         self.heads.clone()
+    }
+
+    /// Set when reading this tree from storage failed (`getHeads` only); the
+    /// `heads` are then empty and not meaningful. `undefined` on success.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn error(&self) -> Option<String> {
+        self.error.clone()
     }
 }
 

@@ -499,6 +499,56 @@ pub(crate) async fn heads_or_hydrate<
     }
 }
 
+/// Compute a sedimentree's heads **without** leaving it resident.
+///
+/// A resident tree is answered from memory (no storage read). On a miss the
+/// tree is rebuilt from its stored payloads (metadata only — no blob bytes),
+/// its heads are computed with the engine's own rule
+/// ([`Sedimentree::heads`]), and the rebuilt tree is dropped: it is **not**
+/// installed in the cache, so the call never evicts a hot tree nor grows the
+/// resident set.
+///
+/// Returns `Ok(None)` when the tree does not exist (neither data nor a
+/// registered id); a registered-but-empty tree yields `Ok(Some(vec![]))`.
+pub(crate) async fn heads_without_residency<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Auth: StoragePolicy<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>(
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    storage: &StoragePowerbox<Store, Auth>,
+    depth_metric: &Metric,
+    id: SedimentreeId,
+) -> Result<Option<Vec<CommitId>>, Store::Error> {
+    if let Some(heads) = sedimentrees
+        .with_entry(&id, |tree| tree.heads(depth_metric))
+        .await
+    {
+        #[cfg(feature = "metrics")]
+        crate::metrics::sedimentree_cache_hit();
+        return Ok(Some(heads));
+    }
+
+    // No miss metric: nothing is hydrated or installed (see `get_or_hydrate`).
+    let local_access = storage.hydration_access();
+    let loose_commits = local_access.load_loose_commit_metas::<Async>(id).await?;
+    let fragments = local_access.load_fragment_metas::<Async>(id).await?;
+
+    if loose_commits.is_empty() && fragments.is_empty() {
+        return if local_access.contains_sedimentree_id::<Async>(id).await? {
+            Ok(Some(Vec::new()))
+        } else {
+            Ok(None)
+        };
+    }
+
+    Ok(Some(
+        Sedimentree::new(fragments, loose_commits).heads(depth_metric),
+    ))
+}
+
 /// Reconstruct a sedimentree's full history directly from storage.
 ///
 /// Returns `Ok(None)` if storage holds no commits and no fragments for `id`

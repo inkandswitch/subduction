@@ -2681,6 +2681,63 @@ where
         out
     }
 
+    /// Get the current heads for exactly the requested sedimentrees.
+    ///
+    /// Same answer as [`get_all_heads`](Self::get_all_heads) for each id
+    /// (computed with the engine's own heads rule, fragments included), but
+    /// reads only the requested trees instead of hydrating the whole node.
+    ///
+    /// * **Order and duplicates.** Results follow the order of first
+    ///   occurrence in `ids`; duplicate ids are answered once.
+    /// * **Unknown vs. empty.** An id the node does not know is omitted. A
+    ///   known tree with no heads yields `Ok` with an empty `Vec`.
+    /// * **Failures.** A tree whose storage read fails yields `Err` for that
+    ///   id only (and is logged); the rest of the list is unaffected. This
+    ///   differs from [`get_all_heads`](Self::get_all_heads), which reports
+    ///   such a tree with empty heads and only logs, making a storage error
+    ///   indistinguishable from "no heads".
+    /// * **Residency.** Resident trees are answered from memory with no
+    ///   storage read. A non-resident tree is rebuilt from stored metadata
+    ///   (no blobs), queried, and dropped: it is not installed in the cache,
+    ///   so the call never evicts a hot tree or grows the resident set.
+    ///   (Resident trees do count as recently used.)
+    /// * **Memory.** Trees are processed one at a time, so working memory is
+    ///   bounded by the largest single tree, not by `ids.len()`.
+    /// * **Concurrent writes.** A resident tree is read atomically under its
+    ///   shard lock. A non-resident tree is read from storage as two
+    ///   successive loads (commits, then fragments) with no cross-load
+    ///   transaction, so a write landing in between may be partly reflected.
+    ///   Results may therefore predate a write that is in flight, and for a
+    ///   non-resident tree may mix pre- and post-write state.
+    pub async fn get_heads(
+        &self,
+        ids: &[SedimentreeId],
+    ) -> Vec<(SedimentreeId, Result<Vec<CommitId>, Store::Error>)> {
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if !seen.insert(id) {
+                continue;
+            }
+            match ingest::heads_without_residency(
+                &self.sedimentrees,
+                &self.storage,
+                &self.depth_metric,
+                id,
+            )
+            .await
+            {
+                Ok(Some(heads)) => out.push((id, Ok(heads))),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(tree = ?id, error = %e, "get_heads: storage read failed");
+                    out.push((id, Err(e)));
+                }
+            }
+        }
+        out
+    }
+
     /// Get the set of all connected peer IDs.
     pub async fn connected_peer_ids(&self) -> Set<PeerId> {
         self.connections.lock().await.keys().copied().collect()

@@ -902,4 +902,44 @@ test.describe("Subduction", () => {
       expect(result.commitCount).toBeGreaterThanOrEqual(1);
     });
   });
+
+  test.describe("getHeads", () => {
+    test("matches getAllHeads for the requested ids, omits unknown, dedups", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.setup();
+        const storage = new MemoryStorage();
+        const writer = new Subduction({ signer, storage });
+
+        const sedIds = [1, 2, 3].map((n) => SedimentreeId.fromBytes(new Uint8Array(32).fill(n)));
+        for (const [i, id] of sedIds.entries()) {
+          await writer.addCommit(id, new CommitId(new Uint8Array(32).fill(10 + i)), [], new Uint8Array([i]));
+        }
+
+        // A cold node over the same storage: nothing is resident yet.
+        const reader = new Subduction({ signer, storage });
+        const unknown = SedimentreeId.fromBytes(new Uint8Array(32).fill(99));
+        const hex = (cid: any) => Array.from(cid.toBytes() as Uint8Array, (b) => b.toString(16)).join("");
+        const key = (h: any) => `${Array.from(h.id.toBytes() as Uint8Array).join(",")}:${h.heads.map(hex).sort().join("|")}`;
+
+        const got = await reader.getHeads([sedIds[2], unknown, sedIds[0], sedIds[2]]);
+        const all = await reader.getAllHeads();
+        const wanted = new Set([sedIds[0], sedIds[2]].map((i) => Array.from(i.toBytes() as Uint8Array).join(",")));
+        const expected = all.filter((h: any) => wanted.has(Array.from(h.id.toBytes() as Uint8Array).join(",")));
+
+        return {
+          gotKeys: got.map(key).sort(),
+          expectedKeys: expected.map(key).sort(),
+          count: got.length,
+          errors: got.map((h: any) => h.error),
+          empty: (await reader.getHeads([])).length,
+        };
+      });
+
+      expect(result.count).toBe(2);
+      expect(result.gotKeys).toEqual(result.expectedKeys);
+      expect(result.errors).toEqual([undefined, undefined]);
+      expect(result.empty).toBe(0);
+    });
+  });
 });
