@@ -58,6 +58,27 @@ fn disconnect_with_no_callback_does_not_panic() {
 }
 
 #[wasm_bindgen_test]
+async fn disconnect_rejects_pending_and_future_io() {
+    use wasm_bindgen_futures::JsFuture;
+
+    let channel = make_message_channel();
+    let transport = WasmMessagePortTransport::new(port_of(&channel, "port1"));
+    let other = WasmMessagePortTransport::new(port_of(&channel, "port2"));
+    let first = JsFuture::from(transport.recv_bytes());
+    let second = JsFuture::from(transport.recv_bytes());
+    JsFuture::from(transport.disconnect())
+        .await
+        .expect("disconnect");
+    assert!(first.await.is_err());
+    assert!(second.await.is_err());
+    assert!(JsFuture::from(transport.recv_bytes()).await.is_err());
+    assert!(JsFuture::from(transport.send_bytes(&[1])).await.is_err());
+    JsFuture::from(other.disconnect())
+        .await
+        .expect("disconnect other port");
+}
+
+#[wasm_bindgen_test]
 fn disconnect_twice_does_not_panic() {
     let channel = make_message_channel();
     let port1 = port_of(&channel, "port1");

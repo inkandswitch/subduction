@@ -46,7 +46,8 @@ See `examples/websocket.rs` for a complete runnable, ephemeral client. Identity 
 - Closing a logical connection, disconnecting its peer, or shutting down the client disables its retries before cancellation.
 - Discovery pins the first authenticated identity on replacement. `.rediscover_on_reconnect()` explicitly permits a different discovered identity.
 
-The public client/handle types are non-generic: storage and policy are checked by the typed builder, then kept behind a private core adapter. Backend errors retain their original `Error::source()` chains.
+The public client/handle types are non-generic: storage and policy are checked by the typed builder, then kept behind a private core adapter. Ordinary operation failures retain original backend `Error::source()` chains.
+Stored streams use portable `LoadError`, with operation failures represented as messages.
 
 ## Stored updates
 
