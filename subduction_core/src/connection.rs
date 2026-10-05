@@ -39,6 +39,14 @@ pub trait Connection<Async: FutureForm + ?Sized, WireMsg: Encode + Decode>:
     /// A problem when receiving a message.
     type RecvError: core::error::Error;
 
+    /// Notify an owner that this connection was removed from core tracking.
+    ///
+    /// This synchronous, idempotent signal must not block or spawn unowned work.
+    /// It does not replace transport disconnection. Runtime integrations can
+    /// use it to clean up drivers after a decode/handler failure, even when
+    /// the underlying byte transport has not reported an I/O error.
+    fn on_unregistered(&self) {}
+
     /// Disconnect from the peer gracefully.
     fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>>;
 
@@ -60,6 +68,10 @@ where
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = T::RecvError;
+
+    fn on_unregistered(&self) {
+        T::on_unregistered(self);
+    }
 
     fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         T::disconnect(self)

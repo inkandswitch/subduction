@@ -280,14 +280,17 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> {
     chan_id: u64,
     peer_id: PeerId,
 
-    ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
+    ws_reader: Arc<Mutex<Option<WebSocketReceiver<T>>>>,
+
+    /// Closing this channel cancels blocked socket reads and writes.
+    stop: async_channel::Receiver<()>,
 
     /// Channel for outbound messages. A dedicated sender task drains this to the WebSocket.
     /// This eliminates mutex contention when many tasks send concurrently.
     outbound_tx: async_channel::Sender<Outbound>,
 
     /// The actual WebSocket sender, used only by the sender task.
-    ws_sender: Arc<Mutex<WebSocketSender<T>>>,
+    ws_sender: Arc<Mutex<Option<WebSocketSender<T>>>>,
 
     inbound_writer: async_channel::Sender<Vec<u8>>,
     inbound_reader: async_channel::Receiver<Vec<u8>>,
@@ -363,7 +366,15 @@ impl<T, Async: FutureForm> Transport<Async> for WebSocket<T, Async> {
 
     fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
-        Async::from_future(async { Ok(()) })
+        Async::from_future(async move {
+            self.stop.close();
+            self.close_channels();
+            // The cancelled driver futures release these locks. Taking both
+            // halves closes the socket even while transport clones remain.
+            self.ws_reader.lock().await.take();
+            self.ws_sender.lock().await.take();
+            Ok(())
+        })
     }
 
     fn send_bytes(&self, bytes: &[u8]) -> Async::Future<'_, Result<(), Self::SendError>> {
@@ -441,54 +452,73 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         let chan_id = rand::random::<u64>();
         let signals = KeepAliveSignals::new();
 
-        let ws_sender = Arc::new(Mutex::new(ws_writer));
-
+        let ws_sender = Arc::new(Mutex::new(Some(ws_writer)));
+        let (stop_tx, stop) = async_channel::bounded::<()>(1);
+        // Closure is explicit through the receiver; retain the sender in the
+        // driver so merely constructing a socket doesn't cancel it.
         let sender_task = {
             let ws_sender = ws_sender.clone();
             let signals = signals.clone();
+            let stopped = stop.clone();
             async move {
-                tracing::debug!(peer = %peer_id, "starting WebSocket sender task");
+                let _stop_tx = stop_tx;
+                let run = async {
+                    tracing::debug!(peer = %peer_id, "starting WebSocket sender task");
 
-                let mut ws_sender = ws_sender.lock().await;
+                    let mut guard = ws_sender.lock().await;
+                    let Some(ws_sender) = guard.as_mut() else {
+                        return Ok(());
+                    };
 
-                while let Ok(item) = outbound_rx.recv().await {
-                    tracing::trace!("sender task: sending message to WebSocket");
-                    #[cfg(feature = "metrics")]
-                    {
-                        subduction_core::metrics::outbound_queue_dwell(
-                            "websocket",
-                            item.enqueued.elapsed().as_secs_f64(),
-                            outbound_rx.len(),
-                        );
-                        subduction_core::metrics::network_frame(
-                            "websocket",
-                            "sent",
-                            item.msg.len(),
-                        );
-                    }
-                    // Data frames feed the keepalive's progress gate; control
-                    // frames must not (see `KeepAliveSignals` field docs).
-                    let is_data = matches!(item.msg, Message::Binary(_) | Message::Text(_));
-                    ws_sender.send(item.msg).await?;
-                    if is_data {
-                        signals.data_write_progress.fetch_add(1, Ordering::Relaxed);
-                    }
-
-                    // Keepalive ping injection — between frames, directly
-                    // into the sink, bypassing the queue. See
-                    // `KeepAliveSignals::ping_requested`.
-                    if signals.ping_requested.swap(false, Ordering::Relaxed) {
-                        let ping = tungstenite::Message::Ping(Vec::new().into());
+                    while let Ok(item) = outbound_rx.recv().await {
+                        tracing::trace!("sender task: sending message to WebSocket");
                         #[cfg(feature = "metrics")]
-                        subduction_core::metrics::network_frame("websocket", "sent", ping.len());
-                        ws_sender.send(ping).await?;
-                        signals.ping_injected.store(true, Ordering::Relaxed);
-                        tracing::trace!(peer = %peer_id, "keepalive: ping injected by sender task");
-                    }
-                }
+                        {
+                            subduction_core::metrics::outbound_queue_dwell(
+                                "websocket",
+                                item.enqueued.elapsed().as_secs_f64(),
+                                outbound_rx.len(),
+                            );
+                            subduction_core::metrics::network_frame(
+                                "websocket",
+                                "sent",
+                                item.msg.len(),
+                            );
+                        }
+                        // Data frames feed the keepalive's progress gate; control
+                        // frames must not (see `KeepAliveSignals` field docs).
+                        let is_data = matches!(item.msg, Message::Binary(_) | Message::Text(_));
+                        ws_sender.send(item.msg).await?;
+                        if is_data {
+                            signals.data_write_progress.fetch_add(1, Ordering::Relaxed);
+                        }
 
-                tracing::debug!("sender task: outbound channel closed, shutting down");
-                Ok(())
+                        // Keepalive ping injection — between frames, directly
+                        // into the sink, bypassing the queue. See
+                        // `KeepAliveSignals::ping_requested`.
+                        if signals.ping_requested.swap(false, Ordering::Relaxed) {
+                            let ping = tungstenite::Message::Ping(Vec::new().into());
+                            #[cfg(feature = "metrics")]
+                            subduction_core::metrics::network_frame(
+                                "websocket",
+                                "sent",
+                                ping.len(),
+                            );
+                            ws_sender.send(ping).await?;
+                            signals.ping_injected.store(true, Ordering::Relaxed);
+                            tracing::trace!(peer = %peer_id, "keepalive: ping injected by sender task");
+                        }
+                    }
+
+                    tracing::debug!("sender task: outbound channel closed, shutting down");
+                    Ok(())
+                };
+                let cancelled = stopped.recv();
+                futures::pin_mut!(run, cancelled);
+                match futures::future::select(run, cancelled).await {
+                    futures::future::Either::Left((result, _)) => result,
+                    futures::future::Either::Right(_) => Ok(()),
+                }
             }
         };
 
@@ -496,7 +526,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
             chan_id,
             peer_id,
 
-            ws_reader: Arc::new(Mutex::new(ws_reader)),
+            ws_reader: Arc::new(Mutex::new(Some(ws_reader))),
+            stop,
             outbound_tx,
             ws_sender,
             inbound_writer,
@@ -537,6 +568,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
     /// If there is an error reading from the WebSocket or processing messages.
     #[allow(clippy::too_many_lines)]
     pub async fn listen(&self) -> Result<(), RunError> {
+        let run = self.listen_inner();
+        let cancelled = self.stop.recv();
+        futures::pin_mut!(run, cancelled);
+        match futures::future::select(run, cancelled).await {
+            futures::future::Either::Left((result, _)) => result,
+            futures::future::Either::Right(_) => Ok(()),
+        }
+    }
+
+    async fn listen_inner(&self) -> Result<(), RunError> {
         tracing::debug!(peer = %self.peer_id, "starting WebSocket listener");
 
         // Outcome to return once the loop ends. Teardown (closing the inbound
@@ -545,7 +586,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         // This is what stops the connection from sitting half-open until
         // keepalive reaps it (~80 s with `KeepAlive::balanced`).
         let outcome: Result<(), RunError> = {
-            let mut in_chan = self.ws_reader.lock().await;
+            let mut guard = self.ws_reader.lock().await;
+            let Some(in_chan) = guard.as_mut() else {
+                return Ok(());
+            };
             loop {
                 let Some(ws_msg) = in_chan.next().await else {
                     // Stream ended (EOF). The write half is already gone, so
@@ -718,7 +762,18 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
             this.signals.clone(),
             sleeper,
         );
-        let task = KeepAliveTask::new(body.boxed());
+        let stopped = this.stop.clone();
+        let task = KeepAliveTask::new(
+            async move {
+                let cancelled = stopped.recv();
+                futures::pin_mut!(body, cancelled);
+                match futures::future::select(body, cancelled).await {
+                    futures::future::Either::Left((outcome, _)) => outcome,
+                    futures::future::Either::Right(_) => KeepAliveOutcome::ConnectionClosed,
+                }
+            }
+            .boxed(),
+        );
 
         (this, sender_task, task)
     }
@@ -1075,6 +1130,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> Clone for WebSocket<T
             chan_id: self.chan_id,
             peer_id: self.peer_id,
             ws_reader: self.ws_reader.clone(),
+            stop: self.stop.clone(),
             outbound_tx: self.outbound_tx.clone(),
             ws_sender: self.ws_sender.clone(),
             inbound_writer: self.inbound_writer.clone(),

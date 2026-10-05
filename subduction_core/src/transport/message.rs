@@ -82,6 +82,10 @@ impl<Async: FutureForm, T, WireMsg> Connection<Async, WireMsg> for MessageTransp
     type SendError = T::SendError;
     type RecvError = RecvDecodeError<T::RecvError>;
 
+    fn on_unregistered(&self) {
+        self.inner.on_unregistered();
+    }
+
     fn disconnect(&self) -> Async::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }
