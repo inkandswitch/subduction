@@ -40,6 +40,53 @@ View Playwright report:
 pnpm run test:report
 ```
 
+## Stored updates
+
+```javascript
+const controller = new AbortController();
+const updates = node.loadAndWatch(treeId, { signal: controller.signal });
+// Call controller.abort() to cancel, or use AbortSignal.timeout(ms) for a timeout.
+try {
+  for await (const event of updates) {
+    // commit / fragment: metadata and Uint8Array blob
+    // storageChecked / peerSynced / rescanRequired: ordered markers
+    applyStoredEvent(event);
+  }
+} finally {
+  updates.close();
+}
+```
+
+`watchStored(treeId)` starts no network work. `loadAndWatch` emits local contents
+first, then syncs and subscribes on all current and future connections, including
+reconnects, even when local contents exist. It remains open when storage is empty
+or current peers have no data, waiting for future updates and connections.
+Construction admits the stream; it does not promise readiness. Markers never end
+iteration. Connections are contacted concurrently without a concurrency cap or
+loading/peer deadline. Stalled connections do not block new ones to the same peer.
+`peerSynced` may occur again for a peer after reconnect or on another connection.
+The optional `{ signal }` replaces the former numeric timeout argument; omit it
+to control cancellation using `close()` or `for await` break.
+
+`return()` (including `for await` break) and `close()` cancel observation and settle
+pending reads. Concurrent reads are serialized; close may safely reenter during
+conversion. Node close rejects pending reads with `SubductionClosedError` and new
+stream construction throws the same error. Storage/local-processing failures use
+`StoredDataError`. Unlike one-shot `fetchBlobs`, exhausting current peers does not
+produce a `DocumentUnavailableError`.
+
+Aborting the signal cancels observation and outstanding sync attempts. Pending
+and subsequent reads reject with `signal.reason` (normally an `AbortError`, or
+`TimeoutError` with `AbortSignal.timeout(ms)`). A signal already aborted at
+construction throws that reason immediately. Closing/breaking the iterator
+removes its abort listener, as does abort or a terminal read. Timing out a
+`Promise.race` alone does not cancel the iterator.
+
+Cancellation neither rolls back writes nor unsubscribes. See
+[SYNC_COMPLETION.md](../SYNC_COMPLETION.md) for shared validity, recovery,
+identity, and peer-marker guarantees. `fetchBlobs` collects that same loader
+without subscriptions, returning from cached contents without contacting peers.
+
 ## Closing a node
 
 ```javascript

@@ -40,6 +40,7 @@ pub mod policy;
 pub mod remote_heads;
 mod runtime;
 pub mod signer;
+pub mod stored;
 pub mod subduction;
 pub mod sync_stats;
 pub mod timer;

@@ -902,7 +902,50 @@ impl WasmSubduction {
             .await
     }
 
-    /// Fetch blobs by their digests, with an optional timeout in milliseconds.
+    /// Stream local contents then live stored updates without starting network work.
+    /// Close the iterator or break out of `for await` to release observation.
+    ///
+    /// # Errors
+    /// Throws if closing; read errors reject iterator reads.
+    #[wasm_bindgen(js_name = watchStored)]
+    pub fn watch_stored(
+        &self,
+        id: &WasmSedimentreeId,
+    ) -> Result<crate::stored::JsStoredUpdates, JsValue> {
+        self.runtime.ensure_open()?;
+        crate::stored::wrap(
+            self.core.watch_stored(id.clone().into()),
+            self.runtime.clone(),
+            JsValue::UNDEFINED,
+        )
+    }
+
+    /// Load local contents, then sync and subscribe on current and future
+    /// connections, including reconnects. Missing data or peers do not end the
+    /// stream. Attempts run concurrently without timeouts; pass an `AbortSignal`
+    /// in options to cancel, or close the iterator.
+    /// Peer markers certify local accepted-response processing,
+    /// not remote acknowledgement or materialization.
+    ///
+    /// # Errors
+    /// Throws if closing or the signal is already aborted. Later aborts reject
+    /// pending reads with the signal's reason; loading errors also reject reads.
+    #[wasm_bindgen(js_name = loadAndWatch)]
+    pub fn load_and_watch(
+        &self,
+        id: &WasmSedimentreeId,
+        options: Option<crate::stored::JsLoadAndWatchOptions>,
+    ) -> Result<crate::stored::JsStoredUpdates, JsValue> {
+        self.runtime.ensure_open()?;
+        let signal = crate::stored::signal(options)?;
+        crate::stored::wrap(
+            self.core.load_and_watch(id.clone().into()),
+            self.runtime.clone(),
+            signal,
+        )
+    }
+
+    /// Collect blobs using the shared local-first loader without subscriptions.
     ///
     /// # Errors
     ///
