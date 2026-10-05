@@ -5620,6 +5620,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "subduction_tokio"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "ed25519-dalek 2.2.0",
+ "future_form",
+ "futures",
+ "rand 0.8.8",
+ "sedimentree_core",
+ "subduction_core",
+ "subduction_crypto",
+ "subduction_websocket",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "subduction_wasm"
 version = "0.26.0"
 dependencies = [
