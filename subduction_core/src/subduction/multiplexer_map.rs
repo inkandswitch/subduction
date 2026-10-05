@@ -54,6 +54,16 @@ impl<Conn: Clone + PartialEq, Async: FutureForm> MultiplexerMap<Conn, Async> {
             .map(|entry| entry.mux.clone())
     }
 
+    /// Snapshot connection/mux pairs for work that outlives the map lock.
+    /// Cloning the existing mux Arcs preserves physical-generation identity.
+    pub(super) fn snapshot(&self) -> Vec<(Authenticated<Conn, Async>, Arc<Multiplexer>)> {
+        self.by_peer
+            .values()
+            .flatten()
+            .map(|entry| (entry.connection.clone(), entry.mux.clone()))
+            .collect()
+    }
+
     /// Detach only this physical connection's muxes, preserving its siblings.
     pub(super) fn detach_connection(
         &mut self,
@@ -133,6 +143,42 @@ mod tests {
         let conn = connection(1, 10);
         map.insert(conn.clone(), mux(&conn));
         map.insert(conn.clone(), mux(&conn));
+    }
+
+    #[test]
+    fn snapshots_preserve_connection_and_mux_identity_after_detachment() {
+        let mut map = MultiplexerMap::new();
+        let a = connection(1, 10);
+        let b = connection(2, 10);
+        let other = connection(3, 20);
+        for conn in [&a, &b, &other] {
+            map.insert(conn.clone(), mux(conn));
+        }
+        let snapshot = map.snapshot();
+        assert_eq!(snapshot.len(), 3);
+        for conn in [&a, &b, &other] {
+            assert!(snapshot.iter().any(|(candidate, _)| candidate == conn));
+        }
+        for (conn, mux) in &snapshot {
+            assert!(
+                map.get(conn)
+                    .is_some_and(|registered| Arc::ptr_eq(mux, &registered))
+            );
+        }
+        let next = map.snapshot();
+        for (conn, mux) in &snapshot {
+            assert!(
+                next.iter()
+                    .any(|(candidate, current)| candidate == conn && Arc::ptr_eq(mux, current))
+            );
+        }
+
+        let detached = map.detach_all();
+        assert!(map.snapshot().is_empty());
+        assert_eq!(snapshot.len(), 3, "existing snapshots own their entries");
+        for (_, mux) in snapshot {
+            assert!(detached.iter().any(|old| Arc::ptr_eq(&mux, old)));
+        }
     }
 
     #[test]

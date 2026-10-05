@@ -91,7 +91,10 @@
 
 pub(crate) mod cache;
 
-use crate::stored::{StoredEvent, StoredItem};
+use crate::{
+    peer::id::PeerId,
+    stored::{StoredEvent, StoredItem},
+};
 use alloc::{
     collections::VecDeque,
     sync::{Arc, Weak},
@@ -172,6 +175,7 @@ impl TreeInner {
             id,
             WatchState {
                 pending: Pending::default(),
+                markers: VecDeque::new(),
                 notify,
             },
         );
@@ -289,8 +293,9 @@ impl TrackedMutation {
         let mut state = self.coordination.state.inner.lock();
         state.active_mutations -= 1;
         state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
         for watch in state.watchers.values_mut() {
-            watch.pending.publish(items);
+            watch.pending.publish(revision, items);
             // Retain only the wake-up sender, not queued data or registration.
             self.wake.push(watch.notify.clone());
         }
@@ -312,7 +317,27 @@ impl Drop for TrackedMutation {
 #[derive(Debug)]
 struct WatchState {
     pending: Pending,
+    // Unlike incremental items, peer markers survive recovery. The accepted
+    // snapshot is delivered before these markers are taken from the queue.
+    markers: VecDeque<(u64, PeerId)>,
     notify: async_channel::Sender<()>,
+}
+impl WatchState {
+    fn take(&mut self) -> Option<StoredEvent> {
+        if let Pending::Updates(updates) = &self.pending
+            && let Some((revision, _)) = self.markers.front()
+            && updates
+                .items
+                .front()
+                .is_none_or(|(item_revision, _)| item_revision > revision)
+        {
+            return self
+                .markers
+                .pop_front()
+                .map(|(_, peer_id)| StoredEvent::PeerSynced { peer_id });
+        }
+        self.pending.take()
+    }
 }
 
 /// A rescan request cannot retain a backlog, and later writes cannot clear it.
@@ -327,7 +352,7 @@ impl Default for Pending {
     }
 }
 impl Pending {
-    fn publish(&mut self, items: Option<&[StoredItem]>) {
+    fn publish(&mut self, revision: u64, items: Option<&[StoredItem]>) {
         let Some(items) = items else {
             *self = Self::RescanRequired;
             return;
@@ -336,7 +361,7 @@ impl Pending {
             return;
         };
         for item in items {
-            if !updates.push(item) {
+            if !updates.push(revision, item) {
                 *self = Self::RescanRequired;
                 return;
             }
@@ -357,12 +382,12 @@ impl Pending {
 
 #[derive(Debug, Default)]
 struct BoundedUpdates {
-    items: VecDeque<StoredItem>,
+    items: VecDeque<(u64, StoredItem)>,
     bytes: usize,
 }
 impl BoundedUpdates {
     /// Return false without cloning the item if it would exceed either budget.
-    fn push(&mut self, item: &StoredItem) -> bool {
+    fn push(&mut self, revision: u64, item: &StoredItem) -> bool {
         let bytes = item.byte_len();
         if self.items.len() >= MAX_PENDING_ITEMS
             || self.bytes.saturating_add(bytes) > MAX_PENDING_BYTES
@@ -370,12 +395,12 @@ impl BoundedUpdates {
             return false;
         }
         self.bytes += bytes;
-        self.items.push_back(item.clone());
+        self.items.push_back((revision, item.clone()));
         true
     }
 
     fn pop(&mut self) -> Option<StoredItem> {
-        let item = self.items.pop_front()?;
+        let (_, item) = self.items.pop_front()?;
         self.bytes -= item.byte_len();
         Some(item)
     }
@@ -414,14 +439,16 @@ impl Watch {
         watch.pending.reset_after_read();
         true
     }
+    /// Only load-initiated rounds call this, after accepted writes settle.
+    pub(crate) fn peer_synced(&self, peer: PeerId) {
+        let mut state = self.tree.inner.lock();
+        let revision = state.revision;
+        if let Some(watch) = state.watchers.get_mut(&self.id) {
+            watch.markers.push_back((revision, peer));
+        }
+    }
     pub(crate) fn take(&self) -> Option<StoredEvent> {
-        self.tree
-            .inner
-            .lock()
-            .watchers
-            .get_mut(&self.id)?
-            .pending
-            .take()
+        self.tree.inner.lock().watchers.get_mut(&self.id)?.take()
     }
 }
 impl Drop for Watch {

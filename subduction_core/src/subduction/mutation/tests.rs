@@ -13,7 +13,7 @@ use crate::{
         powerbox::StoragePowerbox,
         traits::Storage,
     },
-    subduction::{NodeTasks, ingest},
+    subduction::ingest,
     test_utils::probe_storage::ProbeStorage,
 };
 use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec, vec::Vec};
@@ -108,7 +108,7 @@ async fn watching_waits_for_cancelled_mutations_to_settle_then_publishes_or_reco
             assert!(node.get_commits(ID).await.is_some());
         }
         assert_eq!(node.sedimentrees.get_cloned(&ID).await.is_some(), resident);
-        let mut stream = Sendable::start_stored(node.clone(), ID);
+        let mut stream = node.load_and_watch(ID);
         assert!(matches!(
             observed_event(&mut stream).await,
             StoredEvent::Item(_)
@@ -178,7 +178,7 @@ async fn catch_up_waits_for_active_mutation_even_when_backend_bytes_are_already_
     let mut waiter = Box::pin(putter.save_commit(item(1).await));
     assert!(waiter.as_mut().now_or_never().is_none());
     started.recv().await.expect("unsettled effect");
-    let mut stream = Sendable::start_stored(node.clone(), ID);
+    let mut stream = node.load_and_watch(ID);
     assert!(stream.next().now_or_never().is_none());
     drop(waiter);
     release.send(Ok(())).await.expect("settle");
@@ -198,7 +198,7 @@ async fn scan_started_before_a_write_retries_instead_of_certifying_an_empty_view
     let backend = MemoryStorage::new();
     let node = watched_node(backend.clone());
     let (started, release) = backend.gate_next_scan();
-    let mut stream = Sendable::start_stored(node.clone(), ID);
+    let mut stream = node.load_and_watch(ID);
     started.recv().await.expect("old empty scan captured");
     node.storage
         .local_putter(ID)
@@ -222,7 +222,7 @@ async fn failed_snapshot_is_terminal_for_its_watch_not_mutation_admission() {
     let backend = MemoryStorage::new();
     let node = watched_node(backend.clone());
     let (started, release) = backend.gate_next_scan();
-    let mut stream = Sendable::start_stored(node.clone(), ID);
+    let mut stream = node.load_and_watch(ID);
     started.recv().await.expect("scan captured");
     release.send(Err(failure())).await.expect("read fails");
     assert!(matches!(
@@ -241,7 +241,7 @@ async fn failed_snapshot_is_terminal_for_its_watch_not_mutation_admission() {
 async fn aborted_watch_driver_wakes_pending_read_and_does_not_end_mutation_admission() {
     use crate::stored::{LoadError, StoredEvent};
     let node = watched_node(MemoryStorage::new());
-    let mut stream = Sendable::start_stored(node.clone(), ID);
+    let mut stream = node.load_and_watch(ID);
     assert!(matches!(
         observed_event(&mut stream).await,
         StoredEvent::StorageChecked

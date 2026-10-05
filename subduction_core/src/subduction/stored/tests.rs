@@ -7,7 +7,7 @@ use crate::{
     spawn::Spawn,
     storage::memory::MemoryStorage,
     stored::LoadError,
-    subduction::{NodeTasks, builder::SubductionBuilder},
+    subduction::builder::SubductionBuilder,
 };
 use alloc::sync::Arc;
 use future_form::Sendable;
@@ -47,7 +47,7 @@ async fn shutdown_and_driver_loss_interrupt_preparation_without_certifying_a_rea
         let id = SedimentreeId::new([93; 32]);
         let fetcher = node.storage.local_fetcher(id);
         let tracked = fetcher.coordination().track_mutation();
-        let mut stream = Sendable::start_stored(node.clone(), id);
+        let mut stream = node.load_and_watch(id);
         let mut driver = pending.try_recv().expect("node-owned stream task");
         // The snapshot yields once, then waits in prepare_read for the mutation.
         assert!(driver.as_mut().now_or_never().is_none());
