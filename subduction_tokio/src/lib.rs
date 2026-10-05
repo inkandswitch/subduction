@@ -30,5 +30,6 @@ pub use core::PeerSyncReport;
 pub use error::{Error, ErrorKind, PeerIdentityMismatch};
 pub use reconnect::{ConnectionHandle, ConnectionStatus, ReconnectPolicy};
 pub use subduction_core::handshake::audience::Audience as ExpectedPeer;
+pub use subduction_core::stored::{LoadError, StoredEvent, StoredItem, StoredUpdates};
 pub use subduction_core::timeout::call::CallTimeout;
 pub use transport::ErasedTransport;

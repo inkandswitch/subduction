@@ -48,6 +48,30 @@ See `examples/websocket.rs` for a complete runnable, ephemeral client. Identity 
 
 The public client/handle types are non-generic: storage and policy are checked by the typed builder, then kept behind a private core adapter. Backend errors retain their original `Error::source()` chains.
 
+## Stored updates
+
+`ClientHandle::watch_stored(id).await?` admits a storage-only core stream;
+`load_and_watch(id).await?` reads locally first, then syncs and subscribes
+on current and future connections even when cached contents exist, and keeps
+watching. It restores sync/subscriptions on reconnect and keeps waiting when no
+peer or document is currently available.
+The await admits the operation, not document readiness. Consume `StoredEvent` markers alongside metadata/blob items.
+
+```rust,ignore
+use futures::StreamExt;
+let mut updates = node.load_and_watch(tree_id).await?;
+while let Some(event) = updates.next().await {
+    handle_stored_event(event?);
+}
+```
+
+Drop/close cancels this stream, not admitted mutations or established
+subscriptions. Node close terminates streams and rejects new admissions.
+All current and newly connected peers are contacted without a concurrency cap or peer
+timeouts. Callers can impose a timeout and close/drop the stream.
+The adapter shares core coordination and the existing task registry. See
+[SYNC_COMPLETION.md](../SYNC_COMPLETION.md) for validity and recovery limits.
+
 ## Implementing a connector
 
 Implement the object-safe `Connector` trait:
@@ -90,9 +114,9 @@ Deadlines require an executor that continues polling. Blocking code or a future 
 
 - Cancellation and timeout are **not rollback**. Storage may contain partial progress.
 - A connected/reconnected transport is not necessarily caught up.
-- This version **does not restore subscriptions or automatically initiate catch-up after reconnect**. Observe `Connected` and explicitly reissue sync/subscription operations as appropriate. It does not replay in-flight application writes.
+- Active `load_and_watch` streams automatically catch up and restore their document subscriptions on reconnect. Other one-shot sync/subscription operations still need to be reissued as appropriate. In-flight application writes are not replayed.
 - Sync reports preserve existing core semantics: local accepted-response processing, not remote acknowledgement. Received statistics count offered items, and the core may skip rejected items or log outbound failures separately.
-- This crate does not provide inbound accept-loop management, a JavaScript runtime wrapper, or a new stored-item notification API.
+- This crate does not provide inbound accept-loop management or a JavaScript runtime wrapper.
 
 ## Validation
 
