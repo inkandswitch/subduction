@@ -33,7 +33,3 @@ connection.close().await?;
 let report = node.close().await;
 // Inspect forced, unfinished_tasks, and failure; shutdown isn't always graceful.
 ```
-
-See `examples/websocket.rs` for a complete runnable, ephemeral node. Identity
-and authorization are always explicit. The example's memory signer and open
-policy are test choices, not library defaults.

@@ -19,6 +19,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
+    stored::StoredUpdates,
     subduction::{Subduction, builder::SubductionBuilder},
     timeout::call::CallTimeout,
     transport::message::MessageTransport,
@@ -58,6 +59,7 @@ pub struct PeerSyncReport {
 
 pub(crate) trait Core: Send + Sync {
     fn shutdown(&self);
+    fn load_and_watch(&self, id: SedimentreeId) -> StoredUpdates;
     fn add(&self, connection: Connection) -> BoxFuture<'_, Result<(), Error>>;
     fn remove(&self, connection: Connection) -> BoxFuture<'_, Result<(), Error>>;
     fn store(
@@ -94,6 +96,9 @@ where
 {
     fn shutdown(&self) {
         self.0.shutdown();
+    }
+    fn load_and_watch(&self, id: SedimentreeId) -> StoredUpdates {
+        self.0.load_and_watch(id)
     }
     fn add(&self, connection: Connection) -> BoxFuture<'_, Result<(), Error>> {
         Box::pin(async move {
