@@ -187,7 +187,8 @@ pub struct Subduction<
     /// [`connections`](Self::connections). Read paths that need only this
     /// lock (response routing, mux lookup) may take it alone; paths that
     /// also need `connections` must take `connections` first.
-    multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
+    #[allow(clippy::type_complexity)]
+    multiplexers: Arc<Mutex<Map<PeerId, Vec<(Authenticated<Conn, Async>, Arc<Multiplexer>)>>>>,
 
     /// Default per-call deadline for roundtrip calls (`BatchSyncRequest` →
     /// `BatchSyncResponse`) when a caller passes `timeout: None`. This is
@@ -591,41 +592,9 @@ where
         &self,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<bool, Conn::DisconnectionError> {
-        let peer_id = conn.peer_id();
-        tracing::info!(peer = %peer_id, "disconnecting connection from peer");
-
-        // Detach the muxes inside the same critical section that removes
-        // the connection, so a concurrent `add_connection` can't have its
-        // fresh mux clobbered. Cancel them afterwards, off the lock.
-        let detached = {
-            let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return Ok(false),
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return Ok(false);
-                    }
-                },
-            }
-        };
-
-        if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-        } else {
-            #[cfg(feature = "metrics")]
-            crate::metrics::connection_closed();
+        if self.remove_connection(conn).await.is_none() {
+            return Ok(false);
         }
-        self.refresh_connection_gauge().await;
-
         conn.disconnect().await.map(|()| true)
     }
 
@@ -647,12 +616,19 @@ where
             let muxes = core::mem::take(&mut *self.multiplexers.lock().await)
                 .into_values()
                 .flatten()
+                .map(|(_, mux)| mux)
                 .collect();
+            // Clear the old era while registration is excluded. Clearing
+            // after cancelling muxes could erase a replacement's new claims.
+            self.subscriptions.lock().await.clear();
+            self.outgoing_subscriptions.lock().await.clear();
             (conns, muxes)
         };
 
+        for conn in &all_conns {
+            conn.on_unregistered();
+        }
         Self::cancel_detached_muxes(removed_muxes).await;
-        self.subscriptions.lock().await.clear();
         // Send counters survive on purpose; see `teardown_peer`.
 
         #[cfg(feature = "metrics")]
@@ -702,6 +678,9 @@ where
         };
 
         if let Some((conns, muxes)) = removed {
+            for conn in &conns {
+                conn.on_unregistered();
+            }
             // Removing every connection is by definition removing the last.
             self.teardown_peer(peer_id, muxes, conns.len()).await;
             self.refresh_connection_gauge().await;
@@ -802,26 +781,25 @@ where
         // cannot suppress a propagation for this arrival.
         if newly_present {
             self.clear_stale_outgoing_claims(&peer_id).await;
+            peers::remove_peer_from_subscriptions(&self.subscriptions, peer_id).await;
         }
 
         let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
         let mut multiplexers = self.multiplexers.lock().await;
         match multiplexers.get_mut(&peer_id) {
-            Some(muxes) => muxes.push(mux),
+            Some(muxes) => muxes.push((conn.clone(), mux)),
             None => {
-                multiplexers.insert(peer_id, alloc::vec![mux]);
+                multiplexers.insert(peer_id, alloc::vec![(conn.clone(), mux)]);
             }
         }
 
         true
     }
 
-    /// Reconcile tracking for a connection whose transport has **already
-    /// failed** — e.g. a send returned `Err`, or the per-connection
-    /// receive loop exited and reported the closure via the
-    /// `connection_closed` channel. There is no live transport to close,
-    /// so this only updates in-memory state (connection map, multiplexers,
-    /// subscriptions, metrics).
+    /// Reconcile tracking for a removed connection, including a failed send,
+    /// exited reader, or the bookkeeping half of explicit disconnection.
+    /// This updates in-memory state, cancels that connection's pending calls,
+    /// and notifies its owner, but does not itself await transport closure.
     ///
     /// To proactively shut down a connection you believe is still live,
     /// use [`disconnect`](Self::disconnect), which also closes the
@@ -840,37 +818,46 @@ where
     ) -> Option<bool> {
         let peer_id = conn.peer_id();
 
-        let detached = {
+        let (last, detached) = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return None,
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return None;
-                    }
-                },
+            let last = match connections.remove(&peer_id)?.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    connections.insert(peer_id, remaining);
+                    false
+                }
+                RemoveResult::WasLast(_) => true,
+                RemoveResult::NotFound(original) => {
+                    connections.insert(peer_id, original);
+                    return None;
+                }
+            };
+            let mut multiplexers = self.multiplexers.lock().await;
+            let entries = multiplexers.remove(&peer_id).unwrap_or_default();
+            let mut detached = Vec::new();
+            let mut retained = Vec::new();
+            for (candidate, mux) in entries {
+                if last || &candidate == conn {
+                    detached.push(mux);
+                } else {
+                    retained.push((candidate, mux));
+                }
             }
+            if !retained.is_empty() {
+                multiplexers.insert(peer_id, retained);
+            }
+            (last, detached)
         };
 
-        let last = if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-            Some(true)
+        conn.on_unregistered();
+        if last {
+            self.teardown_peer(&peer_id, detached, 1).await;
         } else {
+            Self::cancel_detached_muxes(detached).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
-            Some(false)
-        };
+        }
         self.refresh_connection_gauge().await;
-        last
+        Some(last)
     }
 
     /// Test-only public access to the crate-internal
@@ -903,6 +890,24 @@ where
             .await
             .remove(peer_id)
             .unwrap_or_default()
+            .into_iter()
+            .map(|(_, mux)| mux)
+            .collect()
+    }
+
+    /// Find the mux belonging to this physical connection, not another
+    /// connection or replacement with the same peer identity.
+    async fn mux_for_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<Arc<Multiplexer>> {
+        self.multiplexers
+            .lock()
+            .await
+            .get(&conn.peer_id())?
+            .iter()
+            .find(|(candidate, _)| candidate == conn)
+            .map(|(_, mux)| mux.clone())
     }
 
     /// Cancel the pending calls on a set of detached multiplexers.
@@ -914,7 +919,7 @@ where
     /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
     async fn cancel_detached_muxes(muxes: Vec<Arc<Multiplexer>>) {
         for mux in muxes {
-            mux.cancel_all_pending().await;
+            mux.close().await;
         }
     }
 
@@ -951,11 +956,16 @@ where
         conn_count: usize,
     ) {
         Self::cancel_detached_muxes(muxes).await;
-        peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
-
-        // GC only — invalidation happens on next arrival
-        // (`clear_stale_outgoing_claims`); this bounds the map.
-        self.outgoing_subscriptions.lock().await.remove(peer_id);
+        {
+            // An old reader's teardown can overlap replacement registration.
+            // Never clear the replacement's peer-scoped state. Registration
+            // invalidates the old era while holding this same outer lock.
+            let connections = self.connections.lock().await;
+            if !connections.contains_key(peer_id) {
+                peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+                self.outgoing_subscriptions.lock().await.remove(peer_id);
+            }
+        }
 
         // The send counter is deliberately not cleared: receivers keep a
         // never-reset high-water mark, so a restarted sequence would be
@@ -1106,10 +1116,7 @@ where
 
                     // Mux missing means the peer was torn down between the
                     // connection snapshot and here; skip rather than panic.
-                    let Some(mux) = ({
-                        let muxes = self.multiplexers.lock().await;
-                        muxes.get(&peer_id).and_then(|v| v.first()).cloned()
-                    }) else {
+                    let Some(mux) = self.mux_for_connection(&conn).await else {
                         tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
                         continue;
                     };
@@ -2147,141 +2154,16 @@ where
         let mut conn_errs = Vec::new();
 
         for conn in peer_conns {
-            tracing::info!(peer = %to_ask, "using connection to peer");
-            let seed = FingerprintSeed::random();
-            // A nonexistent tree syncs as empty: we advertise nothing and the
-            // peer sends us everything it has. The hydrated tree is already
-            // minimized for the wire diff.
+            // Refresh per attempt, unlike all-peer sync's shared snapshot.
+            // An unknown tree advertises an empty inventory.
             let tree = self.get_or_hydrate(id).await?.unwrap_or_default();
-            let resolver = tree.fingerprint_resolver(&seed);
-
-            tracing::debug!(
-                tree = ?id,
-                commit_fps = resolver.summary().commit_fingerprints().len(),
-                fragment_fps = resolver.summary().fragment_fingerprints().len(),
-                "sending fingerprint summary"
-            );
-
-            // Mux missing means the peer was torn down between the
-            // connection snapshot and here; report it dropped, don't panic.
-            let Some(mux) = ({
-                let muxes = self.multiplexers.lock().await;
-                muxes.get(to_ask).and_then(|v| v.first()).cloned()
-            }) else {
-                tracing::debug!(peer = %to_ask, "multiplexer for peer gone (concurrent teardown); skipping");
-                conn_errs.push((conn.clone(), CallError::ResponseDropped));
-                continue;
-            };
-            let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-            let req_id = managed.next_request_id();
-
-            let result = ManagedCall::<Async, Hdl::Message>::call(
-                &managed,
-                BatchSyncRequest {
-                    id,
-                    req_id,
-                    fingerprint_summary: resolver.summary().clone(),
-                    subscribe,
-                },
-                timeout,
-            )
-            .await;
-
-            match result {
-                Err(e) => conn_errs.push((conn, e)),
-                Ok(BatchSyncResponse {
-                    result,
-                    responder_heads,
-                    ..
-                }) => {
-                    self.handler
-                        .notify_remote_heads(id, conn.peer_id(), responder_heads.clone());
-                    stats.remote_heads = responder_heads;
-                    let SyncDiff {
-                        missing_commits,
-                        missing_fragments,
-                        requesting,
-                    } = match result {
-                        SyncResult::Ok(diff) => diff,
-                        SyncResult::NotFound => {
-                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports sedimentree not found");
-                            continue;
-                        }
-                        SyncResult::Unauthorized => {
-                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports we are unauthorized for sedimentree");
-                            continue;
-                        }
-                    };
-
-                    // Track counts for stats
-                    let commits_to_receive = missing_commits.len();
-                    let fragments_to_receive = missing_fragments.len();
-
-                    // Ingest in one batched pass: `recv_batch_sync_response` groups
-                    // items by author and writes each batch in a single `save_batch`.
-                    // `requesting` is handled separately below, so the ingester's
-                    // copy is left empty.
-                    let ingested = ingest::recv_batch_sync_response(
-                        &self.sedimentrees,
-                        &self.storage,
-                        to_ask,
-                        id,
-                        SyncDiff {
-                            missing_commits,
-                            missing_fragments,
-                            requesting: RequestedData::default(),
-                        },
-                    )
-                    .await?;
-                    self.minimize_tree(id).await;
-                    self.push_to_subscribers(id, to_ask, &ingested).await;
-
-                    // Update received stats (count what was offered, not verified)
-                    stats.commits_received += commits_to_receive;
-                    stats.fragments_received += fragments_to_receive;
-
-                    tracing::debug!(
-                        tree = ?id,
-                        commits_received = commits_to_receive,
-                        requesting_commits = requesting.commit_fingerprints.len(),
-                        requesting_fragments = requesting.fragment_fingerprints.len(),
-                        "received response"
-                    );
-
-                    // Send back data the responder requested (bidirectional sync)
-                    if !requesting.is_empty() {
-                        tracing::debug!(tree = ?id, "calling send_requested_data");
-                        match self
-                            .send_requested_data(&conn, id, &resolver, &requesting)
-                            .await
-                        {
-                            Ok(sent) => {
-                                tracing::debug!(
-                                    commits = sent.commits,
-                                    fragments = sent.fragments,
-                                    "send_requested_data returned"
-                                );
-                                stats.commits_sent += sent.commits;
-                                stats.fragments_sent += sent.fragments;
-                            }
-                            Err(e) => {
-                                tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
-                                if !matches!(e, SendRequestedDataError::Unauthorized(_)) {
-                                    #[cfg(feature = "metrics")]
-                                    crate::metrics::requested_data_send_failure();
-                                }
-                            }
-                        }
-                    }
-
-                    // Mutual subscription: we subscribed to them, so also add them
-                    // to our subscriptions so our commits get pushed to them
-                    if subscribe {
-                        self.track_outgoing_subscription(*to_ask, id).await;
-                        self.add_subscription(*to_ask, id).await;
-                        tracing::debug!(peer = %to_ask, tree = ?id, "mutual subscription: added peer to our subscriptions");
-                    }
-
+            match self
+                .sync_connection(&conn, id, &tree, subscribe, timeout, &mut stats)
+                .await?
+            {
+                Err(error) => conn_errs.push((conn, error)),
+                Ok(false) => {}
+                Ok(true) => {
                     had_success = true;
                     break;
                 }
@@ -2380,144 +2262,28 @@ where
                     let mut stats = SyncStats::new();
 
                     for conn in peer_conns {
-                        tracing::debug!(peer = %conn.peer_id(), "using connection to peer");
-                        let seed = FingerprintSeed::random();
-                        let resolver = shared_tree.fingerprint_resolver(&seed);
-
-                        // Mux missing means the peer was torn down between
-                        // the connection snapshot and here; report it
-                        // dropped, don't panic.
-                        let Some(mux) = ({
-                            let muxes = self.multiplexers.lock().await;
-                            muxes.get(peer_id).and_then(|v| v.first()).cloned()
-                        }) else {
-                            tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
-                            conn_errs.push((
-                                conn.clone(),
-                                CallError::ResponseDropped,
-                            ));
-                            continue;
-                        };
-                        let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-                        let req_id = managed.next_request_id();
-
-                        let result = ManagedCall::<Async, Hdl::Message>::call(
-                                &managed,
-                                BatchSyncRequest {
-                                    id,
-                                    req_id,
-                                    fingerprint_summary: resolver.summary().clone(),
-                                    subscribe,
-                                },
-                                timeout,
-                            )
-                            .await;
-
-                        match result {
-                            Err(e) => conn_errs.push((conn.clone(), e)),
-                            Ok(BatchSyncResponse {
-                                result,
-                                responder_heads,
-                                ..
-                            }) => {
-                                self.handler.notify_remote_heads(
-                                    id,
-                                    *peer_id,
-                                    responder_heads.clone(),
-                                );
-                                stats.remote_heads = responder_heads;
-                                let SyncDiff {
-                                    missing_commits,
-                                    missing_fragments,
-                                    requesting,
-                                } = match result {
-                                    SyncResult::Ok(diff) => diff,
-                                    SyncResult::NotFound => {
-                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports sedimentree not found");
-                                        continue;
-                                    }
-                                    SyncResult::Unauthorized => {
-                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports we are unauthorized for sedimentree");
-                                        continue;
-                                    }
-                                };
-
-                                // Track counts for stats
-                                let commits_to_receive = missing_commits.len();
-                                let fragments_to_receive = missing_fragments.len();
-
-                                tracing::debug!(
-                                    sedimentree_id = ?id,
-                                    commits_received = commits_to_receive,
-                                    fragments_received = fragments_to_receive,
-                                    peer_requesting_commits = requesting.commit_fingerprints.len(),
-                                    peer_requesting_fragments = requesting.fragment_fingerprints.len(),
-                                    "sync_with_all_peers: response received"
-                                );
-
-                                // Ingest in one batched pass; see `sync_with_peer`.
-                                // `requesting` is handled separately below.
-                                let ingested = ingest::recv_batch_sync_response(
-                                    &self.sedimentrees,
-                                    &self.storage,
-                                    peer_id,
-                                    id,
-                                    SyncDiff {
-                                        missing_commits,
-                                        missing_fragments,
-                                        requesting: RequestedData::default(),
-                                    },
-                                )
-                                .await?;
-                                self.minimize_tree(id).await;
-                                self.push_to_subscribers(id, peer_id, &ingested).await;
-
-                                // Update received stats
-                                stats.commits_received += commits_to_receive;
-                                stats.fragments_received += fragments_to_receive;
-
-                                // Send back data the responder requested (bidirectional sync)
-                                if !requesting.is_empty() {
-                                    match self.send_requested_data(conn, id, &resolver, &requesting).await {
-                                        Ok(sent) => {
-                                            stats.commits_sent += sent.commits;
-                                            stats.fragments_sent += sent.fragments;
-                                        }
-                                        Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
-                                            let msg: Hdl::Message = SyncMessage::from(DataRequestRejected { id }).into();
-                                            if let Err(send_err) = conn.send(&msg).await {
-                                                tracing::warn!(peer = %peer_id, error = %send_err, "peer disconnected while sending DataRequestRejected");
-                                            }
-                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
-                                            #[cfg(feature = "metrics")]
-                                            crate::metrics::requested_data_send_failure();
-                                        }
-                                    }
-                                }
-
-                                // Mutual subscription: we subscribed to them, so also add them
-                                // to our subscriptions so our commits get pushed to them
-                                if subscribe {
-                                    self.track_outgoing_subscription(*peer_id, id).await;
-                                    self.add_subscription(*peer_id, id).await;
-                                    tracing::debug!(peer = %peer_id, tree = ?id, "mutual subscription: added peer to our subscriptions");
-                                }
-
+                        match self
+                            .sync_connection(conn, id, &shared_tree, subscribe, timeout, &mut stats)
+                            .await?
+                        {
+                            Err(error) => conn_errs.push((conn.clone(), error)),
+                            Ok(false) => {}
+                            Ok(true) => {
                                 had_success = true;
                                 break;
                             }
                         }
                     }
 
-                    Ok::<(PeerId, bool, SyncStats, Vec<(Authenticated<Conn, Async>, _)>), IoError<Async, Store, Conn, Hdl::Message>>((
-                        *peer_id,
-                        had_success,
-                        stats,
-                        conn_errs,
-                    ))
+                    Ok::<
+                        (
+                            PeerId,
+                            bool,
+                            SyncStats,
+                            Vec<(Authenticated<Conn, Async>, _)>,
+                        ),
+                        IoError<Async, Store, Conn, Hdl::Message>,
+                    >((*peer_id, had_success, stats, conn_errs))
                 }
             })
             .collect();
@@ -2534,6 +2300,114 @@ where
             }
         }
         Ok(PerPeerSync::new(out))
+    }
+
+    /// Process one connection's round. The outer result covers local I/O;
+    /// the inner result preserves per-connection call errors and refusals.
+    /// Callers retain their own inventory lifetime and aggregation policy.
+    #[allow(clippy::type_complexity, clippy::too_many_lines)]
+    async fn sync_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        id: SedimentreeId,
+        tree: &Sedimentree,
+        subscribe: bool,
+        timeout: Option<Duration>,
+        stats: &mut SyncStats,
+    ) -> Result<Result<bool, CallError<Conn::SendError>>, IoError<Async, Store, Conn, Hdl::Message>>
+    {
+        let peer = conn.peer_id();
+        let seed = FingerprintSeed::random();
+        let resolver = tree.fingerprint_resolver(&seed);
+        let Some(mux) = self.mux_for_connection(conn).await else {
+            tracing::debug!(peer = %peer, "multiplexer gone during sync; skipping connection");
+            return Ok(Err(CallError::ResponseDropped));
+        };
+        let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
+        let response = ManagedCall::<Async, Hdl::Message>::call(
+            &managed,
+            BatchSyncRequest {
+                id,
+                req_id: managed.next_request_id(),
+                fingerprint_summary: resolver.summary().clone(),
+                subscribe,
+            },
+            timeout,
+        )
+        .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return Ok(Err(error)),
+        };
+        self.handler
+            .notify_remote_heads(id, peer, response.responder_heads.clone());
+        stats.remote_heads = response.responder_heads;
+        let SyncDiff {
+            missing_commits,
+            missing_fragments,
+            requesting,
+        } = match response.result {
+            SyncResult::Ok(diff) => diff,
+            SyncResult::NotFound => {
+                tracing::debug!(peer = %peer, tree = ?id, "peer reports sedimentree not found");
+                return Ok(Ok(false));
+            }
+            SyncResult::Unauthorized => {
+                tracing::debug!(peer = %peer, tree = ?id, "peer reports we are unauthorized for sedimentree");
+                return Ok(Ok(false));
+            }
+        };
+        let commits_to_receive = missing_commits.len();
+        let fragments_to_receive = missing_fragments.len();
+        // The shared ingester verifies and groups accepted items by author;
+        // return-direction requests belong to this captured resolver instead.
+        let ingested = ingest::recv_batch_sync_response(
+            &self.sedimentrees,
+            &self.storage,
+            &peer,
+            id,
+            SyncDiff {
+                missing_commits,
+                missing_fragments,
+                requesting: RequestedData::default(),
+            },
+        )
+        .await?;
+        self.minimize_tree(id).await;
+        self.push_to_subscribers(id, &peer, &ingested).await;
+        // Existing statistics count offered items, not acceptance.
+        stats.commits_received += commits_to_receive;
+        stats.fragments_received += fragments_to_receive;
+
+        if !requesting.is_empty() {
+            match self
+                .send_requested_data(conn, id, &resolver, &requesting)
+                .await
+            {
+                Ok(sent) => {
+                    stats.commits_sent += sent.commits;
+                    stats.fragments_sent += sent.fragments;
+                }
+                Err(error @ SendRequestedDataError::Unauthorized(_)) => {
+                    let message: Hdl::Message =
+                        SyncMessage::from(DataRequestRejected { id }).into();
+                    if let Err(send_error) = conn.send(&message).await {
+                        tracing::warn!(peer = %peer, error = %send_error, "peer disconnected while sending DataRequestRejected");
+                    }
+                    tracing::warn!(peer = %peer, %error, "policy rejected requested data");
+                }
+                Err(error) => {
+                    tracing::warn!(peer = %peer, %error, "failed to send requested data to peer");
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::requested_data_send_failure();
+                }
+            }
+        }
+        if subscribe {
+            self.track_outgoing_subscription(peer, id).await;
+            self.add_subscription(peer, id).await;
+        }
+        Ok(Ok(true))
     }
 
     /// Sync all known [`Sedimentree`]s with all connected peers.
@@ -3187,8 +3061,8 @@ where
 
                             let mut consumed = false;
                             if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
+                                for (candidate, mux) in &muxes {
+                                    if candidate == &conn && mux.resolve_pending(resp).await {
                                         tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
                                         consumed = true;
                                         break;
@@ -3259,8 +3133,8 @@ where
                             };
                             let mut consumed = false;
                             if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
+                                for (candidate, mux) in &muxes {
+                                    if candidate == &conn && mux.resolve_pending(resp).await {
                                         consumed = true;
                                         break;
                                     }
