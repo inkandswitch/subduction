@@ -26,8 +26,8 @@ use crate::{
     peer_id::WasmPeerId,
     policy::{JsPolicy, ephemeral::JsEphemeralPolicy},
     remote_heads::JsRemoteHeadsObserver,
+    runtime::ManagedTransport,
     subduction::{WASM_SHARD_COUNT, WasmHashMetric, WasmSpawn},
-    transport::JsTransport,
     wire::WireMessage,
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -81,7 +81,7 @@ impl Clone for JsFrameHandler {
 
 // ── WasmKeyhiveHandler ───────────────────────────────────────────────
 
-type WasmConn = MessageTransport<JsTransport>;
+type WasmConn = MessageTransport<ManagedTransport>;
 
 #[derive(Debug, thiserror::Error)]
 #[error("keyhive frame handler error: {0}")]

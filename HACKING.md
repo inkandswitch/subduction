@@ -262,6 +262,35 @@ These prevent mixing up different 32-byte arrays or timestamps with other intege
 
 `NonceCache` is also wrapped in `Arc` internally for sharing across handshakes.
 
+### Storage completion and application streams
+
+See [SYNC_COMPLETION.md](SYNC_COMPLETION.md) for the shared validity/lifecycle
+contract and [OBSERVE_PLAN.md](OBSERVE_PLAN.md) for the fourteen-change rebuild.
+
+- `storage/powerbox.rs` mints authorized capabilities. Its selected future form
+  shares one typed submission callback, installed by `NodeTasks` on the existing
+  spawner; `storage/traits.rs` stays a persistence-only backend interface.
+- `storage/mutation.rs` describes persistence operations, including deletion.
+  `subduction/mutation.rs` owns persistence, cache repair, and notification through
+  settlement even if the caller stops waiting. Propagation stays outside it.
+- `storage/state.rs` supplies one per-tree revision/active-mutation boundary for
+  checked metadata hydration and full-blob scan/watch handoff. Watch queues are
+  ephemeral, bounded, and recover current contents rather than retained history.
+- `subduction/stored.rs` scans local Fetchers, drives delivery/recovery, and orders
+  scoped peer markers. It reuses the shared sync round, not listener receipt or
+  dispatch completion. Private supplier readiness follows accepted persistence;
+  public sync outcomes/statistics retain their existing meaning.
+- `stored.rs` exposes the portable stream. `fetch_blobs` collects that same
+  coordinator without subscriptions. Tokio admits it through the erased-core
+  adapter; Wasm adapts it to serialized Promise reads without exported borrows
+  across await. Each platform keeps its existing supervisor.
+
+A storage-only watch needs no network listener. Independent backend writers and
+other nodes sharing the database remain outside this node's observation guarantee.
+Standalone powerboxes write inline; do not promote one with unfinished writes.
+Cancelling a stream does not cancel admitted mutations or node-owned subscriptions.
+Forced driver loss closes validity instead of pretending foreign writes rolled back.
+
 ### Compile-Time Validation
 
 Prefer types that make invalid states unrepresentable:

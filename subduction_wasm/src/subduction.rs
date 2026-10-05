@@ -13,11 +13,7 @@ use sedimentree_core::collections::Map;
 
 use from_js_ref::FromJsRef;
 use future_form::Local;
-use futures::{
-    FutureExt,
-    future::{Either, select},
-    stream::Aborted,
-};
+use futures::FutureExt;
 use js_sys::Uint8Array;
 use nonempty::NonEmpty;
 use sedimentree_core::{
@@ -81,10 +77,9 @@ use sedimentree_wasm::{
     storage::{JsStorage, JsStorageError},
 };
 
-use futures::{
-    future::LocalBoxFuture,
-    stream::{AbortHandle, Abortable},
-};
+pub use crate::runtime::WasmSpawn;
+use crate::runtime::{CLOSE_TIMEOUT, ManagedTransport, Runtime, TransportLease};
+use futures::future::AbortHandle;
 
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 pub(crate) const WASM_SHARD_COUNT: usize = 4;
@@ -107,20 +102,6 @@ fn date_now_micros_seed() -> u64 {
     (js_sys::Date::now() * 1_000.0) as u64
 }
 
-/// A spawner that uses wasm-bindgen-futures to spawn local tasks.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WasmSpawn;
-
-impl Spawn<Local> for WasmSpawn {
-    fn spawn(&self, fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
-        let (handle, reg) = AbortHandle::new_pair();
-        wasm_bindgen_futures::spawn_local(async move {
-            let _ = Abortable::new(fut, reg).await;
-        });
-        handle
-    }
-}
-
 use crate::{
     clock::JsClock,
     handler::{JsFrameHandler, WasmComposedHandler, WasmKeyhiveHandler},
@@ -134,7 +115,7 @@ use crate::{
 
 use subduction_keyhive::KeyhiveMessage;
 
-type WasmConn = MessageTransport<JsTransport>;
+type WasmConn = MessageTransport<ManagedTransport>;
 
 type WasmEphemeralHandler =
     EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock, WasmSpawn>;
@@ -153,13 +134,65 @@ type WasmSubductionCore = Subduction<
     WASM_SHARD_COUNT,
 >;
 
-/// Wasm bindings for [`Subduction`](subduction_core::Subduction)
+/// Wasm bindings for [`Subduction`](subduction_core::Subduction).
+///
+/// # Lifecycle
+///
+/// Call [`close`](Self::close) to stop work and await owned task cleanup. All
+/// asynchronous operations reject with `SubductionClosedError` once closing
+/// begins; active calls are cancelled with the same error. Their ordinary
+/// return values and error names are otherwise unchanged. Pure synchronous
+/// accessors (`storage`, `commitDepth`) remain usable until `free()`.
+/// Cancellation is not rollback: already-started JS promises may still finish.
 #[wasm_bindgen(js_name = Subduction)]
 pub struct WasmSubduction {
     core: Arc<WasmSubductionCore>,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
     ephemeral_handler: WasmEphemeralHandler,
     keyhive_handler: Arc<Mutex<Option<JsFrameHandler>>>,
+    runtime: Runtime,
+    ephemeral_task: AbortHandle,
+}
+
+impl WasmSubduction {
+    /// Register using the attempt's existing guard. The caller retains rollback
+    /// responsibility until it disarms the guard (both guards for `link`).
+    async fn register_transport(
+        &self,
+        authenticated: subduction_core::authenticated::Authenticated<
+            MessageTransport<JsTransport>,
+            Local,
+        >,
+        lease: &TransportLease,
+    ) -> Result<bool, WasmAddConnectionError> {
+        let peer = authenticated.peer_id();
+        let managed = authenticated.map(|_| MessageTransport::new(lease.transport()));
+        let fresh = self.core.add_connection(managed).await?;
+        if fresh {
+            self.ephemeral_handler.subscribe_peer(peer).await;
+        }
+        Ok(fresh)
+    }
+
+    fn start_close(&self) {
+        self.ephemeral_task.abort();
+        let core = self.core.clone();
+        let shutdown_core = core.clone();
+        self.runtime.close(
+            move || shutdown_core.shutdown(),
+            async move {
+                drop(core.disconnect_all().await);
+            }
+            .boxed_local(),
+            CLOSE_TIMEOUT,
+        );
+    }
+}
+
+impl Drop for WasmSubduction {
+    fn drop(&mut self) {
+        self.start_close();
+    }
 }
 
 impl core::fmt::Debug for WasmSubduction {
@@ -192,7 +225,7 @@ impl WasmSubduction {
     /// Panics if `hashMetricOverride` is provided but the underlying JS value
     /// cannot be cast to a `Function`.
     #[wasm_bindgen(constructor)]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::arc_with_non_send_sync)] // Core APIs use Arc even on Local.
     pub fn new(opts: &JsSubductionOptions) -> Result<Self, WasmInitError> {
         tracing::debug!("new Subduction node");
 
@@ -234,6 +267,8 @@ impl WasmSubduction {
             Some(f) => JsRemoteHeadsObserver::with_callback(f),
             None => JsRemoteHeadsObserver::new(),
         };
+        let runtime = Runtime::default();
+        let spawner = runtime.spawner();
         let sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
@@ -241,7 +276,7 @@ impl WasmSubduction {
             powerbox.clone(),
             depth_metric.clone(),
             observer.clone(),
-            WasmSpawn,
+            spawner.clone(),
         )
         // Wall-clock seeded so sequences resume above previous values across
         // page reloads; receivers never reset their high-water marks.
@@ -255,7 +290,7 @@ impl WasmSubduction {
             eph_policy,
             EphemeralConfig::default(),
             JsClock,
-            WasmSpawn,
+            spawner.clone(),
         );
         let ephemeral_for_wasm = ephemeral_handler.clone();
 
@@ -280,45 +315,67 @@ impl WasmSubduction {
             JsTimeout,
             default_roundtrip_timeout,
             depth_metric,
-            WasmSpawn,
+            spawner.clone(),
         );
 
-        wasm_bindgen_futures::spawn_local(async move {
-            let manager = manager_fut.fuse();
-            let listener = listener_fut.fuse();
-
-            match select(manager, listener).await {
-                Either::Left((manager_result, _pin)) => {
-                    if let Err(Aborted) = manager_result {
-                        tracing::error!("Subduction manager aborted");
-                    }
-                }
-                Either::Right((listener_result, _pin)) => {
-                    if let Err(Aborted) = listener_result {
-                        tracing::error!("Subduction listener aborted");
-                    }
-                }
+        // Independently tracked: completion of one must not drop the other
+        // while it is draining dispatch work.
+        spawner.spawn(
+            async move {
+                let _ = manager_fut.await;
             }
-        });
+            .boxed_local(),
+        );
+        spawner.spawn(
+            async move {
+                let _ = listener_fut.await;
+            }
+            .boxed_local(),
+        );
 
         // Always drain the ephemeral channel to prevent "channel full" warnings
         // in EphemeralHandler when no JS callback is registered.
         let observer = opts
             .on_ephemeral()
             .map(crate::ephemeral::JsEphemeralObserver::new);
-        wasm_bindgen_futures::spawn_local(async move {
-            while let Ok(event) = ephemeral_rx.recv().await {
-                if let Some(ref obs) = observer {
-                    obs.on_event(event.id, event.sender, &event.payload);
+        let ephemeral_task = spawner.spawn(
+            async move {
+                while let Ok(event) = ephemeral_rx.recv().await {
+                    if let Some(ref obs) = observer {
+                        obs.on_event(event.id, event.sender, &event.payload);
+                    }
                 }
             }
-        });
+            .boxed_local(),
+        );
 
         Ok(Self {
             core,
             js_storage,
             ephemeral_handler: ephemeral_for_wasm,
             keyhive_handler,
+            runtime,
+            ephemeral_task,
+        })
+    }
+
+    /// Stop accepting work, cancel active API calls, disconnect transports, and
+    /// drain owned background tasks. Repeated calls observe the same result.
+    ///
+    /// Shutdown starts synchronously and continues if the promise is abandoned.
+    /// A shared five-second deadline bounds graceful draining; remaining Rust
+    /// futures are then cancelled. Already-started JS promises and storage writes
+    /// are not rolled back. See the crate README for the full lifecycle contract.
+    ///
+    /// # Errors
+    /// Rejects with `SubductionCloseError` on timeout or transport cleanup failure.
+    #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
+    pub fn close(&self) -> js_sys::Promise {
+        self.start_close();
+        let runtime = self.runtime.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            runtime.closed().await?;
+            Ok(JsValue::UNDEFINED)
         })
     }
 
@@ -341,18 +398,22 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         sedimentree: &WasmSedimentree,
         blobs: Vec<Uint8Array>,
-    ) -> Result<(), WasmWriteError> {
-        self.core
-            .store_sedimentree(
-                id.clone().into(),
-                sedimentree.clone().into(),
-                blobs
-                    .into_iter()
-                    .map(|bytes| bytes.to_vec().into())
-                    .collect(),
-            )
-            .await?;
-        Ok(())
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                self.core
+                    .store_sedimentree(
+                        id.clone().into(),
+                        sedimentree.clone().into(),
+                        blobs
+                            .into_iter()
+                            .map(|bytes| bytes.to_vec().into())
+                            .collect(),
+                    )
+                    .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Persist a whole [`Sedimentree`](sedimentree_wasm::WasmSedimentree)
@@ -381,21 +442,25 @@ impl WasmSubduction {
         sedimentree: &WasmSedimentree,
         blobs: Vec<Uint8Array>,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<WasmPeerResultMap, WasmWriteError> {
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
-        let per_peer = self
-            .core
-            .add_sedimentree(
-                id.clone().into(),
-                sedimentree.clone().into(),
-                blobs
-                    .into_iter()
-                    .map(|bytes| bytes.to_vec().into())
-                    .collect(),
-                timeout,
-            )
-            .await?;
-        Ok(per_peer.into())
+    ) -> Result<WasmPeerResultMap, JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+                let per_peer = self
+                    .core
+                    .add_sedimentree(
+                        id.clone().into(),
+                        sedimentree.clone().into(),
+                        blobs
+                            .into_iter()
+                            .map(|bytes| bytes.to_vec().into())
+                            .collect(),
+                        timeout,
+                    )
+                    .await?;
+                Ok(per_peer.into())
+            })
+            .await
     }
 
     /// Remove a Sedimentree and all associated data.
@@ -404,9 +469,13 @@ impl WasmSubduction {
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = removeSedimentree)]
-    pub async fn remove_sedimentree(&self, id: &WasmSedimentreeId) -> Result<(), WasmIoError> {
-        self.core.remove_sedimentree(id.clone().into()).await?;
-        Ok(())
+    pub async fn remove_sedimentree(&self, id: &WasmSedimentreeId) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmIoError>(async {
+                self.core.remove_sedimentree(id.clone().into()).await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Connect to a peer via WebSocket and add the connection.
@@ -429,20 +498,29 @@ impl WasmSubduction {
         &self,
         address: &web_sys::Url,
         expected_peer_id: &WasmPeerId,
-    ) -> Result<WasmPeerId, WasmConnectError> {
-        let authenticated =
-            WasmWebSocket::connect_authenticated(address, self.core.signer(), expected_peer_id)
-                .await?;
-
-        let peer_id = authenticated.peer_id();
-        self.core
-            .add_connection(
-                authenticated.map(|ws| {
-                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
-                }),
-            )
-            .await?;
-        Ok(peer_id.into())
+    ) -> Result<WasmPeerId, JsValue> {
+        self.runtime
+            .run::<_, WasmConnectError>(async {
+                let socket = WasmWebSocket::open(address)
+                    .await
+                    .map_err(WasmConnectError::from)?;
+                let transport: JsTransport = JsValue::from(socket).unchecked_into();
+                let lease = self.runtime.own(transport.clone());
+                let authenticated = WasmAuthenticatedTransport::setup(
+                    transport,
+                    self.core.signer(),
+                    expected_peer_id,
+                    None,
+                )
+                .await
+                .map_err(WasmConnectError::from)?;
+                let peer = authenticated.inner().peer_id();
+                self.register_transport(authenticated.into_inner(), &lease)
+                    .await?;
+                lease.disarm_cleanup();
+                Ok(peer.into())
+            })
+            .await
     }
 
     /// Connect to a peer via WebSocket using discovery mode and add the connection.
@@ -462,23 +540,30 @@ impl WasmSubduction {
         &self,
         address: &web_sys::Url,
         service_name: Option<String>,
-    ) -> Result<WasmPeerId, WasmConnectError> {
-        let authenticated = WasmWebSocket::connect_discover_authenticated(
-            address,
-            self.core.signer(),
-            service_name,
-        )
-        .await?;
-
-        let peer_id = authenticated.peer_id();
-        self.core
-            .add_connection(
-                authenticated.map(|ws| {
-                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
-                }),
-            )
-            .await?;
-        Ok(peer_id.into())
+    ) -> Result<WasmPeerId, JsValue> {
+        self.runtime
+            .run::<_, WasmConnectError>(async {
+                let socket = WasmWebSocket::open(address)
+                    .await
+                    .map_err(WasmConnectError::from)?;
+                let transport: JsTransport = JsValue::from(socket).unchecked_into();
+                let lease = self.runtime.own(transport.clone());
+                let service_name = service_name.unwrap_or_else(|| address.host());
+                let authenticated = WasmAuthenticatedTransport::setup_discover(
+                    transport,
+                    self.core.signer(),
+                    Some(service_name),
+                    None,
+                )
+                .await
+                .map_err(WasmConnectError::from)?;
+                let peer = authenticated.inner().peer_id();
+                self.register_transport(authenticated.into_inner(), &lease)
+                    .await?;
+                lease.disarm_cleanup();
+                Ok(peer.into())
+            })
+            .await
     }
 
     /// Connect to a peer via HTTP long-poll and add the connection.
@@ -498,21 +583,29 @@ impl WasmSubduction {
         &self,
         base_url: &str,
         expected_peer_id: &WasmPeerId,
-    ) -> Result<WasmPeerId, WasmLongPollConnectError> {
-        let (authenticated, _session_id) =
-            WasmLongPoll::connect_authenticated(base_url, self.core.signer(), expected_peer_id)
-                .await?;
-
-        let peer_id = authenticated.peer_id();
-        self.core
-            .add_connection(authenticated.map(|lp| {
-                let transport: JsTransport =
-                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                MessageTransport::new(transport)
-            }))
-            .await?;
-        self.ephemeral_handler.subscribe_peer(peer_id).await;
-        Ok(peer_id.into())
+    ) -> Result<WasmPeerId, JsValue> {
+        self.runtime
+            .run::<_, WasmLongPollConnectError>(async {
+                let (authenticated, _) = WasmLongPoll::connect_authenticated(
+                    base_url,
+                    self.core.signer(),
+                    expected_peer_id,
+                    &self.runtime.spawner(),
+                )
+                .await
+                .map_err(WasmLongPollConnectError::from)?;
+                let peer = authenticated.peer_id();
+                let authenticated = authenticated.map(|lp| {
+                    MessageTransport::<JsTransport>::new(
+                        JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into(),
+                    )
+                });
+                let lease = self.runtime.own(authenticated.inner().inner().clone());
+                self.register_transport(authenticated, &lease).await?;
+                lease.disarm_cleanup();
+                Ok(peer.into())
+            })
+            .await
     }
 
     /// Connect to a peer via HTTP long-poll using discovery mode.
@@ -532,24 +625,29 @@ impl WasmSubduction {
         &self,
         base_url: &str,
         service_name: Option<String>,
-    ) -> Result<WasmPeerId, WasmLongPollConnectError> {
-        let (authenticated, _session_id) = WasmLongPoll::connect_discover_authenticated(
-            base_url,
-            self.core.signer(),
-            service_name,
-        )
-        .await?;
-
-        let peer_id = authenticated.peer_id();
-        self.core
-            .add_connection(authenticated.map(|lp| {
-                let transport: JsTransport =
-                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                MessageTransport::new(transport)
-            }))
-            .await?;
-        self.ephemeral_handler.subscribe_peer(peer_id).await;
-        Ok(peer_id.into())
+    ) -> Result<WasmPeerId, JsValue> {
+        self.runtime
+            .run::<_, WasmLongPollConnectError>(async {
+                let (authenticated, _) = WasmLongPoll::connect_discover_authenticated(
+                    base_url,
+                    self.core.signer(),
+                    service_name,
+                    &self.runtime.spawner(),
+                )
+                .await
+                .map_err(WasmLongPollConnectError::from)?;
+                let peer = authenticated.peer_id();
+                let authenticated = authenticated.map(|lp| {
+                    MessageTransport::<JsTransport>::new(
+                        JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into(),
+                    )
+                });
+                let lease = self.runtime.own(authenticated.inner().inner().clone());
+                self.register_transport(authenticated, &lease).await?;
+                lease.disarm_cleanup();
+                Ok(peer.into())
+            })
+            .await
     }
 
     /// Disconnect from all peers.
@@ -558,8 +656,10 @@ impl WasmSubduction {
     ///
     /// Returns a [`WasmDisconnectionError`] if disconnection was not graceful.
     #[wasm_bindgen(js_name = disconnectAll)]
-    pub async fn disconnect_all(&self) -> Result<(), WasmDisconnectionError> {
-        Ok(self.core.disconnect_all().await?)
+    pub async fn disconnect_all(&self) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmDisconnectionError>(async { Ok(self.core.disconnect_all().await?) })
+            .await
     }
 
     /// Disconnect from a peer by its ID.
@@ -568,14 +668,15 @@ impl WasmSubduction {
     ///
     /// Returns a `WasmDisconnectionError` if disconnection fails.
     #[wasm_bindgen(js_name = disconnectFromPeer)]
-    pub async fn disconnect_from_peer(
-        &self,
-        peer_id: &WasmPeerId,
-    ) -> Result<bool, WasmDisconnectionError> {
-        Ok(self
-            .core
-            .disconnect_from_peer(&peer_id.clone().into())
-            .await?)
+    pub async fn disconnect_from_peer(&self, peer_id: &WasmPeerId) -> Result<bool, JsValue> {
+        self.runtime
+            .run::<_, WasmDisconnectionError>(async {
+                Ok(self
+                    .core
+                    .disconnect_from_peer(&peer_id.clone().into())
+                    .await?)
+            })
+            .await
     }
 
     /// Onboard an authenticated transport: add it and sync all sedimentrees.
@@ -600,13 +701,16 @@ impl WasmSubduction {
     pub async fn add_connection(
         &self,
         transport: &WasmAuthenticatedTransport,
-    ) -> Result<bool, WasmAddConnectionError> {
-        let peer_id = transport.inner().peer_id();
-        let is_new = self.core.add_connection(transport.inner().clone()).await?;
-        if is_new {
-            self.ephemeral_handler.subscribe_peer(peer_id).await;
-        }
-        Ok(is_new)
+    ) -> Result<bool, JsValue> {
+        self.runtime
+            .run::<_, WasmAddConnectionError>(async {
+                let authenticated = transport.inner().clone();
+                let lease = self.runtime.own(authenticated.inner().inner().clone());
+                let fresh = self.register_transport(authenticated, &lease).await?;
+                lease.disarm_cleanup();
+                Ok(fresh)
+            })
+            .await
     }
 
     /// Connect to a peer over any [`Transport`](JsTransport) using discovery mode.
@@ -627,19 +731,25 @@ impl WasmSubduction {
         &self,
         transport: JsTransport,
         service_name: String,
-    ) -> Result<WasmPeerId, WasmConnectError> {
-        let authenticated = WasmAuthenticatedTransport::setup_discover(
-            transport,
-            self.core.signer(),
-            Some(service_name),
-            None,
-        )
-        .await?;
+    ) -> Result<WasmPeerId, JsValue> {
+        self.runtime
+            .run::<_, WasmConnectError>(async {
+                let lease = self.runtime.own(transport.clone());
+                let authenticated = WasmAuthenticatedTransport::setup_discover(
+                    transport,
+                    self.core.signer(),
+                    Some(service_name),
+                    None,
+                )
+                .await?;
 
-        let peer_id = authenticated.inner().peer_id();
-        self.core.add_connection(authenticated.into_inner()).await?;
-        self.ephemeral_handler.subscribe_peer(peer_id).await;
-        Ok(peer_id.into())
+                let peer_id = authenticated.inner().peer_id();
+                self.register_transport(authenticated.into_inner(), &lease)
+                    .await?;
+                lease.disarm_cleanup();
+                Ok(peer_id.into())
+            })
+            .await
     }
 
     /// Accept a connection from a peer over any [`Transport`](JsTransport).
@@ -660,19 +770,25 @@ impl WasmSubduction {
         &self,
         transport: JsTransport,
         service_name: String,
-    ) -> Result<WasmPeerId, WasmConnectError> {
-        let authenticated = WasmAuthenticatedTransport::accept_discover(
-            transport,
-            self.core.signer(),
-            service_name,
-            None,
-        )
-        .await?;
+    ) -> Result<WasmPeerId, JsValue> {
+        self.runtime
+            .run::<_, WasmConnectError>(async {
+                let lease = self.runtime.own(transport.clone());
+                let authenticated = WasmAuthenticatedTransport::accept_discover(
+                    transport,
+                    self.core.signer(),
+                    service_name,
+                    None,
+                )
+                .await?;
 
-        let peer_id = authenticated.inner().peer_id();
-        self.core.add_connection(authenticated.into_inner()).await?;
-        self.ephemeral_handler.subscribe_peer(peer_id).await;
-        Ok(peer_id.into())
+                let peer_id = authenticated.inner().peer_id();
+                self.register_transport(authenticated.into_inner(), &lease)
+                    .await?;
+                lease.disarm_cleanup();
+                Ok(peer_id.into())
+            })
+            .await
     }
 
     /// Link two local [`Subduction`](WasmSubduction) instances over a
@@ -686,54 +802,60 @@ impl WasmSubduction {
     ///
     /// Returns an error if the handshake or connection fails.
     #[wasm_bindgen]
-    pub async fn link(a: &WasmSubduction, b: &WasmSubduction) -> Result<(), WasmConnectError> {
-        use crate::transport::message_port::WasmMessagePortTransport;
+    pub async fn link(a: &WasmSubduction, b: &WasmSubduction) -> Result<(), JsValue> {
+        a.runtime
+            .run::<_, JsValue>(b.runtime.run::<_, WasmConnectError>(async {
+                use crate::transport::message_port::WasmMessagePortTransport;
 
-        let channel =
-            web_sys::MessageChannel::new().map_err(|e| WasmHandshakeError::Transport(e.into()))?;
+                let channel = web_sys::MessageChannel::new()
+                    .map_err(|e| WasmHandshakeError::Transport(e.into()))?;
 
-        let port1 = channel.port1();
-        let port2 = channel.port2();
-        port1.start();
-        port2.start();
+                let port1 = channel.port1();
+                let port2 = channel.port2();
+                port1.start();
+                port2.start();
 
-        let transport_a: JsTransport =
-            JsValue::from(WasmMessagePortTransport::new(port1.into())).unchecked_into();
-        let transport_b: JsTransport =
-            JsValue::from(WasmMessagePortTransport::new(port2.into())).unchecked_into();
+                let transport_a: JsTransport =
+                    JsValue::from(WasmMessagePortTransport::new(port1.into())).unchecked_into();
+                let transport_b: JsTransport =
+                    JsValue::from(WasmMessagePortTransport::new(port2.into())).unchecked_into();
 
-        let (auth_a, auth_b) = futures::future::try_join(
-            WasmAuthenticatedTransport::setup_discover(
-                transport_a,
-                a.core.signer(),
-                Some(DEFAULT_LOCAL_SERVICE_NAME.into()),
-                None,
-            ),
-            WasmAuthenticatedTransport::accept_discover(
-                transport_b,
-                b.core.signer(),
-                DEFAULT_LOCAL_SERVICE_NAME.into(),
-                None,
-            ),
-        )
-        .await
-        .map_err(WasmConnectError::from)?;
+                let lease_a = a.runtime.own(transport_a.clone());
+                let lease_b = b.runtime.own(transport_b.clone());
+                let (auth_a, auth_b) = futures::future::try_join(
+                    WasmAuthenticatedTransport::setup_discover(
+                        transport_a,
+                        a.core.signer(),
+                        Some(DEFAULT_LOCAL_SERVICE_NAME.into()),
+                        None,
+                    ),
+                    WasmAuthenticatedTransport::accept_discover(
+                        transport_b,
+                        b.core.signer(),
+                        DEFAULT_LOCAL_SERVICE_NAME.into(),
+                        None,
+                    ),
+                )
+                .await
+                .map_err(WasmConnectError::from)?;
 
-        let (result_a, result_b) = futures::future::try_join(
-            a.core.add_connection(auth_a.into_inner()),
-            b.core.add_connection(auth_b.into_inner()),
-        )
-        .await?;
+                let (result_a, result_b) = futures::future::try_join(
+                    a.register_transport(auth_a.into_inner(), &lease_a),
+                    b.register_transport(auth_b.into_inner(), &lease_b),
+                )
+                .await?;
 
-        tracing::info!("linked two Subduction instances (new_a={result_a}, new_b={result_b})");
+                tracing::info!(
+                    "linked two Subduction instances (new_a={result_a}, new_b={result_b})"
+                );
 
-        // Send outgoing ephemeral subscriptions to the newly connected peers
-        let peer_b = b.core.peer_id();
-        let peer_a = a.core.peer_id();
-        a.ephemeral_handler.subscribe_peer(peer_b).await;
-        b.ephemeral_handler.subscribe_peer(peer_a).await;
-
-        Ok(())
+                // Keep both guards armed until the whole link succeeds: if
+                // either registration fails, disconnect the other side too.
+                lease_a.disarm_cleanup();
+                lease_b.disarm_cleanup();
+                Ok(())
+            }))
+            .await
     }
 
     /// Get a local blob by its digest.
@@ -746,12 +868,16 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         digest: &WasmDigest,
-    ) -> Result<Option<Uint8Array>, JsStorageError> {
-        Ok(self
-            .core
-            .get_blob(id.clone().into(), digest.clone().into())
-            .await?
-            .map(|blob| Uint8Array::from(blob.as_slice())))
+    ) -> Result<Option<Uint8Array>, JsValue> {
+        self.runtime
+            .run::<_, JsStorageError>(async {
+                Ok(self
+                    .core
+                    .get_blob(id.clone().into(), digest.clone().into())
+                    .await?
+                    .map(|blob| Uint8Array::from(blob.as_slice())))
+            })
+            .await
     }
 
     /// Get all local blobs for a given Sedimentree ID.
@@ -760,22 +886,66 @@ impl WasmSubduction {
     ///
     /// Returns a [`JsStorageError`] if JS storage fails.
     #[wasm_bindgen(js_name = getBlobs)]
-    pub async fn get_blobs(
-        &self,
-        id: &WasmSedimentreeId,
-    ) -> Result<Vec<Uint8Array>, JsStorageError> {
-        #[allow(clippy::expect_used)]
-        if let Some(blobs) = self.core.get_blobs(id.clone().into()).await? {
-            Ok(blobs
-                .into_iter()
-                .map(|blob| Uint8Array::from(blob.as_slice()))
-                .collect())
-        } else {
-            Ok(Vec::new())
-        }
+    pub async fn get_blobs(&self, id: &WasmSedimentreeId) -> Result<Vec<Uint8Array>, JsValue> {
+        self.runtime
+            .run::<_, JsStorageError>(async {
+                #[allow(clippy::expect_used)]
+                if let Some(blobs) = self.core.get_blobs(id.clone().into()).await? {
+                    Ok(blobs
+                        .into_iter()
+                        .map(|blob| Uint8Array::from(blob.as_slice()))
+                        .collect())
+                } else {
+                    Ok(Vec::new())
+                }
+            })
+            .await
     }
 
-    /// Fetch blobs by their digests, with an optional timeout in milliseconds.
+    /// Stream local contents then live stored updates without starting network work.
+    /// Close the iterator or break out of `for await` to release observation.
+    ///
+    /// # Errors
+    /// Throws if closing; read errors reject iterator reads.
+    #[wasm_bindgen(js_name = watchStored)]
+    pub fn watch_stored(
+        &self,
+        id: &WasmSedimentreeId,
+    ) -> Result<crate::stored::JsStoredUpdates, JsValue> {
+        self.runtime.ensure_open()?;
+        crate::stored::wrap(
+            self.core.watch_stored(id.clone().into()),
+            self.runtime.clone(),
+            JsValue::UNDEFINED,
+        )
+    }
+
+    /// Load local contents, then sync and subscribe on current and future
+    /// connections, including reconnects. Missing data or peers do not end the
+    /// stream. Attempts run concurrently without timeouts; pass an `AbortSignal`
+    /// in options to cancel, or close the iterator.
+    /// Peer markers certify local accepted-response processing,
+    /// not remote acknowledgement or materialization.
+    ///
+    /// # Errors
+    /// Throws if closing or the signal is already aborted. Later aborts reject
+    /// pending reads with the signal's reason; loading errors also reject reads.
+    #[wasm_bindgen(js_name = loadAndWatch)]
+    pub fn load_and_watch(
+        &self,
+        id: &WasmSedimentreeId,
+        options: Option<crate::stored::JsLoadAndWatchOptions>,
+    ) -> Result<crate::stored::JsStoredUpdates, JsValue> {
+        self.runtime.ensure_open()?;
+        let signal = crate::stored::signal(options)?;
+        crate::stored::wrap(
+            self.core.load_and_watch(id.clone().into()),
+            self.runtime.clone(),
+            signal,
+        )
+    }
+
+    /// Collect blobs using the shared local-first loader without subscriptions.
     ///
     /// # Errors
     ///
@@ -785,23 +955,27 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<Option<Vec<Uint8Array>>, WasmIoError> {
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
-        if let Some(blobs) = self
-            .core
-            .fetch_blobs(id.clone().into(), timeout)
+    ) -> Result<Option<Vec<Uint8Array>>, JsValue> {
+        self.runtime
+            .run::<_, WasmIoError>(async {
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+                if let Some(blobs) = self
+                    .core
+                    .fetch_blobs(id.clone().into(), timeout)
+                    .await
+                    .map_err(WasmIoError::from)?
+                {
+                    Ok(Some(
+                        blobs
+                            .into_iter()
+                            .map(|blob| Uint8Array::from(blob.as_slice()))
+                            .collect(),
+                    ))
+                } else {
+                    Ok(None)
+                }
+            })
             .await
-            .map_err(WasmIoError::from)?
-        {
-            Ok(Some(
-                blobs
-                    .into_iter()
-                    .map(|blob| Uint8Array::from(blob.as_slice()))
-                    .collect(),
-            ))
-        } else {
-            Ok(None)
-        }
     }
 
     /// Persist a single commit with its blob locally **without** broadcasting
@@ -828,21 +1002,25 @@ impl WasmSubduction {
         head: &WasmCommitId,
         parents: Vec<JsCommitId>,
         blob: &Uint8Array,
-    ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_head = CommitId::from(head);
-        let core_parents: BTreeSet<CommitId> = parents
-            .iter()
-            .map(|p| CommitId::from(WasmCommitId::from(p)))
-            .collect();
-        let blob: Blob = blob.clone().to_vec().into();
+    ) -> Result<Option<WasmFragmentRequested>, JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_head = CommitId::from(head);
+                let core_parents: BTreeSet<CommitId> = parents
+                    .iter()
+                    .map(|p| CommitId::from(WasmCommitId::from(p)))
+                    .collect();
+                let blob: Blob = blob.clone().to_vec().into();
 
-        let maybe_fragment_requested = self
-            .core
-            .store_commit(core_id, core_head, core_parents, blob)
-            .await?;
+                let maybe_fragment_requested = self
+                    .core
+                    .store_commit(core_id, core_head, core_parents, blob)
+                    .await?;
 
-        Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
+                Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
+            })
+            .await
     }
 
     /// Add a commit with its associated blob to the storage, then push it to
@@ -871,21 +1049,25 @@ impl WasmSubduction {
         head: &WasmCommitId,
         parents: Vec<JsCommitId>,
         blob: &Uint8Array,
-    ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_head = CommitId::from(head);
-        let core_parents: BTreeSet<CommitId> = parents
-            .iter()
-            .map(|p| CommitId::from(WasmCommitId::from(p)))
-            .collect();
-        let blob: Blob = blob.clone().to_vec().into();
+    ) -> Result<Option<WasmFragmentRequested>, JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_head = CommitId::from(head);
+                let core_parents: BTreeSet<CommitId> = parents
+                    .iter()
+                    .map(|p| CommitId::from(WasmCommitId::from(p)))
+                    .collect();
+                let blob: Blob = blob.clone().to_vec().into();
 
-        let maybe_fragment_requested = self
-            .core
-            .add_commit(core_id, core_head, core_parents, blob)
-            .await?;
+                let maybe_fragment_requested = self
+                    .core
+                    .add_commit(core_id, core_head, core_parents, blob)
+                    .await?;
 
-        Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
+                Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
+            })
+            .await
     }
 
     /// Persist a single fragment with its blob locally **without**
@@ -910,24 +1092,28 @@ impl WasmSubduction {
         boundary: Vec<JsCommitId>,
         checkpoints: Vec<JsCommitId>,
         blob: &Uint8Array,
-    ) -> Result<(), WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_head = CommitId::from(head);
-        let core_boundary: BTreeSet<CommitId> = boundary
-            .iter()
-            .map(|p| CommitId::from(WasmCommitId::from(p)))
-            .collect();
-        let core_checkpoints: Vec<CommitId> = checkpoints
-            .iter()
-            .map(|p| CommitId::from(WasmCommitId::from(p)))
-            .collect();
-        let blob: Blob = blob.clone().to_vec().into();
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_head = CommitId::from(head);
+                let core_boundary: BTreeSet<CommitId> = boundary
+                    .iter()
+                    .map(|p| CommitId::from(WasmCommitId::from(p)))
+                    .collect();
+                let core_checkpoints: Vec<CommitId> = checkpoints
+                    .iter()
+                    .map(|p| CommitId::from(WasmCommitId::from(p)))
+                    .collect();
+                let blob: Blob = blob.clone().to_vec().into();
 
-        self.core
-            .store_fragment(core_id, core_head, core_boundary, &core_checkpoints, blob)
-            .await?;
+                self.core
+                    .store_fragment(core_id, core_head, core_boundary, &core_checkpoints, blob)
+                    .await?;
 
-        Ok(())
+                Ok(())
+            })
+            .await
     }
 
     /// Add a fragment with its associated blob to the storage, then push it to
@@ -954,24 +1140,28 @@ impl WasmSubduction {
         boundary: Vec<JsCommitId>,
         checkpoints: Vec<JsCommitId>,
         blob: &Uint8Array,
-    ) -> Result<(), WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_head = CommitId::from(head);
-        let core_boundary: BTreeSet<CommitId> = boundary
-            .iter()
-            .map(|p| CommitId::from(WasmCommitId::from(p)))
-            .collect();
-        let core_checkpoints: Vec<CommitId> = checkpoints
-            .iter()
-            .map(|p| CommitId::from(WasmCommitId::from(p)))
-            .collect();
-        let blob: Blob = blob.clone().to_vec().into();
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_head = CommitId::from(head);
+                let core_boundary: BTreeSet<CommitId> = boundary
+                    .iter()
+                    .map(|p| CommitId::from(WasmCommitId::from(p)))
+                    .collect();
+                let core_checkpoints: Vec<CommitId> = checkpoints
+                    .iter()
+                    .map(|p| CommitId::from(WasmCommitId::from(p)))
+                    .collect();
+                let blob: Blob = blob.clone().to_vec().into();
 
-        self.core
-            .add_fragment(core_id, core_head, core_boundary, &core_checkpoints, blob)
-            .await?;
+                self.core
+                    .add_fragment(core_id, core_head, core_boundary, &core_checkpoints, blob)
+                    .await?;
 
-        Ok(())
+                Ok(())
+            })
+            .await
     }
 
     /// Bulk-insert commits and fragments into a sedimentree **without**
@@ -1003,21 +1193,25 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
         fragments: Vec<WasmFragmentInput>,
-    ) -> Result<(), WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_commits = commits
-            .into_iter()
-            .map(WasmCommitInput::into_core)
-            .collect();
-        let core_fragments = fragments
-            .into_iter()
-            .map(WasmFragmentInput::into_core)
-            .collect();
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_commits = commits
+                    .into_iter()
+                    .map(WasmCommitInput::into_core)
+                    .collect();
+                let core_fragments = fragments
+                    .into_iter()
+                    .map(WasmFragmentInput::into_core)
+                    .collect();
 
-        self.core
-            .store_built_batch(core_id, core_commits, core_fragments)
-            .await?;
-        Ok(())
+                self.core
+                    .store_built_batch(core_id, core_commits, core_fragments)
+                    .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Bulk-insert commits and fragments into a sedimentree, then broadcast
@@ -1058,23 +1252,27 @@ impl WasmSubduction {
         commits: Vec<WasmCommitInput>,
         fragments: Vec<WasmFragmentInput>,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<WasmPeerResultMap, WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_commits = commits
-            .into_iter()
-            .map(WasmCommitInput::into_core)
-            .collect();
-        let core_fragments = fragments
-            .into_iter()
-            .map(WasmFragmentInput::into_core)
-            .collect();
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+    ) -> Result<WasmPeerResultMap, JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_commits = commits
+                    .into_iter()
+                    .map(WasmCommitInput::into_core)
+                    .collect();
+                let core_fragments = fragments
+                    .into_iter()
+                    .map(WasmFragmentInput::into_core)
+                    .collect();
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
 
-        let per_peer = self
-            .core
-            .add_built_batch(core_id, core_commits, core_fragments, timeout)
-            .await?;
-        Ok(per_peer.into())
+                let per_peer = self
+                    .core
+                    .add_built_batch(core_id, core_commits, core_fragments, timeout)
+                    .await?;
+                Ok(per_peer.into())
+            })
+            .await
     }
 
     /// Bulk-insert commits into a sedimentree **without** broadcasting (the
@@ -1097,17 +1295,21 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
-    ) -> Result<(), WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_commits = commits
-            .into_iter()
-            .map(WasmCommitInput::into_core)
-            .collect();
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_commits = commits
+                    .into_iter()
+                    .map(WasmCommitInput::into_core)
+                    .collect();
 
-        self.core
-            .store_built_batch(core_id, core_commits, Vec::new())
-            .await?;
-        Ok(())
+                self.core
+                    .store_built_batch(core_id, core_commits, Vec::new())
+                    .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Bulk-insert commits into a sedimentree, then broadcast (the `add_*`
@@ -1132,19 +1334,23 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         commits: Vec<WasmCommitInput>,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<WasmPeerResultMap, WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_commits = commits
-            .into_iter()
-            .map(WasmCommitInput::into_core)
-            .collect();
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+    ) -> Result<WasmPeerResultMap, JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_commits = commits
+                    .into_iter()
+                    .map(WasmCommitInput::into_core)
+                    .collect();
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
 
-        let per_peer = self
-            .core
-            .add_built_batch(core_id, core_commits, Vec::new(), timeout)
-            .await?;
-        Ok(per_peer.into())
+                let per_peer = self
+                    .core
+                    .add_built_batch(core_id, core_commits, Vec::new(), timeout)
+                    .await?;
+                Ok(per_peer.into())
+            })
+            .await
     }
 
     /// Bulk-insert fragments into a sedimentree **without** broadcasting (the
@@ -1167,17 +1373,21 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         fragments: Vec<WasmFragmentInput>,
-    ) -> Result<(), WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_fragments = fragments
-            .into_iter()
-            .map(WasmFragmentInput::into_core)
-            .collect();
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_fragments = fragments
+                    .into_iter()
+                    .map(WasmFragmentInput::into_core)
+                    .collect();
 
-        self.core
-            .store_built_batch(core_id, Vec::new(), core_fragments)
-            .await?;
-        Ok(())
+                self.core
+                    .store_built_batch(core_id, Vec::new(), core_fragments)
+                    .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Bulk-insert fragments into a sedimentree, then broadcast (the `add_*`
@@ -1202,19 +1412,23 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         fragments: Vec<WasmFragmentInput>,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<WasmPeerResultMap, WasmWriteError> {
-        let core_id: SedimentreeId = id.clone().into();
-        let core_fragments = fragments
-            .into_iter()
-            .map(WasmFragmentInput::into_core)
-            .collect();
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+    ) -> Result<WasmPeerResultMap, JsValue> {
+        self.runtime
+            .run::<_, WasmWriteError>(async {
+                let core_id: SedimentreeId = id.clone().into();
+                let core_fragments = fragments
+                    .into_iter()
+                    .map(WasmFragmentInput::into_core)
+                    .collect();
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
 
-        let per_peer = self
-            .core
-            .add_built_batch(core_id, Vec::new(), core_fragments, timeout)
-            .await?;
-        Ok(per_peer.into())
+                let per_peer = self
+                    .core
+                    .add_built_batch(core_id, Vec::new(), core_fragments, timeout)
+                    .await?;
+                Ok(per_peer.into())
+            })
+            .await
     }
 
     /// Compute the [`WasmDepth`] of a commit identifier under this node's
@@ -1261,27 +1475,31 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         subscribe: bool,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<PeerBatchSyncResult, WasmIoError> {
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
-        let (success, stats, transport_errors) = self
-            .core
-            .sync_with_peer(
-                &to_ask.clone().into(),
-                id.clone().into(),
-                subscribe,
-                timeout,
-            )
-            .await
-            .map_err(WasmIoError::from)?;
+    ) -> Result<PeerBatchSyncResult, JsValue> {
+        self.runtime
+            .run::<_, WasmIoError>(async {
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+                let (success, stats, transport_errors) = self
+                    .core
+                    .sync_with_peer(
+                        &to_ask.clone().into(),
+                        id.clone().into(),
+                        subscribe,
+                        timeout,
+                    )
+                    .await
+                    .map_err(WasmIoError::from)?;
 
-        Ok(PeerBatchSyncResult {
-            success,
-            stats: stats.into(),
-            transport_errors: transport_errors
-                .into_iter()
-                .map(|(_conn, err)| WasmCallError::from(err))
-                .collect(),
-        })
+                Ok(PeerBatchSyncResult {
+                    success,
+                    stats: stats.into(),
+                    transport_errors: transport_errors
+                        .into_iter()
+                        .map(|(_conn, err)| WasmCallError::from(err))
+                        .collect(),
+                })
+            })
+            .await
     }
 
     /// Request batch sync for a given Sedimentree ID from all connected peers.
@@ -1301,15 +1519,19 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         subscribe: bool,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<WasmPeerResultMap, WasmIoError> {
-        tracing::debug!("WasmSubduction::sync_with_all_peers");
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
-        let peer_map = self
-            .core
-            .sync_with_all_peers(id.clone().into(), subscribe, timeout)
-            .await?;
-        tracing::debug!("WasmSubduction::sync_with_all_peers - done");
-        Ok(peer_map.into())
+    ) -> Result<WasmPeerResultMap, JsValue> {
+        self.runtime
+            .run::<_, WasmIoError>(async {
+                tracing::debug!("WasmSubduction::sync_with_all_peers");
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+                let peer_map = self
+                    .core
+                    .sync_with_all_peers(id.clone().into(), subscribe, timeout)
+                    .await?;
+                tracing::debug!("WasmSubduction::sync_with_all_peers - done");
+                Ok(peer_map.into())
+            })
+            .await
     }
 
     /// Sync all known Sedimentree IDs with a single peer.
@@ -1319,64 +1541,78 @@ impl WasmSubduction {
     /// * `peer_id` - The peer to sync with
     /// * `subscribe` - Whether to subscribe to future updates (default: `true`)
     /// * `timeout_milliseconds` - Optional per-call total deadline in milliseconds; omit to use the configured default
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = fullSyncWithPeer)]
     pub async fn full_sync_with_peer(
         &self,
         peer_id: &WasmPeerId,
         subscribe: Option<bool>,
         timeout_milliseconds: Option<u32>,
-    ) -> PeerBatchSyncResult {
-        let subscribe = subscribe.unwrap_or(true);
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
-        let (success, stats, conn_errs, io_errs) = self
-            .core
-            .full_sync_with_peer(&peer_id.clone().into(), subscribe, timeout)
-            .await;
+    ) -> Result<PeerBatchSyncResult, JsValue> {
+        self.runtime
+            .run_value(async {
+                let subscribe = subscribe.unwrap_or(true);
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+                let (success, stats, conn_errs, io_errs) = self
+                    .core
+                    .full_sync_with_peer(&peer_id.clone().into(), subscribe, timeout)
+                    .await;
 
-        for (id, err) in &io_errs {
-            tracing::error!(
-                "full_sync_with_peer I/O error for sedimentree {:?}: {}",
-                id,
-                err
-            );
-        }
+                for (id, err) in &io_errs {
+                    tracing::error!(
+                        "full_sync_with_peer I/O error for sedimentree {:?}: {}",
+                        id,
+                        err
+                    );
+                }
 
-        PeerBatchSyncResult {
-            success,
-            stats: stats.into(),
-            transport_errors: conn_errs
-                .into_iter()
-                .map(|(_conn, err)| WasmCallError::from(err))
-                .collect(),
-        }
+                PeerBatchSyncResult {
+                    success,
+                    stats: stats.into(),
+                    transport_errors: conn_errs
+                        .into_iter()
+                        .map(|(_conn, err)| WasmCallError::from(err))
+                        .collect(),
+                }
+            })
+            .await
     }
 
     /// Sync all known Sedimentree IDs with all connected peers.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = fullSyncWithAllPeers)]
     pub async fn full_sync_with_all_peers(
         &self,
         timeout_milliseconds: Option<u32>,
-    ) -> PeerBatchSyncResult {
-        let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
-        let (success, stats, conn_errs, io_errs) =
-            self.core.full_sync_with_all_peers(timeout).await;
+    ) -> Result<PeerBatchSyncResult, JsValue> {
+        self.runtime
+            .run_value(async {
+                let timeout = CallTimeout::from(timeout_milliseconds.map(u64::from));
+                let (success, stats, conn_errs, io_errs) =
+                    self.core.full_sync_with_all_peers(timeout).await;
 
-        for (id, err) in &io_errs {
-            tracing::error!(
-                "full_sync_with_all_peers I/O error for sedimentree {:?}: {}",
-                id,
-                err
-            );
-        }
+                for (id, err) in &io_errs {
+                    tracing::error!(
+                        "full_sync_with_all_peers I/O error for sedimentree {:?}: {}",
+                        id,
+                        err
+                    );
+                }
 
-        PeerBatchSyncResult {
-            success,
-            stats: stats.into(),
-            transport_errors: conn_errs
-                .into_iter()
-                .map(|(_conn, err)| WasmCallError::from(err))
-                .collect(),
-        }
+                PeerBatchSyncResult {
+                    success,
+                    stats: stats.into(),
+                    transport_errors: conn_errs
+                        .into_iter()
+                        .map(|(_conn, err)| WasmCallError::from(err))
+                        .collect(),
+                }
+            })
+            .await
     }
 
     // ── Ephemeral messaging ────────────────────────────────────────────
@@ -1385,6 +1621,9 @@ impl WasmSubduction {
     ///
     /// The payload is opaque bytes — encoding is the caller's responsibility.
     /// Messages are fire-and-forget; delivery is best-effort.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     ///
     /// # Panics
     ///
@@ -1395,51 +1634,73 @@ impl WasmSubduction {
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
-    pub async fn publish_ephemeral(&self, topic: &WasmTopic, payload: &[u8]) {
-        let nonce: u64 = {
-            let mut buf = [0u8; 8];
-            getrandom::getrandom(&mut buf).expect("getrandom failed");
-            u64::from_le_bytes(buf)
-        };
-        // Date.now() returns f64 ms since epoch; convert to seconds.
-        let timestamp = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
-        let ep = EphemeralPayload {
-            id: Topic::from(topic.clone()),
-            nonce,
-            timestamp,
-            payload: payload.to_vec(),
-        };
-        let verified = Signed::seal::<Local, _>(self.core.signer(), ep).await;
-        let msg = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
-        self.ephemeral_handler.publish(msg).await;
+    pub async fn publish_ephemeral(
+        &self,
+        topic: &WasmTopic,
+        payload: &[u8],
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run_value(async {
+                let nonce: u64 = {
+                    let mut buf = [0u8; 8];
+                    getrandom::getrandom(&mut buf).expect("getrandom failed");
+                    u64::from_le_bytes(buf)
+                };
+                // Date.now() returns f64 ms since epoch; convert to seconds.
+                let timestamp = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
+                let ep = EphemeralPayload {
+                    id: Topic::from(topic.clone()),
+                    nonce,
+                    timestamp,
+                    payload: payload.to_vec(),
+                };
+                let verified = Signed::seal::<Local, _>(self.core.signer(), ep).await;
+                let msg = EphemeralMessage::Ephemeral(Box::new(verified.into_signed()));
+                self.ephemeral_handler.publish(msg).await;
+            })
+            .await
     }
 
     /// Subscribe to ephemeral messages for the given topics
     /// from all connected peers.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = subscribeEphemeral)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
-    pub async fn subscribe_ephemeral(&self, topics: Vec<JsTopic>) {
-        let topics: Vec<Topic> = topics
-            .iter()
-            .map(|t| Topic::from(WasmTopic::from(t)))
-            .collect();
-        if let Some(topics) = NonEmpty::from_vec(topics) {
-            self.ephemeral_handler.subscribe(topics).await;
-        }
+    pub async fn subscribe_ephemeral(&self, topics: Vec<JsTopic>) -> Result<(), JsValue> {
+        self.runtime
+            .run_value(async {
+                let topics: Vec<Topic> = topics
+                    .iter()
+                    .map(|t| Topic::from(WasmTopic::from(t)))
+                    .collect();
+                if let Some(topics) = NonEmpty::from_vec(topics) {
+                    self.ephemeral_handler.subscribe(topics).await;
+                }
+            })
+            .await
     }
 
     /// Unsubscribe from ephemeral messages for the given topics
     /// from all connected peers.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = unsubscribeEphemeral)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen takes owned Vecs.
-    pub async fn unsubscribe_ephemeral(&self, topics: Vec<JsTopic>) {
-        let topics: Vec<Topic> = topics
-            .iter()
-            .map(|t| Topic::from(WasmTopic::from(t)))
-            .collect();
-        if let Some(topics) = NonEmpty::from_vec(topics) {
-            self.ephemeral_handler.unsubscribe(topics).await;
-        }
+    pub async fn unsubscribe_ephemeral(&self, topics: Vec<JsTopic>) -> Result<(), JsValue> {
+        self.runtime
+            .run_value(async {
+                let topics: Vec<Topic> = topics
+                    .iter()
+                    .map(|t| Topic::from(WasmTopic::from(t)))
+                    .collect();
+                if let Some(topics) = NonEmpty::from_vec(topics) {
+                    self.ephemeral_handler.unsubscribe(topics).await;
+                }
+            })
+            .await
     }
 
     // ── Keyhive (SUK) frame handling ───────────────────────────────────
@@ -1453,9 +1714,19 @@ impl WasmSubduction {
     ///
     /// Only one handler can be registered at a time. Calling this again
     /// replaces the previous handler. Pass `null`/`undefined` to unregister.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = registerFrameHandler)]
-    pub async fn register_frame_handler(&self, handler: Option<JsFrameHandler>) {
-        *self.keyhive_handler.lock().await = handler;
+    pub async fn register_frame_handler(
+        &self,
+        handler: Option<JsFrameHandler>,
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run_value(async {
+                *self.keyhive_handler.lock().await = handler;
+            })
+            .await
     }
 
     /// Send a keyhive frame to a specific peer.
@@ -1472,51 +1743,80 @@ impl WasmSubduction {
         payload: &[u8],
         peer_id: &WasmPeerId,
     ) -> Result<(), JsValue> {
-        use subduction_core::connection::Connection;
+        self.runtime
+            .run::<_, JsValue>(async {
+                use subduction_core::connection::Connection;
 
-        let pid: PeerId = peer_id.clone().into();
-        let conn = self
-            .core
-            .get_connection(&pid)
+                let pid: PeerId = peer_id.clone().into();
+                let conn = self
+                    .core
+                    .get_connection(&pid)
+                    .await
+                    .ok_or_else(|| JsValue::from_str("no connection for peer"))?;
+                let msg = WireMessage::Keyhive(KeyhiveMessage::new(payload.to_vec()));
+                conn.send(&msg)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))
+            })
             .await
-            .ok_or_else(|| JsValue::from_str("no connection for peer"))?;
-        let msg = WireMessage::Keyhive(KeyhiveMessage::new(payload.to_vec()));
-        conn.send(&msg)
-            .await
-            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     // ── Queries ──────────────────────────────────────────────────────────
 
-    /// Get all known Sedimentree IDs
+    /// Get all known Sedimentree IDs.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = sedimentreeIds)]
-    pub async fn sedimentree_ids(&self) -> Vec<WasmSedimentreeId> {
-        self.core
-            .sedimentree_ids()
+    pub async fn sedimentree_ids(&self) -> Result<Vec<WasmSedimentreeId>, JsValue> {
+        self.runtime
+            .run_value(async {
+                self.core
+                    .sedimentree_ids()
+                    .await
+                    .into_iter()
+                    .map(WasmSedimentreeId::from)
+                    .collect()
+            })
             .await
-            .into_iter()
-            .map(WasmSedimentreeId::from)
-            .collect()
     }
 
-    /// Get all commits for a given Sedimentree ID
-    #[must_use]
+    /// Get all commits for a given Sedimentree ID.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = getCommits)]
-    pub async fn get_commits(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmLooseCommit>> {
-        self.core
-            .get_commits(id.clone().into())
+    pub async fn get_commits(
+        &self,
+        id: &WasmSedimentreeId,
+    ) -> Result<Option<Vec<WasmLooseCommit>>, JsValue> {
+        self.runtime
+            .run_value(async {
+                self.core
+                    .get_commits(id.clone().into())
+                    .await
+                    .map(|commits| commits.into_iter().map(WasmLooseCommit::from).collect())
+            })
             .await
-            .map(|commits| commits.into_iter().map(WasmLooseCommit::from).collect())
     }
 
-    /// Get all fragments for a given Sedimentree ID
-    #[must_use]
+    /// Get all fragments for a given Sedimentree ID.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = getFragments)]
-    pub async fn get_fragments(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmFragment>> {
-        self.core
-            .get_fragments(id.clone().into())
+    pub async fn get_fragments(
+        &self,
+        id: &WasmSedimentreeId,
+    ) -> Result<Option<Vec<WasmFragment>>, JsValue> {
+        self.runtime
+            .run_value(async {
+                self.core
+                    .get_fragments(id.clone().into())
+                    .await
+                    .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
+            })
             .await
-            .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
     }
 
     /// Get the current heads of a single sedimentree.
@@ -1546,29 +1846,42 @@ impl WasmSubduction {
     ///
     /// An inner empty heads array means the sedimentree exists but has no
     /// heads yet.
-    #[must_use]
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = getAllHeads)]
-    pub async fn get_all_heads(&self) -> Vec<WasmSedimentreeHeads> {
-        self.core
-            .get_all_heads()
-            .await
-            .into_iter()
-            .map(|(id, heads)| WasmSedimentreeHeads {
-                id: id.into(),
-                heads: heads.into_iter().map(WasmCommitId::from).collect(),
+    pub async fn get_all_heads(&self) -> Result<Vec<WasmSedimentreeHeads>, JsValue> {
+        self.runtime
+            .run_value(async {
+                self.core
+                    .get_all_heads()
+                    .await
+                    .into_iter()
+                    .map(|(id, heads)| WasmSedimentreeHeads {
+                        id: id.into(),
+                        heads: heads.into_iter().map(WasmCommitId::from).collect(),
+                    })
+                    .collect()
             })
-            .collect()
+            .await
     }
 
     /// Get the peer IDs of all connected peers.
+    ///
+    /// # Errors
+    /// See [lifecycle errors](Self#lifecycle).
     #[wasm_bindgen(js_name = getConnectedPeerIds)]
-    pub async fn connected_peer_ids(&self) -> Vec<WasmPeerId> {
-        self.core
-            .connected_peer_ids()
+    pub async fn connected_peer_ids(&self) -> Result<Vec<WasmPeerId>, JsValue> {
+        self.runtime
+            .run_value(async {
+                self.core
+                    .connected_peer_ids()
+                    .await
+                    .into_iter()
+                    .map(WasmPeerId::from)
+                    .collect()
+            })
             .await
-            .into_iter()
-            .map(WasmPeerId::from)
-            .collect()
     }
 
     /// Get the backing storage.
@@ -1652,7 +1965,7 @@ pub struct WasmPeerResultMap(
         (
             bool,
             WasmSyncStats,
-            Vec<(MessageTransport<JsTransport>, WasmCallError)>,
+            Vec<(MessageTransport<ManagedTransport>, WasmCallError)>,
         ),
     >,
 );

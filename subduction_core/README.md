@@ -96,7 +96,7 @@ the stream stops its scoped attempts, not established node-owned subscriptions.
 There is no concurrency cap or loading/peer deadline; callers close/drop the
 stream to cancel. Stalled connections do not block new ones, even to the same
 peer. Disconnecting cancels that connection's outstanding attempt.
-Managed Tokio/JS adapters remain planned at this stage.
+Managed Tokio and JavaScript expose thin adapters to this same coordinator.
 
 `fetch_blobs()` collects this same loader without establishing subscriptions,
 returning immediately from cached contents or the first completed supplier,

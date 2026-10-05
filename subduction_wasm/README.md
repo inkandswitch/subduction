@@ -40,6 +40,109 @@ View Playwright report:
 pnpm run test:report
 ```
 
+## Stored updates
+
+```javascript
+const controller = new AbortController();
+const updates = node.loadAndWatch(treeId, { signal: controller.signal });
+// Call controller.abort() to cancel, or use AbortSignal.timeout(ms) for a timeout.
+try {
+  for await (const event of updates) {
+    // commit / fragment: metadata and Uint8Array blob
+    // storageChecked / peerSynced / rescanRequired: ordered markers
+    applyStoredEvent(event);
+  }
+} finally {
+  updates.close();
+}
+```
+
+`watchStored(treeId)` starts no network work. `loadAndWatch` emits local contents
+first, then syncs and subscribes on all current and future connections, including
+reconnects, even when local contents exist. It remains open when storage is empty
+or current peers have no data, waiting for future updates and connections.
+Construction admits the stream; it does not promise readiness. Markers never end
+iteration. Connections are contacted concurrently without a concurrency cap or
+loading/peer deadline. Stalled connections do not block new ones to the same peer.
+`peerSynced` may occur again for a peer after reconnect or on another connection.
+The optional `{ signal }` replaces the former numeric timeout argument; omit it
+to control cancellation using `close()` or `for await` break.
+
+`return()` (including `for await` break) and `close()` cancel observation and settle
+pending reads. Concurrent reads are serialized; close may safely reenter during
+conversion. Node close rejects pending reads with `SubductionClosedError` and new
+stream construction throws the same error. Storage/local-processing failures use
+`StoredDataError`. Unlike one-shot `fetchBlobs`, exhausting current peers does not
+produce a `DocumentUnavailableError`.
+
+Aborting the signal cancels observation and outstanding sync attempts. Pending
+and subsequent reads reject with `signal.reason` (normally an `AbortError`, or
+`TimeoutError` with `AbortSignal.timeout(ms)`). A signal already aborted at
+construction throws that reason immediately. Closing/breaking the iterator
+removes its abort listener, as does abort or a terminal read. Timing out a
+`Promise.race` alone does not cancel the iterator.
+
+Cancellation neither rolls back writes nor unsubscribes. See
+[SYNC_COMPLETION.md](../SYNC_COMPLETION.md) for shared validity, recovery,
+identity, and peer-marker guarantees. `fetchBlobs` collects that same loader
+without subscriptions, returning from cached contents without contacting peers.
+
+## Closing a node
+
+```javascript
+try {
+  // Connect, store, and sync. Observe errors from these operations as usual.
+} finally {
+  try {
+    await node.close();
+  } finally {
+    node.free(); // Release the Wasm wrapper after shutdown.
+  }
+}
+```
+
+`close(): Promise<void>` starts shutdown immediately, before its promise is awaited:
+
+- New asynchronous operations reject with `SubductionClosedError`. Active API calls
+  are cancelled and reject with the same error; callers should observe their promises.
+- The node stops accepting inbound work, disconnects its transports (including
+  handshakes in progress), and awaits its owned manager, listener, dispatch, fan-out,
+  ephemeral-delivery, and long-poll driver tasks.
+- Graceful draining has one shared **five-second deadline**. At expiry, remaining
+  Rust tasks are aborted and joined. Close rejects with `SubductionCloseError` if
+  draining timed out or transport cleanup failed; every transport is attempted even
+  when another fails. The event loop must keep running: synchronous blocking code
+  and Wasm traps cannot be forcibly interrupted.
+- Repeated/concurrent calls observe the same completion or error. Abandoning the
+  close promise does not stop shutdown. `free()` alone initiates best-effort shutdown
+  but cannot await it; prefer explicit close. Do not free a wrapper still borrowed by
+  outstanding API calls.
+
+**Cancellation is not rollback.** Already-started JavaScript promises—especially
+storage writes—can still complete after close. No cancelled Rust operation resumes
+its continuation, but Subduction cannot cancel arbitrary work inside a supplied JS
+storage, signer, policy, or transport. Built-in WebSocket dialing and HTTP requests
+are cancelled and their handlers/timers released. No remote flush, remote storage
+acknowledgement, or permanent durability is implied by close.
+
+The node takes ownership of transports admitted through its connection APIs and
+cleans them up on handshake/registration failure as well as shutdown. A call rejected
+because the node is already closing does not take ownership of its argument. Do not
+share one transport between nodes. For supplied transports, `disconnect()` must stop
+I/O, release transport-owned resources, and wake blocked reads. Tasks started outside
+the node remain the supplier's responsibility. Cleanup callbacks must not await the
+same node's close (that would wait on themselves).
+
+The supplied storage and signer are **not** closed or freed; they may be shared by
+other nodes. The synchronous `storage` and `commitDepth` accessors remain available
+until `free()`. Existing sync results are unchanged. JS promise result types are
+unchanged; the Rust Wasm-binding methods now return `Result<_, JsValue>` to represent
+lifecycle rejection alongside their previous named errors.
+
+`disconnectAll()` only disconnects peers; it leaves the node running and able to
+accept new work. It is not a substitute for `close()`. Per-operation `AbortSignal`
+support and `Symbol.asyncDispose` are not included in this change.
+
 ## Naming Conventions
 
 `wasm-bindgen`-generated types ownership rules can be confusing and cumbersome, with different behavior depending on which side of the Wasm boundary your type was created from. To help keep this straight, we adopt the naming convention:
