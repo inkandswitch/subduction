@@ -15,6 +15,7 @@ members = [
   "subduction_iroh",
   "subduction_keyhive",
   "subduction_redb_storage",
+  "subduction_tokio",
   "subduction_wasm",
   "subduction_wasm_bootstrap",
   "subduction_websocket",
@@ -44,6 +45,7 @@ subduction_hyper = { version = "0.2.0", path = "subduction_hyper", default-featu
 subduction_iroh = { version = "0.11.0", path = "subduction_iroh" }
 subduction_keyhive = { version = "0.11.0", path = "subduction_keyhive" }
 subduction_redb_storage = { version = "0.3.0", path = "subduction_redb_storage" }
+subduction_tokio = { version = "0.1.0", path = "subduction_tokio" }
 subduction_wasm = { version = "0.25.0", path = "subduction_wasm" }
 subduction_wasm_bootstrap = { version = "0.4.0", path = "subduction_wasm_bootstrap" }
 subduction_websocket = { version = "0.13.0", path = "subduction_websocket", default-features = false }
