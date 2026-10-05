@@ -39,6 +39,9 @@ use super::error::IoError;
 /// [`peers::build_pushes`](super::peers::build_pushes)).
 #[derive(Debug, Default)]
 pub(crate) struct Ingested {
+    /// Private initial-load readiness, including idempotently written items.
+    /// Public sync statistics still count offers, not acceptance.
+    pub(crate) stored_content: bool,
     pub(crate) commits: Vec<(Signed<LooseCommit>, Blob)>,
     pub(crate) fragments: Vec<(Signed<Fragment>, Blob)>,
 }
@@ -48,6 +51,7 @@ impl Ingested {
         Self {
             commits: alloc::vec![(signed, blob)],
             fragments: Vec::new(),
+            stored_content: true,
         }
     }
 
@@ -55,6 +59,7 @@ impl Ingested {
         Self {
             commits: Vec::new(),
             fragments: alloc::vec![(signed, blob)],
+            stored_content: true,
         }
     }
 
@@ -259,6 +264,7 @@ pub(crate) async fn recv_batch_sync_response<
             .save_batch(commits, fragments)
             .await
             .map_err(IoError::from)?;
+        ingested.stored_content = true;
     }
 
     Ok(ingested)

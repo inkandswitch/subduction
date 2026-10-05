@@ -13,7 +13,10 @@
 //! Bookkeeping locks never cover backend I/O, executor calls, or wake callbacks.
 //! Settlement marks cache/revision/publication together, then wakes outside the
 //! cache lock. Queues have a fixed count/byte budget; snapshots do not.
-use crate::stored::{StoredEvent, StoredItem};
+use crate::{
+    peer::id::PeerId,
+    stored::{StoredEvent, StoredItem},
+};
 use alloc::{
     collections::VecDeque,
     sync::{Arc, Weak},
@@ -208,6 +211,7 @@ struct Queue {
 #[derive(Debug, Default)]
 struct Pending {
     items: VecDeque<(u64, StoredItem)>,
+    markers: VecDeque<(u64, PeerId)>,
     bytes: usize,
     dirty: bool,
 }
@@ -235,10 +239,30 @@ impl Watch {
         pending.dirty = false;
         true
     }
+    /// Only load-initiated rounds call this, after accepted writes settle.
+    pub(crate) fn peer_synced(&self, peer: PeerId) {
+        let state = self.tree.revision.lock();
+        self.queue
+            .pending
+            .lock()
+            .markers
+            .push_back((state.value, peer));
+    }
     pub(crate) fn take(&self) -> Option<StoredEvent> {
         let mut pending = self.queue.pending.lock();
         if pending.dirty {
             return Some(StoredEvent::RescanRequired);
+        }
+        if let Some((revision, _)) = pending.markers.front()
+            && pending
+                .items
+                .front()
+                .is_none_or(|(item_revision, _)| item_revision > revision)
+        {
+            return pending
+                .markers
+                .pop_front()
+                .map(|(_, peer_id)| StoredEvent::PeerSynced { peer_id });
         }
         pending.items.pop_front().map(|(_, item)| {
             pending.bytes -= item.byte_len();
@@ -255,6 +279,7 @@ impl Drop for Watch {
             .retain(|weak| weak.as_ptr() != Arc::as_ptr(&self.queue) && weak.strong_count() != 0);
         let mut pending = self.queue.pending.lock();
         pending.items.clear();
+        pending.markers.clear();
         pending.bytes = 0;
     }
 }

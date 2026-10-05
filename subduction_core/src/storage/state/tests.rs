@@ -127,6 +127,25 @@ async fn watchers_share_items_and_drop_unregisters_and_releases_queues() {
     assert!(tree.revision.lock().watchers.is_empty());
 }
 #[tokio::test]
+async fn peer_markers_follow_covered_items_and_survive_invalidation() {
+    let state = Arc::new(StorageState::default());
+    let watch = state.watch(ID);
+    let tree = state.tree(ID);
+    let first = crate::peer::id::PeerId::new([1; 32]);
+    let second = crate::peer::id::PeerId::new([2; 32]);
+    let item = item(1).await;
+    publish(&tree, Some(core::slice::from_ref(&item)));
+    watch.peer_synced(first);
+    assert!(matches!(watch.take(), Some(StoredEvent::Item(_))));
+    assert!(matches!(watch.take(), Some(StoredEvent::PeerSynced { peer_id }) if peer_id == first));
+    watch.peer_synced(second);
+    publish(&tree, None);
+    assert!(matches!(watch.take(), Some(StoredEvent::RescanRequired)));
+    assert!(watch.scan_finish(watch.scan_start().expect("settled recovery")));
+    assert!(matches!(watch.take(), Some(StoredEvent::PeerSynced { peer_id }) if peer_id == second));
+}
+
+#[tokio::test]
 async fn unsettled_driver_loss_closes_all_watchers_without_certifying_a_scan() {
     let state = Arc::new(StorageState::default());
     let tree = state.tree(ID);
