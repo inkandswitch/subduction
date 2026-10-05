@@ -216,7 +216,7 @@ async fn consumed_items_release_their_byte_budget() {
     let item = item(MAX_PENDING_BYTES / 2).await;
     let mut pending = Pending::default();
     for _ in 0..3 {
-        pending.publish(Some(core::slice::from_ref(&item)));
+        pending.publish(0, Some(core::slice::from_ref(&item)));
         assert!(matches!(pending.take(), Some(StoredEvent::Item(_))));
         let Pending::Updates(updates) = &pending else {
             panic!("updates")
@@ -242,6 +242,69 @@ async fn watch_id_wrap_does_not_replace_a_live_watch() {
         assert!(matches!(watch.take(), Some(StoredEvent::Item(_))));
     }
     assert!(tree.state.inner.lock().watchers.is_empty());
+}
+
+#[tokio::test]
+async fn peer_markers_separate_writes_before_and_after_a_round() {
+    let state = Arc::new(StorageState::default());
+    let watch = state.watch(ID);
+    let tree = state.tree(ID);
+    let first = PeerId::new([1; 32]);
+    let second = PeerId::new([2; 32]);
+    let item = item(1).await;
+    publish(&tree, Some(core::slice::from_ref(&item)));
+    watch.peer_synced(first);
+    publish(&tree, Some(core::slice::from_ref(&item)));
+    watch.peer_synced(second);
+    assert!(matches!(watch.take(), Some(StoredEvent::Item(_))));
+    assert!(matches!(watch.take(), Some(StoredEvent::PeerSynced { peer_id }) if peer_id == first));
+    assert!(matches!(watch.take(), Some(StoredEvent::Item(_))));
+    assert!(matches!(watch.take(), Some(StoredEvent::PeerSynced { peer_id }) if peer_id == second));
+    assert!(watch.take().is_none());
+}
+
+#[tokio::test]
+async fn peer_markers_survive_overflow_and_precede_later_updates_after_recovery() {
+    let state = Arc::new(StorageState::default());
+    let watch = state.watch(ID);
+    let tree = state.tree(ID);
+    let first = PeerId::new([1; 32]);
+    let second = PeerId::new([2; 32]);
+    let item = item(1).await;
+    watch.peer_synced(first);
+    for _ in 0..=MAX_PENDING_ITEMS {
+        publish(&tree, Some(core::slice::from_ref(&item)));
+    }
+    watch.peer_synced(second);
+    assert!(matches!(watch.take(), Some(StoredEvent::RescanRequired)));
+    assert!(watch.finish_read(&watch.prepare_read().await));
+    publish(&tree, Some(core::slice::from_ref(&item)));
+    for expected in [first, second] {
+        assert!(
+            matches!(watch.take(), Some(StoredEvent::PeerSynced { peer_id }) if peer_id == expected)
+        );
+    }
+    assert!(matches!(watch.take(), Some(StoredEvent::Item(_))));
+    assert!(watch.take().is_none());
+}
+
+#[tokio::test]
+async fn peer_markers_follow_covered_items_and_survive_invalidation() {
+    let state = Arc::new(StorageState::default());
+    let watch = state.watch(ID);
+    let tree = state.tree(ID);
+    let first = crate::peer::id::PeerId::new([1; 32]);
+    let second = crate::peer::id::PeerId::new([2; 32]);
+    let item = item(1).await;
+    publish(&tree, Some(core::slice::from_ref(&item)));
+    watch.peer_synced(first);
+    assert!(matches!(watch.take(), Some(StoredEvent::Item(_))));
+    assert!(matches!(watch.take(), Some(StoredEvent::PeerSynced { peer_id }) if peer_id == first));
+    watch.peer_synced(second);
+    publish(&tree, None);
+    assert!(matches!(watch.take(), Some(StoredEvent::RescanRequired)));
+    assert!(watch.finish_read(&watch.prepare_read().await));
+    assert!(matches!(watch.take(), Some(StoredEvent::PeerSynced { peer_id }) if peer_id == second));
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@
 //!
 //! | Method | Description |
 //! |--------|-------------|
-//! | [`add_connection`] | Add a connection (no automatic sync) |
+//! | [`add_connection`] | Add a connection (active loaders sync their documents) |
 //! | [`disconnect`] | Graceful connection shutdown |
 //! | [`disconnect_all`] | Disconnect all connections |
 //! | [`disconnect_from_peer`] | Disconnect all connections from a peer |
@@ -97,7 +97,7 @@ use crate::{
     storage::{fetcher::Fetcher, powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::{Timeout, call::CallTimeout},
 };
-use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::{Mutex, SemaphoreGuardArc};
 use core::{marker::PhantomData, time::Duration};
@@ -182,6 +182,9 @@ pub struct Subduction<
     ///
     /// [`register_connection`]: Self::register_connection
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
+
+    /// Broadcast wakeups for active loaders to reconcile connection generations.
+    connections_changed: Arc<event_listener::Event>,
 
     /// Per-connection multiplexers for request-response correlation.
     ///
@@ -364,6 +367,7 @@ where
             depth_metric,
             sedimentrees,
             connections,
+            connections_changed: Arc::new(event_listener::Event::new()),
             multiplexers: Arc::new(Mutex::new(MultiplexerMap::new())),
             subscriptions,
             storage,
@@ -633,6 +637,7 @@ where
             // whilst we're draining old connections.
             self.subscriptions.lock().await.clear();
             self.outgoing_subscriptions.lock().await.clear();
+            self.connections_changed.notify(usize::MAX);
             (conns, muxes)
         };
 
@@ -675,9 +680,11 @@ where
         let removed = {
             let mut connections = self.connections.lock().await;
             let mut multiplexers = self.multiplexers.lock().await;
-            connections
-                .remove(peer_id)
-                .map(|conns| (conns, multiplexers.detach_peer(peer_id)))
+            connections.remove(peer_id).map(|conns| {
+                let muxes = multiplexers.detach_peer(peer_id);
+                self.connections_changed.notify(usize::MAX);
+                (conns, muxes)
+            })
         };
 
         if let Some((conns, muxes)) = removed {
@@ -699,8 +706,9 @@ where
 
     /// Add a connection to tracking.
     ///
-    /// This does not perform any synchronization. To sync after adding,
-    /// call [`full_sync_with_peer`](Self::full_sync_with_peer).
+    /// Active [`load_and_watch`](Self::load_and_watch) streams sync their documents
+    /// on new connections. To sync other documents after adding, call
+    /// [`full_sync_with_peer`](Self::full_sync_with_peer).
     ///
     /// # Returns
     ///
@@ -786,6 +794,7 @@ where
 
         let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
         self.multiplexers.lock().await.insert(conn.clone(), mux);
+        self.connections_changed.notify(usize::MAX);
 
         true
     }
@@ -842,6 +851,7 @@ where
             } else {
                 multiplexers.detach_connection(conn)
             };
+            self.connections_changed.notify(usize::MAX);
             (last, detached)
         };
 
@@ -1005,6 +1015,29 @@ where
     ) -> Result<Option<Blob>, Store::Error> {
         tracing::debug!(?id, ?digest, "Looking for blob");
         ingest::get_blob(&self.storage, id, digest).await
+    }
+
+    /// Read locally first, then sync and subscribe on every current and future
+    /// connection, including reconnects, for the lifetime of the stream.
+    /// Local replay and updates work without peers or a running network listener;
+    /// network synchronization requires the listener. Missing data or peers do
+    /// not end observation. `StorageChecked` marks a checked local view, not global
+    /// synchronization. Cached contents may be partial or stale, so they do not
+    /// skip peer work. Empty successful rounds emit ordered `PeerSynced` markers.
+    ///
+    /// The stream keeps the node alive. There is no concurrency cap or loading/
+    /// peer deadline. Closing or dropping it cancels observation and scoped sync
+    /// attempts, not admitted writes or established node-owned subscriptions.
+    /// Shutdown or loss of mutation ownership terminates the stream.
+    #[must_use]
+    pub fn load_and_watch(self: &Arc<Self>, id: SedimentreeId) -> crate::stored::StoredUpdates
+    where
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Timer: Send + Sync + 'a,
+        Sp: Send + Sync + 'static,
+        'a: 'static,
+    {
+        Async::start_stored(self.clone(), id, CallTimeout::Uncapped, true)
     }
 
     /// Get all blobs associated with a given sedimentree ID from local storage.
@@ -2066,7 +2099,25 @@ where
         ),
         IoError<Async, Store, Conn, Hdl::Message>,
     > {
-        // Resolve caller policy to the low-level deadline (`None` = uncapped).
+        Ok(self.sync_peer(to_ask, id, subscribe, timeout).await?.0)
+    }
+
+    /// The shared round also carries private initial-loader readiness. It must
+    /// not infer supplied data from advertised heads or offered-item statistics.
+    #[allow(clippy::type_complexity)]
+    async fn sync_peer(
+        &self,
+        to_ask: &PeerId,
+        id: SedimentreeId,
+        subscribe: bool,
+        timeout: CallTimeout,
+    ) -> Result<
+        (
+            per_peer_sync::PeerSyncEntry<Conn, Async, Conn::SendError>,
+            bool,
+        ),
+        IoError<Async, Store, Conn, Hdl::Message>,
+    > {
         let timeout = timeout.resolve(self.default_roundtrip_timeout);
 
         tracing::info!(tree = ?id, peer = %to_ask, "requesting batch sync for sedimentree");
@@ -2076,6 +2127,7 @@ where
 
         let mut stats = SyncStats::new();
         let mut had_success = false;
+        let mut supplied = false;
 
         let peer_conns: Vec<Authenticated<Conn, Async>> = {
             self.connections
@@ -2097,8 +2149,9 @@ where
                 .await?
             {
                 Err(error) => conn_errs.push((conn, error)),
-                Ok(false) => {}
-                Ok(true) => {
+                Ok(None) => {}
+                Ok(Some(stored_content)) => {
+                    supplied = stored_content;
                     had_success = true;
                     break;
                 }
@@ -2124,7 +2177,7 @@ where
             }
         }
 
-        Ok((had_success, stats, conn_errs))
+        Ok(((had_success, stats, conn_errs), supplied))
     }
 
     /// Request a batch sync from all connected peers for a given sedimentree ID.
@@ -2202,8 +2255,8 @@ where
                             .await?
                         {
                             Err(error) => conn_errs.push((conn.clone(), error)),
-                            Ok(false) => {}
-                            Ok(true) => {
+                            Ok(None) => {}
+                            Ok(Some(_)) => {
                                 had_success = true;
                                 break;
                             }
@@ -2237,10 +2290,53 @@ where
         Ok(PerPeerSync::new(out))
     }
 
+    /// Sync the exact connection generation observed by a live loader, rather
+    /// than retrying an older (possibly stalled) connection to the same peer.
+    async fn sync_stored_connection(
+        &self,
+        conn: Authenticated<Conn, Async>,
+        mux: Arc<Multiplexer>,
+        id: SedimentreeId,
+    ) -> Result<Option<(PeerId, bool)>, crate::stored::LoadError> {
+        #[cfg(feature = "metrics")]
+        let started = std::time::Instant::now();
+        let mut stats = SyncStats::new();
+        let result = async {
+            let tree = self.get_or_hydrate(id).await?.unwrap_or_default();
+            self.sync_connection_on_mux(&conn, mux, id, &tree, true, None, &mut stats)
+                .await
+        }
+        .await;
+        #[cfg(feature = "metrics")]
+        if let Ok(round) = &result {
+            if matches!(round, Ok(Some(_))) {
+                crate::metrics::sync_duration(started.elapsed().as_secs_f64());
+            }
+            crate::metrics::sync_data_exchanged(
+                stats.commits_received,
+                stats.fragments_received,
+                stats.commits_sent,
+                stats.fragments_sent,
+            );
+            if let Err(error) = round {
+                crate::metrics::sync_call_failure(error.error_name());
+            }
+        }
+        match result {
+            Ok(Ok(Some(supplied))) => Ok(Some((conn.peer_id(), supplied))),
+            Ok(Ok(None) | Err(_))
+            | Err(IoError::ConnCall(_) | IoError::ConnSend(_) | IoError::ConnRecv(_)) => Ok(None),
+            Err(IoError::StorageInterrupted) => Err(crate::stored::LoadError::Closed),
+            Err(error @ (IoError::Storage(_) | IoError::BlobMismatch(_))) => {
+                Err(crate::stored::LoadError::Operation(error.to_string()))
+            }
+        }
+    }
+
     /// Process one connection's round. The outer result covers local I/O;
     /// the inner result preserves per-connection call errors and refusals.
     /// Callers retain their own inventory lifetime and aggregation policy.
-    #[allow(clippy::type_complexity, clippy::too_many_lines)]
+    #[allow(clippy::type_complexity)]
     async fn sync_connection(
         &self,
         conn: &Authenticated<Conn, Async>,
@@ -2249,15 +2345,41 @@ where
         subscribe: bool,
         timeout: Option<Duration>,
         stats: &mut SyncStats,
-    ) -> Result<Result<bool, CallError<Conn::SendError>>, IoError<Async, Store, Conn, Hdl::Message>>
-    {
+    ) -> Result<
+        Result<Option<bool>, CallError<Conn::SendError>>,
+        IoError<Async, Store, Conn, Hdl::Message>,
+    > {
+        let Some(mux) = self.mux_for_connection(conn).await else {
+            tracing::debug!(peer = %conn.peer_id(), "multiplexer gone during sync; skipping connection");
+            return Ok(Err(CallError::ResponseDropped));
+        };
+        self.sync_connection_on_mux(conn, mux, id, tree, subscribe, timeout, stats)
+            .await
+    }
+
+    /// A captured mux identifies one registration even if the same connection
+    /// object is later re-registered. Never route an old attempt via a new mux.
+    #[allow(
+        clippy::type_complexity,
+        clippy::too_many_lines,
+        clippy::too_many_arguments
+    )]
+    async fn sync_connection_on_mux(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        mux: Arc<Multiplexer>,
+        id: SedimentreeId,
+        tree: &Sedimentree,
+        subscribe: bool,
+        timeout: Option<Duration>,
+        stats: &mut SyncStats,
+    ) -> Result<
+        Result<Option<bool>, CallError<Conn::SendError>>,
+        IoError<Async, Store, Conn, Hdl::Message>,
+    > {
         let peer = conn.peer_id();
         let seed = FingerprintSeed::random();
         let resolver = tree.fingerprint_resolver(&seed);
-        let Some(mux) = self.mux_for_connection(conn).await else {
-            tracing::debug!(peer = %peer, "multiplexer gone during sync; skipping connection");
-            return Ok(Err(CallError::ResponseDropped));
-        };
         let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
         let response = ManagedCall::<Async, Hdl::Message>::call(
             &managed,
@@ -2285,11 +2407,11 @@ where
             SyncResult::Ok(diff) => diff,
             SyncResult::NotFound => {
                 tracing::debug!(peer = %peer, tree = ?id, "peer reports sedimentree not found");
-                return Ok(Ok(false));
+                return Ok(Ok(None));
             }
             SyncResult::Unauthorized => {
                 tracing::debug!(peer = %peer, tree = ?id, "peer reports we are unauthorized for sedimentree");
-                return Ok(Ok(false));
+                return Ok(Ok(None));
             }
         };
         let commits_to_receive = missing_commits.len();
@@ -2342,7 +2464,7 @@ where
             self.track_outgoing_subscription(peer, id).await;
             self.add_subscription(peer, id).await;
         }
-        Ok(Ok(true))
+        Ok(Ok(Some(ingested.stored_content)))
     }
 
     /// Sync all known [`Sedimentree`]s with all connected peers.
@@ -3598,8 +3720,8 @@ pub trait NodeTasks<
         spawner: Sp,
     ) -> StoragePowerbox<Store, Auth, Self>;
 
-    /// Start a storage-only coordinator using the existing tracked spawner.
-    /// Register before scheduling; the driver retains storage, not the node.
+    /// Start document loading, either following connections or collecting once.
+    /// Register before scheduling; streams retain the node until cancellation.
     #[allow(clippy::type_complexity)]
     fn start_stored<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
@@ -3607,9 +3729,13 @@ pub trait NodeTasks<
     >(
         node: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
         id: SedimentreeId,
+        timeout: CallTimeout,
+        subscribe: bool,
     ) -> crate::stored::StoredUpdates
     where
-        'a: 'static;
+        'a: 'static,
+        ManagedConnection<Conn, Self, Timer>:
+            ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>;
 
     /// Construct the listener future; construction does not submit it to an executor.
     #[allow(clippy::type_complexity)]
@@ -3767,15 +3893,20 @@ where
         )
     }
 
+    #[allow(clippy::too_many_lines)]
     fn start_stored<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
         Sp: Spawn<Self> + Clone + Send + Sync + 'static,
     >(
         node: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
         id: SedimentreeId,
+        timeout: CallTimeout,
+        subscribe: bool,
     ) -> crate::stored::StoredUpdates
     where
         'a: 'static,
+        ManagedConnection<Conn, Self, Timer>:
+            ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>,
     {
         let watch = node.storage.state.watch(id);
         let fetcher = node.storage.local_fetcher(id);
@@ -3783,13 +3914,95 @@ where
         // this one-slot channel is occupied (also supported without std).
         let (sender, receiver) = async_channel::bounded(1);
         let terminal = Arc::new(spin::Mutex::new(None));
-        let output = stored::Output {
+        let mut output = stored::Output {
             sender,
             terminal: terminal.clone(),
         };
-        let abort = node
-            .spawner
-            .spawn(Async::from_future(stored::run(fetcher, watch, output)));
+        let spawner = node.spawner.clone();
+        let abort = spawner.spawn(Async::from_future(async move {
+            let work = async {
+                let initial = async {
+                    let load_ready = stored::snapshot(&fetcher, &watch, &mut output, true).await?;
+                    // Collecting fetches may finish from storage, but watchers
+                    // must establish sync/subscriptions even for cached trees.
+                    if subscribe || !load_ready {
+                        let node = &node;
+                        let rounds = if subscribe {
+                            stored::connection_rounds(
+                                node.connections_changed.clone(),
+                                || async { node.multiplexers.lock().await.snapshot() },
+                                |conn, mux| async move {
+                                    node.sync_stored_connection(conn, mux, id).await
+                                },
+                            )
+                            .left_stream()
+                        } else {
+                            let peers = node.connected_peer_ids().await;
+                            // Uncapped rounds must not keep later candidates from starting.
+                            let rounds = peers.into_iter().map(|peer| async move {
+                                match node
+                                    .sync_peer(&peer, id, subscribe, CallTimeout::Uncapped)
+                                    .await
+                                {
+                                    Ok(((success, _, _), supplied)) => {
+                                        Ok(success.then_some((peer, supplied)))
+                                    }
+                                    Err(
+                                        IoError::ConnCall(_)
+                                        | IoError::ConnSend(_)
+                                        | IoError::ConnRecv(_),
+                                    ) => Ok(None),
+                                    Err(IoError::StorageInterrupted) => {
+                                        Err(crate::stored::LoadError::Closed)
+                                    }
+                                    Err(
+                                        error @ (IoError::Storage(_) | IoError::BlobMismatch(_)),
+                                    ) => {
+                                        Err(crate::stored::LoadError::Operation(error.to_string()))
+                                    }
+                                }
+                            });
+                            rounds.collect::<FuturesUnordered<_>>().right_stream()
+                        };
+                        stored::load(
+                            &fetcher,
+                            &watch,
+                            &mut output,
+                            rounds,
+                            load_ready,
+                            !subscribe,
+                        )
+                        .await?;
+                    }
+                    Ok::<(), crate::stored::LoadError>(())
+                };
+                if let Some(duration) = timeout.resolve(node.default_roundtrip_timeout) {
+                    // Only collecting fetches have an overall deadline.
+                    node.timer
+                        .timeout(duration, Async::from_future(initial))
+                        .await
+                        .map_err(|_| crate::stored::LoadError::TimedOut)??;
+                } else {
+                    initial.await?;
+                }
+                // Collecting fetches release their scoped rounds here.
+                // Subscribing loaders keep coordinating connections and stored
+                // updates above until cancellation, shutdown, or a local error.
+                stored::live(&fetcher, &watch, &mut output).await
+            };
+            let result = match futures::future::select(
+                alloc::boxed::Box::pin(fetcher.coordination().wait_closed()),
+                alloc::boxed::Box::pin(work),
+            )
+            .await
+            {
+                futures::future::Either::Left(_) => Err(crate::stored::LoadError::Closed),
+                futures::future::Either::Right((result, _)) => result,
+            };
+            if let Err(error) = result {
+                *output.terminal.lock() = Some(error);
+            }
+        }));
         crate::stored::StoredUpdates::new(receiver, terminal, abort)
     }
 
@@ -3957,6 +4170,34 @@ mod tests {
                 }));
             handle
         }
+    }
+
+    #[tokio::test]
+    async fn connection_changes_notify_on_registration_and_every_removal_path() -> TestResult {
+        use crate::connection::test_utils::{MockConnection, new_test_subduction};
+        use futures::FutureExt;
+
+        let (node, _listener, _manager) = new_test_subduction();
+        for removal in 0..4 {
+            let conn = MockConnection::new().authenticated();
+            let registered = node.connections_changed.listen();
+            assert!(node.add_connection(conn.clone()).await?);
+            assert!(registered.now_or_never().is_some());
+
+            let removed = node.connections_changed.listen();
+            match removal {
+                0 => assert!(node.disconnect(&conn).await?),
+                1 => assert!(node.disconnect_from_peer(&conn.peer_id()).await?),
+                2 => node.disconnect_all().await?,
+                _ => assert_eq!(node.remove_connection(&conn).await, Some(true)),
+            }
+            assert!(
+                removed.now_or_never().is_some(),
+                "removal path {removal} must wake connection observers"
+            );
+            assert!(node.multiplexers.lock().await.snapshot().is_empty());
+        }
+        Ok(())
     }
 
     #[tokio::test]
