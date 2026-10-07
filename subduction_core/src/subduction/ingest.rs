@@ -528,7 +528,8 @@ pub(crate) async fn get_or_hydrate<
 /// resident-hit fast path — taken on every newly-accepted commit/fragment —
 /// this is a single dirty-gated minimize plus the head walk.
 ///
-/// Returns an empty `Vec` for a nonexistent tree (heads are advisory).
+/// Returns `None` for a nonexistent tree, with the same existence rule as
+/// [`get_or_hydrate`]: a registered-but-empty tree yields `Some(vec![])`.
 pub(crate) async fn heads_or_hydrate<
     Async: FutureForm,
     Store: Storage<Async>,
@@ -540,7 +541,7 @@ pub(crate) async fn heads_or_hydrate<
     storage: &StoragePowerbox<Store, Auth>,
     depth_metric: &Metric,
     id: SedimentreeId,
-) -> Result<Vec<CommitId>, Store::Error> {
+) -> Result<Option<Vec<CommitId>>, Store::Error> {
     // Fast path: resident hit. Compute heads in place — minimize only if dirty,
     // no tree clone, no re-minimize.
     if let Some(heads) = sedimentrees
@@ -549,24 +550,20 @@ pub(crate) async fn heads_or_hydrate<
     {
         #[cfg(feature = "metrics")]
         crate::metrics::sedimentree_cache_hit();
-        return Ok(heads);
+        return Ok(Some(heads));
     }
 
-    // Miss: hydrate (which installs into the cache), then read its heads. The
-    // hydrated tree is already minimal, so this second call is a clean,
-    // dirty-gated no-op minimize plus the head walk. `get_or_hydrate` records
-    // the miss (don't double-count it here).
-    match get_or_hydrate::<Async, Store, Auth, Metric, SHARDS>(
+    // Miss: hydrate (which installs into the cache) and read the heads. The
+    // hydrated tree is already minimal, so skip re-minimizing. `get_or_hydrate`
+    // records the miss; don't double-count it here.
+    Ok(get_or_hydrate::<Async, Store, Auth, Metric, SHARDS>(
         sedimentrees,
         storage,
         depth_metric,
         id,
     )
     .await?
-    {
-        Some(tree) => Ok(tree.heads_assuming_minimal()),
-        None => Ok(Vec::new()),
-    }
+    .map(|tree| tree.heads_assuming_minimal()))
 }
 
 /// Reconstruct a sedimentree's full history directly from storage.

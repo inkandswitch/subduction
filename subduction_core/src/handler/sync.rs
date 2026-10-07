@@ -1177,7 +1177,7 @@ impl<
         match ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
             .await
         {
-            Ok(heads) => heads,
+            Ok(heads) => heads.unwrap_or_default(),
             Err(e) => {
                 tracing::warn!(tree = ?id, error = %e, "heads_for: hydration failed");
                 Vec::new()

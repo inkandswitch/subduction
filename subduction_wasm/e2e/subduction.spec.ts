@@ -902,4 +902,72 @@ test.describe("Subduction", () => {
       expect(result.commitCount).toBeGreaterThanOrEqual(1);
     });
   });
+
+  test.describe("getHeads", () => {
+    test("returns one tree's heads from a cold node, undefined if unknown", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.setup();
+        const storage = new MemoryStorage();
+        const writer = new Subduction({ signer, storage });
+
+        const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(90));
+        const parent = new CommitId(new Uint8Array(32).fill(1));
+        const child = new CommitId(new Uint8Array(32).fill(2));
+        await writer.addCommit(sedId, parent, [], new Uint8Array([1]));
+        await writer.addCommit(sedId, child, [parent], new Uint8Array([2]));
+
+        // A second node over the same storage has nothing resident yet
+        const reader = new Subduction({ signer, storage });
+        const heads = await reader.getHeads(sedId);
+        const unknown = await reader.getHeads(SedimentreeId.fromBytes(new Uint8Array(32).fill(91)));
+
+        return {
+          heads: heads?.map((h: any) => h.toHexString()),
+          expected: [child.toHexString()],
+          unknown,
+        };
+      });
+
+      expect(result.heads).toEqual(result.expected);
+      expect(result.unknown).toBeUndefined();
+    });
+
+    test("rejects with the storage backend's error as cause", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { Subduction, MemoryStorage, SedimentreeId, CommitId, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.setup();
+        const inner = new MemoryStorage();
+        const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(92));
+        await new Subduction({ signer, storage: inner }).addCommit(
+          sedId,
+          new CommitId(new Uint8Array(32).fill(1)),
+          [],
+          new Uint8Array([1]),
+        );
+
+        // Same storage, but loading commits fails
+        const boom = new Error("disk on fire");
+        const storage = new Proxy(inner, {
+          get: (target: any, key) =>
+            key === "loadAllCommits"
+              ? async () => {
+                  throw boom;
+                }
+              : typeof target[key] === "function"
+                ? target[key].bind(target)
+                : target[key],
+        });
+
+        try {
+          await new Subduction({ signer, storage }).getHeads(sedId);
+          return { rejected: false };
+        } catch (e: any) {
+          return { rejected: true, name: e.name, sameCause: e.cause === boom };
+        }
+      });
+
+      expect(result).toEqual({ rejected: true, name: "SedimentreeStorageError", sameCause: true });
+    });
+  });
 });
