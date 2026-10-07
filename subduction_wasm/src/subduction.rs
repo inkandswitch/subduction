@@ -1519,6 +1519,29 @@ impl WasmSubduction {
             .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
     }
 
+    /// Get the current heads of a single sedimentree.
+    ///
+    /// Resolves to `undefined` when the tree is unknown, and to an empty array
+    /// for a tree that exists but has no heads yet. To query several trees,
+    /// call this once per id (e.g. with `Promise.allSettled`).
+    ///
+    /// # Errors
+    ///
+    /// Rejects with an `Error` whose `name` is `"SedimentreeStorageError"` if
+    /// reading storage fails. If the storage backend rejected, its original
+    /// value is attached as `cause`.
+    #[wasm_bindgen(js_name = getHeads)]
+    pub async fn get_heads(
+        &self,
+        id: &WasmSedimentreeId,
+    ) -> Result<Option<Vec<WasmCommitId>>, JsStorageError> {
+        Ok(self
+            .core
+            .get_heads(id.clone().into())
+            .await?
+            .map(|heads| heads.into_iter().map(WasmCommitId::from).collect()))
+    }
+
     /// Get the current heads for every locally known sedimentree.
     ///
     /// An inner empty heads array means the sedimentree exists but has no

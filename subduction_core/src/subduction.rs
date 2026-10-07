@@ -1484,17 +1484,13 @@ where
 
         // On a heads read failure push with empty heads rather than drop the
         // data, matching `SyncHandler::heads_for`.
-        let heads = ingest::heads_or_hydrate(
-            &self.sedimentrees,
-            &self.storage,
-            &self.depth_metric,
-            id,
-        )
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(tree = ?id, error = %e, "could not read heads; pushing with none");
-            Vec::new()
-        });
+        let heads = match self.get_heads(id).await {
+            Ok(heads) => heads.unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(tree = ?id, error = %e, "could not read heads; pushing with none");
+                Vec::new()
+            }
+        };
 
         let pushes: Vec<(Authenticated<Conn, Async>, Hdl::Message)> =
             peers::build_pushes(id, &heads, &self.send_counter, &conns, ingested)
@@ -2712,6 +2708,25 @@ where
         }
     }
 
+    /// Get the current heads of a single sedimentree.
+    ///
+    /// Returns `Ok(None)` when the tree does not exist, and `Ok(Some(vec![]))`
+    /// for a tree that exists but has no heads yet.
+    ///
+    /// To query several trees, call this once per id and choose your own
+    /// concurrency (e.g. `buffer_unordered`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Store::Error` if the tree is not resident and loading it from
+    /// storage fails.
+    pub async fn get_heads(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<Option<Vec<CommitId>>, Store::Error> {
+        ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id).await
+    }
+
     /// Get the current heads for every known sedimentree.
     ///
     /// Enumerates from durable storage so the result is complete even after
@@ -2729,8 +2744,8 @@ where
         let ids = self.sedimentree_ids().await;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            match self.get_or_hydrate(id).await {
-                Ok(Some(tree)) => out.push((id, tree.heads(&self.depth_metric))),
+            match self.get_heads(id).await {
+                Ok(Some(heads)) => out.push((id, heads)),
                 // Tree genuinely gone (raced with a delete): omit it.
                 Ok(None) => {}
                 // Transient hydration failure: keep the id (it was just

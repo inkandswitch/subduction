@@ -764,6 +764,22 @@ impl From<JsStorageError> for JsValue {
     fn from(err: JsStorageError) -> Self {
         let js_err = js_sys::Error::new(&alloc::string::ToString::to_string(&err));
         js_err.set_name("SedimentreeStorageError");
+        // Attach the backend's own error as `cause` so callers can match on it
+        // instead of parsing the message. Non-enumerable, as `new Error(msg,
+        // { cause })` would make it, so `JSON.stringify` and `Object.keys`
+        // are unchanged.
+        if let JsStorageError::JsError(cause) = err {
+            let descriptor = js_sys::Object::new();
+            js_sys::Reflect::set(&descriptor, &JsValue::from_str("value"), &cause).ok();
+            js_sys::Reflect::set(&descriptor, &JsValue::from_str("writable"), &JsValue::TRUE).ok();
+            js_sys::Reflect::set(
+                &descriptor,
+                &JsValue::from_str("configurable"),
+                &JsValue::TRUE,
+            )
+            .ok();
+            js_sys::Object::define_property(&js_err, &JsValue::from_str("cause"), &descriptor);
+        }
         js_err.into()
     }
 }

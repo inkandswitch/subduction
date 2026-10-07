@@ -21,6 +21,8 @@
     reason = "fixtures panic on impossible setup failures; tests are the caller"
 )]
 
+pub mod probe_storage;
+
 use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use core::time::Duration;
 
