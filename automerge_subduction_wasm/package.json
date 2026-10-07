@@ -1,6 +1,6 @@
 {
   "name": "@automerge/automerge-subduction",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Wasm bindings for syncing Automerge documents via Subduction",
   "publishConfig": {
     "access": "public"

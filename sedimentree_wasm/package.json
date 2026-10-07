@@ -1,6 +1,6 @@
 {
   "name": "@automerge/sedimentree",
-  "version": "0.17.2",
+  "version": "0.18.0",
   "description": "Wasm/JavaScript bindings for Sedimentree",
   "publishConfig": {
     "access": "public"
