@@ -191,15 +191,20 @@
           { commands = projectCommands; packages = []; }
         ];
 
+        # Tested npm tarballs. Keys match scripts/js-release.py.
+        jsPackage = key: crate: pkgs.callPackage ./nix/js-package.nix {
+          inherit crate key wasm-bodge;
+          rustPlatform = js-rustPlatform;
+          wasm-bindgen-cli = unstable.wasm-bindgen-cli;
+          nodejs = pkgs.nodejs_24;
+          cargoLock = workspaceCargoLock;
+        };
+
       in rec {
         packages = {
-          subduction-js = pkgs.callPackage ./nix/subduction-js.nix {
-            inherit wasm-bodge;
-            rustPlatform = js-rustPlatform;
-            wasm-bindgen-cli = unstable.wasm-bindgen-cli;
-            nodejs = pkgs.nodejs_24;
-            cargoLock = workspaceCargoLock;
-          };
+          automerge-subduction-js = jsPackage "automerge-subduction" "automerge_subduction_wasm";
+          sedimentree-js = jsPackage "sedimentree" "sedimentree_wasm";
+          subduction-js = jsPackage "subduction" "subduction_wasm";
 
           subduction_cli = pkgs.rustPlatform.buildRustPackage {
             pname = "subduction_cli";

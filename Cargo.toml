@@ -18,6 +18,7 @@ members = [
   "subduction_wasm",
   "subduction_wasm_bootstrap",
   "subduction_websocket",
+  "xtask",
 ]
 
 [workspace.package]

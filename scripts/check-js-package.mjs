@@ -1,14 +1,15 @@
 // Check the extracted npm tarball, not the working tree's dist/ or node_modules/.
-// Usage: node scripts/check-js-package.mjs /path/to/extracted/package
+// Usage: node scripts/check-js-package.mjs /path/to/extracted/package @automerge/<name>
 import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
 assert(process.argv[2], "Expected the extracted package directory");
+assert(process.argv[3], "Expected the npm package name");
 const root = resolve(process.argv[2]);
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-assert.equal(pkg.name, "@automerge/subduction");
+assert.equal(pkg.name, process.argv[3]);
 
 function checkTarget(target) {
   if (typeof target === "string") {

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Prepare and check an @automerge/subduction release.
+"""Prepare, check, and publish releases of the npm packages built from this repo.
 
-prepare: prompt for a version, update manifests, and refresh Cargo.lock offline.
-validate: check a release tag against those files and emit CI outputs.
-check-published: query npm for an existing version and emit published=true/false.
+prepare <package>: prompt for a version, update manifests, and refresh Cargo.lock offline.
+validate <tag>: check a release tag against those files and emit CI outputs.
+publish <tag> <tarball>: publish a tested tarball unless that version is already on npm.
+check-published <tag>: for manual use; query npm and emit published=true/false.
 
-Requires Python 3.11+; prepare needs Cargo and check-published needs npm.
-None of these commands publishes.
+Each package has its own tag prefix, e.g. subduction-js-v0.24.0.
+
+Requires Python 3.11+; prepare needs Cargo, and check-published/publish need npm.
+Only publish publishes.
 """
 
 import argparse
@@ -15,62 +18,117 @@ import os
 import re
 import subprocess
 import sys
+import tarfile
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 
-TAG_PREFIX = "subduction-js-v"
-PACKAGE_JSON = "subduction_wasm/package.json"
-CRATE_TOML = "subduction_wasm/Cargo.toml"
+REPOSITORY_URL = "https://github.com/inkandswitch/subduction"
 WORKSPACE_TOML = "Cargo.toml"
 LOCKFILE = "Cargo.lock"
-VERSION_FILES = (PACKAGE_JSON, CRATE_TOML, WORKSPACE_TOML, LOCKFILE)
+
+
+@dataclass(frozen=True)
+class Package:
+    """An npm package published from one workspace crate."""
+
+    key: str
+    npm_name: str
+    crate: str
+
+    @property
+    def tag_prefix(self):
+        return f"{self.key}-js-v"
+
+    @property
+    def flake_output(self):
+        return f"{self.key}-js"
+
+    @property
+    def package_json(self):
+        return f"{self.crate}/package.json"
+
+    @property
+    def crate_toml(self):
+        return f"{self.crate}/Cargo.toml"
+
+    @property
+    def version_files(self):
+        return (self.package_json, self.crate_toml, WORKSPACE_TOML, LOCKFILE)
+
+
+PACKAGES = {
+    package.key: package
+    for package in (
+        Package("automerge-subduction", "@automerge/automerge-subduction", "automerge_subduction_wasm"),
+        Package("sedimentree", "@automerge/sedimentree", "sedimentree_wasm"),
+        Package("subduction", "@automerge/subduction", "subduction_wasm"),
+    )
+}
 
 
 # Command handlers
 
 
-def prepare_release(root):
+def prepare_release(root, package):
     """Prepare a version bump, restoring all four files if any step fails."""
-    current = read_json(root / PACKAGE_JSON)["version"]
-    print(f"Current @automerge/subduction version: {current}")
+    current = read_json(root / package.package_json)["version"]
+    print(f"Current {package.npm_name} version: {current}")
     version = input("New version (without v): ").strip()
 
     # Check both the requested version and the starting state before editing.
     validate_version(version)
-    validate_manifests(root, current)
+    validate_manifests(root, package, current)
     if version == current:
         raise ValueError(f"The version is already {current}")
 
     # Plan the three manifest edits in memory. Cargo will update the lockfile.
-    originals = {path: (root / path).read_bytes() for path in VERSION_FILES}
-    updates = plan_manifest_updates(originals, current, version)
+    originals = {path: (root / path).read_bytes() for path in package.version_files}
+    updates = plan_manifest_updates(originals, package, current, version)
 
     try:
         write_files(root, updates)
-        refresh_lockfile(root)
-        validate_manifests(root, version)
+        refresh_lockfile(root, package)
+        validate_manifests(root, package, version)
     except (Exception, KeyboardInterrupt):
         write_files(root, originals)
         raise
 
-    print_next_steps(version)
+    print_next_steps(package, version)
 
 
 def validate_release(root, tag):
     """Check a tagged release without changing files, then report it to CI."""
-    version = version_from_tag(tag)
-    validate_manifests(root, version)
-    write_validation_output(version)
+    package, version = parse_tag(tag)
+    validate_manifests(root, package, version)
+    write_validation_output(package, version)
 
 
-def check_published(version):
+def check_published(tag):
     """Report whether a version exists; registry or parsing failures are errors."""
-    validate_version(version)
-    published = version in published_versions()
+    package, version = parse_tag(tag)
+    published = is_published(package, version)
     write_ci_output(f"published={str(published).lower()}\n")
-    if published:
-        print(f"@automerge/subduction@{version} is already published.", file=sys.stderr)
+
+
+def publish_release(tag, tarball):
+    """Publish the tested tarball unchanged. Re-running after success is a no-op."""
+    package, version = parse_tag(tag)
+    # An absolute path: npm reads a bare `dir/file.tgz` as GitHub `user/repo`
+    # shorthand and would fetch that instead of the checked tarball.
+    tarball = Path(tarball).resolve(strict=True)
+    check_tarball(tarball, package, version)
+    if is_published(package, version):
+        return
+
+    # Explicit --tag latest bypasses npm's built-in downgrade protection.
+    # Only prereleases need an explicit tag; next follows publish order.
+    tag_args = ["--tag", "next"] if npm_dist_tag(version) == "next" else []
+    subprocess.run(
+        ["npm", "publish", str(tarball), "--ignore-scripts", "--access", "public", *tag_args, "--provenance"],
+        check=True,
+    )
 
 
 # Version and manifest validation (read-only)
@@ -85,12 +143,22 @@ def validate_version(version):
         raise ValueError("Invalid release version")
 
 
-def version_from_tag(tag):
-    if not tag.startswith(TAG_PREFIX):
-        raise ValueError(f"Expected a {TAG_PREFIX}<version> tag")
-    version = tag.removeprefix(TAG_PREFIX)
+def parse_tag(tag):
+    """Return the package and version named by a release tag."""
+    matches = [package for package in PACKAGES.values() if tag.startswith(package.tag_prefix)]
+    if len(matches) != 1:
+        prefixes = ", ".join(f"{package.tag_prefix}<version>" for package in PACKAGES.values())
+        raise ValueError(f"Expected a tag of the form {prefixes}")
+    package = matches[0]
+    version = tag.removeprefix(package.tag_prefix)
     validate_version(version)
-    return version
+    return package, version
+
+
+def package_from_key(key):
+    if key not in PACKAGES:
+        raise ValueError(f"Unknown package {key!r}; expected one of {', '.join(sorted(PACKAGES))}")
+    return PACKAGES[key]
 
 
 def read_json(path):
@@ -101,27 +169,27 @@ def read_toml(path):
     return tomllib.loads(path.read_text())
 
 
-def validate_manifests(root, version):
+def validate_manifests(root, package, version):
     """Require the expected package identity and the same version in all four files."""
     validate_version(version)
-    package = read_json(root / PACKAGE_JSON)
-    crate = read_toml(root / CRATE_TOML)
+    package_json = read_json(root / package.package_json)
+    crate = read_toml(root / package.crate_toml)
     workspace = read_toml(root / WORKSPACE_TOML)
     lockfile = read_toml(root / LOCKFILE)
 
-    if package["name"] != "@automerge/subduction":
-        raise ValueError("Unexpected npm package name")
-    if package["repository"]["url"] != "https://github.com/inkandswitch/subduction":
-        raise ValueError("Unexpected npm repository URL")
+    if package_json["name"] != package.npm_name:
+        raise ValueError(f"{package.package_json}: expected npm name {package.npm_name}")
+    if package_json["repository"]["url"] != REPOSITORY_URL:
+        raise ValueError(f"{package.package_json}: unexpected repository URL")
 
-    locked = [entry for entry in lockfile["package"] if entry["name"] == "subduction_wasm"]
+    locked = [entry for entry in lockfile["package"] if entry["name"] == package.crate]
     if len(locked) != 1:
-        raise ValueError("Expected exactly one subduction_wasm entry in Cargo.lock")
+        raise ValueError(f"Expected exactly one {package.crate} entry in Cargo.lock")
 
     versions = {
-        PACKAGE_JSON: package["version"],
-        CRATE_TOML: crate["package"]["version"],
-        WORKSPACE_TOML: workspace["workspace"]["dependencies"]["subduction_wasm"]["version"],
+        package.package_json: package_json["version"],
+        package.crate_toml: crate["package"]["version"],
+        WORKSPACE_TOML: workspace["workspace"]["dependencies"][package.crate]["version"],
         LOCKFILE: locked[0]["version"],
     }
     for path, actual in versions.items():
@@ -129,10 +197,24 @@ def validate_manifests(root, version):
             raise ValueError(f"{path}: expected version {version}, found {actual}")
 
 
+def check_tarball(tarball, package, version):
+    """Refuse to publish a tarball that is not the package and version being released."""
+    with tarfile.open(tarball) as archive:
+        member = archive.extractfile("package/package.json")
+        if member is None:
+            raise ValueError(f"{tarball}: missing package/package.json")
+        manifest = json.load(member)
+    if (manifest.get("name"), manifest.get("version")) != (package.npm_name, version):
+        raise ValueError(
+            f"{tarball}: contains {manifest.get('name')}@{manifest.get('version')}, "
+            f"expected {package.npm_name}@{version}"
+        )
+
+
 # Planning and applying a version bump
 
 
-def plan_manifest_updates(originals, current, version):
+def plan_manifest_updates(originals, package, current, version):
     """Return new manifest bytes without writing anything.
 
     Validation uses JSON/TOML parsers. Editing uses narrow text replacements so
@@ -140,10 +222,11 @@ def plan_manifest_updates(originals, current, version):
     Cargo.lock is deliberately excluded: Cargo is responsible for updating it.
     """
     old = re.escape(current)
+    crate = re.escape(package.crate)
     version_fields = {
-        PACKAGE_JSON: rf'(?m)^(\s*"version"\s*:\s*"){old}(")',
-        CRATE_TOML: rf'(?m)^(version\s*=\s*"){old}(")',
-        WORKSPACE_TOML: rf'(?m)^(subduction_wasm\s*=\s*\{{[^\n]*?\bversion\s*=\s*"){old}(")',
+        package.package_json: rf'(?m)^(\s*"version"\s*:\s*"){old}(")',
+        package.crate_toml: rf'(?m)^(version\s*=\s*"){old}(")',
+        WORKSPACE_TOML: rf'(?m)^({crate}\s*=\s*\{{[^\n]*?\bversion\s*=\s*"){old}(")',
     }
     updates = {}
     for path, pattern in version_fields.items():
@@ -160,22 +243,29 @@ def write_files(root, contents):
         (root / path).write_bytes(data)
 
 
-def refresh_lockfile(root):
+def refresh_lockfile(root, package):
     """Refresh the path package using cached dependencies, without registry queries."""
     subprocess.run(
-        ["cargo", "update", "--offline", "--package", "subduction_wasm"],
+        ["cargo", "update", "--offline", "--package", package.crate],
         cwd=root,
         check=True,
     )
 
 
-# Registry queries (only used by check-published)
+# Registry queries
 
 
-def published_versions():
+def is_published(package, version):
+    published = version in published_versions(package)
+    if published:
+        print(f"{package.npm_name}@{version} is already published.", file=sys.stderr)
+    return published
+
+
+def published_versions(package):
     """The npm package must already exist. Failed lookups must not allow publishing."""
     result = subprocess.run(
-        ["npm", "view", "@automerge/subduction", "versions", "--json"],
+        ["npm", "view", package.npm_name, "versions", "--json"],
         stdout=subprocess.PIPE,
         text=True,
         check=True,
@@ -192,19 +282,37 @@ def published_versions():
 # User and CI output
 
 
-def print_next_steps(version):
-    tag = TAG_PREFIX + version
-    print(f"\nPrepared @automerge/subduction {version}.")
+def npm_dist_tag(version):
+    return "next" if "-" in version else "latest"
+
+
+def print_next_steps(package, version):
+    tag = package.tag_prefix + version
+    print(f"\nPrepared {package.npm_name} {version}.")
     print("Review and commit the manifest/Cargo.lock changes, then merge to main and wait for CI.")
     print("Once the release commit is on main and CI is green:")
-    print(f"  git tag -a {tag} <release-commit> -m 'Release @automerge/subduction {version}'")
+    print(f"  git tag -a {tag} <release-commit> -m 'Release {package.npm_name} {version}'")
     print(f"  git push origin refs/tags/{tag}")
     print("No commit, tag, push, or publish was performed.")
 
 
-def write_validation_output(version):
-    npm_tag = "next" if "-" in version else "latest"
-    write_ci_output(f"version={version}\nnpm_tag={npm_tag}\n")
+def write_validation_output(package, version):
+    # The workflow reads `package` and `flake_output`; the rest is for the log.
+    write_ci_output(
+        f"package={package.key}\n"
+        f"flake_output={package.flake_output}\n"
+        f"npm_name={package.npm_name}\n"
+        f"version={version}\n"
+        f"npm_tag={npm_dist_tag(version)}\n"
+    )
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as handle:
+            handle.write(
+                f"### {package.npm_name} {version}\n"
+                f"Commit: {os.environ.get('GITHUB_SHA', 'unknown')}\n"
+                f"npm dist-tag: {npm_dist_tag(version)}\n"
+                "If the build passes, the tested tarball is uploaded as the npm-package artifact.\n"
+            )
 
 
 def write_ci_output(output):
@@ -218,26 +326,32 @@ def write_ci_output(output):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("prepare", help="Prompt for a new version and update the manifests and Cargo.lock")
+    prepare = commands.add_parser("prepare", help="Prompt for a new version and update the manifests and Cargo.lock")
+    prepare.add_argument("package", choices=sorted(PACKAGES), help="Package to bump")
     validate = commands.add_parser("validate", help="Check a release tag against the manifests and Cargo.lock")
-    validate.add_argument("tag", help="Release tag, e.g. subduction-js-v0.22.1")
-    published = commands.add_parser("check-published", help="Check whether a version is already on npm")
-    published.add_argument("version", help="Package version, e.g. 0.22.1")
+    validate.add_argument("tag", help="Release tag, e.g. subduction-js-v0.24.0")
+    published = commands.add_parser("check-published", help="Check whether a tag's version is already on npm")
+    published.add_argument("tag", help="Release tag, e.g. subduction-js-v0.24.0")
+    publish = commands.add_parser("publish", help="Publish a tested tarball unless already published")
+    publish.add_argument("tag", help="Release tag, e.g. subduction-js-v0.24.0")
+    publish.add_argument("tarball", help="Path to the tested npm tarball")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
 
     try:
         if args.command == "prepare":
-            prepare_release(root)
+            prepare_release(root, package_from_key(args.package))
         elif args.command == "validate":
             validate_release(root, args.tag)
+        elif args.command == "check-published":
+            check_published(args.tag)
         else:
-            check_published(args.version)
+            publish_release(args.tag, args.tarball)
     except (KeyboardInterrupt, EOFError):
         sys.exit("Cancelled.")
-    except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, KeyError, OSError, tarfile.TarError, subprocess.CalledProcessError) as error:
         sys.exit(f"Release {args.command} failed: {error}")
 
 

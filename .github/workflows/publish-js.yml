@@ -1,15 +1,21 @@
 name: Publish JS package
 
+# One workflow for every npm package: npm trusted publishing is registered per
+# package against this filename. Each `run:` step is a single command; release
+# logic lives in scripts/js-release.py and nix/js-package.nix.
+
 on:
   push:
     tags:
+      - 'automerge-subduction-js-v*'
+      - 'sedimentree-js-v*'
       - 'subduction-js-v*'
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-subduction-npm-${{ github.ref }}
+  group: publish-npm-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -18,8 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
-      version: ${{ steps.release.outputs.version }}
-      npm-tag: ${{ steps.release.outputs.npm_tag }}
+      package: ${{ steps.release.outputs.package }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -39,26 +44,16 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
 
       - name: Build and smoke-test the npm package with Nix
-        run: nix build .#subduction-js --no-update-lock-file --print-build-logs
+        env:
+          FLAKE_OUTPUT: ${{ steps.release.outputs.flake_output }}
+        run: nix build ".#$FLAKE_OUTPUT" --no-update-lock-file --print-build-logs
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: subduction-npm
-          path: result/subduction.tgz
+          name: npm-package
+          path: result/${{ steps.release.outputs.package }}.tgz
           if-no-files-found: error
           retention-days: 14
-
-      - name: Release summary
-        env:
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          NPM_TAG: ${{ steps.release.outputs.npm_tag }}
-        run: |
-          {
-            echo "### @automerge/subduction $RELEASE_VERSION"
-            echo "Commit: $GITHUB_SHA"
-            echo "npm dist-tag: $NPM_TAG"
-            echo 'The tested npm tarball is attached as the subduction-npm artifact.'
-          } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     needs: build
@@ -66,18 +61,15 @@ jobs:
     timeout-minutes: 10
     environment: npm
     # Different release tags may build concurrently, but registry checks and
-    # publishing must be serialized across all versions of this package.
+    # publishing must be serialized across all versions of each package.
     concurrency:
-      group: publish-subduction-npm
+      group: publish-npm-${{ needs.build.outputs.package }}
       # Keep pending releases instead of replacing the previous pending job.
       queue: max
       cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
-    env:
-      RELEASE_VERSION: ${{ needs.build.outputs.version }}
-      NPM_TAG: ${{ needs.build.outputs.npm-tag }}
     steps:
       # Check out only the release helper from the tagged commit. Do not rebuild
       # or install package dependencies; publish the tested tarball unchanged.
@@ -89,7 +81,7 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: subduction-npm
+          name: npm-package
           path: npm-artifacts
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -101,17 +93,8 @@ jobs:
       - name: Install an OIDC-capable npm CLI
         run: npm install --global npm@11.20.0 --ignore-scripts
 
-      - name: Check whether the version is already published
-        id: registry
-        run: python3 scripts/js-release.py check-published "$RELEASE_VERSION"
-
-      - name: Publish using npm trusted publishing
-        if: steps.registry.outputs.published == 'false'
-        run: |
-          # Explicit --tag latest bypasses npm's built-in downgrade protection.
-          # Only prereleases need an explicit tag; next follows publish order.
-          tag_args=()
-          if [[ "$NPM_TAG" == "next" ]]; then
-            tag_args=(--tag next)
-          fi
-          npm publish ./npm-artifacts/subduction.tgz --ignore-scripts --access public "${tag_args[@]}" --provenance
+      - name: Publish using npm trusted publishing (skipped if already published)
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          TARBALL: npm-artifacts/${{ needs.build.outputs.package }}.tgz
+        run: python3 scripts/js-release.py publish "$RELEASE_TAG" "$TARBALL"

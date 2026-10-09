@@ -1,0 +1,34 @@
+name: Semver check
+
+# Compares each publishable crate's API with its latest crates.io release.
+# Advisory: versions are bumped when releasing, so a failure here means "the
+# next crates release needs a bigger bump", not "this PR is wrong". The crates
+# release workflow runs the same check as a gate. Do not make it required.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semver-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Same pinned toolchain (rust-toolchain.toml) as the release gate.
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+
+      - name: Check semver against crates.io
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+        with:
+          rust-toolchain: manual
