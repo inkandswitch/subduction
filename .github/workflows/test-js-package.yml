@@ -14,9 +14,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-script:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Test scripts/js-release.py
+        run: python3 scripts/test_js_release.py
+
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - automerge-subduction-js
+          - sedimentree-js
+          - subduction-js
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -28,4 +46,6 @@ jobs:
       # Exercise exactly the derivation used by the release workflow, including
       # smoke tests of the packed release/debug entrypoints, not the Wasm suite.
       - name: Build and smoke-test the npm package with Nix
-        run: nix build .#subduction-js --no-update-lock-file --print-build-logs
+        env:
+          FLAKE_OUTPUT: ${{ matrix.package }}
+        run: nix build ".#$FLAKE_OUTPUT" --no-update-lock-file --print-build-logs

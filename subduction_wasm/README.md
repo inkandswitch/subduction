@@ -12,7 +12,7 @@ nix build .#subduction-js
 ```
 
 This builds and tests the npm package, including the `/debug` variant, and writes
-`result/subduction.tgz`. See [Releasing the JavaScript package](../RELEASING.md)
+`result/subduction.tgz`. See [Releasing](../RELEASING.md#npm-packages)
 for the tag-driven publishing workflow.
 
 For an in-place development build of `subduction_wasm/dist/`, use
