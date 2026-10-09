@@ -1,3 +1,6 @@
+[alias]
+xtask = "run --locked --quiet --package xtask --"
+
 [build]
 
 [target.'cfg(not(target_arch = "wasm32"))']
