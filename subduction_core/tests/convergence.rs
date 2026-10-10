@@ -521,13 +521,12 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
     commit_ids.sort();
     let (d0, d1, d2) = (commit_ids[0], commit_ids[1], commit_ids[2]);
 
-    // ── Bob adds a fragment covering all 3 of Alice's commit digests ──
+    // ── Bob adds a fragment covering d0/d1 but excluding boundary d2 ──
     //
     // head = d0, boundary = {d2}, checkpoints = [d1]
     //
-    // With AlwaysDeep, every commit is a checkpoint. simplify will see
-    // that each single-commit block is "supported" by this fragment
-    // (via head/boundary/checkpoint matching), and prune them all.
+    // With AlwaysDeep, every commit heads its own range. Minimize prunes
+    // d0/d1 via head/checkpoint matching, but must keep excluded boundary d2.
 
     bob.add_fragment(sed_id, d0, BTreeSet::from([d2]), &[d1], make_blob(23))
         .await?;
@@ -553,14 +552,12 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
 
     // ── Verify the resolver worked ──
 
-    // Alice sends only the commits that aren't covered by Bob's fragment
-    // head/boundary in the commit fingerprint set. Bob's fragment has
-    // head=d0 and boundary={d2}, so fp(d0) and fp(d2) are in Bob's
-    // commit_fingerprints. Alice only sends d1 (the checkpoint, which
-    // is truncated and can't be fingerprinted — accepted one-time redundancy).
+    // Bob advertises d0 as held, but does not claim excluded boundary d2.
+    // Alice sends d2 plus d1 (the truncated checkpoint cannot be directly
+    // fingerprinted, so sending it is accepted one-time redundancy).
     assert_eq!(
-        stats.commits_sent, 1,
-        "Alice should send 1 commit (d1 only; d0/d2 covered by fragment head/boundary)"
+        stats.commits_sent, 2,
+        "Alice should send d1 and the missing boundary d2, but not held head d0"
     );
 
     // Alice received Bob's covering fragment.
@@ -571,10 +568,20 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
 
     // ── Verify Bob received all data ──
     //
-    // With AlwaysDeep, Bob's minimize_tree also prunes the received commits
-    // (his fragment covers them), so get_commits returns 0. That's correct —
-    // the in-memory tree is minimized. The real proof is that the blobs are
-    // in storage: get_blobs loads from the storage backend, not the tree.
+    // Bob keeps the excluded boundary in his minimized tree. The redundant
+    // checkpoint is pruned, but both received blobs remain in storage.
+    let bob_commits = bob
+        .get_commits(sed_id)
+        .await
+        .expect("Bob should have commits");
+    assert_eq!(
+        bob_commits
+            .iter()
+            .map(LooseCommit::head)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([d2]),
+        "the missing boundary must survive sync and minimization"
+    );
 
     let bob_blob_count = bob
         .get_blobs(sed_id)
@@ -583,12 +590,10 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
         .expect("bob should have blobs")
         .len();
 
-    // Bob should have: 1 fragment blob (his own) + 1 commit blob (d1 from Alice).
-    // Alice didn't send d0 or d2 because they're covered by Bob's fragment
-    // head/boundary in the commit fingerprint set.
+    // Bob has his fragment blob plus d1 and d2 from Alice.
     assert_eq!(
-        bob_blob_count, 2,
-        "Bob should have 2 blobs (1 commit + 1 fragment), got {bob_blob_count}"
+        bob_blob_count, 3,
+        "Bob should have 3 blobs (2 commits + 1 fragment), got {bob_blob_count}"
     );
 
     Ok(())

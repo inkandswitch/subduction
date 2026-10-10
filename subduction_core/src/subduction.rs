@@ -2901,7 +2901,7 @@ where
             .filter_map(|fp| {
                 let id = resolver.resolve_commit(fp);
                 if id.is_none() {
-                    // Coverage-only fingerprints (fragment head/boundary) are in
+                    // Coverage-only fingerprints (fragment heads) are in
                     // the summary but intentionally not in the resolver. The remote
                     // echoing them back is expected when it doesn't have that CommitId.
                     tracing::debug!(fingerprint = %fp, "requested commit fingerprint not found in resolver");
