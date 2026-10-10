@@ -65,6 +65,7 @@ pub(crate) mod ingest;
 pub(crate) mod peers;
 pub use peers::{SendPushes, upstream_peers};
 pub(crate) mod spawn_guard;
+pub mod upstream_fetch;
 
 use crate::{
     authenticated::Authenticated,
@@ -89,7 +90,7 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     spawn::Spawn,
-    storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
+    storage::{fetcher::Fetcher, powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::{Timeout, call::CallTimeout},
 };
 use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
@@ -208,6 +209,11 @@ pub struct Subduction<
     /// See [`propagate_subscription`](Self::propagate_subscription) for the
     /// claim lifecycle.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
+
+    /// Upstream fetches in flight for locally missing documents, shared by
+    /// concurrent inbound subscribes. See
+    /// [`hold_for_upstream_fetch`](Self::hold_for_upstream_fetch).
+    in_flight_fetches: Arc<upstream_fetch::InFlightFetches>,
 
     /// Shared monotonic counter for outgoing messages, per peer.
     ///
@@ -354,6 +360,7 @@ where
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
+            in_flight_fetches: Arc::default(),
             send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
@@ -3148,6 +3155,121 @@ where
             SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
         >,
 {
+    /// Check whether to await ongoing requests completion before subscribing
+    ///
+    /// When we receive a request for a document that we don't hold we need to forward those
+    /// requests on to other connected peers and wait for those peers to respond before we respond
+    /// to the originating peer. If we have multiple concurrent requests for the same document then
+    /// we want to forward that request once and have all the concurrent originators wait on the
+    /// same outgoing requests. This method provides the answer to "should I wait for an ongoing
+    /// request before responding".
+    ///
+    /// More specifically this method checks if there is an ongoing request for the document using
+    /// [`upstream_fetch::InFlightFetches`] and, if there is no such request but the document is
+    /// not available locally, creates one and waits for it.
+    ///
+    /// Returns
+    ///
+    /// - `false` if:
+    ///     - the `originator` isn't authorized to fetch
+    ///     - the document is present _and there is no ongoing request_ (note
+    ///       that the document could be present because we are in the process
+    ///       of resolving an ongoing upstream request)
+    /// - `true` if the originator is authorized and
+    ///     - there is an ongoing request for the document
+    ///     - the document was not present locally (i.e. we have begun an
+    ///       ongoing fetch)
+    ///
+    /// Really though, if this returns `false` then you can just immediately
+    /// return
+    pub(crate) async fn hold_for_upstream_fetch(
+        self: &Arc<Self>,
+        id: SedimentreeId,
+        originator: PeerId,
+    ) -> bool {
+        use upstream_fetch::FetchSlot;
+
+        // If the requestor is not authorized then there's no need to hold
+        let Ok(fetcher) = self.storage.get_fetcher::<Async>(originator, id).await else {
+            return false;
+        };
+
+        // A fetch already in flight is joined even if it has ingested a
+        // partial result from one of several upstreams.
+        let done = if let Some(done) = self.in_flight_fetches.join(id).await {
+            done
+        } else {
+            let missing = !self.holds_locally(&fetcher).await;
+            // A request could have begun whilst we were calling `holds_locally`
+            // so we need to re-check for in flight fetches
+            match self.in_flight_fetches.join_or_claim(id, missing).await {
+                // We're still waiting for an ongoing request
+                FetchSlot::Joined(done) => done,
+                // We started a fresh request, need to actually spawn it
+                FetchSlot::Claimed(done, token) => {
+                    self.spawner.spawn(Async::forward_subscription_task(
+                        Arc::clone(self),
+                        id,
+                        originator,
+                        Some(token),
+                    ));
+                    done
+                }
+                // Held locally and nobody is fetching: answer right away.
+                FetchSlot::NothingInFlight => return false,
+            }
+        };
+
+        let _ = self
+            .timer
+            .timeout(self.default_roundtrip_timeout / 2, Async::fetch_done(done))
+            .await;
+        true
+    }
+
+    /// Post-handler hook for an inbound subscribe to `id` from `originator`
+    /// that was answered from local data: forward it upstream, detached from
+    /// the dispatch so a slow upstream never holds the per-peer permit.
+    ///
+    /// Re-checks authorization first — the handler returns `Ok` even after
+    /// sending `Unauthorized`, so handler success alone is too permissive a
+    /// gate (see `design/sync/subscriptions.md#authorization-gate`).
+    pub(crate) async fn forward_subscription_in_background(
+        self: &Arc<Self>,
+        id: SedimentreeId,
+        originator: PeerId,
+    ) {
+        if self
+            .storage
+            .policy()
+            .authorize_fetch(originator, id)
+            .await
+            .is_ok()
+        {
+            self.spawner.spawn(Async::forward_subscription_task(
+                Arc::clone(self),
+                id,
+                originator,
+                None,
+            ));
+        }
+    }
+
+    /// Whether anything is held for `fetcher`'s sedimentree, resident or
+    /// durable. An explicitly registered empty tree counts as held.
+    ///
+    /// Deliberately cheap: neither clones nor minimizes a resident tree, nor
+    /// hydrates a cold one. A storage error is treated as "held" so that a
+    /// failing store degrades to the immediate-response path rather than
+    /// stalling every request.
+    async fn holds_locally(&self, fetcher: &Fetcher<Async, Store>) -> bool {
+        self.sedimentrees
+            .with_entry(&fetcher.sedimentree_id(), |_| ())
+            .await
+            .is_some()
+            || !matches!(fetcher.contains_sedimentree_id().await, Ok(false))
+    }
+
     /// Listen for incoming messages and dispatch them through the handler.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -3707,6 +3829,7 @@ pub trait SubductionFutureForm<
     + RunManager<Authenticated<Conn, Self>, WireMsg>
     + Sized
     + peers::SendPushes<Conn, WireMsg>
+    + upstream_fetch::AwaitFetch
 {
 }
 
@@ -3722,6 +3845,7 @@ impl<
     Async: FutureForm
         + RunManager<Authenticated<Conn, Async>, WireMsg>
         + peers::SendPushes<Conn, WireMsg>
+        + upstream_fetch::AwaitFetch
         + Sized,
 > SubductionFutureForm<'a, Store, Conn, WireMsg, Auth, Sign, Metric, SHARDS> for Async
 {
@@ -3749,6 +3873,7 @@ pub trait StartListener<
     FutureForm
     + RunManager<Authenticated<Conn, Self>, WireMsg>
     + peers::SendPushes<Conn, WireMsg>
+    + upstream_fetch::AwaitFetch
     + Sized where
     Hdl::HandlerError: Into<ListenError<Self, Store, Conn, WireMsg>>,
 {
@@ -3870,6 +3995,7 @@ pub trait SpawnDocSync<
     FutureForm
     + RunManager<Authenticated<Conn, Self>, WireMsg>
     + peers::SendPushes<Conn, WireMsg>
+    + upstream_fetch::AwaitFetch
     + Sized
 {
     /// Construct the spawnable future for syncing a single document.
@@ -3893,9 +4019,11 @@ pub trait SpawnDocSync<
             ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>;
 
     /// Construct the spawnable future for handling one inbound message in the
-    /// listen loop. Runs `handler.handle`, then the subscription-propagation
-    /// gate, then reports `(conn, result)` back through `sender` so the
-    /// listener's cleanup arm can tear down a broken connection on error.
+    /// listen loop. Runs `handler.handle` bracketed by the subscription
+    /// forwarding hooks (`Subduction::hold_for_upstream_fetch` before,
+    /// `Subduction::forward_subscription_in_background` after), then reports
+    /// `(conn, result)` back through `sender` so the listener's cleanup arm
+    /// can tear down a broken connection on error.
     #[allow(clippy::type_complexity)]
     fn dispatch_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'static,
@@ -3910,6 +4038,28 @@ pub trait SpawnDocSync<
         propagate: Option<(SedimentreeId, PeerId)>,
         sender: async_channel::Sender<DispatchOutcomeFor<Conn, Self, Hdl>>,
         permit: SemaphoreGuardArc,
+    ) -> Self::Future<'static, ()>;
+
+    /// Construct the detached task that forwards an inbound subscribe to
+    /// `id` from `originator` upstream. If the caller claimed the shared
+    /// fetch slot for `id` (`claim` is `Some`), the claim is released once
+    /// forwarding completes so every waiter on it wakes.
+    ///
+    /// Detached from the requesting dispatch so a slow upstream never holds
+    /// the per-peer permit, and so a waiter timing out cannot cancel
+    /// ingestion or strand outgoing-subscription claims. Authorization is
+    /// the caller's responsibility; both hooks check it before spawning.
+    #[allow(clippy::type_complexity)]
+    fn forward_subscription_task<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'static, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        id: SedimentreeId,
+        originator: PeerId,
+        claim: Option<upstream_fetch::FetchToken>,
     ) -> Self::Future<'static, ()>;
 }
 
@@ -3995,25 +4145,45 @@ where
 
             let mut completion = DispatchCompletion::new(sender);
 
+            // We need to hold the inbound subscription here, before we've run
+            // the fetch, then forward the subscription after the fetch
+            // completes
+            let held = match propagate {
+                Some((id, originator)) => subduction.hold_for_upstream_fetch(id, originator).await,
+                None => false,
+            };
+
             let result = handler.handle(&conn, msg).await;
+
             if result.is_ok()
-                && let Some((sed_id, originator)) = propagate
+                && !held
+                && let Some((id, originator)) = propagate
             {
-                let sd = Arc::clone(&subduction);
-                let _propagation = subduction.spawner.spawn(Async::from_future(async move {
-                    if sd
-                        .storage
-                        .policy()
-                        .authorize_fetch(originator, sed_id)
-                        .await
-                        .is_ok()
-                    {
-                        sd.propagate_subscription(sed_id, originator).await;
-                    }
-                }));
+                subduction
+                    .forward_subscription_in_background(id, originator)
+                    .await;
             }
 
             completion.complete(conn, result);
+        })
+    }
+
+    fn forward_subscription_task<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'static, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        id: SedimentreeId,
+        originator: PeerId,
+        claim: Option<upstream_fetch::FetchToken>,
+    ) -> Self::Future<'static, ()> {
+        Async::from_future(async move {
+            subduction.propagate_subscription(id, originator).await;
+            if let Some(token) = claim {
+                subduction.in_flight_fetches.finish(id, token).await;
+            }
         })
     }
 }
