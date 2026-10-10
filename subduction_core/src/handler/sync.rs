@@ -307,7 +307,8 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
             // Ingest + storage run here, on the per-peer dispatch permit. The
             // subscription fan-out is spawned OFF the permit so a slow
             // subscriber backpressures a detached task instead of stalling
-            // inbound dispatch for this peer.
+            // inbound dispatch for this peer. (A commit or fragment pushed to
+            // us fans out before its save; only the ack is left by then.)
             if let Some(fanout) = self.dispatch(conn, message).await? {
                 self.spawner.spawn(Async::from_future(fanout.run()));
             }
@@ -352,6 +353,11 @@ impl<
 /// subscriber backpressures a detached task instead of holding the per-peer
 /// dispatch permit. Per-peer send counters are stamped in order *before* the
 /// spawn; `run` only performs the wire sends.
+///
+/// A commit or fragment pushed to us is split in two: its pushes are spawned
+/// as soon as it is verified and found new, before it is saved, so
+/// subscribers never wait on storage; the ack to its sender is a second
+/// `FanOut`, built once the save has finished.
 #[allow(clippy::type_complexity)]
 struct FanOut<Conn, Async>
 where
@@ -415,6 +421,28 @@ where
     }
 }
 
+/// A [`FanOut`] as a future the handler's [`Spawn`] takes, for code generic
+/// over the future form (the receive paths spawn pushes mid-dispatch).
+trait SpawnFanOut<Conn>: FutureForm + Sized
+where
+    Conn: Connection<Self, SyncMessage> + PartialEq + Clone + 'static,
+{
+    fn fan_out(fan_out: FanOut<Conn, Self>) -> Self::Future<'static, ()>;
+}
+
+#[future_form(
+    Sendable where
+        Conn: Connection<Sendable, SyncMessage> + PartialEq + Clone + Send + Sync + 'static,
+        Conn::SendError: Send + 'static,
+    Local where
+        Conn: Connection<Local, SyncMessage> + PartialEq + Clone + 'static
+)]
+impl<Async: FutureForm, Conn> SpawnFanOut<Conn> for Async {
+    fn fan_out(fan_out: FanOut<Conn, Self>) -> Self::Future<'static, ()> {
+        Async::from_future(fan_out.run())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch + recv_* methods (self-contained copies from Subduction)
 // ---------------------------------------------------------------------------
@@ -435,7 +463,10 @@ impl<
         &self,
         conn: &Authenticated<Conn, Async>,
         message: SyncMessage,
-    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>>
+    where
+        Async: SpawnFanOut<Conn>,
+    {
         let from = conn.peer_id();
 
         let span = tracing::debug_span!(
@@ -463,7 +494,10 @@ impl<
         from: PeerId,
         message: SyncMessage,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>>
+    where
+        Async: SpawnFanOut<Conn>,
+    {
         // Note: remote heads arrive via three paths:
         //
         // 1. `responder_heads` in `BatchSyncResponse` — handled by
@@ -561,7 +595,10 @@ impl<
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>>
+    where
+        Async: SpawnFanOut<Conn>,
+    {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -617,38 +654,63 @@ impl<
             }
         };
 
-        let was_new = self
-            .insert_commit_locally(&putter, verified_meta)
+        // Push to subscribers before saving, so the commit reaches them without
+        // waiting on storage; the pushes carry the heads the tree will have
+        // once it is saved. The ack follows the save, so the author hears the
+        // commit is stored only once it is.
+        let heads_with = self
+            .preview_commit(&putter, verified_meta.payload())
+            .await
+            .map_err(IoError::Storage)?;
+        if let Some(heads) = &heads_with {
+            let conns = self.get_authorized_subscriber_conns(id, from).await;
+            let pushes = self
+                .build_loose_commit_pushes(id, &signed_for_wire, &blob, heads, conns)
+                .await;
+            self.push_now(pushes);
+        }
+
+        self.persist_commit_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
 
-        let fanout = if was_new {
-            let heads = self.heads_for(id).await;
+        Ok(match heads_with {
+            Some(_) => Some(self.ack(conn, *from, id).await),
+            None => None,
+        })
+    }
 
-            // Ack the originating peer; stamp per-subscriber counters in order
-            // now (before the spawn), then defer the wire sends to `FanOut`.
-            let ack_msg = SyncMessage::HeadsUpdate {
-                id,
-                heads: RemoteHeads {
-                    counter: self.send_counter.next(*from).await,
-                    heads: heads.clone(),
-                },
-            };
+    /// Send subscription pushes now, on a detached task, rather than after the
+    /// dispatch that built them returns.
+    fn push_now(&self, pushes: Vec<(Authenticated<Conn, Async>, SyncMessage)>)
+    where
+        Async: SpawnFanOut<Conn>,
+    {
+        if !pushes.is_empty() {
+            self.spawner
+                .spawn(Async::fan_out(FanOut { ack: None, pushes }));
+        }
+    }
 
-            let conns = self.get_authorized_subscriber_conns(id, from).await;
-            let pushes = self
-                .build_loose_commit_pushes(id, &signed_for_wire, &blob, &heads, conns)
-                .await;
-
-            Some(FanOut {
-                ack: Some((conn.clone(), ack_msg)),
-                pushes,
-            })
-        } else {
-            None
+    /// The `HeadsUpdate` ack telling `from` the tree's heads now that what it
+    /// sent is stored. Sent off the dispatch permit, like the pushes.
+    async fn ack(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        from: PeerId,
+        id: SedimentreeId,
+    ) -> FanOut<Conn, Async> {
+        let ack_msg = SyncMessage::HeadsUpdate {
+            id,
+            heads: RemoteHeads {
+                counter: self.send_counter.next(from).await,
+                heads: self.heads_for(id).await,
+            },
         };
-
-        Ok(fanout)
+        FanOut {
+            ack: Some((conn.clone(), ack_msg)),
+            pushes: Vec::new(),
+        }
     }
 
     /// Build the per-subscriber `LooseCommit` pushes, stamping each peer's send
@@ -713,7 +775,10 @@ impl<
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>>
+    where
+        Async: SpawnFanOut<Conn>,
+    {
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -766,36 +831,27 @@ impl<
             }
         };
 
-        let was_new = self
-            .insert_fragment_locally(&putter, verified_meta)
+        // Push before saving, ack after; see `recv_commit`.
+        let heads_with = self
+            .preview_fragment(&putter, verified_meta.payload())
+            .await
+            .map_err(IoError::Storage)?;
+        if let Some(heads) = &heads_with {
+            let conns = self.get_authorized_subscriber_conns(id, from).await;
+            let pushes = self
+                .build_fragment_pushes(id, &signed_for_wire, &blob, heads, conns)
+                .await;
+            self.push_now(pushes);
+        }
+
+        self.persist_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
 
-        let fanout = if was_new {
-            let heads = self.heads_for(id).await;
-
-            let ack_msg = SyncMessage::HeadsUpdate {
-                id,
-                heads: RemoteHeads {
-                    counter: self.send_counter.next(*from).await,
-                    heads: heads.clone(),
-                },
-            };
-
-            let conns = self.get_authorized_subscriber_conns(id, from).await;
-            let pushes = self
-                .build_fragment_pushes(id, &signed_for_wire, &blob, &heads, conns)
-                .await;
-
-            Some(FanOut {
-                ack: Some((conn.clone(), ack_msg)),
-                pushes,
-            })
-        } else {
-            None
-        };
-
-        Ok(fanout)
+        Ok(match heads_with {
+            Some(_) => Some(self.ack(conn, *from, id).await),
+            None => None,
+        })
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1146,20 +1202,36 @@ impl<
     // Delegating helpers — logic lives in `ingest` and `peers` modules
     // -----------------------------------------------------------------------
 
-    async fn insert_commit_locally(
+    async fn preview_commit(
+        &self,
+        putter: &Putter<Async, Store>,
+        commit: &LooseCommit,
+    ) -> Result<Option<Vec<CommitId>>, Store::Error> {
+        ingest::preview_commit(&self.sedimentrees, putter, &self.depth_metric, commit).await
+    }
+
+    async fn persist_commit_locally(
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, Store::Error> {
-        ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
+    ) -> Result<(), Store::Error> {
+        ingest::persist_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
-    async fn insert_fragment_locally(
+    async fn preview_fragment(
+        &self,
+        putter: &Putter<Async, Store>,
+        fragment: &Fragment,
+    ) -> Result<Option<Vec<CommitId>>, Store::Error> {
+        ingest::preview_fragment(&self.sedimentrees, putter, &self.depth_metric, fragment).await
+    }
+
+    async fn persist_fragment_locally(
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, Store::Error> {
-        ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
+    ) -> Result<(), Store::Error> {
+        ingest::persist_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
     async fn minimize_tree(&self, id: SedimentreeId) {

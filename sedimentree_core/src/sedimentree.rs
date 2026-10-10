@@ -812,10 +812,12 @@ impl Sedimentree {
         // claiming a loose commit gives no guarantee about its ancestors.
         //
         // Walk roots: local heads matching `remote.fragment_fingerprints`.
-        // Walk direction: both parents and children (head/boundary
-        // orientation varies). Horizon: any non-root commit whose FP is
-        // in `remote.commit_fingerprints` — either a fragment boundary or
-        // a loose-commit head we can't extend through.
+        // Walk direction: parents only. A fragment's head is the newest
+        // commit in its range, so its children are outside the fragment
+        // and the remote's copy says nothing about them. Horizon: any
+        // non-root commit whose FP is in `remote.commit_fingerprints` —
+        // either a fragment boundary or a loose-commit head we can't
+        // extend through.
 
         let fragment_roots: Set<CommitId> = self
             .commits
@@ -830,15 +832,6 @@ impl Sedimentree {
             .collect();
 
         if !fragment_roots.is_empty() {
-            // Build a children index over local loose commits so we can
-            // walk in both DAG directions from each root.
-            let mut children_of: Map<CommitId, Vec<CommitId>> = Map::new();
-            for c in self.commits.values() {
-                for parent in c.parents() {
-                    children_of.entry(*parent).or_default().push(c.head());
-                }
-            }
-
             let mut covered: Set<CommitId> = Set::new();
             let mut stack: Vec<CommitId> = fragment_roots.iter().copied().collect();
             while let Some(id) = stack.pop() {
@@ -852,17 +845,9 @@ impl Sedimentree {
                 if is_horizon {
                     continue;
                 }
-                // Recurse via parents...
                 if let Some(commit) = self.commits.get(&id) {
                     for parent in commit.parents() {
                         stack.push(*parent);
-                    }
-                }
-                // ...and via children, so the walk reaches the fragment's
-                // range regardless of head/boundary orientation.
-                if let Some(children) = children_of.get(&id) {
-                    for child in children {
-                        stack.push(*child);
                     }
                 }
             }
@@ -3394,12 +3379,13 @@ mod tests {
         /// When remote has a fragment and local has the underlying loose
         /// commits, the fragment-aware pruning walks from any local
         /// commit/fragment matching `remote.fragment_fingerprints`,
-        /// extending through the local DAG (both directions) and
-        /// stopping at horizons in `remote.commit_fingerprints`.
+        /// extending through the local DAG toward the fragment's boundary
+        /// (parents only) and stopping at horizons in
+        /// `remote.commit_fingerprints`.
         ///
         /// In this scenario the local has loose commit A (matching the
         /// remote's fragment head). The walk from A traverses to its
-        /// child B, then to D (which is in `remote.commit_fingerprints`
+        /// parent B, then to D (which is in `remote.commit_fingerprints`
         /// as the fragment boundary, so the walk stops there). B is
         /// thereby marked as covered and pruned. The fragment itself
         /// propagates via `fragment_fingerprints`.
@@ -3409,7 +3395,7 @@ mod tests {
             let graph = TestGraph::new(
                 &mut rng,
                 &[("a", 2), ("b", 0), ("d", 2)],
-                &[("a", "b"), ("b", "d")],
+                &[("d", "b"), ("b", "a")],
             );
 
             let fragment = graph.make_fragment("a", &["d"], &["b"]);
@@ -3436,7 +3422,7 @@ mod tests {
             );
 
             // Fragment-aware walk from local's loose commit A (matches
-            // remote's fragment head) reaches B via children, stops at D
+            // remote's fragment head) reaches B via parents, stops at D
             // (in remote.commit_fingerprints). B is marked covered and
             // pruned from local_only_commits. Local sends nothing.
             assert!(

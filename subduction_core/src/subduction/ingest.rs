@@ -310,10 +310,10 @@ pub(crate) async fn insert_commit_locally<
     verified_meta: VerifiedMeta<LooseCommit>,
 ) -> Result<bool, Store::Error> {
     let id = putter.sedimentree_id();
-    let commit = verified_meta.payload().clone();
+    let commit = verified_meta.payload();
     let head = commit.head();
 
-    tracing::debug!(digest = ?Digest::hash(&commit), "inserting commit locally");
+    tracing::debug!(digest = ?Digest::hash(commit), "inserting commit locally");
 
     // Newness ("was this commit not already known?") is judged against the
     // tree state *before* persisting. Read it from the resident cache, or
@@ -330,6 +330,58 @@ pub(crate) async fn insert_commit_locally<
         .await?
         .unwrap_or(true);
 
+    persist_commit_locally(sedimentrees, putter, verified_meta).await?;
+    Ok(was_added)
+}
+
+/// Whether a commit is new to its tree, judged before anything is saved (see
+/// [`insert_commit_locally`]), and if so the heads the tree will have once it
+/// is added.
+///
+/// The heads are computed on a copy, so the cached tree is untouched until
+/// [`persist_commit_locally`] has saved the commit: forwarding a commit with
+/// these heads while the save is in flight never makes the cache claim
+/// something storage does not hold.
+pub(crate) async fn preview_commit<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>(
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    putter: &Putter<Async, Store>,
+    depth_metric: &Metric,
+    commit: &LooseCommit,
+) -> Result<Option<Vec<CommitId>>, Store::Error> {
+    let head = commit.head();
+    let with_commit = |tree: &MinimizedSedimentree| {
+        let mut next = tree.clone();
+        next.add_commit(commit.clone());
+        next.heads(depth_metric)
+    };
+    let previewed = sedimentrees
+        .with_hydrated_ref(
+            putter.sedimentree_id(),
+            || load_tree_via_putter::<Async, _>(putter),
+            |tree| (!tree.has_loose_commit(head)).then(|| with_commit(tree)),
+        )
+        .await?;
+    // `None`: not in storage, so a brand-new tree.
+    Ok(previewed.unwrap_or_else(|| Some(with_commit(&MinimizedSedimentree::default()))))
+}
+
+/// Save a verified commit, then add it to the in-memory tree.
+pub(crate) async fn persist_commit_locally<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    const SHARDS: usize,
+>(
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    putter: &Putter<Async, Store>,
+    verified_meta: VerifiedMeta<LooseCommit>,
+) -> Result<(), Store::Error> {
+    let commit = verified_meta.payload().clone();
+
     // Persist before the in-RAM mutation: storage is the source of truth; the
     // map is a cache that re-hydrates from it.
     putter.save_commit(verified_meta).await?;
@@ -340,7 +392,7 @@ pub(crate) async fn insert_commit_locally<
     // is a harmless no-op and the resident tree is the full, correct history.
     sedimentrees
         .with_entry_hydrated(
-            id,
+            putter.sedimentree_id(),
             || load_tree_via_putter::<Async, _>(putter),
             |tree| {
                 tree.add_commit(commit);
@@ -348,7 +400,7 @@ pub(crate) async fn insert_commit_locally<
         )
         .await?;
 
-    Ok(was_added)
+    Ok(())
 }
 
 /// Insert a verified fragment into storage and the in-memory tree.
@@ -364,8 +416,7 @@ pub(crate) async fn insert_fragment_locally<
     verified_meta: VerifiedMeta<Fragment>,
 ) -> Result<bool, Store::Error> {
     let id = putter.sedimentree_id();
-    let fragment = verified_meta.payload().clone();
-    let head = fragment.head();
+    let head = verified_meta.payload().head();
 
     // Newness from pre-save tree state (resident or hydrated); see
     // `insert_commit_locally`.
@@ -378,12 +429,59 @@ pub(crate) async fn insert_fragment_locally<
         .await?
         .unwrap_or(true);
 
+    persist_fragment_locally(sedimentrees, putter, verified_meta).await?;
+    Ok(was_added)
+}
+
+/// Whether a fragment is new to its tree, and if so the heads the tree will
+/// have once it is added. See [`preview_commit`].
+pub(crate) async fn preview_fragment<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Metric: DepthMetric,
+    const SHARDS: usize,
+>(
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    putter: &Putter<Async, Store>,
+    depth_metric: &Metric,
+    fragment: &Fragment,
+) -> Result<Option<Vec<CommitId>>, Store::Error> {
+    let head = fragment.head();
+    let with_fragment = |tree: &MinimizedSedimentree| {
+        let mut next = tree.clone();
+        next.add_fragment(fragment.clone());
+        next.heads(depth_metric)
+    };
+    let previewed = sedimentrees
+        .with_hydrated_ref(
+            putter.sedimentree_id(),
+            || load_tree_via_putter::<Async, _>(putter),
+            |tree| (!tree.has_fragment(head)).then(|| with_fragment(tree)),
+        )
+        .await?;
+    // `None`: not in storage, so a brand-new tree.
+    Ok(previewed.unwrap_or_else(|| Some(with_fragment(&MinimizedSedimentree::default()))))
+}
+
+/// Save a verified fragment, then add it to the in-memory tree. See
+/// [`persist_commit_locally`].
+pub(crate) async fn persist_fragment_locally<
+    Async: FutureForm,
+    Store: Storage<Async>,
+    const SHARDS: usize,
+>(
+    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    putter: &Putter<Async, Store>,
+    verified_meta: VerifiedMeta<Fragment>,
+) -> Result<(), Store::Error> {
+    let fragment = verified_meta.payload().clone();
+
     // Persist before the in-RAM mutation; see `insert_commit_locally`.
     putter.save_fragment(verified_meta).await?;
 
     sedimentrees
         .with_entry_hydrated(
-            id,
+            putter.sedimentree_id(),
             || load_tree_via_putter::<Async, _>(putter),
             |tree| {
                 tree.add_fragment(fragment);
@@ -391,7 +489,7 @@ pub(crate) async fn insert_fragment_locally<
         )
         .await?;
 
-    Ok(was_added)
+    Ok(())
 }
 
 /// Re-minimize a sedimentree in the in-memory cache.
