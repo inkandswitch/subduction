@@ -351,3 +351,57 @@ fn asymmetric_fragment_no_matching_head_does_send_duplicates() {
          remote already has via the fragment"
     );
 }
+
+// ============================================================================
+// Children of a fragment head are outside the fragment.
+// ============================================================================
+
+/// Server has fragment F(head=D, boundary={A}, checkpoints={B,C}) and a
+/// new loose commit E on top of D. Remote has only F. E is newer than
+/// the fragment head, so F says nothing about it and E must be sent.
+///
+/// This is what happens whenever a writer's head commit closes a
+/// fragment (its hash starts with a zero byte): every peer that took
+/// the fragment never receives the next commit, and its sync round
+/// reports nothing missing.
+#[test]
+fn sends_child_of_fragment_head() {
+    let e = loose(b'E', &[b'D']);
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+
+    let server = Sedimentree::new(vec![frag.clone()], vec![e]);
+    let remote = Sedimentree::new(vec![frag], Vec::new());
+
+    let remote_summary = remote.fingerprint_summarize(&seed());
+    let diff = server.diff_remote_fingerprints(&remote_summary);
+
+    let ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+    assert!(
+        ids.contains(&commit_id(b'E')),
+        "E is a child of fragment head D, outside the fragment's range; \
+         the remote doesn't have it, so it must be sent"
+    );
+}
+
+/// Same, with the fragment reaching all the way to the root (empty
+/// boundary) and a short chain E → G on top of its head. This is the
+/// shape an Automerge doc produces when its first fragment closes.
+#[test]
+fn sends_chain_built_on_rootward_fragment_head() {
+    let e = loose(b'E', &[b'D']);
+    let g = loose(b'G', &[b'E']);
+    let frag = fragment(b'D', &[], &[], 1);
+
+    let server = Sedimentree::new(vec![frag.clone()], vec![e, g]);
+    let remote = Sedimentree::new(vec![frag], Vec::new());
+
+    let remote_summary = remote.fingerprint_summarize(&seed());
+    let diff = server.diff_remote_fingerprints(&remote_summary);
+
+    let ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+    assert_eq!(
+        ids,
+        BTreeSet::from([commit_id(b'E'), commit_id(b'G')]),
+        "both commits on top of fragment head D must be sent"
+    );
+}
