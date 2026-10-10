@@ -471,6 +471,12 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
     /// on transports (e.g. HTTP long-poll) that don't guarantee an eventual
     /// disconnect on a byte-alive but protocol-silent peer.
     ///
+    /// Responding to a subscribing request for a locally missing document
+    /// also waits for upstream fetching, for at most half this duration.
+    /// This bounded responder-side wait breaks relay cycles and leaves time
+    /// to send the response; the fetch can continue in the background.
+    /// A caller's per-request override is not transmitted to the responder.
+    ///
     /// Defaults to [`DEFAULT_ROUNDTRIP_TIMEOUT`] (30 s) if not set. Individual calls can override this per-request via
     /// [`CallTimeout`](crate::timeout::call::CallTimeout).
     #[must_use]
