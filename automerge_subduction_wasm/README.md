@@ -9,6 +9,11 @@ Wasm bindings for syncing Automerge documents via Subduction.
 
 This crate combines the Automerge document ID helpers (e.g. `commitIdOfBase58Id`) with `subduction_wasm` to provide a complete solution for syncing Automerge documents in browser and Node.js environments.
 
+## Building and releasing
+
+Build `dist/` with `bodge automerge_subduction_wasm` inside `nix develop`. See
+[RELEASING.md](../RELEASING.md) for the full release steps.
+
 ## License
 
 Licensed under either of Apache License, Version 2.0 or MIT license at your option.

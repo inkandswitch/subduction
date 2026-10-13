@@ -43,3 +43,12 @@ tags.
 
 Review the tagged commit and build artifact, then approve the `npm` environment
 deployment. The publish job will then publish the package to NPM.
+
+# Other npm packages
+
+`@automerge/automerge-subduction` (`automerge_subduction_wasm/`) and
+`@automerge/sedimentree` (`sedimentree_wasm/`) have no release workflow and are
+published by hand with `pnpm publish`. These packages contain only `dist/`,
+which `pnpm build` does not produce. Build it first with `bodge <crate>` inside
+`nix develop`. A `prepublishOnly` check fails the publish if `dist/` is missing
+any entry point.
