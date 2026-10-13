@@ -1,6 +1,6 @@
 [package]
 name = "subduction_keyhive"
-version = "0.10.0"
+version = "0.11.0"
 description = "Keyhive protocol"
 
 categories = ["web-programming"]
@@ -55,7 +55,7 @@ dhat-heap = ["dep:dhat", "test-utils"]
 [dev-dependencies]
 async-channel = { workspace = true }
 criterion = { workspace = true }
-nonempty = "0.10.0"
+nonempty = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
 subduction_crypto = { workspace = true }
 testresult = { workspace = true }
