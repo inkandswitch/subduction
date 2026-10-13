@@ -1,6 +1,6 @@
 {
   "name": "@automerge/automerge-subduction",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "description": "Wasm bindings for syncing Automerge documents via Subduction",
   "publishConfig": {
     "access": "public"
@@ -10,7 +10,8 @@
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
     "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
-    "build-slim": "node build_slim.js"
+    "build-slim": "node build_slim.js",
+    "prepublishOnly": "node ../scripts/check-dist-exports.mjs"
   },
   "keywords": [
     "automerge",
