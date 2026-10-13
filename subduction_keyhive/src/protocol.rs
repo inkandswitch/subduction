@@ -315,14 +315,14 @@ where
         }
 
         let mut prekey_source_hashes: BTreeMap<Identifier, Vec<EventHash>> = BTreeMap::new();
-        for (source_id, key_ops) in &all_prekey.ops {
+        for (source_id, key_ops) in all_prekey.ops {
             let events = key_ops
                 .iter()
                 .map(|op| -> Event<Async, Signer, CRef, Listener> {
                     Event::from(op.as_ref().clone())
                 });
             prekey_source_hashes.insert(
-                *source_id,
+                source_id,
                 hash_and_insert_events(&mut event_data, events, skip_serialization)?,
             );
         }
@@ -2024,9 +2024,11 @@ mod tests {
         //
         // Storage holds `other`'s full archive. A pending event should
         // trigger a reload from storage only when recovery is enabled, so
-        // the destination keyhive's op count grows only in that case. This
-        // pins both the `with_storage_recovery` wiring and the pending
-        // guard in `ingest_events`.
+        // the destination keyhive gains delegations only in that case. The
+        // new events also carry the member's prekey op, which ingests
+        // without a reload, so the total op count cannot tell the two
+        // cases apart. This pins both the `with_storage_recovery` wiring
+        // and the pending guard in `ingest_events`.
         let other = make_keyhive().await;
         let member = make_keyhive().await;
         let member_id = keyhive_peer_id(&member);
@@ -2084,8 +2086,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Recovery disabled: the pending event ingests nothing and no
-        // reload happens, so the op count is unchanged.
+        // Recovery disabled: the delegation stays pending and no reload
+        // happens, so there are still no delegations.
         let dst_off = make_keyhive().await;
         let proto_off = TestProtocol::new(
             Arc::new(Mutex::new(dst_off.clone())),
@@ -2093,16 +2095,15 @@ mod tests {
             keyhive_peer_id(&dst_off),
             dst_off.generate_contact_card().await.unwrap(),
         );
-        let before_off = proto_off.total_ops().await;
         proto_off.ingest_events(&dependent).await.unwrap();
         assert_eq!(
-            proto_off.total_ops().await,
-            before_off,
-            "with recovery off, a pending event must not change the op count"
+            proto_off.keyhive.lock().await.stats().await.delegations,
+            0,
+            "with recovery off, a pending event must not reload any delegations"
         );
 
         // Recovery enabled: the pending event triggers a reload of the
-        // archive, raising the op count.
+        // archive, which brings in `other`'s delegations.
         let dst_on = make_keyhive().await;
         let proto_on = TestProtocol::new(
             Arc::new(Mutex::new(dst_on.clone())),
@@ -2111,11 +2112,10 @@ mod tests {
             dst_on.generate_contact_card().await.unwrap(),
         )
         .with_storage_recovery();
-        let before_on = proto_on.total_ops().await;
         proto_on.ingest_events(&dependent).await.unwrap();
         assert!(
-            proto_on.total_ops().await > before_on,
-            "with recovery on, a pending event must reload the archive and raise the op count"
+            proto_on.keyhive.lock().await.stats().await.delegations > 0,
+            "with recovery on, a pending event must reload the archive's delegations"
         );
     }
 

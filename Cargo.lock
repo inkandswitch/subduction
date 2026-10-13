@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "automerge",
  "base58",
@@ -472,9 +472,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8035043522050dd868b8f6c3419ab3cb9db674b175ede6e9197325acceebbc72"
+checksum = "556733f3f71101717862a384702a6ae6e320d9089d0f6a4aca07aeca3b6b512a"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -482,7 +482,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
  "keyhive_crypto",
- "nonempty 0.10.0",
+ "nonempty",
  "rand 0.8.8",
  "serde",
  "thiserror 1.0.69",
@@ -2894,9 +2894,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "026106281d5d24e07bd87e6ff6a9a2ea07076388e2253b689cc58872cae03434"
+checksum = "6ad72233ea8a7de1abc90854e7bae9e0c6169f66d0366a6cdb463fbb1d8154c4"
 dependencies = [
  "beekem",
  "bincode",
@@ -2910,7 +2910,7 @@ dependencies = [
  "future_form",
  "futures",
  "keyhive_crypto",
- "nonempty 0.10.0",
+ "nonempty",
  "rand 0.8.8",
  "serde",
  "signature 2.2.0",
@@ -3557,18 +3557,12 @@ dependencies = [
 
 [[package]]
 name = "nonempty"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "303e8749c804ccd6ca3b428de7fe0d86cb86bc7606bc15291f100fd487960bb8"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "nonempty"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9737e026353e5cd0736f98eddae28665118eb6f6600902a7f50db585621fecb6"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "noq"
@@ -4379,9 +4373,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.17"
+version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04759210543be93709136e28212294a659ef5001836ff4eab4d663e4529bba83"
+checksum = "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -4936,7 +4930,7 @@ dependencies = [
  "futures",
  "futures-util",
  "getrandom 0.2.17",
- "nonempty 0.12.0",
+ "nonempty",
  "num-bigint",
  "pprof",
  "rand 0.8.8",
@@ -5353,7 +5347,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "ahash",
  "async-channel",
@@ -5383,7 +5377,7 @@ dependencies = [
  "metrics-process",
  "metrics-util",
  "nix 0.29.0",
- "nonempty 0.12.0",
+ "nonempty",
  "rand 0.8.8",
  "reqwest 0.13.4",
  "sedimentree_core",
@@ -5425,7 +5419,7 @@ dependencies = [
  "getrandom 0.2.17",
  "metrics",
  "metrics-util",
- "nonempty 0.12.0",
+ "nonempty",
  "pprof",
  "rand 0.8.8",
  "sedimentree_core",
@@ -5471,7 +5465,7 @@ dependencies = [
  "future_form",
  "futures",
  "getrandom 0.2.17",
- "nonempty 0.12.0",
+ "nonempty",
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
@@ -5563,7 +5557,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5580,7 +5574,7 @@ dependencies = [
  "futures",
  "keyhive_core",
  "keyhive_crypto",
- "nonempty 0.10.0",
+ "nonempty",
  "rand 0.8.8",
  "sedimentree_core",
  "serde",
@@ -5618,7 +5612,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5631,7 +5625,7 @@ dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "js-sys",
- "nonempty 0.12.0",
+ "nonempty",
  "rand 0.8.8",
  "sedimentree_core",
  "sedimentree_wasm",
@@ -5678,7 +5672,7 @@ dependencies = [
  "futures",
  "futures-timer",
  "futures-util",
- "nonempty 0.12.0",
+ "nonempty",
  "pprof",
  "rand 0.8.8",
  "sedimentree_core",
