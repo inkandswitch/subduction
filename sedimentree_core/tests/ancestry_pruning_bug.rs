@@ -25,7 +25,7 @@
 //! Only fragment heads carry a transitive guarantee, and only down to
 //! their boundaries. The pruning treats a local commit/fragment as a
 //! walk root iff its head appears in `remote.fragment_fingerprints`,
-//! walks the local loose-commit DAG in both directions from each
+//! walks the local loose-commit DAG through parents from each
 //! root, and stops at any non-root commit whose fingerprint is in
 //! `remote.commit_fingerprints` (a boundary horizon, or a loose-commit
 //! head we can't extend through).
@@ -349,5 +349,120 @@ fn asymmetric_fragment_no_matching_head_does_send_duplicates() {
         "no walk root (local has neither fragment F nor a loose commit \
          with head=D); local sends B and/or C as duplicates that the \
          remote already has via the fragment"
+    );
+}
+
+// ============================================================================
+// Descendants beyond a fragment's head are not covered and must be sent.
+// ============================================================================
+
+fn sent(server: &Sedimentree, requester: &Sedimentree) -> BTreeSet<CommitId> {
+    let summary = requester.fingerprint_summarize(&seed());
+    let diff = server.diff_remote_fingerprints(&summary);
+    diff.local_only_commits.iter().map(|(id, _)| **id).collect()
+}
+
+/// Linear A → B → C → D → E (oldest → newest). The requester holds
+/// fragment F(head=D, boundary={A}, checkpoints={B,C}) and nothing newer.
+/// The server holds the same history as loose commits, plus E, a new
+/// commit on top of D. E must be sent.
+#[test]
+fn sends_commit_built_on_remote_fragment_head() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        Vec::new(),
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'D']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], Vec::new());
+
+    let ids = sent(&server, &requester);
+    assert!(
+        ids.contains(&commit_id(b'E')),
+        "E is newer than the requester's fragment and the requester does \
+         not have it, so it must be sent; got {ids:?}"
+    );
+}
+
+/// The same, when the server also holds the fragment, and the new work is
+/// a chain of two commits. Both must be sent.
+#[test]
+fn sends_chain_built_on_shared_fragment_head() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        vec![frag.clone()],
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'D']),
+            loose(b'G', &[b'E']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], Vec::new());
+
+    let ids = sent(&server, &requester);
+    assert!(
+        ids.contains(&commit_id(b'E')) && ids.contains(&commit_id(b'G')),
+        "E and G are newer than the shared fragment and the requester has \
+         neither, so both must be sent; got {ids:?}"
+    );
+}
+
+/// Control: the walk does stop at a newer commit the requester advertised.
+/// The requester holds the fragment and loose E; the server holds the
+/// history plus E and G. Only G is missing, and it must be sent.
+#[test]
+fn sends_commit_beyond_one_the_requester_has() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        Vec::new(),
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'D']),
+            loose(b'G', &[b'E']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], vec![loose(b'E', &[b'D'])]);
+
+    let ids = sent(&server, &requester);
+    assert!(
+        ids.contains(&commit_id(b'G')),
+        "G is newer than everything the requester has, so it must be sent; \
+         got {ids:?}"
+    );
+}
+
+/// A → B → C → D is covered by the requester's fragment, but a sibling
+/// branch E built on B is not. Walking children from B would incorrectly
+/// cross into E even if children of the fragment head D were skipped.
+#[test]
+fn sends_sibling_branch_outside_remote_fragment() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        Vec::new(),
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'B']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], Vec::new());
+
+    assert_eq!(
+        sent(&server, &requester),
+        BTreeSet::from([commit_id(b'E')]),
+        "send the sibling branch, but not commits covered by the fragment"
     );
 }
