@@ -7,7 +7,7 @@
 //! [`Sedimentree::minimize`]: super::Sedimentree::minimize
 //! [`Sedimentree::heads`]: super::Sedimentree::heads
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use crate::{
     collections::{Map, Set},
@@ -96,7 +96,7 @@ impl CommitDag {
         let target_node = self
             .nodes
             .get_mut(target.0)
-            .expect("NodeId not in self.nodes");
+            .expect("add_edge called with a target that is not in self.nodes");
         let prev_parent_head = target_node.parents;
         target_node.parents = Some(parent_edge_idx);
         self.edges.push(Edge {
@@ -130,7 +130,7 @@ impl CommitDag {
         fragments: &[Fragment],
         strategy: &S,
     ) -> Set<CommitId> {
-        // Algorithm: walk reverse-topo from each tip, partitioning
+        // Algorithm: walk parents from each tip, partitioning
         // commits into fragment "ranges" (runs between boundaries — a
         // commit is a boundary when `Depth::is_boundary()`). A commit
         // can appear in multiple ranges (visited from multiple tips),
@@ -170,56 +170,44 @@ impl CommitDag {
             self.nodes.get(idx.0).expect("NodeId not in self.nodes").id
         });
 
-        for tip in tips {
-            let mut range: Option<(CommitId, Vec<CommitId>)> = None;
-            for id in self.reverse_topo(tip) {
-                let depth = strategy.to_depth(id);
-                if depth.is_boundary() {
-                    if let Some((range_head, commits)) = range.take() {
-                        for commit in commits {
-                            rangeless_commits.remove(&commit);
-                            commits_to_ranges
-                                .entry(commit)
-                                .or_insert_with(Vec::new)
-                                .push(range_head);
-                        }
-                    }
-                    range = Some((id, vec![id]));
-                }
-                if let Some((_, commits)) = &mut range {
-                    if !depth.is_boundary() {
-                        commits.push(id);
-                    }
-                } else if !commits_to_ranges.contains_key(&id) && !depth.is_boundary() {
-                    rangeless_commits.insert(id);
-                }
+        // Carry the range head along each ancestry path. A boundary on
+        // one branch must not become the range head for a sibling branch
+        // visited later by DFS. Preserve distinct ranges at merges too.
+        let mut visited = Set::new();
+        let mut stack: Vec<_> = tips.into_iter().map(|tip| (tip, None)).collect();
+        while let Some((node_idx, mut range_head)) = stack.pop() {
+            #[allow(clippy::expect_used)]
+            let id = self
+                .nodes
+                .get(node_idx.0)
+                .expect("NodeId not in self.nodes")
+                .id;
+            if strategy.to_depth(id).is_boundary() {
+                range_head = Some(id);
             }
-            // The walk reached a root without crossing another
-            // boundary; treat the trailing range as unbounded at its
-            // oldest end.
-            if let Some((end, commits)) = range.take() {
+            if !visited.insert((node_idx, range_head)) {
+                continue;
+            }
+            if let Some(head) = range_head {
                 commits_to_ranges
-                    .entry(end)
+                    .entry(id)
                     .or_insert_with(Vec::new)
-                    .push(end);
-                for commit in commits {
-                    commits_to_ranges
-                        .entry(commit)
-                        .or_insert_with(Vec::new)
-                        .push(end);
-                }
+                    .push(head);
+            } else {
+                rangeless_commits.insert(id);
             }
+            stack.extend(self.parents(node_idx).map(|parent| (parent, range_head)));
         }
 
-        // Build the union of `CommitId`s that any fragment supports
-        // (head, boundary, and checkpoints). Range heads recorded above
-        // are full `CommitId`s; checkpoints are truncated, so we
-        // collect both forms. See `Fragment::supports_block`.
+        // Only heads and checkpoints establish payload coverage. A
+        // fragment excludes its boundary commits and the ranges they
+        // head; those need independent coverage from another fragment.
+        // Range heads are full `CommitId`s; checkpoints are truncated,
+        // so we collect both forms.
         let mut covered_range_heads: Set<CommitId> = Set::new();
         let mut covered_checkpoints: Set<Checkpoint> = Set::new();
         for f in fragments {
             covered_range_heads.insert(f.head());
-            covered_range_heads.extend(f.boundary().iter().copied());
             covered_checkpoints.extend(f.checkpoints().iter().copied());
         }
 
@@ -264,10 +252,6 @@ impl CommitDag {
             .flatten()
     }
 
-    fn reverse_topo(&self, start: NodeIdx) -> impl Iterator<Item = CommitId> + '_ {
-        ReverseTopo::new(self, start)
-    }
-
     #[cfg(test)]
     pub(crate) fn contains_commit(&self, id: &CommitId) -> bool {
         self.node_map.contains_key(id)
@@ -282,44 +266,6 @@ impl CommitDag {
                 None
             }
         })
-    }
-}
-
-struct ReverseTopo<'a> {
-    dag: &'a CommitDag,
-    stack: Vec<NodeIdx>,
-    visited: Set<NodeIdx>,
-}
-
-impl<'a> ReverseTopo<'a> {
-    fn new(dag: &'a CommitDag, start: NodeIdx) -> Self {
-        let stack = vec![start];
-        ReverseTopo {
-            dag,
-            stack,
-            visited: Set::new(),
-        }
-    }
-}
-
-impl Iterator for ReverseTopo<'_> {
-    type Item = CommitId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.stack.pop() {
-            if self.visited.contains(&node) {
-                continue;
-            }
-            self.visited.insert(node);
-            let mut parents = self.dag.parents(node).collect::<Vec<_>>();
-            parents.sort_by_key(|p| {
-                #[allow(clippy::expect_used)]
-                self.dag.nodes.get(p.0).expect("node is not in DAG").id
-            });
-            self.stack.extend(parents);
-            return Some(self.dag.nodes.get(node.0)?.id);
-        }
-        None
     }
 }
 

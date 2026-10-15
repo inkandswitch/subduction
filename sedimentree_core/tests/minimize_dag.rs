@@ -43,7 +43,7 @@ fn diamond_merge_fragment_covers_interior() {
     let graph = TestGraph::new(
         &mut rng,
         &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
-        &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+        &[("d", "b"), ("d", "c"), ("b", "a"), ("c", "a")],
     );
 
     // Fragment from A to D, with B and C as checkpoints
@@ -152,8 +152,8 @@ fn deep_linear_chain() {
     let mut rng = seeded_rng(103);
     let graph = TestGraph::new(
         &mut rng,
-        &[("a", 3), ("b", 0), ("c", 0), ("d", 0), ("e", 2)],
-        &[("a", "b"), ("b", "c"), ("c", "d"), ("d", "e")],
+        &[("a", 3), ("b", 0), ("c", 0), ("d", 0), ("e", 3)],
+        &[("e", "d"), ("d", "c"), ("c", "b"), ("b", "a")],
     );
 
     // Fragment covers entire chain

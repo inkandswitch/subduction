@@ -2576,10 +2576,8 @@ mod tests {
         ///   ╰── fragment(head=E, boundary={A}) ──╯
         /// ```
         ///
-        /// All commits A–E are in a block bounded by two depth-2 commits.
-        /// The fragment's `supports_block` covers E (head), A (boundary),
-        /// and B/C/D should be pruned because they're in a block fully
-        /// covered by the fragment.
+        /// The fragment contains B–E. Its boundary A is excluded from
+        /// the blob and must survive as a loose commit.
         #[test]
         fn linear_chain_all_intermediates_pruned() {
             let a = d2(1); // oldest, root
@@ -2601,9 +2599,10 @@ mod tests {
             let tree = Sedimentree::new(vec![frag], commits);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
-            assert!(
-                remaining_commit_ids(&minimized).is_empty(),
-                "all commits in a fully covered block should be pruned"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([a]),
+                "prune fragment members, but keep the boundary"
             );
         }
 
@@ -2645,7 +2644,7 @@ mod tests {
         /// ```
         ///
         /// C is a depth-1 commit recorded as a checkpoint. The fragment
-        /// covers the entire block A→E. All commits should be pruned.
+        /// covers B–E; only boundary A should survive.
         #[test]
         fn checkpoint_covers_intermediate_depth1_commit() {
             let a = d2(1);
@@ -2666,9 +2665,10 @@ mod tests {
             let tree = Sedimentree::new(vec![frag], commits);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
-            assert!(
-                remaining_commit_ids(&minimized).is_empty(),
-                "all commits in a block with checkpoints should be pruned"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([a]),
+                "checkpoints cover interior ranges, not the boundary"
             );
         }
 
@@ -2708,9 +2708,10 @@ mod tests {
             let tree = Sedimentree::new(vec![frag], commits);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
-            assert!(
-                remaining_commit_ids(&minimized).is_empty(),
-                "commits between checkpoints should be pruned when block is covered"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([a]),
+                "prune commits between checkpoints, but keep the boundary"
             );
         }
 
@@ -2787,9 +2788,10 @@ mod tests {
             let tree = Sedimentree::new(vec![frag], commits);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
-            assert!(
-                remaining_commit_ids(&minimized).is_empty(),
-                "diamond DAG intermediates should be pruned when block is covered"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([d]),
+                "prune both diamond branches, but keep the boundary"
             );
         }
 
@@ -2823,9 +2825,10 @@ mod tests {
             let tree = Sedimentree::new(vec![frag], commits);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
-            assert!(
-                remaining_commit_ids(&minimized).is_empty(),
-                "diamond with checkpoint should prune all commits in covered block"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([d]),
+                "prune both diamond branches, but keep the boundary"
             );
         }
 
@@ -2864,9 +2867,10 @@ mod tests {
             let tree = Sedimentree::new(vec![frag1, frag2], commits);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
-            assert!(
-                remaining_commit_ids(&minimized).is_empty(),
-                "two adjacent fragments should prune all intermediates"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([a]),
+                "C is covered by frag1's head, but A has no independent coverage"
             );
         }
 
@@ -2942,15 +2946,9 @@ mod tests {
         ///                    ╰── frag(C, {A}) ──╯
         /// ```
         ///
-        /// X and Y are older than A (the first depth-2 boundary). In
-        /// reverse-topo from C, the traversal hits A and starts a block,
-        /// but X and Y come _after_ A is flushed. They end up in a block
-        /// whose end is A — and since the fragment supports A (it's the
-        /// boundary), that block is also covered.
-        ///
-        /// To get truly "blockless" tail commits we need them reachable
-        /// from a tip but with no depth-2 commit anywhere in their
-        /// ancestry path.
+        /// X and Y would survive below boundary A because the fragment
+        /// excludes A's range. This test instead puts them on a separate
+        /// branch with no depth-2 commit, exercising rangeless commits.
         #[test]
         fn tail_commits_on_separate_branch_survive() {
             let x = d0(10); // oldest, root, separate branch
@@ -3029,10 +3027,10 @@ mod tests {
                 "deep fragment should dominate shallow: surviving heads = {frags:?}"
             );
 
-            // All loose commits should be pruned
-            assert!(
-                remaining_commit_ids(&minimized).is_empty(),
-                "all intermediates should be pruned when deep fragment covers the range"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([a]),
+                "the deeper fragment still excludes boundary A"
             );
         }
 
@@ -3053,9 +3051,9 @@ mod tests {
         /// `deep_frag`'s range. Both survive minimize.
         ///
         /// For loose commits: B is in block C→A (covered by `shallow_frag`),
-        /// so B is pruned. D is in block E→C; block E is covered by
-        /// `deep_frag` (E is its boundary), so D is also pruned. F is in
-        /// block G→E (covered by `deep_frag`), so F is pruned.
+        /// so B is pruned. D is in block E→C, outside both fragments,
+        /// and survives along with E and A. F is in block G→E
+        /// (covered by `deep_frag`), so F is pruned.
         #[test]
         fn different_depth_non_overlapping_both_survive() {
             let a = d2(1);
@@ -3090,12 +3088,10 @@ mod tests {
                 "both fragments should survive: heads = {frags:?}"
             );
 
-            // All depth-0 intermediates should be pruned (each is in a
-            // block whose boundary commit is covered by some fragment)
-            let remaining = remaining_commit_ids(&minimized);
-            assert!(
-                !remaining.contains(&b) && !remaining.contains(&d) && !remaining.contains(&f),
-                "all depth-0 intermediates should be pruned: got {remaining:?}"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([a, d, e]),
+                "keep boundaries and the uncovered gap between fragments"
             );
         }
 
@@ -3117,8 +3113,9 @@ mod tests {
         /// in `deep_frag`'s range. After minimize:
         /// - `deep_frag` and `shallow2` survive; `shallow1` is pruned
         /// - F and H are in block I→E, covered by `deep_frag` → pruned
-        /// - B is in block C→A or E→C, covered by `shallow2` or `deep_frag` → pruned
-        /// - D is in block E→C, block E covered by `deep_frag` → pruned
+        /// - B is in block C→A, covered by `shallow2` → pruned
+        /// - D is in block E→C, outside both surviving fragments → kept
+        /// - Boundaries A and E are not payload members → kept
         #[test]
         fn three_levels_partial_domination() {
             let a = d2(1);
@@ -3165,11 +3162,10 @@ mod tests {
                 "dominated shallow1 should be pruned: heads = {frag_heads:?}"
             );
 
-            // All intermediates pruned
-            let remaining = remaining_commit_ids(&minimized);
-            assert!(
-                remaining.is_empty(),
-                "all intermediates should be pruned by the two surviving fragments: got {remaining:?}"
+            assert_eq!(
+                remaining_commit_ids(&minimized),
+                BTreeSet::from([a, d, e]),
+                "keep boundaries and the uncovered gap between surviving fragments"
             );
         }
     }
@@ -3212,7 +3208,7 @@ mod tests {
             let graph = TestGraph::new(
                 &mut rng,
                 &[("a", 2), ("b", 0), ("c", 0), ("d", 2), ("e", 0)],
-                &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d"), ("d", "e")],
+                &[("e", "d"), ("d", "b"), ("d", "c"), ("b", "a"), ("c", "a")],
             );
 
             let fragment = graph.make_fragment("a", &["d"], &["b", "c"]);
@@ -3232,20 +3228,19 @@ mod tests {
                 "commit C should have been pruned by minimize"
             );
 
-            // E (below fragment boundary) should remain
+            // D (the excluded boundary) and E (below it) should remain
+            assert!(minimized.has_loose_commit(graph.node_hash("d")));
             assert!(
                 minimized.has_loose_commit(graph.node_hash("e")),
                 "commit E should survive minimize (below fragment boundary)"
             );
 
             // The fingerprint summary should have 3 commit fingerprints:
-            // E (surviving loose commit) + A (fragment head) + D (fragment boundary).
-            // The head/boundary are included for coverage — they tell the remote
-            // "I know about these CommitIds" so it doesn't re-send them.
+            // D and E (surviving loose commits) + A (fragment head).
             assert_eq!(
                 summary.commit_fingerprints().len(),
                 3,
-                "commit fingerprints should include E (loose) + A (head) + D (boundary)"
+                "commit fingerprints should include D, E (loose) + A (head)"
             );
             assert_eq!(
                 summary.fragment_fingerprints().len(),
@@ -3333,18 +3328,18 @@ mod tests {
         }
 
         /// When local has a fragment covering commits, and remote has nothing,
-        /// the diff on the minimized local should send only the fragment
-        /// (not the covered commits, since they were pruned).
+        /// the diff on the minimized local should send the fragment and
+        /// its excluded boundary (not the covered commits).
         ///
         /// This is the core bandwidth win: sync sends fragments, not the
         /// individual commits they subsume.
         #[test]
-        fn diff_minimized_local_sends_only_fragment() {
+        fn diff_minimized_local_sends_fragment_and_boundary() {
             let mut rng = seeded_rng(202);
             let graph = TestGraph::new(
                 &mut rng,
                 &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
-                &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+                &[("d", "b"), ("d", "c"), ("b", "a"), ("c", "a")],
             );
 
             let fragment = graph.make_fragment("a", &["d"], &["b", "c"]);
@@ -3366,11 +3361,13 @@ mod tests {
                 "local should send exactly the fragment"
             );
 
-            // Local should NOT send covered commits (they were pruned by minimize)
             assert_eq!(
-                diff.local_only_commits.len(),
-                0,
-                "covered commits should not be sent (pruned by minimize)"
+                diff.local_only_commits
+                    .iter()
+                    .map(|(id, _)| **id)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([graph.node_hash("d")]),
+                "send the excluded boundary, not the covered commits"
             );
         }
 
@@ -3508,19 +3505,19 @@ mod tests {
         ///     oldest                                     newest
         ///
         ///   LOCAL has: all 6 commits + fragment(head=D, boundary={A})
-        ///   After minimize: fragment survives; all commits in blocks
-        ///                   A→D are pruned; E and F survive (blockless)
+        ///   After minimize: fragment survives; B–D are pruned;
+        ///                   boundary A and blockless E, F survive
         ///
         ///   REMOTE has: nothing (empty)
         ///
         ///   Expected diff:
-        ///     LOCAL sends: fragment(D→A) + commits E, F
-        ///     LOCAL does NOT send: A, B, C, D (captured in fragment)
-        ///     Total: 3 items (not 7)
+        ///     LOCAL sends: fragment(D→A) + commits A, E, F
+        ///     LOCAL does NOT send: B, C, D (captured in fragment)
+        ///     Total: 4 items (not 7)
         ///
-        ///   After remote receives these 3 items, it has full coverage:
-        ///   the fragment's blob contains the compacted data for A-D,
-        ///   and the loose commits provide E and F.
+        ///   After remote receives these 4 items, it has full coverage:
+        ///   the fragment's blob contains the compacted data for B-D,
+        ///   and the loose commits provide A, E and F.
         /// ```
         #[test]
         #[allow(clippy::too_many_lines)]
@@ -3591,13 +3588,13 @@ mod tests {
             let local_tree = Sedimentree::new(alloc::vec![fragment], commits);
             let local_min = local_tree.minimize(&CountLeadingZeroBytes);
 
-            // Verify minimize pruned A-D but kept E, F
+            // Verify minimize pruned B-D but kept boundary A and E, F.
+            assert!(local_min.has_loose_commit(a), "boundary A must survive");
             assert!(
-                !local_min.has_loose_commit(a)
-                    && !local_min.has_loose_commit(b)
+                !local_min.has_loose_commit(b)
                     && !local_min.has_loose_commit(c)
                     && !local_min.has_loose_commit(d),
-                "A-D should be pruned (blocks covered by fragment)"
+                "B-D should be pruned (members of fragment)"
             );
             assert!(
                 local_min.has_loose_commit(e) && local_min.has_loose_commit(f),
@@ -3615,36 +3612,25 @@ mod tests {
 
             let diff = local_min.diff_remote_fingerprints(&remote_summary);
 
-            // Local sends: 1 fragment + 2 commits (E, F) = 3 items total
+            // Local sends: 1 fragment + 3 commits (A, E, F) = 4 items total
             // NOT 1 fragment + 6 commits = 7 items
             let total_items_sent = diff.local_only_fragments.len() + diff.local_only_commits.len();
 
             assert_eq!(
                 diff.local_only_fragments.len(),
                 1,
-                "should send 1 fragment (captures A-D)"
+                "should send 1 fragment (captures B-D)"
             );
             assert_eq!(
                 diff.local_only_commits.len(),
-                2,
-                "should send 2 loose commits (E, F only)"
+                3,
+                "should send 3 loose commits (A, E, F)"
             );
-            assert_eq!(total_items_sent, 3, "total wire items should be 3, not 7");
+            assert_eq!(total_items_sent, 4, "total wire items should be 4, not 7");
 
-            // The sent commits are E and F, not any of A-D
             let sent_commit_ids: BTreeSet<_> =
                 diff.local_only_commits.iter().map(|(id, _)| **id).collect();
-            assert!(
-                sent_commit_ids.contains(&e) && sent_commit_ids.contains(&f),
-                "sent commits should be E and F"
-            );
-            assert!(
-                !sent_commit_ids.contains(&a)
-                    && !sent_commit_ids.contains(&b)
-                    && !sent_commit_ids.contains(&c)
-                    && !sent_commit_ids.contains(&d),
-                "covered commits A-D must NOT be sent"
-            );
+            assert_eq!(sent_commit_ids, BTreeSet::from([a, e, f]));
 
             // === Verify remote has full coverage after receiving ===
             let mut remote_post_sync = remote_min;
@@ -3655,7 +3641,7 @@ mod tests {
                 remote_post_sync.add_fragment((*frag).clone());
             }
 
-            // Remote now has 1 fragment + 2 loose commits
+            // Remote now has 1 fragment + 3 loose commits
             assert_eq!(
                 remote_post_sync.fragments().count(),
                 1,
@@ -3663,8 +3649,8 @@ mod tests {
             );
             assert_eq!(
                 remote_post_sync.loose_commits().count(),
-                2,
-                "remote should have 2 loose commits (E, F) after sync"
+                3,
+                "remote should have 3 loose commits (A, E, F) after sync"
             );
 
             // After minimize, remote's state matches local's
