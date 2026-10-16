@@ -106,12 +106,6 @@ pub struct EphemeralHandler<
     /// harmlessly. Increment/decrement pairing is enforced by
     /// [`InflightGuard`] (RAII), so counters cannot leak even if a fan-out
     /// future is cancelled, aborted, or never polled.
-    ///
-    /// FIXME(core): the proactive disconnect APIs (`disconnect`,
-    /// `disconnect_from_peer`, `disconnect_all`) tear the peer down
-    /// without invoking `on_peer_disconnect`, so entries evicted via those
-    /// paths linger — the same pre-existing gap as ephemeral subscriptions
-    /// and the nonce cache. Fix belongs in `subduction_core`'s teardown.
     inflight_sends: Arc<Mutex<Map<PeerId, Arc<AtomicUsize>>>>,
 }
 
