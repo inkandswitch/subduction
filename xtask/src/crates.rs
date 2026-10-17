@@ -298,7 +298,9 @@ fn tag() -> Result<(), CratesError> {
             continue;
         }
         // Without --force, `git tag` refuses a name that already exists.
-        let status = git(&["tag", &tag])?;
+        // `--no-sign`: lightweight tags, so `tag.gpgSign` does not ask for a
+        // signature per crate. The workflow does not check signatures.
+        let status = git(&["tag", "--no-sign", &tag])?;
         if !status.success() {
             return Err(CratesError::TagExists(tag));
         }
