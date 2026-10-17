@@ -1,54 +1,131 @@
-# Releasing the JavaScript package
+# Releasing
 
-The `@automerge/subduction` NPM package is published from `subduction_wasm/` by
-[Publish JS package](.github/workflows/publish-js.yml). This workflow is
-triggered by pushes of tags matching `subduction-js-v*` to the `main` branch.
+Every package is released by pushing a tag to a commit on `main`. A GitHub
+Actions workflow then publishes it with trusted publishing (OIDC, so no
+long-lived registry token is stored), after an environment approval. Workflow
+steps are single commands; the logic lives in `scripts/js-release.py` (npm) and
+`cargo xtask crates` (crates).
 
-Releasing is thus a two step process:
+| What | Tag | Workflow | Approval |
+|---|---|---|---|
+| `@automerge/subduction` (`subduction_wasm/`) | `subduction-js-v<version>` | [Publish JS package](.github/workflows/publish-js.yml) | `npm` |
+| `@automerge/sedimentree` (`sedimentree_wasm/`) | `sedimentree-js-v<version>` | [Publish JS package](.github/workflows/publish-js.yml) | `npm` |
+| `@automerge/automerge-subduction` (`automerge_subduction_wasm/`) | `automerge-subduction-js-v<version>` | [Publish JS package](.github/workflows/publish-js.yml) | `npm` |
+| Each publishable crate, e.g. `subduction_core` | `<crate>-v<version>`, e.g. `subduction_core-v0.19.0` | [Publish crates](.github/workflows/publish-crates.yml) | `crates-io` |
 
-- Prepare a release commit on `main` with the new version in all manifests
-- Tag the commit and push the tag to trigger the release
+The tag's version must match the package's manifest at the tagged commit.
 
-## Preparing a release
+## npm packages
 
-Run with Python 3.11+ and Cargo available:
-
-```sh
-./scripts/js-release.py prepare
-```
-
-Enter the new version when prompted. The script updates `subduction_wasm/package.json`,
-`subduction_wasm/Cargo.toml`, the root workspace dependency, and `Cargo.lock`.
-It uses Cargo offline, does not look up available versions, and restores the
-original files if preparation fails.
-
-Review and commit the changes, merge to `main`, and wait for CI to pass before
-tagging the release. The script prints the tag/push commands but does not run
-them or create a commit.
-
-## Triggering a release
-
-Push a package-specific tag pointing to the CI-green release commit on `main`:
+### Preparing
 
 ```sh
-# Replace the example version and commit with the release you prepared.
-git tag -a subduction-js-v0.22.1 <release-commit> -m 'Release @automerge/subduction 0.22.1'
-git push origin refs/tags/subduction-js-v0.22.1
+./scripts/js-release.py prepare subduction   # or sedimentree, automerge-subduction
 ```
 
-The tag version must match all the manifests and `Cargo.lock`. Stable versions
-publish to `latest`; prereleases such as `subduction-js-v0.23.0-rc.1` publish to
-`next`. The `subduction-js-v` prefix avoids collisions with CLI/nightly release
-tags. 
+Enter the new version when prompted. This updates `package.json`, the crate's
+`Cargo.toml`, the workspace dependency, and `Cargo.lock`. Commit, merge to
+`main`, and wait for CI.
+
+### Publishing
+
+Push the package's tag pointing to the CI-green release commit on `main`:
+
+```sh
+git tag -a subduction-js-v0.24.0 <release-commit> -m 'Release @automerge/subduction 0.24.0'
+git push <remote> refs/tags/subduction-js-v0.24.0   # the inkandswitch/subduction remote
+```
+
+Stable versions publish to `latest`; prereleases such as
+`subduction-js-v0.25.0-rc.1` publish to `next`.
 
 Review the tagged commit and build artifact, then approve the `npm` environment
-deployment. The publish job will then publish the package to NPM.
+deployment. The publish step checks that the tarball is the tagged package and
+version, and skips the upload if npm already has that version.
 
-# Other npm packages
+Tests for the script: `python3 scripts/test_js_release.py`.
 
-`@automerge/automerge-subduction` (`automerge_subduction_wasm/`) and
-`@automerge/sedimentree` (`sedimentree_wasm/`) have no release workflow and are
-published by hand with `pnpm publish`. These packages contain only `dist/`,
-which `pnpm build` does not produce. Build it first with `bodge <crate>` inside
-`nix develop`. A `prepublishOnly` check fails the publish if `dist/` is missing
-any entry point.
+## Crates
+
+### Preparing
+
+```sh
+cargo xtask crates prepare minor   # or major, patch
+```
+
+This bumps every crate without `publish = false` at the given level, updates
+its `[workspace.dependencies]` entry, and refreshes `Cargo.lock` offline. It
+then checks the result with `cargo metadata --locked`, which may download
+dependency manifests that are not cached. It restores the original files if any
+step fails. If you interrupt it (Ctrl-C), it does not; run
+`git restore Cargo.toml Cargo.lock '*/Cargo.toml'` to undo a partial bump. It
+only bumps stable versions; set prerelease versions by hand. It prints the tags
+to push.
+
+In 0.x, use `minor` for new features or breaking changes and `patch` for fixes.
+The `semver` workflow on pull requests flags breaking changes, which need
+`minor`. It does not flag new features; choose `minor` for those yourself.
+
+Merge the release commit to `main` and wait for CI.
+
+Tests for the crates tool: `cargo test -p xtask`.
+
+### Publishing
+
+Check out the CI-green release commit, tag the crates to release, and push the
+tags:
+
+```sh
+git switch --detach <release-commit>
+cargo xtask crates tag
+cargo xtask crates push-tags
+```
+
+`tag` creates `<crate>-v<version>` at `HEAD` for every publishable crate whose
+current version is not on crates.io yet, and refuses to move a tag that already
+points elsewhere. To release only some crates, tag them by hand instead, e.g.
+`git tag subduction_core-v0.19.1`.
+
+`push-tags` checks every `<crate>-v<version>` tag at `HEAD` against its manifest
+and checks that `HEAD` is on the remote's `main`, before pushing anything. It
+then pushes the tags one per `git push` (GitHub starts no workflow for a single
+push of more than three tags), dependencies first, so a run that starts before
+the last push still sees every sibling it needs. Re-running it is a no-op for
+tags already pushed.
+
+A release run publishes every crate tagged at its commit that crates.io does not
+have yet, so crates tagged together release together whichever tag's run starts
+first. The run:
+
+1. Checks that the commit is on `main`, that `Cargo.lock` is current, and that
+   every publishable crate's non-dev dependency on a sibling is publishable and
+   requires `^<sibling's current version>`.
+2. Plans the release from the crate tags at the commit. It fails if a tag's
+   version differs from the manifest, if a tagged crate has never been
+   published, or if a crate to publish needs a sibling version that is neither
+   on crates.io nor tagged at the commit; the error names the tag to add.
+3. Runs `cargo-semver-checks` on the planned crates against crates.io.
+4. Waits for approval of the `crates-io` environment. The plan is in the run's
+   summary.
+5. Publishes the planned crates in dependency order.
+
+Runs for tags pushed later find their crates already published and stop at the
+plan. If a run starts before all the tags arrive, it publishes the crates tagged
+so far, and a later run asks for a second approval for the rest. A tag pushed
+while a run waits for approval is published by its own run, not by the waiting
+one.
+
+The `crates-io` environment's required reviewers are the approval gate: anyone
+who can push a tag can start a release, but only a reviewer can let it publish.
+
+Publishing many crates is not atomic. If a run fails partway, re-run it: crates
+already on crates.io are skipped. If a re-run fails because a version already
+exists, wait a few minutes for the crates.io index to catch up and run it again.
+
+## Adding a package
+
+Trusted publishing cannot create a package. Publish the first version of a new
+crate or npm package by hand, then add a trusted publisher for it on the
+registry: repository `inkandswitch/subduction`, workflow `publish-crates.yml`
+with environment `crates-io` for a crate, or workflow `publish-js.yml` with
+environment `npm` for an npm package.

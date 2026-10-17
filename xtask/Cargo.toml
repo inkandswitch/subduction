@@ -1,0 +1,30 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Release tooling for the Subduction workspace (run with `cargo xtask`)"
+publish = false
+
+categories = ["development-tools"]
+keywords = ["release"]
+readme = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
+semver = { version = "1.0", features = ["serde"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+toml_edit = "0.25"
+
+[dev-dependencies]
+bolero = { workspace = true }
+
+[lints]
+workspace = true

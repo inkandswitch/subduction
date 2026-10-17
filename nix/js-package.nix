@@ -7,10 +7,19 @@
   esbuild,
   nodejs,
   cargoLock,
+  # Workspace crate holding package.json, e.g. "subduction_wasm".
+  crate,
+  # Package key from scripts/js-release.py, e.g. "subduction". Names the
+  # flake output (`<key>-js`) and the tarball (`<key>.tgz`).
+  key,
 }:
+let
+  packageJson = builtins.fromJSON (builtins.readFile ../${crate}/package.json);
+  tarball = "${key}.tgz";
+in
 rustPlatform.buildRustPackage {
-  pname = "subduction-js";
-  version = (builtins.fromJSON (builtins.readFile ../subduction_wasm/package.json)).version;
+  pname = "${key}-js";
+  inherit (packageJson) version;
   src = lib.cleanSource ../.;
 
   # Nix fetches and verifies these dependencies before entering the sandbox.
@@ -36,15 +45,15 @@ rustPlatform.buildRustPackage {
     cp Cargo.lock "$TMPDIR/original-Cargo.lock"
 
     wasm-bodge build \
-      --crate-path "$PWD/subduction_wasm" \
-      --package-json "$PWD/subduction_wasm/package.json" \
-      --out-dir "$PWD/subduction_wasm/dist" \
+      --crate-path "$PWD/${crate}" \
+      --package-json "$PWD/${crate}/package.json" \
+      --out-dir "$PWD/${crate}/dist" \
       --debug-profile wasm-debug
     # wasm-bodge invokes Cargo itself; don't permit silent lockfile changes.
     cmp Cargo.lock "$TMPDIR/original-Cargo.lock"
 
-    (cd subduction_wasm && npm pack --offline --ignore-scripts --pack-destination "$TMPDIR/npm-package")
-    mv "$TMPDIR/npm-package/"*.tgz "$TMPDIR/subduction.tgz"
+    (cd ${crate} && npm pack --offline --ignore-scripts --pack-destination "$TMPDIR/npm-package")
+    mv "$TMPDIR/npm-package/"*.tgz "$TMPDIR/${tarball}"
 
     runHook postBuild
   '';
@@ -55,8 +64,8 @@ rustPlatform.buildRustPackage {
 
     # Rust/Wasm and browser suites run in test-wasm.yml. Only smoke-test the
     # exact tarball to be installed here, not the build tree's dist/.
-    tar -xzf "$TMPDIR/subduction.tgz" -C "$TMPDIR/npm-package"
-    node scripts/check-js-package.mjs "$TMPDIR/npm-package/package"
+    tar -xzf "$TMPDIR/${tarball}" -C "$TMPDIR/npm-package"
+    node scripts/check-js-package.mjs "$TMPDIR/npm-package/package" "${packageJson.name}"
 
     runHook postCheck
   '';
@@ -64,7 +73,7 @@ rustPlatform.buildRustPackage {
   installPhase = ''
     runHook preInstall
     mkdir -p "$out"
-    cp "$TMPDIR/subduction.tgz" "$out/subduction.tgz"
+    cp "$TMPDIR/${tarball}" "$out/${tarball}"
     runHook postInstall
   '';
 
@@ -72,7 +81,7 @@ rustPlatform.buildRustPackage {
   dontFixup = true;
 
   meta = {
-    description = "Tested npm tarball for @automerge/subduction (release and debug Wasm)";
+    description = "Tested npm tarball for ${packageJson.name} (release and debug Wasm)";
     homepage = "https://github.com/inkandswitch/subduction";
     license = [ lib.licenses.mit lib.licenses.asl20 ];
     platforms = lib.platforms.unix;
