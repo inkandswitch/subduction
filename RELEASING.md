@@ -33,7 +33,7 @@ Push the package's tag pointing to the CI-green release commit on `main`:
 
 ```sh
 git tag -a subduction-js-v0.24.0 <release-commit> -m 'Release @automerge/subduction 0.24.0'
-git push origin refs/tags/subduction-js-v0.24.0
+git push <remote> refs/tags/subduction-js-v0.24.0   # the inkandswitch/subduction remote
 ```
 
 Stable versions publish to `latest`; prereleases such as
@@ -72,15 +72,19 @@ Tests for the crates tool: `cargo test -p xtask`.
 
 ### Publishing
 
-Tag each crate to release at the CI-green release commit, then push the tags
-from that commit:
+Check out the CI-green release commit, tag the crates to release, and push the
+tags:
 
 ```sh
-git tag subduction_core-v0.19.0 <release-commit>
-git tag subduction_crypto-v0.10.0 <release-commit>
 git switch --detach <release-commit>
+cargo xtask crates tag
 cargo xtask crates push-tags
 ```
+
+`tag` creates `<crate>-v<version>` at `HEAD` for every publishable crate whose
+current version is not on crates.io yet, and refuses to move a tag that already
+points elsewhere. To release only some crates, tag them by hand instead, e.g.
+`git tag subduction_core-v0.19.1`.
 
 `push-tags` checks every `<crate>-v<version>` tag at `HEAD` against its manifest
 and checks that `HEAD` is on the remote's `main`, before pushing anything. It

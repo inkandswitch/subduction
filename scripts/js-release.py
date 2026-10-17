@@ -292,7 +292,7 @@ def print_next_steps(package, version):
     print("Review and commit the manifest/Cargo.lock changes, then merge to main and wait for CI.")
     print("Once the release commit is on main and CI is green:")
     print(f"  git tag -a {tag} <release-commit> -m 'Release {package.npm_name} {version}'")
-    print(f"  git push origin refs/tags/{tag}")
+    print(f"  git push <remote> refs/tags/{tag}   # the inkandswitch/subduction remote")
     print("No commit, tag, push, or publish was performed.")
 
 

@@ -69,17 +69,30 @@ pub(crate) enum Command {
         only: Option<Vec<String>>,
     },
 
+    /// Create a local `<crate>-v<version>` tag at `HEAD` for each publishable
+    /// crate whose current version is not on crates.io yet.
+    ///
+    /// Skips crates already released and tags already at `HEAD`; refuses to
+    /// move a tag that points elsewhere. Fails if a crate has never been
+    /// published (its first version is published by hand). Pushes nothing:
+    /// follow with `push-tags`.
+    Tag,
+
     /// Push every `<crate>-v<version>` tag at `HEAD`, one per `git push`.
     ///
     /// GitHub starts no workflow for a single push of more than three tags.
     /// Checks every tag against its manifest before pushing any. Pushing a tag
     /// the remote already has is a no-op.
     PushTags {
-        /// The remote to push to.
-        #[arg(long, default_value = "origin")]
-        remote: String,
+        /// The remote to push to. Defaults to the one remote whose URL is the
+        /// `inkandswitch/subduction` GitHub repository.
+        #[arg(long)]
+        remote: Option<String>,
     },
 }
+
+/// The repository releases are published from; its tags start release runs.
+const RELEASE_REPOSITORY: &str = "inkandswitch/subduction";
 
 /// The part of a version to increment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -136,7 +149,8 @@ pub(crate) fn run(command: Command) -> Result<(), CratesError> {
             report_plan(&plan)
         }
         Command::Publish { tag, only } => publish(&tag, only.as_deref()),
-        Command::PushTags { remote } => push_tags(&remote),
+        Command::Tag => tag(),
+        Command::PushTags { remote } => push_tags(remote),
     }
 }
 
@@ -176,13 +190,14 @@ fn prepare(level: Level) -> Result<(), CratesError> {
         .iter()
         .map(|(krate, version)| Tag(&krate.name, version).to_string())
         .collect();
-    println!("\nReview and commit the changes, merge to main, and wait for CI. Then tag");
-    println!("the release commit:");
-    for tag in &tags {
-        println!("  git tag {tag} <release-commit>");
-    }
-    println!("\nThen, with the release commit checked out, push them one at a time:");
+    println!("\nReview and commit the changes, merge to main, and wait for CI. Then, with");
+    println!("the merged release commit checked out:");
+    println!("  cargo xtask crates tag");
     println!("  cargo xtask crates push-tags");
+    println!("\n`tag` will create:");
+    for tag in &tags {
+        println!("  {tag}");
+    }
     println!("\nNo commit, tag, push, or publish was performed.");
     Ok(())
 }
@@ -230,6 +245,69 @@ enum Registry {
     HasVersion,
 }
 
+fn registry_status<F: Fn(&str) -> Result<Listing, IndexError>>(
+    krate: &Crate,
+    listing: &F,
+) -> Result<Registry, CratesError> {
+    Ok(match listing(&krate.name)? {
+        Listing::Missing => Registry::NeverPublished,
+        Listing::Versions(versions) if versions.contains(&krate.version) => Registry::HasVersion,
+        Listing::Versions(_) => Registry::LacksVersion,
+    })
+}
+
+/// The publishable crates whose current version crates.io lacks: the ones a
+/// release from this commit should tag. Fails on never-published crates.
+fn unreleased<F: Fn(&str) -> Result<Listing, IndexError>>(
+    workspace: &Workspace,
+    listing: F,
+) -> Result<Vec<&Crate>, CratesError> {
+    let mut unreleased = Vec::new();
+    let mut new = Vec::new();
+    for krate in workspace.publishable() {
+        match registry_status(krate, &listing)? {
+            Registry::LacksVersion => unreleased.push(krate),
+            Registry::HasVersion => {}
+            Registry::NeverPublished => new.push(krate.name.clone()),
+        }
+    }
+    if new.is_empty() {
+        Ok(unreleased)
+    } else {
+        Err(CratesError::NewCrates(new))
+    }
+}
+
+/// Tag each unreleased crate at `HEAD`, dependencies first (for readable output;
+/// `push-tags` orders the pushes itself).
+fn tag() -> Result<(), CratesError> {
+    let workspace = Workspace::load()?;
+    validate(&workspace)?;
+    let index = Index::crates_io()?;
+    let unreleased = unreleased(&workspace, |name| index.listing(name))?;
+    if unreleased.is_empty() {
+        println!("Every publishable crate's version is already on crates.io; nothing to tag.");
+        return Ok(());
+    }
+
+    let at_head = tags_at_head()?;
+    for krate in dependencies_first(&unreleased) {
+        let tag = krate.tag().to_string();
+        if at_head.contains(&tag) {
+            println!("{tag}: already at HEAD");
+            continue;
+        }
+        // Without --force, `git tag` refuses a name that already exists.
+        let status = git(&["tag", &tag])?;
+        if !status.success() {
+            return Err(CratesError::TagExists(tag));
+        }
+        println!("{tag}: tagged HEAD");
+    }
+    println!("\nPush them with: cargo xtask crates push-tags");
+    Ok(())
+}
+
 /// What a release run would do with the crates tagged at its commit.
 #[derive(Debug, Default)]
 struct Plan<'a> {
@@ -261,13 +339,7 @@ fn plan<'a, F: Fn(&str) -> Result<Listing, IndexError>>(
         if let Some(&status) = known.get(krate.name.as_str()) {
             return Ok(status);
         }
-        let status = match listing(&krate.name)? {
-            Listing::Missing => Registry::NeverPublished,
-            Listing::Versions(versions) if versions.contains(&krate.version) => {
-                Registry::HasVersion
-            }
-            Listing::Versions(_) => Registry::LacksVersion,
-        };
+        let status = registry_status(krate, &listing)?;
         known.insert(&krate.name, status);
         Ok(status)
     };
@@ -418,12 +490,21 @@ fn dependencies_first<'a>(crates: &[&'a Crate]) -> Vec<&'a Crate> {
 
 /// Push the crate tags at `HEAD`, dependencies first, so a release run that
 /// starts before the last push still sees a complete set of siblings.
-fn push_tags(remote: &str) -> Result<(), CratesError> {
+fn push_tags(remote: Option<String>) -> Result<(), CratesError> {
     let workspace = Workspace::load()?;
     let tagged = tagged_crates(&workspace, &tags_at_head()?)?;
     if tagged.is_empty() {
         return Err(CratesError::NoCrateTags);
     }
+    let remote = match remote {
+        Some(remote) => remote,
+        None => release_remote(&git_output(&[
+            "config",
+            "--get-regexp",
+            r"^remote\..*\.url$",
+        ])?)?,
+    };
+    let remote = remote.as_str();
 
     // The release workflow rejects commits not on main; catch that before any
     // tag reaches the remote.
@@ -442,6 +523,55 @@ fn push_tags(remote: &str) -> Result<(), CratesError> {
         }
     }
     Ok(())
+}
+
+/// The one remote whose URL is [`RELEASE_REPOSITORY`] on GitHub, from
+/// `git config --get-regexp '^remote\..*\.url$'` output.
+fn release_remote(config: &str) -> Result<String, CratesError> {
+    let is_release_url = |url: &str| {
+        let path = url.trim_end_matches('/').trim_end_matches(".git");
+        ["github.com:", "github.com/"]
+            .iter()
+            .any(|host| path.ends_with(&format!("{host}{RELEASE_REPOSITORY}")))
+    };
+    let remotes: Vec<(&str, &str)> = config
+        .lines()
+        .filter_map(|line| {
+            let (key, url) = line.split_once(' ')?;
+            let name = key.strip_prefix("remote.")?.strip_suffix(".url")?;
+            Some((name, url.trim()))
+        })
+        .collect();
+    let mut matching: Vec<&str> = remotes
+        .iter()
+        .filter(|(_, url)| is_release_url(url))
+        .map(|(name, _)| *name)
+        .collect();
+    matching.dedup();
+    match matching.as_slice() {
+        [one] => Ok((*one).to_owned()),
+        [] => Err(CratesError::NoReleaseRemote(
+            remotes
+                .iter()
+                .map(|(name, url)| format!("{name} ({url})"))
+                .collect(),
+        )),
+        many => Err(CratesError::AmbiguousRemote(
+            many.iter().map(|name| (*name).to_owned()).collect(),
+        )),
+    }
+}
+
+/// Run git and return its standard output. An empty result is not an error.
+fn git_output(args: &[&str]) -> Result<String, CratesError> {
+    let output = Process::new("git")
+        .args(args)
+        .output()
+        .map_err(|source| CratesError::Spawn {
+            program: PathBuf::from("git"),
+            source,
+        })?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn git(args: &[&str]) -> Result<process::ExitStatus, CratesError> {
@@ -566,9 +696,21 @@ pub(crate) enum CratesError {
     #[error("could not list the tags at HEAD:\n{0}")]
     Git(String),
 
+    /// A crate's tag already exists at another commit.
+    #[error("tag {0} already exists elsewhere; a released version never moves")]
+    TagExists(String),
+
     /// `push-tags` found nothing to push.
     #[error("no `<crate>-v<version>` tags at HEAD; tag the release commit first")]
     NoCrateTags,
+
+    /// No remote points at the release repository.
+    #[error("no remote points at github.com/{RELEASE_REPOSITORY}; pass --remote (remotes: {})", or_none(&.0.join(", ")))]
+    NoReleaseRemote(Vec<String>),
+
+    /// Several remotes point at the release repository.
+    #[error("several remotes point at github.com/{RELEASE_REPOSITORY} ({}); pass --remote", .0.join(", "))]
+    AmbiguousRemote(Vec<String>),
 
     /// `git fetch <remote> main` failed.
     #[error("could not fetch main from {0}")]
@@ -855,5 +997,58 @@ mod tests {
         let app = workspace.publishable_crate("app").expect("app");
         let ordered = dependencies_first(&[app]);
         assert_eq!(names(&ordered), ["app"]);
+    }
+
+    #[test]
+    fn unreleased_lists_only_crates_whose_version_crates_io_lacks() {
+        let workspace = Workspace::for_test(&[
+            ("app", "0.3.0", true, &["core"]),
+            ("core", "0.2.0", true, &[]),
+            ("util", "0.1.0", true, &[]),
+            ("wasm", "0.9.0", false, &[]),
+        ]);
+        let found = unreleased(&workspace, |name| Ok(registry(name))).expect("unreleased");
+        assert_eq!(names(&found), ["app", "core"]);
+
+        let fresh = Workspace::for_test(&[("fresh", "0.1.0", true, &[])]);
+        assert!(matches!(
+            unreleased(&fresh, |name| Ok(registry(name))),
+            Err(CratesError::NewCrates(new)) if new == ["fresh"]
+        ));
+    }
+
+    #[test]
+    fn release_remote_finds_the_repository_under_any_name() {
+        for config in [
+            "remote.inkandswitch.url git@github.com:inkandswitch/subduction.git\n",
+            "remote.upstream.url https://github.com/inkandswitch/subduction\n\
+             remote.origin.url git@github.com:expede/subduction.git\n",
+            "remote.ik.url ssh://git@github.com/inkandswitch/subduction.git/\n",
+        ] {
+            let name = release_remote(config).expect("one release remote");
+            assert!(
+                ["inkandswitch", "upstream", "ik"].contains(&name.as_str()),
+                "{config}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_remote_refuses_forks_and_ambiguity() {
+        assert!(matches!(
+            release_remote("remote.origin.url git@github.com:expede/subduction.git\n"),
+            Err(CratesError::NoReleaseRemote(_))
+        ));
+        assert!(matches!(
+            release_remote("remote.origin.url git@github.com:notinkandswitch/subduction.git\n"),
+            Err(CratesError::NoReleaseRemote(_))
+        ));
+        assert!(matches!(
+            release_remote(
+                "remote.a.url git@github.com:inkandswitch/subduction.git\n\
+                 remote.b.url https://github.com/inkandswitch/subduction.git\n"
+            ),
+            Err(CratesError::AmbiguousRemote(names)) if names == ["a", "b"]
+        ));
     }
 }
