@@ -172,10 +172,21 @@ impl Workspace {
             }
             write(&krate.manifest, &manifest)?;
 
-            let Some(entry) = root
-                .get_mut("workspace")
-                .and_then(|workspace| workspace.get_mut("dependencies"))
-                .and_then(|dependencies| dependencies.get_mut(&krate.name))
+            // Look before borrowing mutably: toml_edit's `get_mut` inserts an
+            // empty item for a missing key, which would read as a malformed
+            // entry for crates (like binaries) that have none.
+            let has_entry = root
+                .get("workspace")
+                .and_then(|workspace| workspace.get("dependencies"))
+                .and_then(|dependencies| dependencies.get(&krate.name))
+                .is_some();
+            let Some(entry) = has_entry
+                .then(|| {
+                    root.get_mut("workspace")
+                        .and_then(|workspace| workspace.get_mut("dependencies"))
+                        .and_then(|dependencies| dependencies.get_mut(&krate.name))
+                })
+                .flatten()
             else {
                 continue;
             };
@@ -575,5 +586,23 @@ mod tests {
             fs::remove_dir_all(&dir).ok();
             assert!(result.is_err(), "{root}");
         }
+    }
+
+    /// Binary crates such as `automerge_subduction_ingest` have no entry.
+    #[test]
+    fn write_versions_skips_crates_without_a_workspace_entry() {
+        let root = "[workspace.dependencies]\nother = { version = \"1.0.0\" }\n";
+        let (workspace, dir) = scratch(root, "[package]\nname = \"a\"\nversion = \"0.1.0\"\n");
+        let bumps: Vec<_> = workspace
+            .publishable()
+            .map(|k| (k, version("0.2.0")))
+            .collect();
+        let result = workspace.write_versions(&bumps);
+        let root_after = fs::read_to_string(dir.join("Cargo.toml")).expect("read root");
+        let member = fs::read_to_string(dir.join("a/Cargo.toml")).expect("read member");
+        fs::remove_dir_all(&dir).ok();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(root_after, root, "no entry is invented for `a`");
+        assert!(member.contains("version = \"0.2.0\""));
     }
 }
