@@ -466,3 +466,27 @@ fn sends_sibling_branch_outside_remote_fragment() {
         "send the sibling branch, but not commits covered by the fragment"
     );
 }
+
+/// A document created concurrently by two peers has two roots: one the
+/// requester holds as fragment F (head D), the other as loose root X. The
+/// server then merges them (M, parents {D, X}) and builds N on M. The
+/// requester has neither M nor N, so both must be sent.
+#[test]
+fn sends_merge_of_fragment_head_and_loose_root() {
+    let frag = fragment(b'D', &[], &[], 1);
+    let server = Sedimentree::new(
+        vec![frag.clone()],
+        vec![
+            loose(b'X', &[]),
+            loose(b'M', &[b'D', b'X']),
+            loose(b'N', &[b'M']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], vec![loose(b'X', &[])]);
+
+    assert_eq!(
+        sent(&server, &requester),
+        BTreeSet::from([commit_id(b'M'), commit_id(b'N')]),
+        "the merge and its descendant are newer than everything the requester has"
+    );
+}
