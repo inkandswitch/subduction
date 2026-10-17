@@ -115,7 +115,7 @@ graph TD
 
 ## Sedimentree
 
-[Sedimentree][sedimentree-design] is a novel data structure for organizing encrypted data into hierarchical layers (strata). Each layer contains metadata (hashes) that represent fragments of a larger file or log. This enables:
+[Sedimentree](./design/sedimentree.md) is a novel data structure for organizing encrypted data into hierarchical layers (strata). Each layer contains metadata (hashes) that represent fragments of a larger file or log. This enables:
 
 1. **Efficient Diffing**: Compare metadata to determine which fragments need synchronization
 2. **Privacy**: Sync without exposing plaintext data
@@ -289,5 +289,4 @@ The project uses several testing strategies:
 [`bolero`]: https://github.com/camshaft/bolero
 [CRDTs]: https://crdt.tech/
 [Ink & Switch]: https://www.inkandswitch.com/
-[sedimentree-design]: https://github.com/inkandswitch/keyhive/blob/main/design/sedimentree.md
 [wasm-pack]: https://rustwasm.github.io/wasm-pack/
