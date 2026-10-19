@@ -14,8 +14,9 @@ use sedimentree_core::{
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::Sedimentree,
+    test_utils::{TestGraph, seeded_rng},
 };
-use subduction_core::connection::message::{BatchSyncRequest, SyncMessage};
+use subduction_core::connection::message::{BatchSyncRequest, RequestId, SyncMessage};
 
 fn close_ancestry(commits: &[LooseCommit]) -> Vec<LooseCommit> {
     let ids: BTreeSet<CommitId> = commits.iter().map(LooseCommit::head).collect();
@@ -44,6 +45,53 @@ fn codec_roundtrip(req: BatchSyncRequest) -> BatchSyncRequest {
         panic!("expected BatchSyncRequest, got {decoded:?}");
     };
     r
+}
+
+#[test]
+fn codec_preserves_boundary_ownership_without_new_wire_fields() {
+    let graph = TestGraph::new(
+        &mut seeded_rng(42),
+        &[("z", 0), ("a", 1), ("c", 0), ("h", 1)],
+        &[("z", "a"), ("a", "c"), ("c", "h")],
+    );
+    let fragment = graph.make_fragment("h", &["a"], &[]);
+    let id = fragment.sedimentree_id();
+    let requester = Sedimentree::new(vec![fragment], vec![]);
+    let request = BatchSyncRequest {
+        id,
+        req_id: RequestId {
+            requestor: subduction_core::peer::id::PeerId::new([0; 32]),
+            nonce: 0,
+        },
+        fingerprint_summary: requester.fingerprint_summarize(&FingerprintSeed::new(42, 99)),
+        subscribe: false,
+    };
+    let bytes = SyncMessage::BatchSyncRequest(request.clone()).encode();
+    assert!(bytes.starts_with(b"SUM\x00"));
+    // Existing envelope + request fields + two counts + head FP in each set.
+    assert_eq!(bytes.len(), 9 + 32 + 40 + 1 + 16 + 2 + 2 + 8 + 8);
+    let decoded = codec_roundtrip(request.clone());
+    assert_eq!(decoded, request);
+
+    let shared = graph.to_sedimentree_with_fragments(vec![graph.make_fragment("h", &["a"], &[])]);
+    for (responder, expected) in [
+        (
+            shared,
+            BTreeSet::from([graph.node_hash("a"), graph.node_hash("z")]),
+        ),
+        (
+            graph.to_sedimentree(),
+            BTreeSet::from([
+                graph.node_hash("a"),
+                graph.node_hash("c"),
+                graph.node_hash("z"),
+            ]),
+        ),
+    ] {
+        let diff = responder.diff_remote_fingerprints(&decoded.fingerprint_summary);
+        let sent: BTreeSet<_> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+        assert_eq!(sent, expected);
+    }
 }
 
 /// `diff_remote_fingerprints` against a decoded summary returns the same

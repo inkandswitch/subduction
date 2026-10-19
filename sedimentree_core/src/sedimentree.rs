@@ -43,12 +43,10 @@ fn insert_or_tiebreak<K: Ord + core::hash::Hash, V: Encode>(map: &mut Map<K, V>,
 /// Each side computes fingerprints with the shared [`FingerprintSeed`]
 /// and performs set difference on u64 values.
 ///
-/// Both commit and fragment fingerprints use `Fingerprint<CommitId>` as
-/// their type — the distinction between commit and fragment identity is
-/// structural (separate fields), not type-level. A commit and a fragment
-/// sharing the same head [`CommitId`] will produce the same fingerprint
-/// value, but they live in separate sets and are never compared against
-/// each other.
+/// Both sets use `Fingerprint<CommitId>`: their roles are distinguished
+/// by field, not by type. Commit fingerprints claim payload ownership;
+/// fragment fingerprints identify fragment heads. Boundaries are not
+/// transmitted, so ancestry pruning requires locally known fragment metadata.
 ///
 /// Bandwidth: ~16 bytes (seed) + 8 bytes per item, vs ~100+ bytes
 /// per item with [`SedimentreeSummary`].
@@ -82,7 +80,9 @@ impl FingerprintSummary {
         &self.seed
     }
 
-    /// The fingerprints of commit causal identities.
+    /// Fingerprints of held loose commits and fragment heads.
+    ///
+    /// Fragment boundaries alone do not establish payload ownership.
     #[must_use]
     pub const fn commit_fingerprints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
         &self.commit_fingerprints
@@ -715,14 +715,9 @@ impl Sedimentree {
             .map(|c| Fingerprint::new(seed, &c.head()))
             .collect();
 
-        // Include fragment heads and boundaries in the commit fingerprint set.
-        // This tells the remote "I know about these CommitIds" so it doesn't
-        // re-send them as loose commits — their data is inside our fragments.
+        // Heads are in the payload; boundaries alone do not establish ownership.
         for fragment in self.fragments.values() {
             commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
-            for boundary in fragment.boundary() {
-                commit_fingerprints.insert(Fingerprint::new(seed, boundary));
-            }
         }
 
         let fragment_fingerprints = self
@@ -762,14 +757,10 @@ impl Sedimentree {
         let mut commit_fingerprints: BTreeSet<Fingerprint<CommitId>> =
             commit_fp_to_id.keys().copied().collect();
 
-        // Include fragment heads and boundaries in the commit fingerprint set
-        // for coverage (prevents remote from re-sending these as loose commits).
-        // NOT added to commit_fp_to_id — they're not resolvable as standalone items.
+        // Fragment heads establish coverage, but aren't added to the
+        // resolver map unless also held as standalone loose commits.
         for fragment in self.fragments.values() {
             commit_fingerprints.insert(Fingerprint::new(seed, &fragment.head()));
-            for boundary in fragment.boundary() {
-                commit_fingerprints.insert(Fingerprint::new(seed, boundary));
-            }
         }
 
         let fragment_fingerprints = fragment_fp_to_id.keys().copied().collect();
@@ -807,50 +798,30 @@ impl Sedimentree {
             })
             .collect();
 
-        // Fragment-aware ancestry pruning. Only fragments carry a
-        // transitive coverage guarantee (head→boundary range); a peer
-        // claiming a loose commit gives no guarantee about its ancestors.
-        //
-        // Walk roots: local heads matching `remote.fragment_fingerprints`.
-        // Walk direction: parents only, from the newest commit toward
-        // the fragment's boundaries. Horizon: any non-root commit whose FP is
-        // in `remote.commit_fingerprints` — either a fragment boundary or
-        // a loose-commit head we can't extend through.
-
-        let fragment_roots: Set<CommitId> = self
-            .commits
-            .values()
-            .map(LooseCommit::head)
-            .chain(self.fragments.values().map(Fragment::head))
-            .filter(|h| {
-                remote
-                    .fragment_fingerprints
-                    .contains(&Fingerprint::new(seed, h))
-            })
-            .collect();
-
-        if !fragment_roots.is_empty() {
-            let mut covered: Set<CommitId> = Set::new();
-            let mut stack: Vec<CommitId> = fragment_roots.iter().copied().collect();
+        // Only shared fragments establish a known head→boundary range.
+        // A matching loose head is insufficient: the wire summary contains
+        // no boundaries. Without local fragment metadata, send conservatively.
+        let mut covered: Set<CommitId> = Set::new();
+        for fragment in self.fragments.values().filter(|fragment| {
+            remote
+                .fragment_fingerprints
+                .contains(&Fingerprint::new(seed, &fragment.head()))
+        }) {
+            // Each fragment has its own stopping points. Do not use `covered`
+            // as the visited set: an overlapping fragment may extend further.
+            let mut visited = Set::new();
+            let mut stack = vec![fragment.head()];
             while let Some(id) = stack.pop() {
-                if !covered.insert(id) {
+                if fragment.boundary().contains(&id) || !visited.insert(id) {
                     continue;
                 }
-                let is_horizon = !fragment_roots.contains(&id)
-                    && remote
-                        .commit_fingerprints
-                        .contains(&Fingerprint::new(seed, &id));
-                if is_horizon {
-                    continue;
-                }
+                covered.insert(id);
                 if let Some(commit) = self.commits.get(&id) {
-                    for parent in commit.parents() {
-                        stack.push(*parent);
-                    }
+                    stack.extend(commit.parents().iter().copied());
                 }
             }
-            local_only_commits.retain(|(id, _)| !covered.contains(id));
         }
+        local_only_commits.retain(|(id, _)| !covered.contains(id));
 
         let local_only_fragments: Vec<(&CommitId, &Fragment)> = self
             .fragments
@@ -863,8 +834,8 @@ impl Sedimentree {
             .collect();
 
         // Find requestor fingerprints we don't have locally (echo back).
-        // Include fragment head/boundary coverage in local commit fps
-        // so the remote doesn't ask us to send them as standalone items.
+        // Include fragment heads, but not boundaries: we may need the
+        // remote to send us those excluded commits as standalone items.
         let mut local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
             .commits
             .values()
@@ -873,9 +844,6 @@ impl Sedimentree {
 
         for fragment in self.fragments.values() {
             local_commit_fps.insert(Fingerprint::new(seed, &fragment.head()));
-            for boundary in fragment.boundary() {
-                local_commit_fps.insert(Fingerprint::new(seed, boundary));
-            }
         }
 
         let local_fragment_fps: BTreeSet<Fingerprint<CommitId>> = self
@@ -1876,12 +1844,9 @@ mod tests {
                         let summary = tree.fingerprint_summarize(seed);
 
                         // Commit fingerprints include surviving loose commits PLUS
-                        // fragment head/boundary coverage fingerprints. The total
+                        // fragment-head coverage fingerprints. The total
                         // can exceed the loose commit count.
-                        let max_coverage = tree
-                            .fragments()
-                            .map(|f| 1 + f.boundary().len()) // head + boundaries
-                            .sum::<usize>();
+                        let max_coverage = tree.fragments().count();
                         assert!(
                             summary.commit_fingerprints().len()
                                 <= tree.loose_commits().count() + max_coverage,
@@ -3371,18 +3336,9 @@ mod tests {
             );
         }
 
-        /// When remote has a fragment and local has the underlying loose
-        /// commits, the fragment-aware pruning walks from any local
-        /// commit/fragment matching `remote.fragment_fingerprints`,
-        /// following parents through the local DAG and
-        /// stopping at horizons in `remote.commit_fingerprints`.
-        ///
-        /// In this scenario the local has loose commit A (matching the
-        /// remote's fragment head). The walk from A traverses to its
-        /// parent B, then to D (which is in `remote.commit_fingerprints`
-        /// as the fragment boundary, so the walk stops there). B is
-        /// thereby marked as covered and pruned. The fragment itself
-        /// propagates via `fragment_fingerprints`.
+        /// When only remote has the fragment metadata, a matching loose
+        /// head does not reveal its boundaries. Send all unadvertised
+        /// commits conservatively, and request the fragment metadata.
         #[test]
         fn diff_minimized_remote_has_fragment_local_has_commits() {
             let mut rng = seeded_rng(203);
@@ -3415,14 +3371,16 @@ mod tests {
                 "remote has a fragment that local doesn't"
             );
 
-            // Fragment-aware walk from local's loose commit A (matches
-            // remote's fragment head) reaches B via parents, stops at D
-            // (in remote.commit_fingerprints). B is marked covered and
-            // pruned from local_only_commits. Local sends nothing.
-            assert!(
-                diff_at_local.local_only_commits.is_empty(),
-                "fragment-aware walk should cover all loose commits inside \
-                 the remote's fragment range"
+            // Only A is advertised as held. Without local fragment metadata,
+            // send B and D rather than guessing where coverage stops.
+            assert_eq!(
+                diff_at_local
+                    .local_only_commits
+                    .iter()
+                    .map(|(id, _)| **id)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([graph.node_hash("b"), graph.node_hash("d")]),
+                "without fragment metadata, send every unadvertised commit"
             );
         }
 
@@ -3706,12 +3664,12 @@ mod tests {
         ///     oldest                                              newest
         ///
         ///   ALICE: commits A..F + fragment(head=D, boundary={A})
-        ///          After minimize: fragment + loose {E, F}
+        ///          After minimize: fragment + loose {A, E, F}
         ///
         ///   BOB:   commits A..G (no fragment)
         ///          After minimize: all 7 commits
         ///
-        ///   Sync → exchange → re-minimize → both converge
+        ///   Sync → exchange → re-minimize → reconcile redundant copies → converge
         /// ```
         #[test]
         #[allow(clippy::too_many_lines)]
@@ -3823,23 +3781,17 @@ mod tests {
                 "Alice sends 1 fragment"
             );
 
-            // Bob sends: only G (everything else is an ancestor of shared E, F, D, A)
+            // Bob sends G and redundant B/C: without the fragment metadata,
+            // he cannot infer their coverage from the shared loose head D.
             let bob_sent: BTreeSet<_> = bob_diff
                 .local_only_commits
                 .iter()
                 .map(|(id, _)| **id)
                 .collect();
-            assert!(
-                bob_sent.contains(&g),
-                "Bob should send G (genuinely new to Alice)"
-            );
-            assert!(
-                !bob_sent.contains(&a)
-                    && !bob_sent.contains(&b)
-                    && !bob_sent.contains(&c)
-                    && !bob_sent.contains(&d),
-                "Bob should NOT send A-D (ancestors of shared commits, \
-                 or covered by Alice's fragment head/boundary)"
+            assert_eq!(
+                bob_sent,
+                BTreeSet::from([b, c, g]),
+                "Bob sends every unadvertised commit until he has the fragment metadata"
             );
 
             // === Round 2: Exchange ===
@@ -3861,7 +3813,27 @@ mod tests {
 
             // === Round 3: Both re-minimize ===
             let alice_final = alice_post_sync.minimize(&CountLeadingZeroBytes);
-            let bob_final = bob_post_sync.minimize(&CountLeadingZeroBytes);
+            let mut bob_final = bob_post_sync.minimize(&CountLeadingZeroBytes);
+
+            // Alice had already pruned loose D before receiving redundant B/C,
+            // so she cannot walk D's parents to re-prune those copies. Bob had
+            // D during minimization and pruned B/C. One more exchange reconciles
+            // the redundant copies; no history may be omitted in either round.
+            let second_diff =
+                alice_final.diff_remote_fingerprints(&bob_final.fingerprint_summarize(&seed));
+            assert_eq!(
+                second_diff
+                    .local_only_commits
+                    .iter()
+                    .map(|(id, _)| **id)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([b, c]),
+                "the second exchange reconciles only the redundant interior commits"
+            );
+            for (_, commit) in &second_diff.local_only_commits {
+                bob_final.add_commit((*commit).clone());
+            }
+            bob_final.minimize_in_place(&CountLeadingZeroBytes);
 
             // Both should have the same fragments
             let alice_frag_heads: BTreeSet<_> =
@@ -4369,7 +4341,7 @@ mod tests {
 
         /// For any tree and seed, the resolver resolves every fingerprint
         /// from its own summary that corresponds to a sendable item.
-        /// Coverage fingerprints (fragment head/boundary in the commit set)
+        /// Coverage fingerprints (fragment heads in the commit set)
         /// are intentionally not resolvable — they exist only to prevent
         /// redundant sends from the remote.
         #[test]
@@ -4380,7 +4352,7 @@ mod tests {
                     let resolver = tree.fingerprint_resolver(seed);
 
                     // Every commit fingerprint should either resolve as a commit
-                    // or be a coverage fingerprint (fragment head/boundary).
+                    // or be a coverage fingerprint (fragment head).
                     // Coverage fingerprints resolve to None — that's correct.
                     let resolvable_count = resolver
                         .summary()
@@ -4491,7 +4463,7 @@ mod tests {
                     let _minimized = merged.minimize(&CountLeadingZeroBytes);
 
                     // The resolver is independent — still resolves sendable items.
-                    // Coverage fingerprints (fragment head/boundary) intentionally
+                    // Coverage fingerprints (fragment heads) intentionally
                     // don't resolve — they're in the summary for redundancy prevention only.
                     for fp in &original_commit_fps {
                         // Only check fingerprints that were resolvable originally
